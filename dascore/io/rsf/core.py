@@ -76,6 +76,19 @@ def _get_attr_text(value) -> str:
     return f'"{escaped}"'
 
 
+def _is_one_binding(line: str) -> bool:
+    """Return True when Madagascar reads a header line as a single binding."""
+    # simtab.c opens or closes a string at every '"', with no escape, and
+    # ends a word at whitespace outside one and a string at a newline.
+    parts = line.split('"')
+    outside = "".join(parts[::2])
+    return (
+        len(parts) % 2 == 1
+        and "\n" not in line
+        and not any(x.isspace() for x in outside)
+    )
+
+
 def _get_attr_lines(patch) -> list[str]:
     """Return a key=value line per attr that is set and not stored elsewhere."""
     # the history has its own lines, a read derives the ids from the file,
@@ -89,7 +102,15 @@ def _get_attr_lines(patch) -> list[str]:
             continue
         if RESERVED.fullmatch(name) or name.startswith(PREFIX):
             name = PREFIX + name
-        out.append(f"{name}={_get_attr_text(value)}")
+        line = f"{name}={_get_attr_text(value)}"
+        if not _is_one_binding(line):
+            msg = (
+                f"The {name} attr is not written to RSF: Madagascar would "
+                "misread its quotes, newline, or spacing."
+            )
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
+            continue
+        out.append(line)
     return out
 
 
@@ -179,7 +200,9 @@ class RSFV1(FiberIO):
         - Each attr that is set is written as one key=value line, a dict as
         one quoted JSON string, and with the prefix 'dascore_' when its
         name is an RSF key such as n1 or in. The ids are not written; a
-        read derives them from the file.
+        read derives them from the file. An attr Madagascar would misread,
+        such as text with one quote or a newline, is skipped with a
+        DASCoreWarning, since RSF has no escape inside a quoted value.
         - Each history entry opens the header as a line
         '# dascore <version> <entry>' with every '=' written as ':', so no
         RSF reader binds it. The entry reads back with ':' in place of

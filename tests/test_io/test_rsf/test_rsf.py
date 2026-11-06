@@ -496,6 +496,17 @@ class TestRsfAttrs:
             "decimate(time:2)",
         )
 
+    @pytest.mark.parametrize("value", ['say "hi', "line 1\nline 2", {"a": "x y"}])
+    def test_misread_skipped(self, value, fractional_patch, tmp_path):
+        """An attr Madagascar would misread is skipped with a warning."""
+        patch = fractional_patch.update_attrs(note=value, tag="kept")
+        with pytest.warns(DASCoreWarning, match="note attr") as record:
+            dc.write(patch, tmp_path / "q.rsf", "rsf")
+        assert record[0].filename == __file__
+        out = dict(dc.spool(tmp_path / "q.rsf")[0].attrs)
+        assert "note" not in out
+        assert out["tag"] == "kept"
+
     def test_datetime(self, fractional_patch, tmp_path):
         """A datetime attr is written as ISO 8601 UTC and reads back as text."""
         when = np.datetime64("2024-01-01T00:00:00.5")
