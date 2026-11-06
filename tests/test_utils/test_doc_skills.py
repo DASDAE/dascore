@@ -77,7 +77,7 @@ class TestSkills:
         assert capsys.readouterr().out == doc_skills.read_skill("make-inventory")
 
     def test_install(self, tmp_path, capsys):
-        """One command copies every shipped skill and replaces an older copy."""
+        """One command installs an entry for every skill, replacing older ones."""
         target = tmp_path / "agent" / "skills"
         stale = target / "dascore" / "SKILL.md"
         stale.parent.mkdir(parents=True)
@@ -88,10 +88,18 @@ class TestSkills:
         assert installed == [str(target / x.parent.name / x.name) for x in sources]
         assert {x.parent.name for x in sources} == set(_CATALOG)
         for source in sources:
-            copy = target / source.parent.name / source.name
-            assert copy.read_text(encoding="utf-8") == source.read_text(
-                encoding="utf-8"
-            )
+            name = source.parent.name
+            shipped = source.read_text(encoding="utf-8")
+            entry = (target / name / source.name).read_text(encoding="utf-8")
+            if name == "dascore":
+                # The entry point is what selects the environment, so it is whole.
+                assert entry == shipped
+                continue
+            # Other entries keep the metadata and defer the procedure to the CLI.
+            front, body = entry.split("\n---\n", 1)
+            assert front == shipped.split("\n---\n", 1)[0]
+            assert f"-m dascore skill {name}`" in body
+            assert shipped.split("\n---\n", 1)[1].strip() not in entry
 
     @pytest.mark.parametrize(
         "args, code, message",

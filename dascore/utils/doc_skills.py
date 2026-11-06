@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from pathlib import Path
 
 import yaml
@@ -15,6 +14,18 @@ from dascore.utils.doc_corpus import (
     DocumentationError,
     _read_page,
     source_paths,
+)
+
+# What an installed skill says in place of its procedure, which would go stale.
+_INSTALLED_BODY = (
+    "\nThe procedure for this skill ships with DASCore and changes between "
+    "versions, so read the current text before acting:\n\n"
+    "1. Use the project's Python environment, selected as the `dascore` skill "
+    "describes. Prefer that environment's executable over a global `python` or "
+    "`dascore` command.\n"
+    "2. Run `<python> -m dascore skill {name}` and follow what it prints.\n\n"
+    "If the command reports an unknown skill, the project's DASCore predates "
+    "it. Say so rather than working from memory.\n"
 )
 
 
@@ -65,12 +76,24 @@ def read_skill(name: str) -> str:
 
 
 def install_skills(directory: Path | str) -> list[Path]:
-    """Copy every shipped skill into an agent's skill directory, replacing copies."""
+    """
+    Write an entry for every shipped skill into an agent's skill directory.
+
+    The entry point is copied whole. Every other entry keeps the skill's name
+    and description and tells the agent to read the current procedure from the
+    project's DASCore, so an installed skill cannot go stale.
+    """
     out = []
     for source in sorted(SKILL_PATH.glob("*/SKILL.md")):
-        target = Path(directory) / source.parent.name
-        shutil.copytree(source.parent, target, dirs_exist_ok=True)
-        out.append(target / source.name)
+        name = source.parent.name
+        text = source.read_text(encoding="utf-8")
+        if name != "dascore":
+            front = text.split("\n---\n", 1)[0]
+            text = f"{front}\n---\n{_INSTALLED_BODY.format(name=name)}"
+        target = Path(directory) / name / source.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        out.append(target)
     return out
 
 
