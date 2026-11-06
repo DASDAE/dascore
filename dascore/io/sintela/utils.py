@@ -3,8 +3,8 @@ Utilities for reading binary sintela data.
 
 Notes
 -----
-- We make the strong assumption that each file contains contiguous
-  blocks of DAS data.
+- Each file must hold one contiguous run of packets; the packet headers'
+  sample counts and start times are checked and a gap raises.
 
 - We only support v3 for now, though some commented out code here has the
   start for version 4 support.
@@ -142,10 +142,46 @@ def _read_remaining_header(fid, base):
     return header
 
 
+def _check_packet_continuity(fid, header):
+    """
+    Raise if the packets are not one contiguous run.
+
+    Each packet header states the samples recorded before it and its own
+    start time, so a dropped or concatenated packet shows as a jump in
+    either. Times may jitter as the recorder clock resynchronizes, so they
+    only need to agree within half a packet.
+    """
+    num_samples = int(header["num_samples"])
+    packet_size = (
+        int(header["header_size"])
+        + int(header["num_channels"]) * num_samples * np.dtype(header["dtype"]).itemsize
+    )
+    # sample_count and start_time_ns follow the base header in every packet.
+    stamps = np.empty((int(header["num_packets"]), 2), dtype="<u8")
+    for index in range(len(stamps)):
+        fid.seek(index * packet_size + base_header_dtypes.itemsize)
+        stamps[index] = np.frombuffer(fid.read(16), dtype="<u8", count=2)
+    # uint64 differences wrap, so a backwards step reads as a huge jump.
+    count_steps = np.diff(stamps[:, 0])
+    time_steps = np.diff(stamps[:, 1]).view(np.int64)
+    expected_ns = round(num_samples / float(header["sample_rate"]) * 1e9)
+    bad = (count_steps != num_samples) | (
+        np.abs(time_steps - expected_ns) > expected_ns / 2
+    )
+    if np.any(bad):
+        index = int(np.flatnonzero(bad)[0]) + 1
+        msg = (
+            f"Sintela binary packet {index} does not follow packet {index - 1}; "
+            "the file is not one contiguous recording."
+        )
+        raise InvalidFiberFileError(msg)
+
+
 def _get_complete_header(rid):
     """Get the complete header information."""
     header = _read_base_header(rid)
     header.update(_read_remaining_header(rid, header))
+    _check_packet_continuity(rid, header)
     return header
 
 
