@@ -1,47 +1,31 @@
 ---
 title: Agent onboarding
-description: Connect an agent to the documentation and recipes in the project's DASCore installation.
-keywords: [agents, skills, cli, environment]
+description: Install the DASCore skill and browse the included workflows.
+keywords: [agents, skills, cli]
 ---
 
-DASCore provides installed API documentation and workflow recipes through its CLI. Agents search the generated Markdown with their existing file tools. Install the optional dependencies in the project's Python environment using its package manager:
+## Install the skill
 
-```bash
-python -m pip install "dascore[agents]"
-```
+Ask your agent:
 
-For a uv-managed project, use `uv add "dascore[agents]"`. Follow the project's version constraints. Then inspect the selected installation:
+> Run `dascore skill --bootstrap` and save its output as `SKILL.md` in your agent's personal `dascore` skill directory. Replace an existing file only if the command succeeds.
 
-```bash
-python -m dascore doc
-python -m dascore skills
-python -m dascore skill dascore
-python -m dascore skill make-inventory
-```
-
-The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skills.yml` makes a page a skill; its title, description, and procedure remain in the original documentation page. Pages keep their ordinary `.qmd` filenames. Keyword tags describe topics independently of skill membership.
-
-## Install the agent bootstrap
-
-Installing the Python package does not change agent configuration. Ask your agent to install the small native `SKILL.md`:
-
-> Run `python -m dascore skill --bootstrap` with this project's Python and save its output as UTF-8 `SKILL.md` in your personal `dascore` skill directory. Replace an existing file only if the command succeeds.
-
-Personal skills use these locations:
-
-| Agent | Directory |
+| Agent | Skill directory |
 | --- | --- |
-| [Codex](https://developers.openai.com/codex/skills) | `~/.agents/skills/dascore/` |
-| [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/dascore/` |
+| Codex | `~/.agents/skills/dascore/` |
+| Claude Code | `~/.claude/skills/dascore/` |
 
-Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same file in their supported skill directory. Reload or restart the agent if the new skill is not visible. The package also ships the file at `dascore/.agents/skills/dascore/SKILL.md` inside `site-packages`, the conventional location for skill installers that link skills from a project's dependencies; agents do not read it there directly.
+For other agents, use their supported skills directory. Reload the agent if needed, then ask it to use DASCore on your data. If the command is unavailable, see [Local documentation](local_documentation.qmd).
 
-The bootstrap tells the agent to identify the project's environment, verify `dascore doc` provenance, and retain that environment's absolute Python executable and documentation directory. It loads the current routing recipe and specialized skills through the CLI, and searches the reported directory using the agent's existing file tools. It contains neither a fixed interpreter path nor a copied inventory procedure.
+## Included skills
 
-Install the bootstrap once per agent location. Recipes and API documentation follow the selected DASCore installation, so switching projects also requires selecting that project's interpreter. Reinstall the bootstrap after upgrading DASCore if its installation or discovery instructions changed.
+Install the `dascore` entry point once; it discovers the workflows available in your DASCore installation.
 
-## Check the connection
+| Skill | Documentation | Purpose |
+| --- | --- | --- |
+| `dascore` | [Choose a DASCore workflow](../recipes/dascore.qmd) | Find APIs, inspect data, and choose a procedure. |
+| `make-inventory` | [Create an inventory](../recipes/tunnel_inventory.qmd) | Create, validate, repair, and attach observing-system metadata. |
+| `migrate-to-v1` | [Migrate to DASCore 1.0](../migrations/dascore_1.0_migration.qmd) | Update projects using the 0.1.x APIs. |
+| `test-beta` | [Test the latest pre-release](../migrations/test_latest_beta.qmd) | Try a pre-release in isolation and draft problem reports. |
 
-Ask the agent to use DASCore to inspect a small dataset or prepare an inventory. Check that it reports the intended Python executable, DASCore version, and documentation directory, searches that directory for relevant APIs or recipes, and uses that same executable for subsequent CLI calls. A global `dascore` command can belong to another environment.
-
-The documentation cache may be outside the project workspace, so the agent should use its reported absolute path when searching. The bootstrap and recipes guide the requested work; they do not authorize publishing data or changing unrelated project configuration.
+Run `dascore skills` to list available workflows, or `dascore skill <name>` to read one. Each linked page is the same procedure served by the CLI. The migration and beta-testing pages can also be given directly to an agent without installing the skill.

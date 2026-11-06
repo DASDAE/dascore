@@ -1,51 +1,14 @@
 ---
 name: start-task
-description: Instructions for working on a task in this repo.
+description: Set up an isolated DASCore task worktree and environment when starting implementation work.
 ---
 
-# start-task
+# Start a task
 
-Instructions for starting work on a task in this repo in an isolated git worktree.
+Read the repository's `AGENTS.md` and local instructions if present.
 
-## Inputs
-
-- `task_name`: A short human-readable task name.
-
-## Workflow
-
-1. Load and follow canonical agent instructions from `.agents/agents.md`.
-2. Determine the repository root and repo name.
-3. Normalize `task_name` into a safe slug.
-   - Lowercase.
-   - Replace spaces and underscores with `-`.
-   - Remove characters that are not letters, numbers, `-`, or `/`.
-   - Collapse repeated `-`.
-   - Trim leading/trailing `-`.
-4. Use branch name `{slug}` unless the user explicitly requested another branch naming convention.
-5. Create the worktree at `{repo_root}/worktrees/{slug}`.
-   - This path is relative to the repository root discovered in step 2, not relative to the current working directory.
-   - Do not create task worktrees under `{repo_root}/.agents/worktrees`.
-6. Preflight checks before creating anything:
-   - Confirm the repo root exists and is a git repository.
-   - Print or otherwise verify the resolved target path is exactly `{repo_root}/worktrees/{slug}` before running `git worktree add`.
-   - If `{repo_root}/worktrees/{slug}` already exists, reuse it if it is attached to the intended branch; otherwise stop and report the conflict.
-   - If branch `{slug}` already exists, create the worktree from that branch instead of failing.
-7. Create the worktree:
-   - If the branch does not exist: create it from the current default working branch.
-   - If the branch exists: attach the worktree to that branch.
-8. Change into the new worktree directory.
-9. Activate or create the matching mamba environment named `{slug}`, then use `mamba activate {slug}`.
-10. Run one lightweight sanity check before starting work:
-   - `python -c "import {repo_name}"`
-   - If the package import name differs from the repo name, use the package name used by the repo.
-11. Report:
-   - worktree path
-   - branch name
-   - activated environment
-   - whether the sanity check passed
-
-## Notes
-
-- Use `{repo_root}/worktrees/` consistently.
-- Do not modify or delete existing worktrees unless the user explicitly asks.
-- If the repo already has unrelated uncommitted changes in the main worktree, leave them alone; creating a separate worktree is the isolation mechanism.
+1. Find the repository root and choose a task slug containing only lowercase letters, digits, and hyphens. Reject an empty slug. Use it as the branch name unless the user supplies one.
+2. Resolve the worktree path to `<repo-root>/worktrees/<slug>`. If it exists, reuse it only when attached to the intended branch. If that branch is checked out elsewhere, report its path rather than moving or deleting it. Leave unrelated changes alone.
+3. For an existing branch, attach the worktree to it. For a new branch, use `origin/dev` as the base; refresh it when available. If it cannot be refreshed, report the local base used. If no dev ref exists, ask which base to use. Do not silently branch from the current task branch.
+4. In the worktree, use a dedicated mamba environment named for the slug or a worktree-local uv environment. Install `.[dev]` with that environment's Python and install pre-commit hooks once. Keep editable installs isolated between tasks.
+5. Verify `python -c "import dascore; print(dascore.__file__)"` resolves to this worktree. Report path, branch/base, environment, and sanity-check result.
