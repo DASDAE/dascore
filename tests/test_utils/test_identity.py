@@ -11,6 +11,7 @@ import warnings
 from enum import Enum
 from functools import partial
 from pathlib import PureWindowsPath
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -425,21 +426,32 @@ class TestCallables:
         assert digest(make(1)) == digest(make(1))
         assert digest(make(1)) != digest(make(2))
 
-    def test_a_script_function_by_source(self, monkeypatch):
-        """A path into `__main__` finds it, but two scripts share that path."""
+    @pytest.mark.parametrize("module", ["__main__", "__mp_main__"])
+    def test_a_script_function_by_source(self, monkeypatch, module):
+        """A path into a script finds it, but two scripts share that path."""
+        script = ModuleType(module)
+        monkeypatch.setitem(sys.modules, module, script)
 
-        def first(x):
-            return x * 2
+        def doubled():
+            def clean(x):
+                return x * 2
 
-        def second(x):
-            return x * 3
+            return clean
+
+        def tripled():
+            def clean(x):
+                return x * 3
+
+            return clean
 
         names = []
-        for func in (first, second):
-            func.__module__ = "__main__"
-            func.__name__ = func.__qualname__ = "clean"
-            monkeypatch.setattr(sys.modules["__main__"], "clean", func, raising=False)
+        for func in (doubled(), tripled()):
+            # Only the bodies differ: one name, one signature.
+            func.__module__ = module
+            func.__qualname__ = "clean"
+            script.clean = func
             names.append(callable_name(func))
+        # A spawned worker's `__mp_main__` names it as its parent does.
         assert names[0].startswith("__main__:clean@")
         assert names[0] != names[1]
 
