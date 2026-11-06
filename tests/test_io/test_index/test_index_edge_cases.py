@@ -1192,6 +1192,68 @@ class TestDirSpoolPassthrough:
         assert len(spool) == 1
 
 
+class TestPatchRowsNeverReused:
+    """A patch row, once handed out, never names another patch."""
+
+    @staticmethod
+    def _rows(back, source_path=None) -> list[int]:
+        """The patch rows of one source, or of every source."""
+        sql = "SELECT patch_row FROM patches JOIN sources USING (source_row)"
+        params = [] if source_path is None else [source_path]
+        if source_path is not None:
+            sql += " WHERE source_path = ?"
+        return list(back._fetch_df(sql, params)["patch_row"].astype(int))
+
+    @pytest.fixture()
+    def path(self, tmp_path):
+        """An index file holding the contract summaries."""
+        out = tmp_path / "rows.sqlite3"
+        back = get_backend(out)
+        back.write_sources(summaries_to_records(make_summaries()))
+        back.close()
+        return out
+
+    @pytest.mark.parametrize("remove", ["rewrite", "delete", "clear"])
+    def test_rows_after_removal_are_new(self, path, remove):
+        """Rows freed by a rescan, delete, or clear are not handed out again."""
+        record = summaries_to_records(make_summaries())[-1]
+        back = get_backend(path)
+        top = max(self._rows(back))
+        if remove == "delete":
+            back.delete_sources([record.source_path])
+        elif remove == "clear":
+            back.clear()
+        back.close()
+        # a fresh connection, so the mark must come from the file
+        back = get_backend(path)
+        back.write_sources([record])
+        assert min(self._rows(back, record.source_path)) > top
+        back.close()
+
+    def test_index_without_floor_seeds_it(self, path):
+        """An index written before the floor existed seeds it before deleting."""
+        record = summaries_to_records(make_summaries())[-1]
+        back = get_backend(path)
+        back._execute("DROP TABLE patch_row_floor")
+        top = max(self._rows(back))
+        back.delete_sources([record.source_path])
+        back.write_sources([record])
+        assert min(self._rows(back, record.source_path)) > top
+        back.close()
+
+    def test_rows_added_without_the_floor_count(self, path):
+        """Rows a writer unaware of the floor added are not reused once deleted."""
+        records = summaries_to_records(make_summaries())
+        back = get_backend(path)
+        # an older writer appends a row above the floor without moving it
+        back._execute("UPDATE patch_row_floor SET next_row = 1")
+        top = max(self._rows(back))
+        back.delete_sources([records[-1].source_path])
+        back.write_sources(records[-1:])
+        assert min(self._rows(back, records[-1].source_path)) > top
+        back.close()
+
+
 class TestFinalCoverage:
     """Remaining edge branches."""
 
