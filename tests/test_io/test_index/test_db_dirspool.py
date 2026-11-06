@@ -118,20 +118,24 @@ class TestUpdateLifecycle:
         time = patch.get_coord("time")
         step = np.timedelta64(1, "s") + (time.max() - time.min())
         b = patch.update_coords(time_min=time.min() + step)
-        c = (b * 0 + 7).update_coords(time_min=time.min() + 2 * step)
+        # a different size, so the update cannot take c.h5 for a renamed b.h5
+        c = (b * 0 + 7).select(distance=(0, 10), samples=True)
+        c = c.update_coords(time_min=time.min() + 2 * step)
         dc.write(patch, tmp_path / "a.h5", "DASDAE")
         root = dc.spool(tmp_path).update(progress=None)
-        # indexed after a.h5, so b.h5 holds the top patch row
-        dc.write(b, tmp_path / "b.h5", "DASDAE")
-        root.update(progress=None)
-        view = root[1:2]
-        assert view[0].equals(b)
-        (tmp_path / "b.h5").unlink()
-        dc.write(c, tmp_path / "c.h5", "DASDAE")
-        root.update(progress=None)
-        assert len(root) == 2
-        assert len(view) == 0
-        root.indexer.close()
+        try:
+            # indexed after a.h5, so b.h5 holds the top patch row
+            dc.write(b, tmp_path / "b.h5", "DASDAE")
+            root.update(progress=None)
+            view = root[1:2]
+            assert view[0].equals(b)
+            (tmp_path / "b.h5").unlink()
+            dc.write(c, tmp_path / "c.h5", "DASDAE")
+            root.update(progress=None)
+            assert len(root) == 2
+            assert len(view) == 0
+        finally:
+            root.indexer.close()
 
     def test_no_change_update_uses_narrow_projection(self, fresh, monkeypatch):
         """A no-op update reads only the stat columns, not the wide table."""
