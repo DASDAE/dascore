@@ -13,6 +13,7 @@ from scipy import ndimage, signal
 import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
+    CoordError,
     FilterValueError,
     ParameterError,
     UnitError,
@@ -279,19 +280,19 @@ class TestSobelFilter:
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_holes_warn(self, holed_patch):
-        """Missing samples filter until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
+    def test_holes_raise(self, holed_patch):
+        """Missing samples raise, naming the fixes."""
+        # the kernel smooths along every dimension, so each is checked
+        with pytest.raises(CoordError, match="not evenly sampled"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
-        with pytest.warns(FutureWarning, match="not evenly sampled"):
+        with pytest.raises(CoordError, match="not evenly sampled"):
             holed_patch.sobel_filter("distance")
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels still filter until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = stepless_seam_patch.sobel_filter("time")
-        assert out.shape == stepless_seam_patch.shape
+        """Step-less labels raise."""
+        with pytest.raises(CoordError, match="sobel_filter"):
+            stepless_seam_patch.sobel_filter("time")
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

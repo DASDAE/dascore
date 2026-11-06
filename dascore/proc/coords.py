@@ -5,7 +5,6 @@ from __future__ import annotations
 import itertools
 import warnings
 from functools import partial
-from pathlib import Path
 from typing import Any, ClassVar, Self
 
 import numpy as np
@@ -576,8 +575,8 @@ class CoordsFromDf(PatchProcessor):
     * Exactly one of the column names in the dataframe must map to one of
       the patch.dims. The other columns become new coordinates, set through
       [`update_coords`](`dascore.Patch.update_coords`). Overwriting an
-      existing coordinate warns, and from DASCore 0.1.26 raises; drop it
-      first with [`drop_coords`](`dascore.Patch.drop_coords`).
+      existing coordinate raises; drop it first with
+      [`drop_coords`](`dascore.Patch.drop_coords`).
 
     * This function uses linear interpolation between the nearest two points
       to get values in patch coords that aren't in the dataframe. Row order
@@ -649,12 +648,11 @@ class CoordsFromDf(PatchProcessor):
 
         if overwritten := sorted(set(new_coords) & set(meta.coords.coord_map)):
             msg = (
-                f"coords_from_df overwrote existing coordinates {overwritten}; "
-                "from DASCore 0.1.26 it refuses. Drop them first with "
-                "Patch.drop_coords, or set them with Patch.update_coords."
+                f"coords_from_df cannot overwrite existing coordinates "
+                f"{overwritten}. Drop them first with Patch.drop_coords, or set "
+                "them with Patch.update_coords."
             )
-            prefix = str(Path(dc.__file__).parent)
-            warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
+            raise ParameterError(msg)
         # update_coords is the one setter; its metadata half records no history.
         out, _ = UpdateCoords(**new_coords).get_metadata(meta)
         # Only coordinates are named, so the conversion never scales data.
@@ -1121,7 +1119,7 @@ class Order(_Query):
       If there are repeated values in the requested values or in the patch
       coordinate arrays, the data will end up being repeated as well.
     - Values (or, with `samples`, positions) the coordinate does not hold
-      are dropped with a `FutureWarning`; from DASCore 0.1.26 they raise.
+      raise a [`CoordError`](`dascore.exceptions.CoordError`).
     """
 
     def get_metadata(self, meta):

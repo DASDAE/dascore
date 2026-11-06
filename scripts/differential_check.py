@@ -75,6 +75,11 @@ EXPECTED_ERRORS = (
     "idxmax_squeeze_only_dim",
     "pass_two_dims",
     "*_no_window",
+    # These need an evenly sampled coordinate, which wacky's are not.
+    "taper_wacky",
+    "diff_wacky*",
+    "int_wacky*",
+    "decimate_wacky_iir",
     # One sample per dimension has no step to window or filter by.
     "matrix/tiny/*",
     "matrix/single_row/hampel_exact",
