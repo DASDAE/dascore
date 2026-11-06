@@ -82,6 +82,14 @@ class TestStoredLayout:
         assert metadata.attrs.origin_id == full.attrs.origin_id
         assert metadata.dtype == data.dtype
 
+    def test_single_digit_seconds(self, stored_file):
+        """A file name with seconds below 10 gives the start time it states."""
+        path, _, _, time = stored_file
+        path = path.rename(path.with_name("DASDMSShot00_20230328155605124.das"))
+        shift = np.timedelta64(48_495, "ms")  # 53.619 s to 05.124 s
+        patch = dc.read(path, snap=False)[0]
+        np.testing.assert_array_equal(patch.get_coord("time").values, time - shift)
+
     def test_default_scan_reads_no_signal(self, stored_file):
         """Default scans read the header and labels, never a signal sample."""
         path, data, _, _ = stored_file
