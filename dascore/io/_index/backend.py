@@ -29,7 +29,7 @@ from dascore.exceptions import (
     InvalidIndexVersionError,
     UnitError,
 )
-from dascore.io.index.ingest import (
+from dascore.io._index.ingest import (
     _COORD_DEF_FIELDS,
     CoordRecord,
     SourceRecord,
@@ -43,14 +43,14 @@ from dascore.io.index.ingest import (
     hive_typed_attrs,
     index_runs,
 )
-from dascore.io.index.query import (
+from dascore.io._index.query import (
     Query,
     _as_query_list,
     _normalize_unit,
     apply_residuals,
     build_sql,
 )
-from dascore.io.index.schema import (
+from dascore.io._index.schema import (
     GRID_NEEDED,
     INDEX_VERSION,
     INDEXES,

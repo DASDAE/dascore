@@ -20,8 +20,8 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.planned import PlanResolver
+from dascore.io._index.catalog import PatchCatalog
+from dascore.io._index.planned import PlanResolver
 from dascore.units import get_quantity, m, percent, s
 
 

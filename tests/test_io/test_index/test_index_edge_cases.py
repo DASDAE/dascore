@@ -39,21 +39,19 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.io.core import is_directory_format
-from dascore.io.febus.core import FebusPatchAttrs
-from dascore.io.index.backend import (
+from dascore.io._index.backend import (
     SQLiteIndexBackend,
     _ns_to_time,
     adapt_params,
     get_backend,
 )
-from dascore.io.index.catalog import LiveResolver, PatchCatalog
-from dascore.io.index.indexer import (
+from dascore.io._index.catalog import LiveResolver, PatchCatalog
+from dascore.io._index.indexer import (
     DBDirectoryIndexer,
     _set_mapped_index_path,
     scan_unit_stats,
 )
-from dascore.io.index.ingest import (
+from dascore.io._index.ingest import (
     SourceRecord,
     _coord_record,
     _py_scalar,
@@ -63,10 +61,10 @@ from dascore.io.index.ingest import (
     summaries_to_records,
     typed_value,
 )
-from dascore.io.index.ingest import (
+from dascore.io._index.ingest import (
     summaries_to_records as s2r,
 )
-from dascore.io.index.query import (
+from dascore.io._index.query import (
     _UNSET,
     InvalidSpoolQueryError,
     Query,
@@ -74,6 +72,8 @@ from dascore.io.index.query import (
     _to_target_unit,
     resolve_query,
 )
+from dascore.io.core import is_directory_format
+from dascore.io.febus.core import FebusPatchAttrs
 from dascore.units import get_quantity, m, s
 from dascore.units import get_quantity as _gq
 from dascore.utils.downloader import fetch
@@ -1337,7 +1337,7 @@ class TestPivotEdge:
                 return record
             return dataclasses.replace(record, data_id=None)
 
-        monkeypatch.setattr("dascore.io.index.ingest._coord_record", no_time_id)
+        monkeypatch.setattr("dascore.io._index.ingest._coord_record", no_time_id)
         patch = dc.get_example_patch()
         dc.write(patch, tmp_path / "a.h5", "dasdae")
         spool = dc.spool(tmp_path).update()

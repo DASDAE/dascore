@@ -10,11 +10,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dascore._lazy import columns as columns_module
+from dascore._lazy import identity as identity_module
+from dascore._lazy.columns import SOURCE_FIELDS
+from dascore._lazy.recipe import Recipe, RecipeTable, concat
 from dascore.core.source import ArraySource
-from dascore.lazy import columns as columns_module
-from dascore.lazy import identity as identity_module
-from dascore.lazy.columns import SOURCE_FIELDS
-from dascore.lazy.recipe import Recipe, RecipeTable, concat
 from tests.test_lazy.conftest import (
     ALIKE_VALUES,
     FORMAT,

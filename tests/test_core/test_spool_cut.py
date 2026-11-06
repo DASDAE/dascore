@@ -13,8 +13,8 @@ import dascore as dc
 import dascore.io.core as io_core
 from dascore.core.spool import Spool
 from dascore.exceptions import CoordMergeError, ParameterError
-from dascore.io.index.catalog import FileResolver
-from dascore.io.index.planned import PlanResolver
+from dascore.io._index.catalog import FileResolver
+from dascore.io._index.planned import PlanResolver
 
 DIMS = ("distance", "time")
 SECOND = pd.Timedelta("1s")

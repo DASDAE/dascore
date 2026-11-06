@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from dascore.utils.doc_skills import get_skills
+from dascore.utils._doc_skills import get_skills
 
 _qmd_builder = pytest.importorskip("_qmd_builder")
 

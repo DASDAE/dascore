@@ -30,7 +30,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.source import _offsets_text
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
-from dascore.io.index.schema import (
+from dascore.io._index.schema import (
     KINDS,
     RESERVED_ATTR_COLUMNS,
     CoordDefRow,

@@ -16,9 +16,7 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_list_like
 
-from dascore.core.source import ArraySource, _offsets_text
-from dascore.exceptions import ParameterError
-from dascore.lazy.columns import (
+from dascore._lazy.columns import (
     _LAYOUT_DEFAULTS,
     SOURCE_FIELDS,
     _broadcast,
@@ -27,6 +25,8 @@ from dascore.lazy.columns import (
     _Members,
     _sources_of_columns,
 )
+from dascore.core.source import ArraySource, _offsets_text
+from dascore.exceptions import ParameterError
 
 # The src_axis of an output axis which no stored axis feeds.
 NEW_AXIS = -1

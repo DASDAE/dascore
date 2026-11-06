@@ -8,8 +8,8 @@ import sys
 import typer
 
 import dascore as dc
+from dascore.utils._doc_skills import get_skills, read_bootstrap, read_skill
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_skills import get_skills, read_bootstrap, read_skill
 
 app = typer.Typer(
     help="The DASCore command-line interface.",

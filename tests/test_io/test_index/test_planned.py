@@ -13,7 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import MissingPatchError, ParameterError
-from dascore.io.index.planned import (
+from dascore.io._index.planned import (
     PLAN_SCHEME,
     PlanResolver,
     _aux_coord_info,
@@ -24,7 +24,7 @@ from dascore.io.index.planned import (
     derived_catalog,
 )
 from dascore.units import m
-from dascore.utils.chunk_plan import ChunkPlan, patch_local_adjusted_envelopes
+from dascore.utils._chunk_plan import ChunkPlan, patch_local_adjusted_envelopes
 
 
 @pytest.fixture(scope="module")

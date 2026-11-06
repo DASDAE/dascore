@@ -27,6 +27,13 @@ from dascore.transform.spectral_descriptors import (
     SpectralFormat,
 )
 from dascore.units import Quantity
+from dascore.utils._display import (
+    Repr,
+    array_to_text,
+    attrs_to_text,
+    get_header_text,
+    split_block,
+)
 from dascore.utils.array import (
     PatchUFunc,
     apply_ufunc,
@@ -34,13 +41,6 @@ from dascore.utils.array import (
     patch_array_ufunc,
 )
 from dascore.utils.array_api import backend_name, to_numpy
-from dascore.utils.display import (
-    Repr,
-    array_to_text,
-    attrs_to_text,
-    get_header_text,
-    split_block,
-)
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from dascore.exceptions import MissingOptionalDependencyError
-from dascore.utils.doc_corpus import DocumentationError
+from dascore.utils._doc_corpus import DocumentationError
 from dascore.utils.misc import optional_import
 
 

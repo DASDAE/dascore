@@ -67,7 +67,7 @@ import sys
 import matplotlib
 
 import dascore
-from dascore.utils.display import NodeRepr
+from dascore.utils._display import NodeRepr
 
 
 @contextmanager

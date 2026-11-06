@@ -8,10 +8,10 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore._lazy import read as read_module
+from dascore._lazy import recipe as recipe_module
+from dascore._lazy.recipe import Recipe, concat
 from dascore.core.source import ArraySource
-from dascore.lazy import read as read_module
-from dascore.lazy import recipe as recipe_module
-from dascore.lazy.recipe import Recipe, concat
 from tests.test_lazy.conftest import FORMAT
 
 

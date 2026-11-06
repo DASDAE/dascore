@@ -253,7 +253,7 @@ def _xarray_group_nodes(outputs, group_attrs):
     """Name a DataTree node per output group, by the spool's naming rule."""
     # The same rule which names a repr's tracks and a coverage plot's
     # lanes; a node name must also be a valid single path component.
-    from dascore.utils.display import ACQUISITION_ATTR, group_names  # noqa: PLC0415
+    from dascore.utils._display import ACQUISITION_ATTR, group_names  # noqa: PLC0415
 
     if not group_attrs:
         frame = pd.DataFrame(index=[0])
@@ -408,12 +408,12 @@ def spool_to_xarray(
         )
         raise PatchConversionError(msg)
     # function-level to avoid circular imports through the package root
-    from dascore.io.index.planned import (  # noqa: PLC0415
+    from dascore.io._index.planned import (  # noqa: PLC0415
         PlanResolver,
         collapse_working_df,
         derived_catalog,
     )
-    from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
+    from dascore.utils._chunk_plan import build_chunk_plan  # noqa: PLC0415
     from dascore.utils.patch_assembly import plan_data_units  # noqa: PLC0415
 
     source_rows, working = spool._plan_frames(dim)

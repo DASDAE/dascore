@@ -18,15 +18,15 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
-from dascore.io.index import indexer as indexer_mod
-from dascore.io.index.indexer import (
+from dascore.io._index import indexer as indexer_mod
+from dascore.io._index.indexer import (
     DBDirectoryIndexer,
     _get_mapped_index_path,
     _map_entry_path,
     _path_digest,
     _set_mapped_index_path,
 )
-from dascore.io.index.query import InvalidSpoolQueryError
+from dascore.io._index.query import InvalidSpoolQueryError
 from dascore.utils.patch import get_patch_names
 from dascore.warnings import DASCoreWarning
 

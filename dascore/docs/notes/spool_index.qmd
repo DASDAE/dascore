@@ -95,7 +95,7 @@ The cell below runs against the real catalog so this description cannot silently
 
 ```{python}
 import dascore as dc
-from dascore.io.index.catalog import PatchCatalog
+from dascore.io._index.catalog import PatchCatalog
 
 catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
 df = catalog.to_df()

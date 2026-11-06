@@ -588,7 +588,7 @@ def glob_filter(include, exclude):
 
 def match_resolved(values, name: str, selector, units=None) -> np.ndarray:
     """Return which of the values an inventory states match a selector."""
-    from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
+    from dascore.io._index.query import evaluate_attr_predicate  # noqa: PLC0415
 
     values = np.asarray(values, dtype=object)
     out = np.zeros(len(values), dtype=bool)
@@ -1484,7 +1484,7 @@ def _channel_values(inventory, path, name, distances) -> tuple:
 
 def _channel_matches(inventory, path, name, selector, distances) -> np.ndarray:
     """Return the channels one selector matches, as the index would."""
-    from dascore.io.index.query import evaluate_attr_predicate  # noqa: PLC0415
+    from dascore.io._index.query import evaluate_attr_predicate  # noqa: PLC0415
 
     values, units = _channel_values(inventory, path, name, distances)
     if values is None:
