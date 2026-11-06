@@ -11,7 +11,6 @@ import dataclasses
 import itertools
 import math
 import re
-import warnings
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
@@ -4638,10 +4637,10 @@ def get_coord(
         that step and are jittered; anything else has no step. Integer and
         time labels are judged exactly in their own tick unit, floats within
         a few units in the last place of the dtype they were stored in. No
-        label is moved. None (default) also snaps labels within 0.1% of one
-        spacing onto a grid, as DASCore 0.1.24 did, warning where that
-        differs from reading them exactly; from DASCore 0.1.26 it reads
-        them exactly. True snaps the same way without the warning.
+        label is moved. None (default) reads them exactly too; DASCore 0.1.24
+        instead snapped labels within 0.1% of one spacing onto a grid, which
+        True still does. Unless snap is False, float labels with a declared
+        step still snap onto that step's grid within rounding.
 
     Notes
     -----
@@ -4818,7 +4817,7 @@ def get_coord(
         )
     if isinstance(data, BaseCoord):  # just return coordinate
         return data
-    released = snap is not False  # the 0.1% snapping, for one more release
+    released = snap is not False  # a declared step forgives float rounding
     # An exact read takes a squeezed sample as one label, as readers did
     if not isinstance(data, np.ndarray) or not (released or data.ndim):
         data = np.atleast_1d(data)
@@ -4852,7 +4851,7 @@ def get_coord(
             if len(out) == len(data) and np.allclose(out.values, data, 0, tol):
                 return out
         return _exact_coord(data, step=step, units=units)
-    if released:
+    if snap:  # the 0.1% snap DASCore 0.1.24 applied by default
         start, stop, step, monotonic, uniform = _maybe_get_start_stop_step(data)
         if start is not None:
             # labels flooring a fractional-step grid keep it; the median step
@@ -4864,7 +4863,7 @@ def get_coord(
             out = out.change_length(len(data))
             if uniform:  # one spacing: the grid restates the labels
                 return out
-            return _released_or_exact(out, data, units, warn=snap is None)
+            return _released_or_exact(out, data, units)
     else:
         monotonic = data.ndim == 1 and is_strictly_monotonic(data)
     # labels the 0.1% snap leaves alone may still be jittered
@@ -4892,13 +4891,12 @@ def _shift(coord, data) -> float:
     return float(np.max(moved)) / abs(float(coord.step))
 
 
-def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
+def _released_or_exact(snapped, data, units) -> BaseCoord:
     """
     The released snap of labels within 0.1% of one spacing, or the exact coord.
 
-    DASCore 0.1.24 snapped such labels onto a grid. Where that moves them by
-    more than rounding, the snap is kept for one more release, with a warning
-    when ``warn``, unless the exact coordinate is evenly sampled too. Its
+    DASCore 0.1.24 snapped such labels onto a grid by default; ``snap=True``
+    still does, unless the exact coordinate is evenly sampled too. Its
     median step can move a label half a step or more, relabelling samples
     (#1419); jittered labels are then snapped from their end labels and
     count instead, as `snap` does, and others keep no step.
@@ -4915,21 +4913,10 @@ def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
     exact = _exact_coord(data, units=units)
     if exact.evenly_sampled:  # as a grid, which the released result was
         return exact if exact._grid is not None else exact.snap()
-    shift = _shift(snapped, data)
-    if shift >= 0.5:
+    if _shift(snapped, data) >= 0.5:
         if not exact.jittered:
             return exact
         snapped = exact.snap()
-        shift = _shift(snapped, data)
-    if warn:
-        msg = (
-            f"get_coord(data=...) snapped labels lying up to {shift:.2g} steps "
-            "off a grid onto it, as DASCore 0.1.24 did. From DASCore 0.1.26 "
-            "inference keeps labels as recorded, so these will be jittered or "
-            "have no step. Pass snap=False, or a coordinate built with it, to "
-            "get that now; snap_coords snaps explicitly."
-        )
-        warnings.warn(msg, FutureWarning, stacklevel=3)
     return snapped
 
 
