@@ -59,10 +59,10 @@ class RSFV1(FiberIO):
 
         spool needs to have a single patch in it
 
-        time origin is forced to 0.0 in the new RSF file; for a datetime
-        time axis i, epoch<i> holds the start time as an ISO 8601 UTC
-        string with nanoseconds, and the legacy key 'starttime' holds it
-        as float seconds since 1970
+        for a datetime time axis i, o<i> is 0.0, epoch<i> holds the start
+        time as an ISO 8601 UTC string with nanoseconds, and the legacy
+        key 'starttime' holds it as float seconds since 1970; any other
+        axis, including a time axis of offsets, holds its start in o<i>
 
         Parameters
         ----------
@@ -118,10 +118,9 @@ class RSFV1(FiberIO):
         hdr_info = [hdr_str, file_format, f"esize={file_esize}"]
         for i in range(length):
             hdr_info.append(f"n{i + 1}={axis_lengths[i]}")
-            if axis_names[i] == "time":
+            if axis_names[i] == "time" and axis_epochs[i] is not None:
                 hdr_info.append(f"o{i + 1}=0.0")
-                if axis_epochs[i] is not None:
-                    hdr_info.append(f'epoch{i + 1}="{axis_epochs[i]}"')
+                hdr_info.append(f'epoch{i + 1}="{axis_epochs[i]}"')
                 # legacy key, kept for readers of earlier output
                 hdr_info.append(f"starttime={axis_origs[i]}")
             else:

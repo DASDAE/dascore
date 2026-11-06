@@ -184,3 +184,15 @@ class TestRsfEpoch:
         assert hdr["epoch2"] == "2024-01-01T00:00:00.123456789Z"
         start = fractional_patch.get_coord("time").min()
         assert np.datetime64(hdr["epoch2"][:-1], "ns") == start
+
+    def test_relative_time(self, fractional_patch, tmp_path):
+        """A time axis of offsets keeps its start in o, with no epoch."""
+        time = dc.get_coord(
+            start=np.timedelta64(5, "s"), step=np.timedelta64(4, "ms"), shape=(8,)
+        )
+        path = tmp_path / "relative.rsf"
+        RSFV1().write(fractional_patch.update_coords(time=time), path)
+        hdr, _, _ = _split_combined(path.read_bytes())
+        assert (hdr["o2"], hdr["d2"], hdr["unit2"]) == ("5.0", "0.004", "s")
+        assert "epoch2" not in hdr
+        assert "starttime" not in hdr
