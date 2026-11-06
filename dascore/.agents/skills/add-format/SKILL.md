@@ -27,10 +27,10 @@ class JingleV1(FiberIO):
     def get_version(self, resource) -> str | None:
         """Return the resource's Jingle version, or None for another family."""
 
-    def get_metadata(self, resource, *, snap: snap_type = ()) -> list[dc.Patch]:
+    def get_metadata(self, resource, *, snap: snap_type = ()) -> list[dc.PatchMeta]:
         """Describe each logical patch without retaining its sample array."""
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=patch_attrs,
                 coords=coord_manager,
                 dtype=dtype,

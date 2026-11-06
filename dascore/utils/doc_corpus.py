@@ -289,11 +289,16 @@ def _read_readme():
     return text.partition("\n\n")[2]
 
 
-def _read_source(path, included, stack=()):
-    """Expand packaged includes, collecting each included file's front matter."""
+def _read_source(path, stack=()):
+    """
+    Return a page's metadata and body, with packaged includes expanded.
+
+    An included file's front matter fills in metadata the page lacks, as Quarto
+    merges the metadata blocks of the files a page includes.
+    """
     if path in stack:
         raise DocumentationError(f"Circular documentation include: {path}")
-    text = path.read_text(encoding="utf-8")
+    front, body = _frontmatter(path.read_text(encoding="utf-8"))
 
     def include(match):
         target = (path.parent / match[1].strip().strip("\"'")).resolve()
@@ -303,18 +308,12 @@ def _read_source(path, included, stack=()):
             raise DocumentationError(
                 f"Documentation include escapes its source directory: {target}"
             )
-        front, body = _frontmatter(_read_source(target, included, (*stack, path)))
-        included.update(front)
-        return body
+        included, text = _read_source(target, (*stack, path))
+        for key, value in included.items():
+            front.setdefault(key, value)
+        return text
 
-    return _INCLUDE.sub(include, text)
-
-
-def _read_page(path):
-    """Return a page's metadata and body; its own keys override an include's."""
-    included = {}
-    front, body = _frontmatter(_read_source(path, included))
-    return {**included, **front}, body
+    return front, _INCLUDE.sub(include, body)
 
 
 def _frontmatter(text):
@@ -325,6 +324,8 @@ def _frontmatter(text):
     if len(parts) < 2:
         raise DocumentationError("Unterminated documentation frontmatter")
     front = yaml.safe_load(parts[0][4:]) or {}
+    if not isinstance(front, dict):
+        raise DocumentationError("Documentation frontmatter must be a mapping")
     return front, "\n---".join(parts[1:]).lstrip("\n")
 
 
@@ -429,7 +430,7 @@ def write_corpus(destination: Path) -> dict:
     records, omitted = _api_documents()
     for source in source_paths():
         relative = source.relative_to(DOC_PATH)
-        front, body = _read_page(source)
+        front, body = _read_source(source)
         key = relative.with_suffix("").as_posix()
         keywords = front.get("keywords", [])
         records[key] = dict(

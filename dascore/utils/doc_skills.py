@@ -13,7 +13,7 @@ from dascore.utils.doc_corpus import (
     DOC_PATH,
     SKILL_PATH,
     DocumentationError,
-    _read_page,
+    _read_source,
     source_paths,
 )
 
@@ -37,7 +37,7 @@ def get_skills() -> dict[str, dict[str, str]]:
             raise DocumentationError(
                 f"Skill {name!r} refers to an unknown document: {target!r}."
             )
-        front, _body = _read_page(pages[target])
+        front, _body = _read_source(pages[target])
         if not all(
             isinstance(front.get(key), str) and front[key].strip()
             for key in ("title", "description")
@@ -68,7 +68,7 @@ def install_skills(directory: Path | str) -> list[Path]:
     """Copy every shipped skill into an agent's skill directory, replacing copies."""
     out = []
     for source in sorted(SKILL_PATH.glob("*/SKILL.md")):
-        target = Path(directory) / source.parent.name
+        target = Path(directory).expanduser() / source.parent.name
         shutil.copytree(source.parent, target, dirs_exist_ok=True)
         out.append(target / source.name)
     return out
