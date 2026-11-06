@@ -4,6 +4,8 @@ execute:
   warning: false
 ---
 
+{{< include ../_experimental.qmd >}}
+
 The [inventory tutorial](../tutorial/inventory.qmd) covers what an inventory says and the verbs which use it. This note is about the machinery in between: what happens when a spool has an inventory, when that inventory is read, and why several things which look like they should read it do not.
 
 The short version is that attaching an inventory and reading one are separate events, deliberately, and that most of what a spool does sits between them.

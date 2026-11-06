@@ -1,0 +1,3 @@
+::: {.callout-warning title="Experimental"}
+This page covers an experimental part of DASCore: its API and file formats may change in any minor release without a deprecation period. See what [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features) means.
+:::

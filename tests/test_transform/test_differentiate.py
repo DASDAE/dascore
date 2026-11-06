@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.transform.differentiate import differentiate
 from dascore.units import get_quantity
 from dascore.utils.time import to_float
@@ -90,18 +90,9 @@ class TestDifferentiateOrder2:
         assert get_quantity(out.attrs.data_units) == expected_units
 
     def test_uneven_spacing(self, wacky_dim_patch):
-        """Ensure we can diff over uneven dimensions."""
-        patch = wacky_dim_patch.update(data=np.ones_like(wacky_dim_patch.data))
-        out = differentiate(patch, "time")
-        # very occasionally, numpy outputs a few nan values from grad when
-        # coordinate spacing is provided. I am still trying to figure out
-        # why, but we don't want this to fail CI so skip test when that happens.
-        if np.any(np.isnan(out.data)):
-            pytest.skip("found NaN in output, not sure why this happens.")
-        spacing = to_float(out.get_coord("time").values)
-        ax = patch.get_axis("time")
-        expected = np.gradient(patch.data, spacing, axis=ax, edge_order=2)
-        assert np.allclose(expected, out.data, rtol=0.01)
+        """A dimension which is not evenly sampled raises."""
+        with pytest.raises(CoordError, match="differentiate"):
+            differentiate(wacky_dim_patch, "time")
 
 
 class TestStep:
@@ -156,13 +147,9 @@ class TestStep:
         assert np.allclose(out2.data, out3.data)
 
     def test_different_steps_monotonic_coord(self, linear_patch_monotonic_coord):
-        """Ensure using different steps still gives similar results."""
-        patch = linear_patch_monotonic_coord
-        out1 = patch.differentiate("distance", step=1)
-        out2 = patch.differentiate("distance", step=2)
-        out3 = patch.differentiate("distance", step=5)
-        assert np.allclose(out1.data, out2.data)
-        assert np.allclose(out2.data, out3.data)
+        """A stepped derivative along a coordinate with no step raises."""
+        with pytest.raises(CoordError, match="differentiate"):
+            linear_patch_monotonic_coord.differentiate("distance", step=2)
 
     def test_steps_with_order(self, linear_patch):
         """Tests combinations of step and order."""
@@ -277,14 +264,12 @@ class TestDataType:
 class TestHoles:
     """Differentiation must not difference across a coordinate hole."""
 
-    def test_holes_warn(self, holed_patch):
-        """Missing samples use label spacing until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
-            out = holed_patch.differentiate("time")
-        assert out.shape == holed_patch.shape
+    def test_holes_raise(self, holed_patch):
+        """Missing samples raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.differentiate("time")
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels use label spacing until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = stepless_seam_patch.differentiate("time")
-        assert out.shape == stepless_seam_patch.shape
+        """Step-less labels raise."""
+        with pytest.raises(CoordError, match="differentiate"):
+            stepless_seam_patch.differentiate("time")

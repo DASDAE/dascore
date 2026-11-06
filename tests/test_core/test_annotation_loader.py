@@ -815,6 +815,22 @@ class TestDeclaringDimensions:
 class TestTheAttrsFile:
     """What a set directory says about itself."""
 
+    def test_format_version(self, regions, tmp_path):
+        """attrs.json states the format version; none reads as 1 (s04-F6)."""
+        path = regions.io.save(tmp_path / "picks") / "attrs.json"
+        document = json.loads(path.read_text())
+        assert document.pop("format_version") == 1
+        path.write_text(json.dumps(document))
+        assert dc.annotations(path.parent).attrs.format_version == 1
+
+    def test_newer_format_version_is_refused(self, regions, tmp_path):
+        """A set from a newer DASCore is refused, not misread."""
+        path = regions.io.save(tmp_path / "picks") / "attrs.json"
+        document = json.loads(path.read_text()) | {"format_version": 2}
+        path.write_text(json.dumps(document))
+        with pytest.raises(InvalidAnnotationError, match="upgrade DASCore"):
+            dc.annotations(path.parent)
+
     def test_yaml_spelling(self, regions, tmp_path):
         """One data model stands behind both spellings."""
         directory = regions.io.save(tmp_path / "picks")

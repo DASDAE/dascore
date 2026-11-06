@@ -57,6 +57,7 @@ from dascore.io.utils import (
     convert_attr_units,
     resolve_keyed_source,
     slice_dataset,
+    step_from_interval,
     step_from_rate,
     stored_coord,
     windows_to_slices,
@@ -2899,6 +2900,24 @@ class TestStepFromRate:
         coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
         assert coord.step_exact == Fraction(1, 1024)
         assert coord.min() + coord.coord_range() == t0 + np.timedelta64(1, "s")
+
+    def test_exact_intervals(self):
+        """Simple intervals, as doubles or exact float32s, give exact steps."""
+        assert step_from_interval(1 / 1024) == Fraction(1, 1024)
+        assert step_from_interval(np.float32(1 / 1024)) == Fraction(1, 1024)
+        assert step_from_interval(1 / 3000) == Fraction(1, 3000)
+        assert step_from_interval(0.001) == Fraction(1, 1000)
+
+    def test_inexact_interval_keeps_nanoseconds(self):
+        """An interval already cut to nanoseconds claims nothing more."""
+        for value in (0.000976562, np.float32(0.001), np.float32(1 / 3000)):
+            out = step_from_interval(value)
+            assert isinstance(out, np.timedelta64)
+            assert out == dc.to_timedelta64(float(value))
+
+    def test_nonpositive_interval_falls_back(self):
+        """A non-positive interval is not a grid."""
+        assert isinstance(step_from_interval(-0.001), np.timedelta64)
 
 
 class TestOffsetReads:

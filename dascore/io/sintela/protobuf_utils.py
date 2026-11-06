@@ -56,7 +56,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import stored_coord, windows_to_slices
+from dascore.io.utils import step_from_rate, stored_coord, windows_to_slices
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -776,7 +776,7 @@ def _get_time_coord_from_samples(start: np.datetime64, sample_rate: float, size:
     if not np.isfinite(sample_rate) or sample_rate <= 0:
         msg = f"Invalid Sintela protobuf sample_rate: {sample_rate!r}."
         raise InvalidFiberFileError(msg)
-    step = dc.to_timedelta64(1 / sample_rate)
+    step = step_from_rate(sample_rate)
     return get_coord(start=start, step=step, shape=(size,))
 
 

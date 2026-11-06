@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.proc.taper import taper
 from dascore.units import m, percent
 from dascore.utils.misc import broadcast_for_index
@@ -166,9 +166,9 @@ class TestTaperBasics:
         assert out1.equals(out2, close=True)
 
     def test_uneven_time_coord(self, patch_sorted_time):
-        """Ensure taper works on patches without even sampling."""
-        out = patch_sorted_time.taper(time=(0.1, 0.2))
-        assert isinstance(out, dc.Patch)
+        """A time coordinate which is not evenly sampled raises."""
+        with pytest.raises(CoordError, match="taper"):
+            patch_sorted_time.taper(time=(0.1, 0.2))
 
     def test_full_taper(self, patch_ones):
         """Ensure a "full taper" works"""
@@ -350,17 +350,15 @@ class TestTaperErrors:
 class TestTaperHoles:
     """Tapering must not treat a coordinate with holes as one record."""
 
-    def test_holes_warn(self, holed_patch):
-        """Missing samples taper by their labels until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
-            out = holed_patch.taper(time=0.1)
-        assert out.shape == holed_patch.shape
+    def test_holes_raise(self, holed_patch):
+        """Missing samples raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.taper(time=0.1)
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels still taper until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = stepless_seam_patch.taper(time=0.1)
-        assert out.shape == stepless_seam_patch.shape
+        """Step-less labels raise."""
+        with pytest.raises(CoordError, match="taper"):
+            stepless_seam_patch.taper(time=0.1)
 
 
 class TestTaperDtype:

@@ -340,22 +340,35 @@ class TestStatedStep:
 
 
 class TestReleasedSnapping:
-    """The released 0.1% snapping is kept for one release, with a warning."""
+    """The released 0.1% snapping is kept behind snap=True."""
 
-    def test_default_warns(self):
-        """The default keeps the released grid and warns that it will change."""
+    def test_default_is_exact(self):
+        """The default reads labels exactly, as snap=False does, silently."""
         values = _slightly_jittered_floats()
-        with pytest.warns(FutureWarning, match="snap=False"):
-            coord = get_coord(data=values)
-        assert coord.evenly_sampled
+        coord = _no_warning(get_coord, data=values)
+        assert coord.jittered
+        np.testing.assert_array_equal(coord.values, values)
 
     def test_snap_true_is_silent(self):
         """Asking for the released snapping keeps it without a warning."""
         coord = _no_warning(get_coord, data=_slightly_jittered_floats(), snap=True)
         assert coord.evenly_sampled
 
+    def test_snap_true_keeps_a_fractional_grid(self):
+        """Labels flooring a fractional-step grid rebuild it under snap=True."""
+        coord = get_coord(start=0, step=(10_000, 3), shape=(100,))
+        out = _no_warning(get_coord, data=coord.values, snap=True)
+        assert out == coord
+
+    def test_snap_true_puts_stored_labels_on_a_grid(self):
+        """Labels on their step within rounding become a grid under snap=True."""
+        values = np.linspace(0, 100, 1001, dtype=np.float32)[:100]
+        assert get_coord(data=values)._grid is None
+        out = _no_warning(get_coord, data=values, snap=True)
+        assert out.evenly_sampled and out._grid is not None
+
     def test_snap_false_is_exact(self):
-        """snap=False gives the new result now."""
+        """snap=False reads labels exactly."""
         values = _slightly_jittered_floats()
         coord = _no_warning(get_coord, data=values, snap=False)
         assert coord.jittered
@@ -370,15 +383,14 @@ class TestReleasedSnapping:
 
     def test_relabelling_is_not_kept(self):
         """A released grid moving labels half a step or more is not kept."""
-        coord = _no_warning(get_coord, data=_drifting_floats())
+        coord = _no_warning(get_coord, data=_drifting_floats(), snap=True)
         assert coord.step is None
 
     def test_relabelling_jitter_snaps_from_its_ends(self):
         """Jitter the median step would relabel is snapped from its end labels."""
         pattern = np.array([0.9999, 0.9999, 0.9999, 1.00015, 1.00015])
         values = np.r_[0.0, np.cumsum(np.tile(pattern, 6000))]
-        with pytest.warns(FutureWarning, match="snap=False"):
-            coord = get_coord(data=values)
+        coord = _no_warning(get_coord, data=values, snap=True)
         assert coord.evenly_sampled
         assert coord.step == pytest.approx(1.0)
         assert np.max(np.abs(coord.values - values)) < 0.01

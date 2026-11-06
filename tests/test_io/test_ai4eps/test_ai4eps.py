@@ -1,6 +1,7 @@
 """Tests for the AI4EPS event format."""
 
 import shutil
+from fractions import Fraction
 
 import h5py
 import numpy as np
@@ -108,6 +109,25 @@ class TestAI4EPS:
         assert np.array_equal(patch.data, values)
         assert dc.scan(path)[0].coords["time"].max == dc.to_datetime64(
             "2020-01-01T00:00:00.03"
+        )
+
+    @pytest.mark.filterwarnings("error:AI4EPS file end_time")
+    def test_exact_dt(self, tmp_path):
+        """A dt_s of 1/1024 gives an exact step, not a nanosecond-rounded one."""
+        path = tmp_path / "hz_1024.h5"
+        with h5py.File(path, "w") as h5:
+            dataset = h5.create_dataset("data", data=np.zeros((2, 2048)))
+            dataset.attrs.update(
+                begin_time="2020-01-01T00:00:00",
+                end_time="2020-01-01T00:00:02",
+                dt_s=1 / 1024,
+                dx_m=8,
+                unit="m/s",
+            )
+        time = dc.read(path)[0].get_coord("time")
+        assert time.step_exact == Fraction(1, 1024)
+        assert time.min() + time.coord_range() == dc.to_datetime64(
+            "2020-01-01T00:00:02"
         )
 
     def test_missing_acquisition_units_not_claimed(self, tmp_path):

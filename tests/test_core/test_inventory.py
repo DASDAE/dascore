@@ -3162,8 +3162,13 @@ class TestSerializationIsLossless:
         default = inv.Inventory().schema_version
         data = yaml.safe_load(build_inventory().io.to_yaml())
         assert data["schema_version"] == default
-        other = inv.Inventory(schema_version=default + 1)
-        assert dc.inventory(other.io.to_yaml()).schema_version == default + 1
+        assert dc.inventory(build_inventory().io.to_yaml()).schema_version == default
+
+    def test_newer_schema_version_is_refused(self):
+        """A document from a newer DASCore is refused, not misread (s04-F6)."""
+        text = f"object_type: Inventory\nschema_version: {inv.SCHEMA_VERSION + 1}\n"
+        with pytest.raises(InvalidInventoryError, match="upgrade DASCore"):
+            dc.inventory(text)
 
     def test_empty_label_value_is_rejected(self):
         """

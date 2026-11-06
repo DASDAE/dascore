@@ -3,6 +3,10 @@ name: make-inventory
 description: Create, validate, repair, serialize, and attach an inventory using a worked tunnel deployment.
 ---
 
+::: {.callout-warning title="Experimental"}
+This page covers an experimental part of DASCore: its API and file formats may change in any minor release without a deprecation period. See what [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features) means.
+:::
+
 Use an inventory to describe the observing system independently of the files containing its measurements. Start from recorded deployment facts; the tunnel example below shows how the pieces fit together.
 
 ## Workflow

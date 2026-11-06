@@ -43,7 +43,6 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
-from dascore.warnings import DASCoreWarning
 
 
 def _gigo(garbage):
@@ -1904,7 +1903,6 @@ class TestConcatenatePartitions:
         kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
         assert kinds == {"M", "f"}
 
-    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_riding_the_dimension_is_joined(self, pair):
         """A coordinate every member carries along the dimension follows it."""
         first, other = pair
@@ -1916,8 +1914,6 @@ class TestConcatenatePartitions:
         assert patch.coords.dim_map["clock"] == ("time",)
         assert np.array_equal(patch.get_array("clock"), np.arange(2 * nt) * 1.0)
         assert out.get_contents()["clock_max"].iloc[0] == 2 * nt - 1
-        direct = dc.utils.patch.concatenate_patches([a, b], time=None)[0]
-        assert np.array_equal(direct.get_array("clock"), np.arange(2 * nt) * 1.0)
 
     def test_first_row_without_step_keeps_input_order(self):
         """A later row's step does not lend the partition an orientation."""
@@ -1932,7 +1928,6 @@ class TestConcatenatePartitions:
         assert np.allclose(values[:n], irregular.get_coord("distance").values)
         assert np.all(np.diff(values) < 0)
 
-    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_attached_differently_conflicts(self):
         """Equal values on different dimensions are different coordinates."""
         base = dc.get_example_patch()
@@ -1946,10 +1941,16 @@ class TestConcatenatePartitions:
             sp = dc.spool([a, b]).concatenate(time=None, conflict=conflict)
             with pytest.raises(CoordMergeError, match="quality"):
                 sp[0]
+
+    def test_stack_refuses_a_coordinate_attached_differently(self):
+        """Stacking compares where a coordinate is attached, not just its values."""
+        base = dc.get_example_patch()
+        square = base.select(distance=(0, 50), samples=True)
+        square = square.select(time=(0, 50), samples=True)
+        a = square.update_coords(quality=("distance", np.arange(50) * 1.0))
+        b = square.update_coords(quality=("time", np.arange(50) * 1.0))
         with pytest.raises(IncompatiblePatchError, match="quality"):
-            dc.utils.patch.concatenate_patches(
-                [a, b], time=None, check_behavior="raise"
-            )
+            dc.utils.patch.stack_patches([a, b], check_behavior="raise")
 
     def test_numeric_units_normalize_beside_another_kind(self, pair):
         """A text coordinate of the same name does not stop metres meeting cm."""
@@ -1965,17 +1966,6 @@ class TestConcatenatePartitions:
         assert len(out) == 2
         joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
         assert len(joined) == 1
-
-    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
-    def test_rider_only_on_the_first_is_left_out_directly(self, pair):
-        """The direct function drops a rider a later patch lacks, as the plan does."""
-        first, other = pair
-        nt = first.shape[first.get_axis("time")]
-        a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
-        with pytest.warns(DASCoreWarning, match="clock"):
-            out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
-        assert "clock" not in out.coords.coord_map
-        assert out.shape[out.get_axis("time")] == 2 * nt
 
     def test_rider_units_survive(self, pair):
         """A unitful rider keeps its units; members in other spellings convert."""
@@ -2054,9 +2044,8 @@ class TestConcatenatePartitions:
             with pytest.raises(CoordMergeError, match="clock"):
                 spool[0]
 
-    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
-    def test_direct_concatenation_picks_the_lowest_spelling(self, pair):
-        """Without a plan, the rider joins in the units of its lowest member."""
+    def test_rider_joins_in_the_lowest_spelling(self, pair):
+        """The rider joins in the units of its lowest member, whatever the order."""
         first, other = pair
         nt = first.shape[first.get_axis("time")]
         ticks = np.arange(nt) * 1.0
@@ -2064,7 +2053,7 @@ class TestConcatenatePartitions:
         high = other.update_coords(clock=("time", (ticks + nt) * 1000)).convert_units(
             clock="ms"
         )
-        out = dc.utils.patch.concatenate_patches([high, low], time=None)[0]
+        out = dc.spool([high, low]).concatenate(time=None)[0]
         clock = out.get_coord("clock")
         assert clock.units == dc.get_quantity("s")
         assert np.allclose(np.sort(clock.values), np.arange(2 * nt))

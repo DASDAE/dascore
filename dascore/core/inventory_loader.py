@@ -15,6 +15,8 @@ are ignored. Columns beginning with an underscore are also ignored.
 
 from __future__ import annotations
 
+__experimental__ = True
+
 import difflib
 import itertools
 import os

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
 
@@ -54,6 +55,7 @@ def _write_modern_dasvader_file(
     data_name: str = "data",
     include_attrib: bool = True,
     host_name: str | None = None,
+    time_step: float = MODERN_DASVADER.time_step,
 ) -> Path:
     """Write a readable DASVader file with named datasets and references."""
     tp_dtype = np.dtype([("hi", "<f8"), ("lo", "<f8")])
@@ -93,7 +95,7 @@ def _write_modern_dasvader_file(
         ddas[data_name] = data.ref
         ddas["htime"] = htime.ref
         ddas["time"]["ref"]["hi"] = 0.0
-        ddas["time"]["step"]["hi"] = MODERN_DASVADER.time_step
+        ddas["time"]["step"]["hi"] = time_step
         ddas["time"]["len"] = MODERN_DASVADER.ntime
         ddas["time"]["offset"] = 1
         ddas["offset"]["ref"]["hi"] = 0.0
@@ -277,6 +279,18 @@ class TestDASVader:
         assert patch.dims == ("distance", "time")
         assert patch.attrs.gauge_length == MODERN_DASVADER.gauge_length
         assert dict(patch.attrs)["interrogator.name"] == MODERN_DASVADER.host_name
+
+    def test_exact_time_step(self, tmp_path):
+        """A time step of 1/1024 s stays exact rather than nanosecond-rounded."""
+        path = _write_modern_dasvader_file(
+            tmp_path / "hz_1024.jld2", time_step=1 / 1024
+        )
+        for coord in (
+            dc.read(path)[0].get_coord("time"),
+            DASVaderV1().scan(path)[0].get_coord("time"),
+        ):
+            assert coord.step_exact == Fraction(1, 1024)
+            assert len(coord) == MODERN_DASVADER.ntime
 
     def test_blank_host_name_dropped(self, tmp_path):
         """An empty Hostname is not passed off as an interrogator name."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__experimental__ = True
+
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 

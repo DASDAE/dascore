@@ -696,7 +696,11 @@ class TestLineageIds:
         """A bound within an even grid's edge tolerance does not advance lineage."""
         patch = dc.get_example_patch().abs()
         values = start + np.arange(patch.shape[0]) * step
-        patch.update_coords(distance=values).io.write(tmp_path / "source.h5", "dasdae")
+        # snapped onto a grid; labels read exactly have no edge tolerance
+        distance = dc.get_coord(data=values, snap=True)
+        patch.update_coords(distance=distance).io.write(
+            tmp_path / "source.h5", "dasdae"
+        )
         spool = dc.spool(tmp_path).update()
         source = spool[0]
         coord = source.get_coord("distance")

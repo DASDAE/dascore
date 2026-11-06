@@ -3,6 +3,10 @@ name: make-annotations
 description: Build an annotation set from a table of picks, ranges, paths, or polygons, then query, plot, and save it.
 ---
 
+::: {.callout-warning title="Experimental"}
+This page covers an experimental part of DASCore: its API and file formats may change in any minor release without a deprecation period. See what [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features) means.
+:::
+
 An [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`) records where things are in a patch's dimensions: phase picks, boxes around noise, vehicle tracks, outlines of a region. It is a dataframe first. A picker's output is one table, and the same set can grow into grouped events, paths and polygons without changing what it already holds.
 
 Annotations describe data but never hold it. They are stated in coordinates, not sample indices, so they stay valid when the data is decimated, trimmed or re-chunked.

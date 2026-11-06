@@ -13,7 +13,7 @@ An agent can follow this guide directly from this page; the project does not nee
 2. Search the code for every old name in the tables below, and replace each with its 1.0 spelling. Read the installed docstring of each replacement before using it, since arguments changed too.
 3. Search separately for the **silent** changes: coordinate fields written through attrs, `attrs.get` of coordinate fields, gap merging in `chunk`, glob negation, STFT time values, and correlation units.
 4. Plan for existing files: 0.1.x DASDAE files need an explicit opt-in to read, old spool indexes are replaced, and DASDAE files written by 1.0 cannot be read by 0.1.x.
-5. Run the project's tests. Treat new `ParameterError`, `UnitError`, `CoordError`, `PatchCoordinateError`, and `InvalidSpoolQueryError` exceptions as places where 0.1.x computed something questionable, not as noise to suppress, and read new `FutureWarning`s as errors to come.
+5. Run the project's tests. Treat new `ParameterError`, `UnitError`, `CoordError`, `PatchCoordinateError`, and `InvalidSpoolQueryError` exceptions as places where 0.1.x computed something questionable, not as noise to suppress.
 
 ## Requirements
 
@@ -47,8 +47,12 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `to_float.register`, `to_int.register` | register on the private `_to_float`, `_to_int` |
 | `dc.proc.align_patch_coords` | `dascore.utils.patch.align_patch_coords` |
 | `DEFAULT_ATTRS_TO_IGNORE`, `PATCH_MERGE_ATTRS`, `attrs_to_ignore=` | the `patch_kind_attrs` config option; see [Patch compatibility](../notes/patch_compatibility.qmd) |
-
-`dascore.utils.patch.merge_patches` still works but is deprecated; use `dc.spool(patches).chunk(time=None)`.
+| `dascore.utils.patch.merge_patches(patches)` | `dc.spool(patches).chunk(time=None)` |
+| `dascore.utils.patch.concatenate_patches(patches, time=None)` | `dc.spool(patches).concatenate(time=None)`, which puts patches that cannot be concatenated together in separate outputs rather than skipping them |
+| `dascore.utils.patch.get_patch_window_size`, `get_window_axis_step` | `dascore.utils.window.resolve_window(...)`; `.full_size()` gives the window along every axis |
+| `dascore.utils.pd.get_regex` | `dascore.utils.misc.glob_to_regex`, which negates a character class with `[^...]` rather than fnmatch's `[!...]` |
+| `dascore.utils.hdf5.unpack_scalar_h5_dataset(dataset)` | `dataset[()]`, taking the first element of a length-one array |
+| `dascore.utils.misc.yield_sub_sequences` | slice the sequence directly |
 
 ## Attributes and coordinates
 
@@ -110,7 +114,9 @@ The coordinate classes were unified into one run-based [`NumericCoord`](`dascore
 
 `dc.get_coord(data=..., step=...)` now checks that the values sit on the stated grid and raises when they do not; 0.1.x ignored the step.
 
-Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. Operations which need evenly sampled data (`differentiate`, `integrate`, `taper`, `sobel_filter`, filtered `decimate`) still compute on such a patch but issue a `FutureWarning`, and will raise in a later release. Use `fill_gaps` or `split_gaps` first.
+Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. Operations which need evenly sampled data (`differentiate`, `integrate`, `taper`, `sobel_filter`, filtered `decimate`) raise `CoordError` on a coordinate with holes, jitter, or no step, where 0.1.x computed on the labels. Use `fill_gaps` or `split_gaps`, or `snap_coords`, first.
+
+**Silent:** `dc.get_coord(data=...)` without a `step` reads labels exactly by default: labels within 0.1% of one spacing of a grid, which 0.1.x snapped onto it, are now jittered or have no step. Pass `snap=True` for the 0.1.x result, or call `snap_coords` on the patch. A stated `step` still absorbs float rounding unless `snap=False`.
 
 ## Processing
 
@@ -118,7 +124,9 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 - `Patch.apply_ufunc` takes the patch first: `patch.apply_ufunc(np.add, other)`. Code calling `Patch.apply_ufunc(ufunc, patch)` should use `dascore.utils.array.apply_ufunc`.
 - `np.sort`, `np.argsort`, `np.partition`, and `numpy.fft` raise on patches instead of returning mislabelled coordinates. Apply them to `patch.data`, or use `Patch.dft`.
 - Arithmetic between patches no longer requires `data_units` to match; attributes in `patch_kind_attrs`, such as `tag`, still must. It raises `PatchCoordinateError` when a shared dimension has no overlapping values instead of returning an empty patch.
-- `Patch.order` raises `UnknownCoordinateError` for a coordinate the patch does not have, as `select` already did.
+- `Patch.order` raises `UnknownCoordinateError` for a coordinate the patch does not have, as `select` already did, and `CoordError` for values (or, with `samples=True`, positions) the coordinate does not hold, which 0.1.x dropped. Order only by values the coordinate holds.
+- `Patch.coords_from_df` raises `ParameterError` rather than overwrite an existing coordinate. Drop it first with `drop_coords`, or set it with `update_coords`.
+- **Silent: stack labels.** `Spool.stack(dim_vary=...)` keeps the first patch's labels for `dim_vary`; 0.1.x relabelled it to start at zero (1970 for times).
 - `hampel_filter` without a dimension raises instead of returning the data unchanged.
 - **Silent: STFT.** `Patch.stft` places its windows differently, so depending on window length and overlap the output `time` values, and the number of windows, can differ from 0.1.x. The output also carries `{dim}_start` and `{dim}_stop` coordinates giving each window's edges.
 - **Silent: correlation units.** `correlate` reports the square of the input data units.
