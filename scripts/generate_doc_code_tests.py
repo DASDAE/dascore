@@ -19,7 +19,7 @@ import re
 import shlex
 import shutil
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from textwrap import indent
 
@@ -308,7 +308,8 @@ def _chunk_is_executable(chunk_lines: list[str]) -> bool:
     return True
 
 
-_INCLUDE = re.compile(r"\{\{<\s*include\s+(\S+)\s*>\}\}")
+# The same spelling the corpus builder accepts, quoted paths included.
+_INCLUDE = re.compile(r"\{\{<\s*include\s+([^>]+?)\s*>\}\}")
 
 
 def _read_body(path: Path) -> tuple[list[str], list[tuple[Path, int, str]]]:
@@ -331,7 +332,8 @@ def _read_body(path: Path) -> tuple[list[str], list[tuple[Path, int, str]]]:
             out.append((path, offset, line))
         else:
             # Quarto pastes the included file here, so its cells run as well.
-            out.extend(_read_body((path.parent / include[1]).resolve())[1])
+            target = include[1].strip().strip("\"'")
+            out.extend(_read_body((path.parent / target).resolve())[1])
     return front_matter, out
 
 
@@ -443,13 +445,7 @@ def _collect_future_imports(
                 future_imports.append(future_import)
         body_source = "\n".join(body_lines).strip()
         if body_source:
-            cleaned_chunks.append(
-                Chunk(
-                    start_line=chunk.start_line,
-                    source=body_source + "\n",
-                    path=chunk.path,
-                )
-            )
+            cleaned_chunks.append(replace(chunk, source=body_source + "\n"))
     return tuple(future_imports), tuple(cleaned_chunks)
 
 

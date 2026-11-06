@@ -1,6 +1,6 @@
 ---
 name: make-namespace
-description: Add methods to Patch, Spool, Inventory, or AnnotationSet from a local namespace or a plugin package, and define patch processors and backend kernels.
+description: Add methods to DASCore's Patch, Spool, Inventory, or AnnotationSet from a local namespace or a plugin package, and define patch processors and backend kernels.
 ---
 
 Namespaces let external packages expose methods such as `patch.my_plugin.method()` without subclassing DASCore objects or adding optional dependencies to core. File formats use [`FiberIO`](new_format.qmd), not namespaces.

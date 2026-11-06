@@ -14,8 +14,6 @@ on:
     paths:
       - 'pyproject.toml'
       - '**.py'
-      # Skill files hold code cells that run as documentation tests.
-      - 'dascore/.agents/**'
       - '.github/workflows/run_min_dep_tests.yml'
       - '.github/actions/**/*.yml'
       # Registry edits change the test-data cache key; run the suite so the

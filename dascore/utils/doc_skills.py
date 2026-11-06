@@ -27,13 +27,16 @@ _INSTALLED_BODY = (
     "versions. Run `<python> -m dascore skill {name}` with the project's "
     "Python, selected as the `dascore` skill describes, and follow what it "
     "prints.\n\n"
-    "If the command reports an unknown skill, the project's DASCore predates "
-    "it. Say so rather than working from memory.\n"
+    "If the command is missing or reports an unknown skill, the project's "
+    "DASCore predates this skill. Say so rather than working from memory.\n"
 )
 
 
 def get_skills() -> dict[str, dict[str, str]]:
-    """Read skill membership, each page's title, and its skill's description."""
+    """Read skill membership and each page's title and description.
+
+    A page without a description takes its included skill's.
+    """
     catalog = yaml.safe_load((DOC_PATH / "skills.yml").read_text(encoding="utf-8"))
     if not isinstance(catalog, dict):
         raise DocumentationError("The skill catalog must map names to document IDs.")
@@ -95,7 +98,12 @@ def install_skills(directory: Path | str) -> list[Path]:
             front = text.split("\n---\n", 1)[0]
             text = f"{front}\n---\n{_INSTALLED_BODY.format(name=name)}"
         target = Path(directory).expanduser() / name / source.name
-        # A directory linked to the package holds the skill files themselves.
+        # Replace a link rather than write through it: it may point into a
+        # package, whose procedure the short entry would then overwrite.
+        for link in (target.parent, target):
+            if link.is_symlink():
+                link.unlink()
+        # The same holds when the directory is this package's own skills.
         if not (target.exists() and target.samefile(source)):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8")

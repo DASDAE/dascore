@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -9,6 +13,18 @@ import dascore as dc
 from dascore.cli import main
 from dascore.utils import doc_skills
 from dascore.utils.doc_corpus import DOC_PATH, SKILL_PATH, DocumentationError
+
+_SCRIPTS = Path(__file__).parents[2] / "scripts"
+
+
+def _load_script(name):
+    """Import a documentation build script, which lives outside the package."""
+    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    # Dataclasses with postponed annotations look their module up by name.
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestSkills:
@@ -39,16 +55,27 @@ class TestSkills:
             include = f"{{{{< include ../../.agents/skills/{name}/SKILL.md >}}}}"
             assert page.endswith(f"\n---\n{include}\n")
 
+    @pytest.mark.skipif(not _SCRIPTS.exists(), reason="needs a repository checkout")
+    def test_build_tools_read_skill_files(self):
+        """Code cells and links that moved into skill files are still checked."""
+        generator = _load_script("generate_doc_code_tests")
+        page = DOC_PATH / "recipes" / "tunnel_inventory.qmd"
+        assert generator.extract_qmd_file(page).chunks
+        validator = _load_script("_validate_links")
+        skill = SKILL_PATH / "make-inventory" / "SKILL.md"
+        assert skill in set(validator.get_qmd_files())
+
     def test_cli(self, cache, capsys):
         """Discovery lists canonical pages and retrieval serves their contents."""
         assert main(["skills"]) == 0
         listed = capsys.readouterr().out
         for name, info in doc_skills.get_skills().items():
             assert f"{name}: {info['description']}" in listed
-        for name in doc_skills.get_skills():
+        for name, info in doc_skills.get_skills().items():
             assert main(["skill", name]) == 0
             printed = capsys.readouterr().out
             assert printed == doc_skills.read_skill(name)
+            assert f"\n# {info['title']}\n" in printed
             # The skill file's own front matter stays out of the printed page.
             assert f"name: {name}" not in printed
 
@@ -66,7 +93,13 @@ class TestSkills:
         installed = capsys.readouterr().out.split()
         sources = sorted(SKILL_PATH.glob("*/SKILL.md"))
         assert installed == [str(target / x.parent.name / x.name) for x in sources]
-        assert doc_skills._STANDALONE < {x.parent.name for x in sources}
+        # Each of these serves a project whose DASCore may have no command line.
+        assert doc_skills._STANDALONE == {
+            "dascore",
+            "migrate-to-v1",
+            "start-task",
+            "test-beta",
+        }
         descriptions = {k: v["description"] for k, v in doc_skills.get_skills().items()}
         for source in sources:
             name = source.parent.name
@@ -85,6 +118,26 @@ class TestSkills:
             assert f"-m dascore skill {name}`" in body
             procedure = shipped.split("\n---\n", 1)[1].splitlines()
             assert not {x for x in procedure if x.strip()} & set(body.splitlines())
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+    def test_install_over_links(self, tmp_path):
+        """A linked or dangling skill folder is replaced, not written through."""
+        other = tmp_path / "other-environment" / "make-inventory"
+        other.mkdir(parents=True)
+        procedure = other / "SKILL.md"
+        procedure.write_text("Another installation's procedure.")
+        target = tmp_path / "skills"
+        target.mkdir()
+        (target / "make-inventory").symlink_to(other, target_is_directory=True)
+        (target / "add-format").symlink_to(
+            tmp_path / "deleted", target_is_directory=True
+        )
+        doc_skills.install_skills(target)
+        assert procedure.read_text() == "Another installation's procedure."
+        for name in ("make-inventory", "add-format"):
+            entry = target / name / "SKILL.md"
+            assert not entry.parent.is_symlink()
+            assert f"-m dascore skill {name}`" in entry.read_text(encoding="utf-8")
 
     def test_install_into_package(self, tmp_path, monkeypatch):
         """Installing into a directory that is the shipped skills changes nothing."""
