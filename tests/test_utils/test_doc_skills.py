@@ -11,6 +11,17 @@ from dascore.utils import doc_skills
 from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import DocumentationError
 
+# The shipped catalog, in listing order.
+_CATALOG = {
+    "dascore": "recipes/dascore",
+    "make-inventory": "recipes/tunnel_inventory",
+    "make-annotations": "tutorial/annotations",
+    "make-namespace": "contributing/extending_dascore",
+    "add-format": "contributing/new_format",
+    "migrate-to-v1": "migrations/dascore_1.0_migration",
+    "test-beta": "migrations/test_latest_beta",
+}
+
 
 class TestSkills:
     """Exercise the real packaged catalog and command-line surface."""
@@ -24,17 +35,10 @@ class TestSkills:
     def test_catalog(self):
         """The catalog exposes each catalogued procedure with its metadata."""
         skills = doc_skills.get_skills()
-        assert {name: info["target"] for name, info in skills.items()} == {
-            "dascore": "recipes/dascore",
-            "make-inventory": "recipes/tunnel_inventory",
-            "migrate-to-v1": "migrations/dascore_1.0_migration",
-            "test-beta": "migrations/test_latest_beta",
-        }
+        assert {name: info["target"] for name, info in skills.items()} == _CATALOG
         assert all(x["title"] and x["description"] for x in skills.values())
 
-    @pytest.mark.parametrize(
-        "name", ["dascore", "make-inventory", "migrate-to-v1", "test-beta"]
-    )
+    @pytest.mark.parametrize("name", list(_CATALOG))
     def test_same_document(self, cache, name):
         """Skill retrieval returns the exact canonical cached documentation page."""
         target = doc_skills.get_skills()[name]["target"]
@@ -58,7 +62,7 @@ class TestSkills:
             (
                 ["skill", "unknown"],
                 1,
-                "Available skills: dascore, make-inventory, migrate-to-v1, test-beta",
+                f"Available skills: {', '.join(_CATALOG)}",
             ),
             (["skill", "dascore", "--bootstrap"], 2, "Use a skill name"),
         ],

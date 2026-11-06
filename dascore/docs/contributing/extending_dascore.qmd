@@ -1,5 +1,7 @@
 ---
 title: Extending DASCore
+description: Add methods to Patch, Spool, Inventory, or AnnotationSet from a local namespace or a plugin package, and define patch processors and backend kernels.
+keywords: [namespace, plugin, entry point, processor, backend]
 ---
 
 Namespaces let external packages expose methods such as `patch.my_plugin.method()` without subclassing DASCore objects or adding optional dependencies to core. File formats use [`FiberIO`](new_format.qmd), not namespaces.

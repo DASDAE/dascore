@@ -1,5 +1,7 @@
 ---
 title: Annotations
+description: Build an annotation set from a table of picks, ranges, paths, or polygons, then query, plot, and save it.
+keywords: [annotations, picks, events, csv]
 execute:
   warning: false
 ---
@@ -57,6 +59,8 @@ path = folder / "picks.csv"
 pick_set.io.to_csv(path)
 assert dc.annotations(path, dims=patch.dims).annotations.equals(pick_set.annotations)
 ```
+
+A CSV written by another tool reads the same way once its columns are named as in [the model](#the-model): `time` for a value, `time_min` and `time_max` for a range, and likewise for each dimension. Rename them with pandas and pass the dataframe to `dc.AnnotationSet(df, dims=("time", "distance"))`. A row stating no dimension is refused.
 
 # Building features
 
