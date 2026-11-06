@@ -171,7 +171,8 @@ def _check_packet_continuity(indices, stamps, header):
     dropped, repeated, or concatenated packet.
     """
     num_samples = int(header["num_samples"])
-    packet_ns = round(num_samples / float(header["sample_rate"]) * 1e9)
+    # Unrounded, so the expected offsets do not drift over a long file.
+    packet_ns = num_samples / float(header["sample_rate"]) * 1e9
     offsets = np.asarray(indices, dtype=np.int64) - indices[0]
     # uint64 differences wrap, so a backwards count reads as a huge jump;
     # the int64 view gives signed time offsets.

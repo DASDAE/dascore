@@ -11,7 +11,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.sintela import SintelaBinaryV3
-from dascore.io.sintela.utils import _get_complete_header
+from dascore.io.sintela.utils import _check_packet_continuity, _get_complete_header
 from dascore.utils.downloader import fetch
 
 
@@ -154,3 +154,11 @@ class TestPacketContinuity:
         assert dc.read(near_path)[0].shape[0] == len(packets) * 500
         with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* start time"):
             dc.read(far_path)
+
+    def test_no_drift_over_long_files(self):
+        """A packet duration that is not whole ns does not drift into a raise."""
+        header = {"num_samples": 1, "sample_rate": 3000.0}
+        # 500001 samples at 3 kHz end 166.667 s in, exactly; rounding the
+        # packet duration first would put it a whole tolerance away.
+        stamps = np.array([[0, 0], [500_001, 166_667_000_000]], dtype="<u8")
+        _check_packet_continuity(np.array([0, 500_001]), stamps, header)
