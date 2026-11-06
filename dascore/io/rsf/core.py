@@ -3,12 +3,14 @@
 
 # import segyio
 import datetime as dt
+import warnings
 
 import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
 from dascore.io.utils import require_grid
+from dascore.units import get_quantity_str
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 
@@ -20,11 +22,17 @@ def _coerce_output_path(path):
     return coerce_to_local_path(path) if is_local_path(path) else coerce_to_upath(path)
 
 
+def _get_step(coord):
+    """Return the coordinate's step as a float, exactly when it has an exact form."""
+    step = coord.step_exact
+    return float(step) if step is not None else to_float(coord.step)
+
+
 class RSFV1(FiberIO):
     """An IO class supporting the RSF format of MADAGASCAR."""
 
     name = "rsf"
-    preferred_extensions = "rsf"
+    preferred_extensions = ("rsf",)
     # also specify a version so when version 2 is released you can
     # just make another class in the same module named rsfV2.
     version = "1"
@@ -59,7 +67,11 @@ class RSFV1(FiberIO):
         Notes
         -----
         - Patch datatype is converted to float32 for compatibility with
-        Madagascar (may be able to keep dtype in the future)
+        Madagascar (may be able to keep dtype in the future), with a
+        UserWarning when the data are not already float32
+        - With data_path, the header's in= holds the binary's absolute path
+        - Without data_path, the header ends with a blank line and the
+        separator bytes 0x0c 0x0c 0x04 before the binary
         """
         patches = [spool] if isinstance(spool, dc.Patch) else spool
         assert len(patches) == 1
@@ -67,15 +79,18 @@ class RSFV1(FiberIO):
         require_grid(patch, patch.dims, "RSF")
         axis_lengths = patch.shape
         axis_origs = [to_float(patch.get_coord(x).values[0]) for x in patch.dims]
-        axis_steps = [to_float(patch.get_coord(x).step) for x in patch.dims]
+        axis_steps = [_get_step(patch.get_coord(x)) for x in patch.dims]
         axis_names = patch.dims
-        axis_units = [patch.get_coord(x).units.units for x in patch.dims]
+        axis_units = [get_quantity_str(patch.get_coord(x).units) for x in patch.dims]
 
         data = patch.data
         dtype = np.dtype(data.dtype)
 
         if not (np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating)):
             raise ValueError("Data format is not integer or floating.")
+        if dtype != np.float32:
+            msg = f"RSF stores float32; casting {dtype} data to float32."
+            warnings.warn(msg, UserWarning, stacklevel=2)
         ## we are casting to float32 to ensure that esize=4 for m8r
         data = patch.data.astype(np.float32)
         dtype = np.dtype(data.dtype)
@@ -97,16 +112,18 @@ class RSFV1(FiberIO):
                 hdr_info.append(f"o{i + 1}={axis_origs[i]}")
             hdr_info.append(f"d{i + 1}={axis_steps[i]}")
             hdr_info.append(f'label{i + 1}="{axis_names[i]}"')
-            hdr_info.append(f'unit{i + 1}="{axis_units[i]}"')
+            if axis_units[i]:
+                hdr_info.append(f'unit{i + 1}="{axis_units[i]}"')
 
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
             outdatapath = _coerce_output_path(str(data_path) + "@")
             outdatapath.parent.mkdir(exist_ok=True, parents=True)
-            hdr_info.append(f'in="{data_path}@"')
+            in_path = outdatapath.resolve() if is_local_path(data_path) else outdatapath
+            hdr_info.append(f'in="{in_path}"')
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)
-            out = "\n".join(hdr_info)
+            out = "\n".join(hdr_info) + "\n"
             outpath = _coerce_output_path(resource)
             outpath.parent.mkdir(exist_ok=True, parents=True)
             with outpath.open("w") as fi:
@@ -119,4 +136,5 @@ class RSFV1(FiberIO):
             outpath.parent.mkdir(exist_ok=True, parents=True)
             with outpath.open("wb") as fi:
                 fi.write(out)
+                fi.write(b"\x0c\x0c\x04")
                 fi.write(data_bytes)
