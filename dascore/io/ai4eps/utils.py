@@ -8,7 +8,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.io.utils import parse_units
+from dascore.io.utils import parse_units, step_from_interval
 from dascore.utils.hdf5 import h5_matches_structure
 from dascore.utils.misc import _maybe_unpack, maybe_get_items, unbyte
 
@@ -52,14 +52,14 @@ def _get_coords(dataset):
     attrs = dataset.attrs
     time = get_coord(
         start=_to_utc_datetime64(attrs["begin_time"]),
-        step=dc.to_timedelta64(float(_maybe_unpack(attrs["dt_s"]))),
+        step=step_from_interval(_maybe_unpack(attrs["dt_s"])),
         shape=(n_time,),
     )
     # Exports use either the last sample or the exclusive stop as end_time.
     # Both describe the same samples; only warn on an actual disagreement.
     end_time = _to_utc_datetime64(attrs["end_time"])
-    expected_stop = time.min() + n_time * time.step
-    expected_last = expected_stop - time.step
+    expected_last = time.max()
+    expected_stop = expected_last + time.step
     if (
         min(abs(end_time - expected_last), abs(end_time - expected_stop))
         > time.step / 2

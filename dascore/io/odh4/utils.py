@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from fractions import Fraction
+
 import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import parse_units
+from dascore.io.utils import parse_units, step_from_rate
 from dascore.utils.misc import maybe_get_items
 
 # Root attributes which must all be present for a file to be considered
@@ -69,20 +71,18 @@ def _get_coords(attrs, shape):
         raise InvalidFiberFileError(msg)
     time_start = dc.to_datetime64(attrs["starttime"])
     time_end = dc.to_datetime64(attrs["endtime"])
-    step_from_rate = dc.to_timedelta64(1 / rate)
+    nominal = dc.to_timedelta64(1 / rate)
     # Deriving the step from the time span avoids accumulating the
     # nanosecond truncation of 1/rate over long files. An inclusive-bound
     # writer spans (n - 1) samples rather than n; pick whichever
     # convention the file is closer to so the step stays exact.
     span = time_end - time_start
     denominator = n_time
-    if n_time > 1 and abs(span - (n_time - 1) * step_from_rate) < abs(
-        span - n_time * step_from_rate
-    ):
+    if n_time > 1 and abs(span - (n_time - 1) * nominal) < abs(span - n_time * nominal):
         denominator = n_time - 1
-    step_from_span = span / denominator if denominator else step_from_rate
+    step_from_span = span / denominator if denominator else nominal
     channel_range = int(attrs["channel_end"]) - int(attrs["channel_start"])
-    time_consistent = abs(step_from_span - step_from_rate) <= 0.01 * step_from_rate
+    time_consistent = abs(step_from_span - nominal) <= 0.01 * nominal
     channel_consistent = channel_range in (n_channel, n_channel - 1)
     if not (time_consistent and channel_consistent):
         msg = (
@@ -91,7 +91,9 @@ def _get_coords(attrs, shape):
             "coordinates (the data may be transposed or corrupt)."
         )
         raise InvalidFiberFileError(msg)
-    time = get_coord(start=time_start, step=step_from_span, shape=(n_time,))
+    time = get_coord(
+        start=time_start, step=_time_step(rate, step_from_span), shape=(n_time,)
+    )
     # Distance along the fiber: channel index times channel spacing.
     dx = float(attrs["channel spacing m"])
     channel_start = int(attrs["channel_start"])
@@ -116,3 +118,19 @@ def _get_attrs_dict(attrs) -> dict:
         "gauge_length": float(attrs["GL m"]),
         "scale_factor_to_strain": float(attrs["scale factor to strain"]),
     }
+
+
+def _time_step(rate: float, step_from_span: np.timedelta64):
+    """
+    The exact step a simple rate states, where the time span agrees.
+
+    The span gives the step only to a whole nanosecond, so a 1024 Hz file
+    spans 976562 ns per sample; the rate it states is exactly 1/1024 s.
+    That exact step is kept when the span agrees with it to within the
+    nanosecond the span was cut to, and the span's step otherwise.
+    """
+    exact = step_from_rate(rate)
+    if not isinstance(exact, Fraction):
+        return step_from_span
+    span_ns = int(step_from_span.astype("timedelta64[ns]").astype(np.int64))
+    return exact if abs(span_ns - exact * 10**9) < 1 else step_from_span

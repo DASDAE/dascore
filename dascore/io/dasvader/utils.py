@@ -9,7 +9,7 @@ from h5py.h5r import Reference, dereference
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.exceptions import DASVaderCompatibilityError
-from dascore.io.utils import drop_blank_attrs
+from dascore.io.utils import drop_blank_attrs, step_from_interval
 from dascore.utils.misc import maybe_get_items, unbyte
 
 # Julia DateTime "instant" values (Dates.value) are milliseconds since
@@ -134,14 +134,11 @@ def _get_time_coord(h5, rec):
     htime_node = _dereference(h5, rec["htime"], "htime")
     start_htime = _julia_ms_to_datetime64(htime_node[0])
     _start, _step, time_len = _step_range_len_to_params(time_struct)
-    _end = _start + time_len * _step
-
-    out = dc.get_coord(
-        min=start_htime + dc.to_timedelta64(_start),
-        max=start_htime + dc.to_timedelta64(_end),
-        step=dc.to_timedelta64(_step),
+    return dc.get_coord(
+        start=start_htime + dc.to_timedelta64(_start),
+        step=step_from_interval(_step),
+        shape=(time_len,),
     )
-    return out
 
 
 def _get_distance_coord(rec):

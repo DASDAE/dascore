@@ -10,13 +10,19 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
-from dascore.io.utils import drop_blank_attrs, windows_to_slices
+from dascore.io.utils import (
+    drop_blank_attrs,
+    step_from_interval,
+    step_from_rate,
+    windows_to_slices,
+)
 from dascore.utils.misc import (
     _maybe_unpack,
     maybe_get_items,
     tukey_fence,
     unbyte,
 )
+from dascore.utils.time import to_exact_fraction
 
 # --- Getting format/version
 
@@ -28,7 +34,7 @@ _FebusSlice = namedtuple(
 
 _FebusTime = namedtuple(
     "_FebusTime",
-    ["block_time", "time_step", "idx_start", "idx_stop"],
+    ["block_time", "time_step", "idx_start", "idx_stop", "step"],
 )
 
 
@@ -72,7 +78,10 @@ def _get_zone_time(feb):
     # use spatial sampling.
     if has_version:
         block_pad = 1 + extents[3] - extents[2]
-        dt = spacing[1] / 1_000 if block_pad != 0 else block_time
+        if block_pad != 0:
+            dt, step = spacing[1] / 1_000, _step_from_ms(spacing[1])
+        else:
+            dt, step = block_time, step_from_interval(block_time)
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
@@ -81,11 +90,11 @@ def _get_zone_time(feb):
         # 250000000 stored in zone.attrs["SamplingRate"]
         # We then use then spacing[1] instead (converted from milli-seconds)
         fsamp = float(_maybe_unpack(zone.attrs["SamplingRate"]))
-        dt = (
-            1 / fsamp
-            if fsamp < 1e8
-            else float(_maybe_unpack(zone.attrs["Spacing"][1])) / 1_000.0
-        )
+        if fsamp < 1e8:
+            dt, step = 1 / fsamp, step_from_rate(fsamp)
+        else:
+            spacing_ms = float(_maybe_unpack(zone.attrs["Spacing"][1]))
+            dt, step = spacing_ms / 1_000.0, _step_from_ms(spacing_ms)
         block_pad = shape[1]
 
     # Apparently, if the extents are set to 0 the overlapping edges are still
@@ -112,7 +121,20 @@ def _get_zone_time(feb):
         block_pad,
         block_no_pad,
     )
-    return _FebusTime(block_time, dt, idx_start, idx_stop)
+    return _FebusTime(block_time, dt, idx_start, idx_stop, step)
+
+
+def _step_from_ms(spacing_ms):
+    """
+    The time step a Febus file states as a sample spacing in milliseconds.
+
+    A spacing that is a simple number (25.0, or 0.9765625 for 1024 Hz)
+    gives an exact step in seconds; any other keeps the nearest nanosecond.
+    """
+    frac = to_exact_fraction(spacing_ms)
+    if frac is not None and frac > 0:
+        return frac / 1_000
+    return dc.to_timedelta64(float(spacing_ms) / 1_000)
 
 
 def _get_block_time(feb):
@@ -250,17 +272,13 @@ def _get_time_coord(feb):
     # to the center of the block, so this finds the first non-overlapping
     # sample.
     total_start = t_0 + time_offset + time_info.idx_start * time_step
-    total_end = total_start + (total_time_rows * time_step) * num_blocks
-    time_coord = get_coord(
+    # The length comes from the blocks rather than a span divided by the
+    # step, which a nanosecond-rounded step (1/3e-4 Hz, say) can miscount.
+    return get_coord(
         start=dc.to_datetime64(total_start),
-        stop=dc.to_datetime64(total_end),
-        step=dc.to_timedelta64(time_step),
+        step=time_info.step,
+        shape=(total_time_rows * num_blocks,),
     )
-    # Note: we have found some files in which the sampling rate is 1/3e-4
-    # because we use datetime64 we lose some precision which has caused
-    # slight differences in shape of the patch.
-    out = time_coord.change_length(total_time_rows * num_blocks)
-    return out
 
 
 def _get_distance_coord(feb):

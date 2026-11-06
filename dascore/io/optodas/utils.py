@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import stored_coord
+from dascore.io.utils import step_from_interval, stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -35,6 +35,13 @@ def _scalar(node):
     return _maybe_unpack(node)
 
 
+def _time_offset(index: int, step) -> np.timedelta64:
+    """The time `index` steps from the start, to the nearest nanosecond."""
+    if isinstance(step, np.timedelta64):
+        return step * index
+    return np.timedelta64(round(index * step * 10**9), "ns")
+
+
 def _get_coord_manager(fi, snap=True):
     """Get the distance ranges and spacing."""
     header = fi["header"]
@@ -47,11 +54,12 @@ def _get_coord_manager(fi, snap=True):
 
         # Special case for time.
         if dim == "time":
-            step = dc.to_timedelta64(step)
+            step = step_from_interval(step)
             t1 = dc.to_datetime64(_scalar(header["time"]))
-            start = t1 + _scalar(crange["min"]) * step
-            stop = t1 + (_scalar(crange["max"]) + 1) * step
-            coord = get_coord(min=start, max=stop, step=step, units=unit)
+            first, last = int(_scalar(crange["min"])), int(_scalar(crange["max"]))
+            start = t1 + _time_offset(first, step)
+            shape = (last - first + 1,)
+            coord = get_coord(start=start, step=step, shape=shape, units=unit)
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             coord = stored_coord(
