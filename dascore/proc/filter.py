@@ -111,19 +111,24 @@ class PassFilter(PatchProcessor):
     >>>  # Apply bandpass filter along time axis from 1 to 100 Hz
     >>> bandpassed = pa.pass_filter(time=(1, 100))
 
-    >>>  # Apply lowpass filter along distance axis for wavelengths less than 100m
+    >>>  # Lowpass along distance below 0.01 1/m (keeps wavelengths over 100 m)
     >>> lowpassed = pa.pass_filter(distance=(None, 1/100))
     >>> # Note that None and ... both indicate open intervals
     >>> assert pa.pass_filter(time=(None, 90)) == pa.pass_filter(time=(..., 90))
 
     >>> # Optionally, units can be specified for a more expressive API.
+    >>> # Bounds in the coordinate's units (periods, wavelengths) describe
+    >>> # the band to keep in those units, one-sided or not.
     >>> from dascore.units import m, ft, s, Hz
     >>> # Filter from 1 Hz to 10 Hz in time dimension
-    >>> lp_units = pa.pass_filter(time=(1 * Hz, 10 * Hz))
-    >>> # Filter wavelengths 50m to 100m
+    >>> bp_units = pa.pass_filter(time=(1 * Hz, 10 * Hz))
+    >>> # Keep wavelengths from 50 m to 100 m
     >>> bp_m = pa.pass_filter(distance=(50 * m, 100 * m))
-    >>> # filter wavelengths less than 200 ft
+    >>> # Keep wavelengths of 200 ft and longer (a wavenumber lowpass)
     >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
+    >>> # Keep periods up to 0.1 s; the same as a 10 Hz highpass
+    >>> hp_s = pa.pass_filter(time=(..., 0.1 * s))
+    >>> assert hp_s == pa.pass_filter(time=(10 * Hz, ...))
 
     Keywords
     --------
