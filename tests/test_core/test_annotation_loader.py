@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import yaml
+from pydantic import ValidationError
 
 try:
     import pyarrow
@@ -21,9 +22,17 @@ except ImportError:
 
 import dascore as dc
 from dascore.core.annotation_loader import _holds_blank, find_annotations
-from dascore.core.annotations import ATTRS_KEY, DIMS_KEY, Line, Moveout, _one_file
+from dascore.core.annotations import (
+    ANNOTATION_FORMAT_VERSION,
+    ATTRS_KEY,
+    DIMS_KEY,
+    AnnotationSetAttrs,
+    Line,
+    Moveout,
+    _one_file,
+)
 from dascore.exceptions import InvalidAnnotationError, ParameterError
-from dascore.utils.tables import DOCUMENT_KEY, write_parquet
+from dascore.utils.tables import DOCUMENT_KEY, read_parquet_metadata, write_parquet
 
 DIMS = ("distance", "time")
 
@@ -2361,3 +2370,111 @@ class TestParquet:
         path.write_text("note\na\n")
         with pytest.raises(InvalidAnnotationError, match=r"\.csv or \.parquet"):
             dc.annotations(path, dims=("time",))
+
+
+class TestFormatVersion:
+    """Stored sets state a format version, and unknown versions are refused."""
+
+    newer = ANNOTATION_FORMAT_VERSION + 1
+
+    def _restate(self, directory: Path, **fields) -> None:
+        """Rewrite a saved set's attrs.json with fields changed or removed."""
+        path = directory / "attrs.json"
+        document = json.loads(path.read_text())
+        document.update(fields)
+        document = {k: v for k, v in document.items() if v is not ...}
+        path.write_text(json.dumps(document))
+
+    def test_saved_set_states_its_version(self, regions, tmp_path):
+        """A saved set records its format version, default or not (s04-F6)."""
+        directory = Path(regions.io.save(tmp_path / "a"))
+        document = json.loads((directory / "attrs.json").read_text())
+        assert document["format_version"] == ANNOTATION_FORMAT_VERSION
+        assert dc.annotations(directory) == regions
+
+    def test_unversioned_set_reads_as_version_one(self, regions, tmp_path):
+        """A set saved before versions existed reads as version 1."""
+        directory = regions.io.save(tmp_path / "a")
+        self._restate(directory, format_version=...)
+        assert "format_version" not in (directory / "attrs.json").read_text()
+        loaded = dc.annotations(directory)
+        assert loaded.attrs.format_version == 1
+        assert loaded == regions
+
+    def test_newer_version_refused(self, regions, tmp_path):
+        """A set from a newer DASCore is refused, naming its file."""
+        directory = regions.io.save(tmp_path / "a")
+        self._restate(directory, format_version=self.newer)
+        match = r"attrs\.json.*newer DASCore.*Upgrade"
+        with pytest.raises(InvalidAnnotationError, match=match):
+            dc.annotations(directory)
+
+    @pytest.mark.parametrize(
+        ("version", "match"),
+        [(0, "at least 1"), (-3, "at least 1"), ("1", "integer"), (1.0, "integer")],
+    )
+    def test_invalid_version_refused(self, regions, tmp_path, version, match):
+        """Versions are integers from 1; pydantic coercion is not relied on."""
+        directory = regions.io.save(tmp_path / "a")
+        self._restate(directory, format_version=version)
+        with pytest.raises(InvalidAnnotationError, match=match):
+            dc.annotations(directory)
+
+    def test_boolean_version_refused(self):
+        """A boolean is not read as the integer pydantic would make it."""
+        with pytest.raises(ValidationError, match="integer"):
+            AnnotationSetAttrs(dims=("time",), format_version=True)
+
+    def test_built_in_memory_refused(self):
+        """Attributes of a newer format cannot be built either."""
+        with pytest.raises(ValidationError, match="newer DASCore"):
+            AnnotationSetAttrs(dims=("time",), format_version=self.newer)
+
+    def test_newer_child_set_refused(self, regions, tmp_path):
+        """One set of a collection from a newer DASCore refuses the whole."""
+        root = tmp_path / "sets"
+        regions.io.save(root / "hand")
+        self._restate(regions.io.save(root / "picker"), format_version=self.newer)
+        with pytest.raises(InvalidAnnotationError, match="newer DASCore"):
+            dc.annotations(root)
+
+    def test_newer_nested_set_refused(self, regions, tmp_path):
+        """A set stated inside the attributes is checked as well."""
+        directory = regions.io.save(tmp_path / "a")
+        child = {"dims": list(DIMS), "format_version": self.newer}
+        self._restate(directory, sets={"hand": child})
+        with pytest.raises(InvalidAnnotationError, match="newer DASCore"):
+            dc.annotations(directory)
+
+    def test_bare_csv_is_unversioned(self, regions, tmp_path):
+        """A bare CSV has no attributes to state a version in; it reads as 1."""
+        path = tmp_path / "picks.csv"
+        text = regions.io.to_csv(path)
+        assert "format_version" not in text
+        assert dc.annotations(path, dims=DIMS).attrs.format_version == 1
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    def test_parquet_footer_states_version(self, regions, tmp_path):
+        """A bare parquet file states its version in its footer."""
+        path = regions.io.to_parquet(tmp_path / "picks.parquet")
+        stated = json.loads(read_parquet_metadata(path)[ATTRS_KEY])
+        assert stated["format_version"] == ANNOTATION_FORMAT_VERSION
+        assert dc.annotations(path) == regions
+
+    @pytest.mark.skipif(pyarrow is None, reason="pyarrow is not installed")
+    @pytest.mark.parametrize("version", [None, ANNOTATION_FORMAT_VERSION + 1])
+    def test_parquet_footer_version(self, regions, tmp_path, version):
+        """A footer with no version reads as 1; a newer one is refused."""
+        path = regions.io.to_parquet(tmp_path / "picks.parquet")
+        metadata = read_parquet_metadata(path)
+        stated = json.loads(metadata[ATTRS_KEY])
+        stated.pop("format_version")
+        if version is not None:
+            stated["format_version"] = version
+        frame = pd.read_parquet(path)
+        write_parquet(frame, path, {**metadata, ATTRS_KEY: json.dumps(stated)})
+        if version is None:
+            assert dc.annotations(path).attrs.format_version == 1
+            return
+        with pytest.raises(InvalidAnnotationError, match=r"dascore:attrs.*newer"):
+            dc.annotations(path)

@@ -56,6 +56,7 @@ from dascore.core.annotations import (
     _is_text_dtype,
     _Tables,
     _text,
+    check_format_version,
     read_dimension,
     read_ordinal,
 )
@@ -158,6 +159,13 @@ def _checked_attrs(data: dict[str, Any], where: str) -> dict[str, Any]:
             f"an annotation set declare {_SET_TAG!r}."
         )
         raise ParameterError(msg)
+    # Checked before anything else is read, so a set written in a newer
+    # format says so rather than failing on whatever that format changed.
+    if "format_version" in data:
+        try:
+            check_format_version(data["format_version"])
+        except InvalidAnnotationError as error:
+            raise ParameterError(f"{where}: {error}") from error
     return data
 
 

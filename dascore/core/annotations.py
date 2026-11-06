@@ -69,13 +69,18 @@ from pydantic import (
     PlainSerializer,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 from rich.text import Text
 
 from dascore.constants import dascore_styles, max_lens
 from dascore.core.inventory import CreationInfo
-from dascore.exceptions import InvalidInventoryError, ParameterError
+from dascore.exceptions import (
+    InvalidAnnotationError,
+    InvalidInventoryError,
+    ParameterError,
+)
 from dascore.models import (
     DascoreBaseModel,
     DateTime64,
@@ -166,6 +171,11 @@ OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 DIMS_KEY = "dascore:dims"
 # Where a bare parquet table keeps what attrs.json holds in a directory.
 ATTRS_KEY = "dascore:attrs"
+
+# The newest annotation format version this DASCore reads. Stored attributes
+# state it; attributes stating none were written before it existed and are
+# version 1. A newer version is refused, never misread.
+ANNOTATION_FORMAT_VERSION = 1
 
 # Range suffixes, as everywhere else in DASCore.
 _MIN, _MAX = "_min", "_max"
@@ -683,6 +693,29 @@ class Feature(_AnnotationModel):
 # --- Set attributes -------------------------------------------------------
 
 
+def check_format_version(value) -> int:
+    """
+    Return a stored annotation format version this DASCore reads, else raise.
+
+    Checked before pydantic coerces, so `"1"`, `1.0` or `true` are refused
+    rather than read as a version nobody wrote.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+        msg = f"format_version must be an integer, not {value!r}."
+        raise InvalidAnnotationError(msg)
+    if value > ANNOTATION_FORMAT_VERSION:
+        msg = (
+            f"format_version {value} was written by a newer DASCore, which "
+            f"this one cannot read (it reads 1 through "
+            f"{ANNOTATION_FORMAT_VERSION}). Upgrade DASCore to read it."
+        )
+        raise InvalidAnnotationError(msg)
+    if value < 1:
+        msg = f"format_version must be at least 1, not {value}."
+        raise InvalidAnnotationError(msg)
+    return int(value)
+
+
 class AnnotationColumn(_AnnotationModel):
     """
     What a set says about one of its columns.
@@ -745,6 +778,19 @@ class AnnotationSetAttrs(_AnnotationModel):
             "not the merged one."
         ),
     )
+    format_version: int = Field(
+        default=ANNOTATION_FORMAT_VERSION,
+        description=(
+            "Version of the stored annotation format. Written with the "
+            "attributes; stored attributes stating none are version 1."
+        ),
+    )
+
+    @field_validator("format_version", mode="before")
+    @classmethod
+    def _check_format_version(cls, value):
+        """Refuse a format version this DASCore cannot read."""
+        return check_format_version(value)
 
     @model_validator(mode="after")
     def _check_dims(self) -> Self:
@@ -3472,6 +3518,12 @@ def annotation_set_to_csv(
     dimensions in a ``# dims: distance, time`` line written above the header
     by hand.
 
+    A bare CSV is therefore the one unversioned spelling: it has no place
+    for the attributes the format version is stored with, and is kept
+    plain so other tools read it as an ordinary table. It is read as
+    format version 1. A set saved as a directory states its version in
+    ``attrs.json``, and a parquet file in its footer.
+
     Parameters
     ----------
     annotations
@@ -3505,8 +3557,9 @@ def annotation_set_to_parquet(
 
     The parquet spelling of
     [to_csv](`dascore.core.annotations.annotation_set_to_csv`): columns keep
-    their types, and the dimensions and attributes travel in the file's
-    metadata, so the file reads back as the set it was. A column
+    their types, and the dimensions and attributes, format version
+    included, travel in the file's metadata, so the file reads back as the
+    set it was. A column
     with no one type is written as JSON, which keeps each cell's value but
     not every python type -- a tuple comes back as a list. Needs pyarrow.
 
@@ -3535,12 +3588,21 @@ def annotation_set_to_parquet(
     """
     _refuse_bare(annotations)
     # The dimensions travel under their own key only.
-    attrs = annotations._attrs.model_dump(
-        mode="json", exclude_defaults=True, exclude={"dims"}
-    )
+    attrs = _stored_attrs(annotations._attrs, exclude={"dims"})
     metadata = {DIMS_KEY: json.dumps(list(annotations.dims))}
     write_parquet(annotations._df, path, {**metadata, ATTRS_KEY: json.dumps(attrs)})
     return pathlib.Path(path)
+
+
+def _stored_attrs(attrs: AnnotationSetAttrs, exclude=None) -> dict[str, Any]:
+    """
+    Return the attributes as stored, stating the format version.
+
+    Defaulted fields are dropped, so the version is put back by hand: it is
+    what tells a later DASCore which format the file was written in.
+    """
+    dumped = attrs.model_dump(mode="json", exclude_defaults=True, exclude=exclude)
+    return {"format_version": attrs.format_version} | dumped
 
 
 def _refuse_unwritable_durations(annotations: AnnotationSet) -> None:
@@ -3583,8 +3645,9 @@ def save_annotation_set(
     Write the set to a directory, creating it if needed.
 
     Reached as ``annotation_set.io.save``. The directory holds
-    ``attrs.json``, the ``annotations`` table, a ``features`` table when the
-    set has features, and ``bases.json`` when it has bases; it reads back
+    ``attrs.json`` (which states the format version), the ``annotations``
+    table, a ``features`` table when the set has features, and
+    ``bases.json`` when it has bases; it reads back
     through [dascore.annotations](`dascore.annotations`). Tables are CSV by
     default or parquet when requested; duration dimensions require parquet.
     Saving replaces stale parts and alternate-format files.
@@ -3622,9 +3685,7 @@ def save_annotation_set(
     tables = {ANNOTATION_STEM: _spell_table(annotations._df, suffix, annotations.dims)}
     if len(annotations._features):
         tables[FEATURE_STEM] = _spell_table(annotations._features, suffix)
-    documents = {
-        ATTRS_STEM: annotations._attrs.model_dump(mode="json", exclude_defaults=True)
-    }
+    documents = {ATTRS_STEM: _stored_attrs(annotations._attrs)}
     if annotations._bases:
         documents[BASES_STEM] = {
             k: v.model_dump(mode="json") for k, v in annotations._bases.items()
