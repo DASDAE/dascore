@@ -166,9 +166,9 @@ class TestTaperBasics:
         assert out1.equals(out2, close=True)
 
     def test_uneven_time_coord(self, patch_sorted_time):
-        """A time coordinate which is not evenly sampled raises."""
-        with pytest.raises(CoordError, match="taper"):
-            patch_sorted_time.taper(time=(0.1, 0.2))
+        """Ensure taper works on patches without even sampling."""
+        out = patch_sorted_time.taper(time=(0.1, 0.2))
+        assert isinstance(out, dc.Patch)
 
     def test_full_taper(self, patch_ones):
         """Ensure a "full taper" works"""
@@ -355,10 +355,15 @@ class TestTaperHoles:
         with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
             holed_patch.taper(time=0.1)
 
+    def test_jitter_raises(self, jittered_patch):
+        """Labels off their step's grid raise."""
+        with pytest.raises(CoordError, match="off the grid"):
+            jittered_patch.taper(time=0.1)
+
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels raise."""
-        with pytest.raises(CoordError, match="taper"):
-            stepless_seam_patch.taper(time=0.1)
+        """Step-less labels are an irregular axis, which tapers by its labels."""
+        out = stepless_seam_patch.taper(time=0.1)
+        assert out.shape == stepless_seam_patch.shape
 
 
 class TestTaperDtype:

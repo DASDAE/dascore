@@ -42,7 +42,7 @@ from dascore.utils.misc import (
     check_filter_range,
 )
 from dascore.utils.patch import (
-    _require_evenly_sampled,
+    _refuse_holes_and_jitter,
     get_dim_axis_value,
     get_dim_sampling_rate,
 )
@@ -179,9 +179,11 @@ class SobelFilter(PatchProcessor):
     Notes
     -----
     The kernel smooths along every dimension, so missing samples (holes
-    in a step) in any of them raise; use
-    [split_gaps](`dascore.Patch.split_gaps`) or
-    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+    in a step) or labels off a step's grid (jitter) in any of them raise;
+    use [split_gaps](`dascore.Patch.split_gaps`),
+    [fill_gaps](`dascore.Patch.fill_gaps`) or
+    [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with no
+    step is filtered sample by sample, as an irregular axis.
 
     Examples
     --------
@@ -215,7 +217,7 @@ class SobelFilter(PatchProcessor):
             )
             raise FilterValueError(msg)
         # the kernel smooths along every other axis too
-        _require_evenly_sampled(meta, meta.dims, "sobel_filter")
+        _refuse_holes_and_jitter(meta, meta.dims, "sobel_filter")
         return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):

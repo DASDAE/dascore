@@ -406,7 +406,9 @@ class Dft(PatchProcessor):
             padded, pad_plan = pad.get_metadata(meta)
             plan["pad_width"] = pad_plan["pad_width"]
         # get axes and spacing along desired dimensions.
-        dxs, axes = _get_dx_or_spacing_and_axes(padded, dims)
+        dxs, axes = _get_dx_or_spacing_and_axes(
+            padded, dims, require_evenly_spaced=True
+        )
         original_cm = meta.coords if self.pad else None
         new_coords = _get_dft_new_coords(
             padded, dxs, dims, axes, real, original_cm=original_cm

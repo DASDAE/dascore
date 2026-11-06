@@ -23,7 +23,7 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
-from dascore.core.coords import concat_coords
+from dascore.core.coords import NumericCoord, concat_coords
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -566,6 +566,18 @@ def holed_patch():
 def stepless_seam_patch():
     """The same labels as holed_patch with no declared step (irregular)."""
     return _seam_patch(step=None)
+
+
+@pytest.fixture(scope="session")
+def jittered_patch():
+    """A patch whose time labels keep a step but sit off its grid."""
+    labels = np.arange(120.0)
+    labels[1:-1:7] += 0.1
+    time = NumericCoord.from_labels(labels, step=1.0)
+    assert time.jittered and not time.gapped
+    data = np.ones((1, 120))
+    coords = {"distance": np.array([0]), "time": time}
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)
