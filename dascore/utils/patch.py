@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import functools
 import inspect
-import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 import numpy as np
@@ -1834,9 +1832,8 @@ def stack_patches(
         The name of the dimension which can be different in values
         (but not shape) and patches still added together.
         If None, all dimension values must be equal. Its labels in the
-        output start at zero, keeping the first patch's step, as DASCore
-        0.1.24 gave them, with a `FutureWarning`; from DASCore 0.1.26 they
-        are the first patch's labels.
+        output are the first patch's (DASCore 0.1.24 relabelled them to
+        start at zero).
     {check_desc}
 
     Examples
@@ -1878,21 +1875,8 @@ def stack_patches(
         operation_id("Stack", {"dim_vary": dim_vary, "check_behavior": check_behavior}),
     )
 
-    # create coords array for the stack
-    stack_coords = init_patch.coords
-    if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
-        coord_to_change = stack_coords.coord_map[dim_vary]
-        new_dim = coord_to_change.update_limits(min=0)
-        if new_dim != coord_to_change:
-            msg = (
-                f"stack labels {dim_vary!r} from zero, as DASCore 0.1.24 did; "
-                "from DASCore 0.1.26 it keeps the first patch's labels."
-            )
-            prefix = str(Path(__file__).parent.parent)
-            warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
-        stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
     with operation_context():
-        return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+        return dc.Patch(stack_arr, init_patch.coords, init_patch.dims, stack_attrs)
 
 
 def swap_kwargs_dim_to_axis(patch, kwargs):

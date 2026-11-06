@@ -18,7 +18,6 @@ from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from fractions import Fraction
 from functools import cache
-from pathlib import Path
 from types import EllipsisType
 from typing import (
     TYPE_CHECKING,
@@ -153,18 +152,16 @@ def _is_translation_equivariant(func, data):
         return True
 
 
-def _warn_order_missing(missing) -> None:
-    """Warn that order dropped values (or positions) the coordinate lacks."""
+def _refuse_order_missing(missing) -> None:
+    """Refuse values (or positions) to order by which the coordinate lacks."""
     if not len(missing):
         return
     shown = ", ".join([str(x) for x in missing[:3]] + ["..."] * (len(missing) > 3))
     msg = (
-        f"order dropped {len(missing)} value(s) the coordinate does not hold "
-        f"({shown}); from DASCore 0.1.26 it raises. Select only values the "
-        "coordinate holds."
+        f"order got {len(missing)} value(s) the coordinate does not hold "
+        f"({shown}). Select only values the coordinate holds."
     )
-    prefix = str(Path(dc.__file__).parent)
-    warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
+    raise CoordError(msg)
 
 
 def _reduce_time_like(func, data):
@@ -630,10 +627,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     def _order_by_value_array(self, values_to_find):
         """Select values based on an array of values."""
         coord_array = self.values
-        # First simply filter arg values to only include those in the index
-        held = np.isin(values_to_find, coord_array)
-        _warn_order_missing(values_to_find[~held])
-        values_to_find = values_to_find[held]
+        _refuse_order_missing(values_to_find[~np.isin(values_to_find, coord_array)])
         # Handle fast cases for sorted and reverse sorted coords.
         if self.sorted:
             inds = self._get_value_index(coord_array, values_to_find)
@@ -656,10 +650,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if not np.issubdtype(array.dtype, np.integer):
             msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
-        # Filter out bad indices
         held = (array >= -len(self)) & (array < len(self))
-        _warn_order_missing(array[~held])
-        array = array[held]
+        _refuse_order_missing(array[~held])
         return self[array], array
 
     def _select_by_value_array(self, array):

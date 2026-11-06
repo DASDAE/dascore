@@ -30,7 +30,6 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
-from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 
 
@@ -461,18 +460,12 @@ class TestCoordsFromDf:
         with pytest.raises(ParameterError, match="Exactly one column"):
             random_patch.coords_from_df(bad_df)
 
-    def test_overwrite_warns(self, random_patch, coord_df):
-        """Overwriting an existing coordinate warns, ahead of refusing it."""
+    def test_overwrite_raises(self, random_patch, coord_df):
+        """Overwriting an existing coordinate raises, naming it."""
         patch = random_patch.coords_from_df(coord_df)
         name = next(x for x in coord_df.columns if x != "distance")
-        with pytest.warns(FutureWarning, match=name):
-            out = patch.coords_from_df(coord_df)
-        assert out.coords.get_coord(name) == patch.coords.get_coord(name)
-
-    def test_new_coords_do_not_warn(self, random_patch, coord_df):
-        """Adding coordinates the patch lacks is silent."""
-        with suppress_warnings(FutureWarning, action="error"):
-            random_patch.coords_from_df(coord_df)
+        with pytest.raises(ParameterError, match=name):
+            patch.coords_from_df(coord_df)
 
 
 class TestSelect:
@@ -1036,25 +1029,22 @@ class TestOrder:
         out = random_patch.order(time=[1, 2, 3], samples=True, copy=True)
         assert isinstance(out.data, np.ndarray)
 
-    def test_missing_values_warn(self, random_patch):
-        """Values the coordinate does not hold are dropped with a warning."""
+    def test_missing_values_raise(self, random_patch):
+        """Values the coordinate does not hold raise."""
         dist = random_patch.get_array("distance")
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = random_patch.order(distance=[dist[2], -1000.0, dist[1]])
-        assert np.all(out.get_array("distance") == dist[[2, 1]])
+        with pytest.raises(CoordError, match="does not hold"):
+            random_patch.order(distance=[dist[2], -1000.0, dist[1]])
 
-    def test_missing_samples_warn(self, random_patch):
-        """Positions past the end are dropped with a warning; -1 is held."""
+    def test_missing_samples_raise(self, random_patch):
+        """Positions past the end raise."""
         size = random_patch.coord_shapes["time"][0]
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out = random_patch.order(time=[0, size, -1], samples=True)
-        assert out.coord_shapes["time"] == (2,)
+        with pytest.raises(CoordError, match="does not hold"):
+            random_patch.order(time=[0, size], samples=True)
 
-    def test_found_values_do_not_warn(self, random_patch):
-        """Ordering by values the coordinate holds is silent."""
-        dist = random_patch.get_array("distance")
-        with suppress_warnings(FutureWarning, action="error"):
-            random_patch.order(distance=dist[[3, 1]])
+    def test_last_sample_is_held(self, random_patch):
+        """Position -1 is held, so ordering by it works."""
+        out = random_patch.order(time=[0, -1], samples=True)
+        assert out.coord_shapes["time"] == (2,)
 
 
 class TestAppendDims:

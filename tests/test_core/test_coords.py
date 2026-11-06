@@ -998,10 +998,9 @@ class TestSelect:
         assert in_coord.sum() == len(out) == reduction.sum()
 
     def test_negative_samples_held(self, long_coord):
-        """Negative positions down to -len pick samples, without a warning."""
+        """Negative positions down to -len pick samples."""
         inds = np.array([-len(long_coord), -1, 0])
-        with suppress_warnings(FutureWarning, action="error"):
-            coord, _ = long_coord.order(inds, samples=True)
+        coord, _ = long_coord.order(inds, samples=True)
         assert len(coord) == 3
         assert coord.values[0] == coord.values[2] == long_coord.values[0]
 
@@ -1132,22 +1131,20 @@ class TestOrder:
         assert len(out) == len(values[reduction])
 
     def test_overlapping_array(self, long_coord):
-        """Ensure an overlapping array works as well."""
+        """An array holding values the coordinate lacks raises."""
         # Create an array which likely has values not contained in the original.
         values1 = long_coord.values[: len(long_coord) // 2]
         values2 = long_coord._get_compatible_value(-to_float(values1))
         values = np.concatenate([values1, values2])
-        # Ensure this still gets some output.
-        in_coord = np.isin(values, long_coord.values)
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out, reduction = long_coord.order(values)
-        assert in_coord.sum() == len(out) == len(long_coord.values[reduction])
+        if np.isin(values, long_coord.values).all():
+            return
+        with pytest.raises(CoordError, match="does not hold"):
+            long_coord.order(values)
 
     def test_negative_samples_held(self, long_coord):
-        """Negative positions down to -len pick samples, without a warning."""
+        """Negative positions down to -len pick samples."""
         inds = np.array([-len(long_coord), -1, 0])
-        with suppress_warnings(FutureWarning, action="error"):
-            coord, _ = long_coord.order(inds, samples=True)
+        coord, _ = long_coord.order(inds, samples=True)
         assert len(coord) == 3
         assert coord.values[0] == coord.values[2] == long_coord.values[0]
 
@@ -1174,7 +1171,7 @@ class TestOrder:
         assert np.all(vals == coord.values)
 
     def test_values_no_in_coord(self, long_coord):
-        """Ensure using values not in coord results in an empty coordinate."""
+        """Values the coordinate does not hold raise."""
         values1 = long_coord.values[: len(long_coord) // 2]
         rand = random_state.rand(len(values1))
         # try to make values that won't be in the coordinate.
@@ -1182,21 +1179,14 @@ class TestOrder:
         # if by some chance there are any overlaps just bail out.
         if np.any(np.isin(values2, long_coord.values)):
             return
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out, red = long_coord.order(values2)
-        assert out.shape == red.shape
-        assert len(out) == 0
+        with pytest.raises(CoordError, match="does not hold"):
+            long_coord.order(values2)
 
     def test_index_not_in_coord(self, long_coord):
-        """
-        Ensure using samples array with values not in coord results in
-        an empty coordinate.
-        """
+        """Positions past the coordinate's end raise."""
         bad_indices = np.arange(len(long_coord)) + len(long_coord)
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out, red = long_coord.order(bad_indices, samples=True)
-        assert out.shape == red.shape
-        assert len(out) == 0
+        with pytest.raises(CoordError, match="does not hold"):
+            long_coord.order(bad_indices, samples=True)
 
     def test_duplicate_coord_single_value(self, coord_with_duplicates):
         """Ensure order works with duplicate coordinates and single value."""
