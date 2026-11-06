@@ -1,6 +1,7 @@
 """Tests for the OptaSense ODH4 format."""
 
 import shutil
+from fractions import Fraction
 
 import h5py
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.odh4 import ODH4V1
+from dascore.io.odh4.utils import _time_step
 from dascore.utils.downloader import fetch
 
 
@@ -123,6 +125,40 @@ class TestODH4:
             h5.attrs["endtime"] = inclusive_end.isoformat()
         patch = ODH4V1().read(path)[0]
         assert patch.get_coord("time").step == dc.to_timedelta64(1 / rate)
+
+    @pytest.mark.parametrize("inclusive", [False, True])
+    def test_simple_rate_gives_exact_step(self, odh4_path, tmp_path, inclusive):
+        """A 1024 Hz rate whose span agrees gives a step of exactly 1/1024 s."""
+        path = tmp_path / "hz_1024.h5"
+        shutil.copy(odh4_path, path)
+        with h5py.File(path, "a") as h5:
+            start = pd.Timestamp(h5.attrs["starttime"])
+            n_time = h5["raw_data"].shape[1] - inclusive
+            h5.attrs["sampling rate Hz"] = 1024
+            end = start + pd.Timedelta(round(n_time * 10**9 / 1024), "ns")
+            h5.attrs["endtime"] = end.isoformat()
+        for coord in (
+            ODH4V1().read(path)[0].get_coord("time"),
+            ODH4V1().scan(path)[0].get_coord("time"),
+        ):
+            assert coord.step_exact == Fraction(1, 1024)
+
+    def test_disagreeing_span_keeps_span_step(self, odh4_path, tmp_path):
+        """A span off the stated rate by more than a nanosecond a step wins."""
+        path = tmp_path / "off_rate.h5"
+        shutil.copy(odh4_path, path)
+        with h5py.File(path, "a") as h5:
+            start = pd.Timestamp(h5.attrs["starttime"])
+            n_time = h5["raw_data"].shape[1]
+            end = start + pd.Timedelta(n_time * 20_000_010, "ns")
+            h5.attrs["endtime"] = end.isoformat()
+        time = ODH4V1().read(path)[0].get_coord("time")
+        assert time.step == np.timedelta64(20_000_010, "ns")
+
+    def test_inexact_rate_keeps_span_step(self):
+        """A rate that is no simple number leaves the span's step."""
+        span_step = np.timedelta64(976_562, "ns")
+        assert _time_step(1024.0001234567891, span_step) == span_step
 
     def test_near_miss_not_claimed(self, tmp_path):
         """A file with raw_data but not the full attr set isn't claimed."""
