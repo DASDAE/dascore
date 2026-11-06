@@ -3527,3 +3527,9 @@ class TestSnapTimeUnits:
         assert out.evenly_sampled and len(out) == len(labels)
         assert out.min() == labels[0] and out.max() == labels[-1]
         assert out.step == np.timedelta64(1000, unit)
+
+    def test_snap_calendar_units(self):
+        """Month labels snap to a grid between their actual first and last."""
+        labels = np.array(["2024-01", "2024-02", "2024-04"], dtype="datetime64[M]")
+        out = get_coord(data=labels, snap=False).snap()
+        assert out.min() == labels[0] and out.max() == labels[-1]
