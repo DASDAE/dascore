@@ -31,8 +31,8 @@ Remote destinations use the same interface through [universal-pathlib](https://p
 ```{python}
 from upath import UPath
 
-remote_path = UPath("memory://dascore/tutorial/output.pkl")
-patch.io.write(remote_path, "pickle")
+remote_path = UPath("memory://dascore/tutorial/output.h5")
+patch.io.write(remote_path, "DASDAE")
 remote_patch = dc.spool(remote_path)[0]
 ```
 

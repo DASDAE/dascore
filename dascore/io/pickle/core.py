@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import pickle
+import pickletools
 
 import numpy as np
 
 import dascore
 import dascore as dc
+from dascore.config import get_config
 from dascore.constants import snap_type, windows_type
 from dascore.core.summary import normalize_source_patch_key
+from dascore.exceptions import InvalidFiberFileError, PickleFormatDisabledError
 from dascore.io import ArraySource, BinaryReader, BinaryWriter, FiberIO
 from dascore.io.utils import (
     resolve_keyed_source,
@@ -19,10 +22,63 @@ from dascore.io.utils import (
 )
 from dascore.utils.io import IOResourceManager
 
+# Enough of the stream to reach the first class a DASCore pickle names.
+_HEADER_SIZE = 256
+# Protocols 0 and 1 name copyreg's reconstructor before the pickled class.
+_COPYREG_MODULES = frozenset({"copy_reg", "copyreg"})
+
+
+def _check_opt_in():
+    """Refuse to go on unless the caller has opted in to unpickling."""
+    if not get_config().allow_pickle_format:
+        msg = (
+            "This looks like a DASCore pickle, but reading the PICKLE format "
+            "is disabled by default because unpickling a file can run "
+            "arbitrary code. If you trust this file, read it inside a "
+            "'with dc.config_context(allow_pickle_format=True):' block, or "
+            "enable it permanently with dc.set_config(allow_pickle_format=True)."
+        )
+        raise PickleFormatDisabledError(msg)
+
+
+def _first_class(header: bytes) -> tuple[str, str] | None:
+    """Name the first class a pickle header refers to, without unpickling."""
+    strings = []
+    # genops only parses opcodes; it never imports or calls anything. It
+    # raises ValueError where the header stops being a pickle, or is cut off.
+    try:
+        for opcode, arg, _ in pickletools.genops(header):
+            if opcode.name == "GLOBAL":
+                module, _, name = str(arg).partition(" ")
+            elif opcode.name == "STACK_GLOBAL" and len(strings) >= 2:
+                module, name = strings[-2:]
+            else:
+                if isinstance(arg, str):
+                    strings.append(arg)
+                continue
+            if module not in _COPYREG_MODULES:
+                return module, name
+    except ValueError:
+        pass
+    return None
+
+
+def _header_is_dascore(header: bytes) -> bool:
+    """Return True if a pickle header first names a DASCore Patch or Spool."""
+    module, name = _first_class(header) or ("", "")
+    return module.startswith("dascore.") and name.endswith(("Patch", "Spool"))
+
 
 def _read_patches(resource):
     """Load positional entries, retaining unambiguous keys from legacy pickles."""
-    patches = list(dascore.spool(pickle.load(resource)))
+    # The gate comes before pickle.load: a payload runs while it is loaded.
+    _check_opt_in()
+    try:
+        loaded = pickle.load(resource)
+    except (pickle.UnpicklingError, EOFError) as exc:
+        msg = f"Could not unpickle the DASCore pickle: {exc}"
+        raise InvalidFiberFileError(msg) from exc
+    patches = list(dascore.spool(loaded))
     # ArraySource describes the previous file, not positions in this container.
     keys = [
         normalize_source_patch_key(p.attrs.get("_source_patch_key", ""))
@@ -59,32 +115,47 @@ class PickleIO(FiberIO):
 
     Warning
     -------
-    The pickle format is discouraged due to potential security and
-    compatibility issues.
+    Unpickling a file can run arbitrary code, so reading the PICKLE format
+    is disabled by default. Enable it with the `allow_pickle_format` config
+    setting, and only for files you trust: while it is on, any directory
+    scan unpickles every file whose header names a DASCore Patch or Spool,
+    whatever its extension. Detection reads only the header and never
+    unpickles; reading or scanning a pickle without the setting raises
+    [`PickleFormatDisabledError`](`dascore.exceptions.PickleFormatDisabledError`).
+    Writing pickles needs no opt-in. Pickles also tie a file to the
+    DASCore version which wrote it, so prefer DASDAE for storage.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> import tempfile
+    >>> from pathlib import Path
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> path = Path(tempfile.mkdtemp()) / "patch.pkl"
+    >>> _ = dc.write(patch, path, "pickle")
+    >>> # Only for a file you trust; unpickling it can run any code.
+    >>> with dc.config_context(allow_pickle_format=True):
+    ...     spool = dc.read(path)
     """
 
     name = "PICKLE"
     preferred_extensions = ("pkl", "pickle")
     multi_patch_write = True
 
-    def _header_is_dascore(self, byte_stream):
-        """Return True if the first few bytes mention dascore classes."""
-        has_dascore = b"dascore.core" in byte_stream
-        spool_or_patch = b"Spool" in byte_stream or b"Patch" in byte_stream
-        return has_dascore and spool_or_patch
-
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
-        """Return the file version when the resource matches this family."""
-        try:
-            start = resource.read(100)
-            if self._header_is_dascore(start):
-                getattr(resource, "seek", lambda x: None)(0)
-                pickle.load(resource)
-                return self.version
-            else:
-                return None
-        except (pickle.UnpicklingError, FileNotFoundError, IndexError):
+        """
+        Return the version if the header names a DASCore Patch or Spool.
+
+        This parses only the header's opcodes and never unpickles. A
+        DASCore pickle raises PickleFormatDisabledError unless
+        `allow_pickle_format` is on; format detection treats that as an
+        unknown format, and reports it only if no other format matches.
+        """
+        if not _header_is_dascore(resource.read(_HEADER_SIZE)):
             return None
+        _check_opt_in()
+        return self.version
 
     def get_metadata(
         self, resource: _PickleReader, *, snap: snap_type = ()

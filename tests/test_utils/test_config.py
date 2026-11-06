@@ -226,6 +226,12 @@ class TestConfigDefaults:
         with pytest.raises(ValueError, match="max_index_runs"):
             DascoreConfig(max_index_runs=0)
 
+    def test_unpickling_off_by_default(self):
+        """Neither pickle setting is on until a user opts in."""
+        config = DascoreConfig()
+        assert config.allow_pickle_format is False
+        assert config.allow_dasdae_format_unpickle is False
+
 
 class TestMapConfigBinding:
     """Spool.map applies the config active when map() was called."""
