@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import tempfile
 from collections.abc import Sequence
-from contextlib import suppress
 from pathlib import Path
 
 import numpy as np
@@ -31,10 +30,10 @@ from dascore.core.inventory import (
 from dascore.exceptions import UnknownExampleError
 from dascore.utils.downloader import (
     _fetch_cached,
-    fetch,
     get_fetcher,
     get_registry_df,
 )
+from dascore.utils.downloader import fetch as fetch  # public as dc.examples.fetch
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
@@ -47,8 +46,15 @@ EXAMPLE_SPOOLS = {}
 EXAMPLE_INVENTORIES = {}
 
 
-def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
-    """Load the first patch from an example file without spool indirection."""
+def _load_registry_patch(name: str) -> dc.Patch:
+    """
+    Load the first patch from a data registry file.
+
+    Registry files are hash checked, so their legacy DASDAE pickles are
+    trusted: the fetch re-checks the hash just before the read. A local file
+    of the same name is never used, since it is not checked.
+    """
+    path = Path(get_fetcher().fetch(name))
     with config_context(allow_dasdae_format_unpickle=True):
         return dc.read(path)[0]
 
@@ -307,8 +313,7 @@ def example_event_1():
     """
     An induced event recorded on a borehole fiber  from @stanvek2022fracture.
     """
-    path = fetch("example_dasdae_event_1.h5")
-    return _load_example_patch_from_file(path)
+    return _load_registry_patch("example_dasdae_event_1.h5")
 
 
 @register_func(EXAMPLE_PATCHES, key="example_event_2")
@@ -316,8 +321,9 @@ def example_event_2():
     """
     [`example_event_1`](`dascore.examples.example_event_1`) with pre-processing.
     """
-    path = fetch("example_dasdae_event_1.h5")
-    patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
+    patch = _load_registry_patch("example_dasdae_event_1.h5").update_attrs(
+        data_type="strain_rate"
+    )
     # We convert time to relative time in seconds to match the figure in
     # the publication.
     delta_time = patch.coords.get_array("time") - patch.coords.min("time")
@@ -335,8 +341,7 @@ def deformation_rate_event_1():
     """
     An event recorded in an underground mine by a Terra15 unit.
     """
-    path = fetch("deformation_rate_event_1.hdf5")
-    return _load_example_patch_from_file(path)
+    return _load_registry_patch("deformation_rate_event_1.hdf5")
 
 
 @register_func(EXAMPLE_PATCHES, key="forge_dss")
@@ -346,8 +351,7 @@ def forge_dss():
 
     https://gdr.openei.org/submissions/1565
     """
-    path = fetch("neubrex_dss_forge.h5")
-    return _load_example_patch_from_file(path)
+    return _load_registry_patch("neubrex_dss_forge.h5")
 
 
 @register_func(EXAMPLE_PATCHES, key="febus_dss_mine_tight")
@@ -355,7 +359,7 @@ def febus_dss_mine_1():
     """
     DSS file from a tight-buffered fiber at a mine with Febus interrogator
     """
-    return _load_example_patch_from_file(fetch("dss_ug_mine_tight.h5"))
+    return _load_registry_patch("dss_ug_mine_tight.h5")
 
 
 @register_func(EXAMPLE_PATCHES, key="febus_dss_mine_loose")
@@ -363,7 +367,7 @@ def febus_dss_mine_2():
     """
     DSS file from a loose-buffered fiber at a mine with Febus interrogator
     """
-    return _load_example_patch_from_file(fetch("dss_ug_mine_loose.h5"))
+    return _load_registry_patch("dss_ug_mine_loose.h5")
 
 
 @register_func(EXAMPLE_PATCHES, key="forge_dts")
@@ -373,8 +377,7 @@ def forge_dts():
 
     https://gdr.openei.org/submissions/1565
     """
-    path = fetch("neubrex_dts_forge.h5")
-    return _load_example_patch_from_file(path)
+    return _load_registry_patch("neubrex_dts_forge.h5")
 
 
 @register_func(EXAMPLE_PATCHES, key="nd_patch")
@@ -619,8 +622,7 @@ def dispersion_event():
     """
     A synthetic shot record that exhibits dispersion.
     """
-    path = fetch("dispersion_event.h5")
-    return _load_example_patch_from_file(path)
+    return _load_registry_patch("dispersion_event.h5")
 
 
 @register_func(EXAMPLE_SPOOLS, key="random_das")
@@ -801,6 +803,9 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
     print(get_registry_df()[['name']].to_markdown(index=False, stralign="center"))
     ```
 
+    Any other existing path is read like [`dc.read`](`dascore.io.core.read`),
+    under the caller's config: no unpickling setting is turned on for it.
+
     Parameters
     ----------
     example_name
@@ -814,9 +819,11 @@ def get_example_patch(example_name="random_das", **kwargs) -> dc.Patch:
         unregistered patch is requested.
     """
     if example_name not in EXAMPLE_PATCHES:
-        # Allow the example name to be a data registry entry.
-        with suppress(ValueError):
-            return _load_example_patch_from_file(fetch(example_name))
+        if str(example_name) in get_registry_df()["name"].values:
+            return _load_registry_patch(str(example_name))
+        # Any other existing file is the caller's own, read under their config.
+        if Path(example_name).exists():
+            return dc.read(example_name)[0]
         msg = (
             f"No example patch registered with name {example_name} "
             f"Registered example patches are {list(EXAMPLE_PATCHES)}"

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import pathlib
+import pickle
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,10 +14,39 @@ import pytest
 import dascore as dc
 import dascore.examples as dc_examples
 from dascore.examples import EXAMPLE_INVENTORIES, EXAMPLE_PATCHES
-from dascore.exceptions import DASDAEUnpickleError, UnknownExampleError
+from dascore.exceptions import (
+    DASDAEUnpickleError,
+    PickleFormatDisabledError,
+    UnknownExampleError,
+)
 from dascore.utils.downloader import fetch, get_fetcher
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.time import to_float
+
+
+class _Marker:
+    """Harmless gadget: unpickling writes a marker file and nothing else."""
+
+    def __init__(self, path):
+        self.path = pathlib.Path(path)
+
+    def __reduce__(self):
+        """Rebuild by writing the marker file."""
+        return pathlib.Path.write_text, (self.path, "unpickled")
+
+
+def _write_legacy_dasdae(path, marker):
+    """Write a legacy DASDAE file whose pickled coord payload writes a marker."""
+    with h5py.File(path, "w") as h5:
+        h5.attrs["__format__"] = "DASDAE"
+        h5.attrs["__DASDAE_version__"] = "1"
+        group = h5.create_group("waveforms").create_group("patch")
+        group.attrs["_dims"] = "distance"
+        group.attrs["_attrs_coords"] = np.bytes_(pickle.dumps(_Marker(marker)))
+        group.attrs["_cdims_distance"] = "distance"
+        group.create_dataset("_coord_distance", data=np.array([0.0, 1.0, 2.0]))
+        group.create_dataset("data", data=np.zeros(3))
+    return path
 
 
 class TestGetExamplePatch:
@@ -40,6 +72,50 @@ class TestGetExamplePatch:
         """Ensure the registered example patches can all be loaded."""
         patch = dc.get_example_patch(name)
         assert isinstance(patch, dc.Patch)
+
+
+class TestExamplePatchLocalPath:
+    """
+    A local path given to get_example_patch is read under the caller's config.
+
+    Reported by Aaron Girard in his pre-v1.0 review (s08-F4).
+    """
+
+    def test_legacy_dasdae_refused(self, tmp_path):
+        """A legacy DASDAE pickle payload is refused, as dc.read refuses it."""
+        marker = tmp_path / "marker"
+        path = _write_legacy_dasdae(tmp_path / "legacy.h5", marker)
+        with dc.config_context(allow_dasdae_format_unpickle=False):
+            with pytest.raises(DASDAEUnpickleError):
+                dc.read(path)
+            with pytest.raises(DASDAEUnpickleError):
+                dc.get_example_patch(str(path))
+        assert not marker.exists()
+
+    def test_pickle_refused(self, tmp_path):
+        """A local pickle is refused unless the caller opted in."""
+        marker = tmp_path / "marker"
+        path = tmp_path / "payload.pkl"
+        path.write_bytes(pickle.dumps((dc.Patch, _Marker(marker))))
+        with dc.config_context(allow_pickle_format=False):
+            with pytest.raises(PickleFormatDisabledError):
+                dc.get_example_patch(str(path))
+        assert not marker.exists()
+
+    def test_local_file_reads(self, tmp_path):
+        """A safe local file still loads as an example patch."""
+        path = tmp_path / "patch.h5"
+        dc.write(dc.get_example_patch(), path, "DASDAE")
+        assert isinstance(dc.get_example_patch(path), dc.Patch)
+
+    def test_registry_name_ignores_local_file(self, tmp_path, monkeypatch):
+        """A registry example never reads a file of its name from the cwd."""
+        marker = tmp_path / "marker"
+        monkeypatch.chdir(tmp_path)
+        _write_legacy_dasdae(tmp_path / "dispersion_event.h5", marker)
+        assert isinstance(dc.get_example_patch("dispersion_event"), dc.Patch)
+        assert isinstance(dc.get_example_patch("dispersion_event.h5"), dc.Patch)
+        assert not marker.exists()
 
 
 class TestGetExampleSpool:
