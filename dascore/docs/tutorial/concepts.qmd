@@ -59,6 +59,13 @@ by_wavelength = patch.pass_filter(distance=(10 * m, 100 * m))
 assert np.allclose(by_wavenumber.data, by_wavelength.data)
 ```
 
+Wavelength (or period) bounds describe the band to keep in those units, even when only one is given: `distance=(None, 100 * m)` keeps wavelengths up to 100 m, which is a wavenumber highpass at 0.01 per metre.
+
+```{python}
+short_waves = patch.pass_filter(distance=(None, 100 * m))
+assert np.allclose(short_waves.data, patch.pass_filter(distance=(0.01, None)).data)
+```
+
 ```{python}
 in_feet = patch.convert_units(distance="ft")
 assert np.allclose(
