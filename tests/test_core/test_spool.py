@@ -18,6 +18,7 @@ from pandas.errors import PerformanceWarning
 import dascore as dc
 import dascore.core.spool as spool_module
 import dascore.utils.patch_assembly as assembly_mod
+from dascore._lazy.recipe import Recipe
 from dascore.config import config_context
 from dascore.core.coords import get_coord
 from dascore.core.spool import BaseSpool, Spool, _bytes_to_load
@@ -34,12 +35,11 @@ from dascore.exceptions import (
     UnknownExampleError,
     UnknownFiberFormatError,
 )
-from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.planned import PlanResolver
+from dascore.io._index.catalog import PatchCatalog
+from dascore.io._index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
-from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs
-from dascore.utils.display import range_texts
+from dascore.utils._display import range_texts
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim

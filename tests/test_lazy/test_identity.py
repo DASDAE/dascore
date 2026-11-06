@@ -10,13 +10,13 @@ from itertools import pairwise
 import numpy as np
 import pytest
 
+from dascore._lazy import identity as identity_module
+from dascore._lazy.block import NEW_AXIS
+from dascore._lazy.identity import MAX_CUT_AXES
+from dascore._lazy.recipe import Recipe, RecipeTable, concat, stack
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.io import core as io_core
-from dascore.lazy import identity as identity_module
-from dascore.lazy.block import NEW_AXIS
-from dascore.lazy.identity import MAX_CUT_AXES
-from dascore.lazy.recipe import Recipe, RecipeTable, concat, stack
 from dascore.utils.identity import H
 from tests.test_lazy.conftest import (
     constant,

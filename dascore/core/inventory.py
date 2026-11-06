@@ -57,7 +57,7 @@ from dascore.models import (
     UnitQuantity,
 )
 from dascore.models.registry import TAG_FIELD
-from dascore.utils.display import (
+from dascore.utils._display import (
     NodeRepr,
     Repr,
     Section,

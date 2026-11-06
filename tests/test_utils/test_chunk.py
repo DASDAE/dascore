@@ -11,8 +11,7 @@ import pytest
 import dascore as dc
 from dascore.core import get_coord
 from dascore.exceptions import ChunkError, ParameterError, UnitError
-from dascore.utils.chunk import get_intervals
-from dascore.utils.chunk_plan import (
+from dascore.utils._chunk_plan import (
     _carry_grids,
     _normalize_chunk_units,
     build_chunk_plan,
@@ -21,6 +20,7 @@ from dascore.utils.chunk_plan import (
     build_subdivision_plan,
     subdivision_pieces,
 )
+from dascore.utils.chunk import get_intervals
 from dascore.utils.time import to_timedelta64
 
 STARTTIME = np.datetime64("2020-01-03")

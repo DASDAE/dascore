@@ -22,8 +22,8 @@ from upath.implementations.memory import MemoryPath
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
 from dascore.io import core as io_core
+from dascore.io._index.indexer import scan_unit_stats
 from dascore.io.core import source_identity
-from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.zarr import ZarrV3
 from dascore.io.zarr import core as zarr_core
 from dascore.utils.misc import suppress_warnings

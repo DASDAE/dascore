@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.index import planned
+from dascore.io._index import planned
 from dascore.io.optodas import OptoDASV8
 from dascore.utils.downloader import fetch
 

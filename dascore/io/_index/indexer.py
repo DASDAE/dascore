@@ -29,13 +29,13 @@ from dascore.compat import UPath
 from dascore.config import config_attr, config_context, get_config
 from dascore.constants import INDEX_NAME, PROGRESS_LEVELS, ExecutorType
 from dascore.exceptions import InvalidIndexVersionError
-from dascore.io.core import _directory_members, is_directory_format
-from dascore.io.index.backend import get_backend
-from dascore.io.index.ingest import (
+from dascore.io._index.backend import get_backend
+from dascore.io._index.ingest import (
     SourceRecord,
     hive_path_attrs,
     summaries_to_records,
 )
+from dascore.io.core import _directory_members, is_directory_format
 from dascore.utils.identity import _snap_names
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import (

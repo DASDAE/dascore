@@ -12,10 +12,10 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore._lazy.block import AXIS_FIELDS
+from dascore._lazy.recipe import Recipe
 from dascore.core.source import ArraySource
 from dascore.io import core as io_core
-from dascore.lazy.block import AXIS_FIELDS
-from dascore.lazy.recipe import Recipe
 from dascore.utils.downloader import fetch
 
 

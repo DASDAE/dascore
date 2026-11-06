@@ -18,7 +18,7 @@ import dascore.io.core as io_core
 from dascore.config import config_context
 from dascore.examples import spool_to_directory
 from dascore.exceptions import PatchConversionError
-from dascore.io.index.planned import PlanResolver
+from dascore.io._index.planned import PlanResolver
 from dascore.units import get_quantity_str
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.xarray.patch import _cf_unit_str
@@ -113,7 +113,10 @@ class TestSpoolToXarray:
 
     def test_builds_without_reading(self, diverse_spool_directory, monkeypatch):
         """Constructing the tree must not read any patch data."""
-        from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
+        from dascore.io._index.catalog import (  # noqa: PLC0415
+            FileResolver,
+            PatchCatalog,
+        )
 
         spool = dc.spool(diverse_spool_directory).update()
 
@@ -314,7 +317,7 @@ class TestSpoolToXarray:
 
     def test_duplicate_node_names_raise(self, random_patch, monkeypatch):
         """Two groups resolving to one node name must not overwrite arrays."""
-        import dascore.utils.display as display_module  # noqa: PLC0415
+        import dascore.utils._display as display_module  # noqa: PLC0415
 
         patches = [
             random_patch.update_attrs(cable_id="a"),

@@ -9,16 +9,16 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-import dascore.utils.chunk_plan as cp
+import dascore.utils._chunk_plan as cp
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
     InvalidSpoolQueryError,
     ParameterError,
 )
-from dascore.io.index.catalog import PatchCatalog
+from dascore.io._index.catalog import PatchCatalog
 from dascore.units import m, percent
-from dascore.utils.chunk_plan import (
+from dascore.utils._chunk_plan import (
     ChunkPlan,
     _directions,
     _normalize_numeric_units,

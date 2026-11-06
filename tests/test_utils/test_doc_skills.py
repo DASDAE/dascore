@@ -11,8 +11,8 @@ import yaml
 
 import dascore as dc
 from dascore.cli import main
-from dascore.utils import doc_skills
-from dascore.utils.doc_corpus import DOC_PATH, SKILL_PATH, DocumentationError
+from dascore.utils import _doc_skills as doc_skills
+from dascore.utils._doc_corpus import DOC_PATH, SKILL_PATH, DocumentationError
 
 _SCRIPTS = Path(__file__).parents[2] / "scripts"
 

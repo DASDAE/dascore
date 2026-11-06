@@ -7,14 +7,14 @@ from pathlib import Path
 
 import yaml
 
-from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import (
+from dascore.utils._doc_corpus import (
     DOC_PATH,
     SKILL_PATH,
     DocumentationError,
     _read_source,
     source_paths,
 )
+from dascore.utils.doc_cache import documentation_cache, read_document
 
 # Skills that must work where the project's DASCore has no command line (an
 # older release, or no environment yet), so they are installed whole.

@@ -8,9 +8,9 @@ from dataclasses import replace
 
 import numpy as np
 
+from dascore._lazy.block import _Block
+from dascore._lazy.columns import SOURCE_FIELDS, _dtype_of
 from dascore.core.source import ArraySource, _text_offsets
-from dascore.lazy.block import _Block
-from dascore.lazy.columns import SOURCE_FIELDS, _dtype_of
 
 # Merged reads of abutting windows are cut where a member starts this many
 # bytes into its run, so one holds at most this and one member more.

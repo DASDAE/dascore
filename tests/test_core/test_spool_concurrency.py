@@ -19,7 +19,7 @@ from dascore.exceptions import (
     MissingPatchError,
     ParameterError,
 )
-from dascore.io.index import indexer as indexer_module
+from dascore.io._index import indexer as indexer_module
 
 
 class _RecordingClient:

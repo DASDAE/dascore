@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from dascore._lazy import block as block_module
+from dascore._lazy.recipe import Recipe, concat
 from dascore.core.source import ArraySource
-from dascore.lazy import block as block_module
-from dascore.lazy.recipe import Recipe, concat
 from tests.test_lazy.conftest import (
     FORMAT,
     assert_same_members,

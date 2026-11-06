@@ -11,9 +11,9 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import TimeOverflowError
-from dascore.io.index.backend import get_backend
-from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.query import Query, build_sql
+from dascore.io._index.backend import get_backend
+from dascore.io._index.catalog import PatchCatalog
+from dascore.io._index.query import Query, build_sql
 
 
 @pytest.fixture()

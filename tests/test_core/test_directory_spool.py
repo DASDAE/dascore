@@ -16,7 +16,7 @@ from dascore.constants import ONE_SECOND
 from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
-from dascore.io.index.catalog import FileResolver
+from dascore.io._index.catalog import FileResolver
 from dascore.utils.misc import suppress_warnings
 
 
@@ -143,7 +143,7 @@ class TestLoadPatchFastPath:
             calls.append(kwargs)
             return object()
 
-        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        monkeypatch.setattr("dascore.io._index.catalog.dc.read", _fake_read)
         row = {"source_format": "DASDAE", "source_version": "1"}
         resolver._read("path", row, {}, "")
         assert calls[-1]["file_format"] == "DASDAE"
@@ -160,7 +160,7 @@ class TestLoadPatchFastPath:
             calls.append(kwargs)
             return ()  # an unusual (empty) reader return
 
-        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        monkeypatch.setattr("dascore.io._index.catalog.dc.read", _fake_read)
         row = {"source_format": "DASDAE", "source_version": "1"}
         resolver = one_directory_spool._catalog.resolver
         resolver._read("path", row, {}, "")
@@ -178,7 +178,7 @@ class TestLoadPatchFastPath:
             reads.append(kwargs)
             return dc.spool([patch_1, patch_2])
 
-        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        monkeypatch.setattr("dascore.io._index.catalog.dc.read", _fake_read)
         row = {
             "source_path": "path",
             "source_format": "DASDAE",
@@ -200,7 +200,7 @@ class TestLoadPatchFastPath:
             assert "time" not in kwargs, "positional ids must read untrimmed"
             return dc.spool([random_patch, patch_2])
 
-        monkeypatch.setattr("dascore.io.index.catalog.dc.read", _fake_read)
+        monkeypatch.setattr("dascore.io._index.catalog.dc.read", _fake_read)
         row = {
             "source_path": "path",
             "source_format": "DASDAE",

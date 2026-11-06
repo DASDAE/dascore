@@ -6,15 +6,15 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any
 
-from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.planned import derived_catalog
-from dascore.utils.chunk_plan import (
+from dascore.io._index.catalog import PatchCatalog
+from dascore.io._index.planned import derived_catalog
+from dascore.utils._chunk_plan import (
     _ensure_patch_row,
     _trim_explicit,
     build_subdivision_plan,
     refuse_riders,
 )
-from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
+from dascore.utils._explicit_ranges import ExplicitRanges, known_coordinates
 
 
 class _SchemaBackend:

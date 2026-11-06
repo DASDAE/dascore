@@ -11,8 +11,8 @@ from threading import Barrier
 import pytest
 
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
-from dascore.io.index.backend import get_backend
-from dascore.io.index.schema import INDEX_VERSION, TABLES, TYPE_MAP
+from dascore.io._index.backend import get_backend
+from dascore.io._index.schema import INDEX_VERSION, TABLES, TYPE_MAP
 
 
 class TestSchemaDeclaration:

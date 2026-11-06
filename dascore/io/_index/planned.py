@@ -30,9 +30,8 @@ from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import FiberIO
-from dascore.io.index.backend import get_backend
-from dascore.io.index.catalog import (
+from dascore.io._index.backend import get_backend
+from dascore.io._index.catalog import (
     CompositeResolver,
     FileResolver,
     PatchCatalog,
@@ -41,25 +40,26 @@ from dascore.io.index.catalog import (
     apply_exact_residuals,
     directory_decodes,
 )
-from dascore.io.index.indexer import scan_unit_stats
-from dascore.io.index.ingest import (
+from dascore.io._index.indexer import scan_unit_stats
+from dascore.io._index.ingest import (
     CoordRecord,
     PatchRecord,
     SourceRecord,
     _coord_record,
     typed_value,
 )
-from dascore.io.index.schema import SOURCE_STAT_COLUMNS
+from dascore.io._index.schema import SOURCE_STAT_COLUMNS
+from dascore.io.core import FiberIO
 from dascore.units import get_quantity
-from dascore.utils.attrs import _is_missing
-from dascore.utils.chunk_plan import (
+from dascore.utils._chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
     grid_fits,
     patch_local_adjusted_envelopes,
 )
-from dascore.utils.explicit_ranges import _select_manager, _source_manager
+from dascore.utils._explicit_ranges import _select_manager, _source_manager
+from dascore.utils.attrs import _is_missing
 from dascore.utils.misc import is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (

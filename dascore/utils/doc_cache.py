@@ -13,7 +13,7 @@ from pathlib import Path
 from tempfile import mkdtemp
 
 import dascore as dc
-from dascore.utils.doc_corpus import (
+from dascore.utils._doc_corpus import (
     PACKAGE_PATH,
     SKILL_PATH,
     DocumentationError,

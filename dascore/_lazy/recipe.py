@@ -1,12 +1,12 @@
 """
 A recipe for an array which is read a member at a time.
 
-A [`Recipe`](`dascore.lazy.recipe.Recipe`) holds no data. It holds
+A [`Recipe`](`dascore._lazy.recipe.Recipe`) holds no data. It holds
 members, and each member says "this window of this source goes in this box of
 the output". Everything is positional: axis numbers and sample indices, never
 dimension names, coordinates or units.
 
-Many arrays share one [`RecipeTable`](`dascore.lazy.recipe.RecipeTable`),
+Many arrays share one [`RecipeTable`](`dascore._lazy.recipe.RecipeTable`),
 which owns the storage; an array is a view of one of its rows. Members of an
 array are stored together, in canonical placement order, so slicing, joining
 and rechunking are vectorized over members and never open a file.
@@ -15,7 +15,7 @@ Examples
 --------
 >>> import numpy as np
 >>> from dascore.core.source import ArraySource
->>> from dascore.lazy.recipe import Recipe, concat
+>>> from dascore._lazy.recipe import Recipe, concat
 >>>
 >>> left = Recipe.from_source(ArraySource.full((4, 3), 1.0))
 >>> right = Recipe.from_source(ArraySource.full((4, 3), 2.0))
@@ -39,9 +39,7 @@ from numpy.typing import ArrayLike, DTypeLike
 from pandas.api.types import is_list_like
 
 import dascore as dc
-from dascore.core.source import ArraySource
-from dascore.exceptions import ParameterError
-from dascore.lazy.block import (
+from dascore._lazy.block import (
     AXIS_FIELDS,
     NEW_AXIS,
     _Block,
@@ -55,7 +53,7 @@ from dascore.lazy.block import (
     _transposed,
     _View,
 )
-from dascore.lazy.columns import (
+from dascore._lazy.columns import (
     _LAYOUT_NUMBERS,
     _STRING_FIELDS,
     SOURCE_FIELDS,
@@ -67,14 +65,16 @@ from dascore.lazy.columns import (
     _members_of,
     _merge_members,
 )
-from dascore.lazy.identity import _digest, _signature, _whole_source_id
-from dascore.lazy.read import (
+from dascore._lazy.identity import _digest, _signature, _whole_source_id
+from dascore._lazy.read import (
     _coalesced,
     _member_source,
     _source_groups,
     _sources_of,
     _to_output,
 )
+from dascore.core.source import ArraySource
+from dascore.exceptions import ParameterError
 from dascore.utils.identity import H
 
 # The name the array api reports for a lazy array.
@@ -120,7 +120,7 @@ class RecipeTable:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import Recipe, RecipeTable
+    >>> from dascore._lazy.recipe import Recipe, RecipeTable
     >>>
     >>> flat = Recipe.from_source(ArraySource.full((4, 3), 1.0))
     >>> cube = Recipe.from_source(ArraySource.full((2, 3, 4), 2.0))
@@ -252,13 +252,13 @@ class Recipe:
     """
     An array which says where each of its members is read from.
 
-    A view of one row of a [`RecipeTable`](`dascore.lazy.recipe.RecipeTable`).
+    A view of one row of a [`RecipeTable`](`dascore._lazy.recipe.RecipeTable`).
     Slicing and transposing keep a window and an axis order instead, and
     the members are clipped to them only when something needs them.
     The shape, ndim and dtype are stored rather than derived, so an array
     which selects nothing still knows what it is. Boxes may not overlap and
     must cover the whole output; a hole is an explicit constant member.
-    [`validate`](`dascore.lazy.recipe.Recipe.validate`) checks every
+    [`validate`](`dascore._lazy.recipe.Recipe.validate`) checks every
     rule, on demand.
 
     A member is cast once, from the dtype it is stored at to the array's, so
@@ -270,7 +270,7 @@ class Recipe:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import Recipe
+    >>> from dascore._lazy.recipe import Recipe
     >>>
     >>> array = Recipe.from_source(ArraySource.full((6, 4), np.nan))
     >>> assert array.shape == (6, 4) and array.ndim == 2
@@ -429,7 +429,7 @@ class Recipe:
         Examples
         --------
         >>> import numpy as np
-        >>> from dascore.lazy.recipe import Recipe
+        >>> from dascore._lazy.recipe import Recipe
         >>>
         >>> paths = np.array(["/data/f0.h5", "/data/f1.h5", "/data/f2.h5"])
         >>> array = Recipe.from_columns(
@@ -709,7 +709,7 @@ class Recipe:
 
         The rules are checked first, so no sample of the result is left
         uninitialized; see
-        [`validate`](`dascore.lazy.recipe.Recipe.validate`).
+        [`validate`](`dascore._lazy.recipe.Recipe.validate`).
         Abutting windows of one source are read as one. Members are read a
         resource at a time: each resource is opened once for all of its
         members, and closed before the next is opened.
@@ -766,13 +766,13 @@ class Recipe:
         an interval rather than a pair of corners, so an array of any
         number of dimensions is named as cheaply as one which is cut the
         same way in two. One cut on more than
-        [`MAX_CUT_AXES`](`dascore.lazy.identity.MAX_CUT_AXES`) distinct
+        [`MAX_CUT_AXES`](`dascore._lazy.identity.MAX_CUT_AXES`) distinct
         axes is refused, since every axis cut doubles the corners.
 
         Examples
         --------
         >>> from dascore.core.source import ArraySource
-        >>> from dascore.lazy.recipe import Recipe
+        >>> from dascore._lazy.recipe import Recipe
         >>>
         >>> array = Recipe.from_source(ArraySource.full((8, 2), 1.0))
         >>> assert array[0:4].data_id == array[0:8][0:4].data_id
@@ -904,7 +904,7 @@ def concat(arrays: Sequence[Recipe], axis: int = 0) -> Recipe:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import Recipe, concat
+    >>> from dascore._lazy.recipe import Recipe, concat
     >>>
     >>> parts = [Recipe.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
     >>> joined = concat(parts, axis=1)
@@ -960,7 +960,7 @@ def stack(arrays: Sequence[Recipe], axis: int = 0) -> Recipe:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import Recipe, stack
+    >>> from dascore._lazy.recipe import Recipe, stack
     >>>
     >>> parts = [Recipe.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
     >>> stacked = stack(parts, axis=1)

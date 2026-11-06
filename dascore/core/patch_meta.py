@@ -20,8 +20,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import ParameterError
-from dascore.utils.attrs import _values_equal
-from dascore.utils.display import (
+from dascore.utils._display import (
     NodeRepr,
     Repr,
     attrs_to_text,
@@ -29,6 +28,7 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
+from dascore.utils.attrs import _values_equal
 from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.identity import (
     _without_ids,
