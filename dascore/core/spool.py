@@ -29,6 +29,7 @@ from rich.filesize import decimal as format_bytes
 from rich.text import Text
 
 import dascore as dc
+from dascore._lazy.recipe import Recipe
 from dascore.compat import UPath, is_array
 from dascore.constants import (
     CONFLICT,
@@ -91,12 +92,9 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
-from dascore.lazy.recipe import Recipe
 from dascore.units import Quantity
-from dascore.utils.array_api import backend_name, to_numpy
-from dascore.utils.chunk_plan import (
+from dascore.utils._chunk_plan import (
     _SOURCE_COLUMNS,
-    ChunkPlan,
     _drop_patch_local_empty,
     _ensure_patch_row,
     _resolve_group_attrs,
@@ -112,8 +110,7 @@ from dascore.utils.chunk_plan import (
     subdivision_pieces,
     with_runs,
 )
-from dascore.utils.concurrency import _prefetch
-from dascore.utils.display import (
+from dascore.utils._display import (
     _TIME_TYPES,
     ACQUISITION_ATTR,
     NodeRepr,
@@ -126,9 +123,7 @@ from dascore.utils.display import (
     span_text,
     split_block,
 )
-from dascore.utils.docs import compose_docstring
-from dascore.utils.downloader import resolve_example_uri
-from dascore.utils.explicit_ranges import (
+from dascore.utils._explicit_ranges import (
     ExplicitRanges,
     _select_manager,
     _source_manager,
@@ -136,6 +131,11 @@ from dascore.utils.explicit_ranges import (
     known_coordinates,
     looks_explicit,
 )
+from dascore.utils.array_api import backend_name, to_numpy
+from dascore.utils.chunk import ChunkPlan
+from dascore.utils.concurrency import _prefetch
+from dascore.utils.docs import compose_docstring
+from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.identity import operation_context
 from dascore.utils.misc import (
     _spool_map,
@@ -160,7 +160,7 @@ from dascore.utils.pd import (
 from dascore.utils.time import to_float, to_timedelta64
 
 if TYPE_CHECKING:
-    from dascore.io.index.catalog import PatchCatalog
+    from dascore.io._index.catalog import PatchCatalog
 
 T = TypeVar("T")
 
@@ -396,7 +396,7 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         data: PatchType | Sequence[PatchType] | Spool | None = None,
     ):
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+        from dascore.io._index.catalog import PatchCatalog  # noqa: PLC0415
 
         if isinstance(data, Spool):
             # copy-construction: share the catalog and provenance. A
@@ -610,7 +610,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 "or iterate the spool and keep only what each patch yields."
             )
             raise InsufficientMemoryError(msg)
-        from dascore.io.index.catalog import _patch_path  # noqa: PLC0415
+        from dascore.io._index.catalog import _patch_path  # noqa: PLC0415
 
         patches, seen = [], set()
         for patch in self:
@@ -695,7 +695,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         if not isinstance(other, Spool):
             return NotImplemented
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+        from dascore.io._index.catalog import PatchCatalog  # noqa: PLC0415
 
         members = [self._as_union_member(), other._as_union_member()]
         union = PatchCatalog.union(members)
@@ -839,7 +839,9 @@ class Spool(NodeRepr, NamespaceOwner):
             if samples or relative:
                 msg = "Explicit ranges require samples=False and relative=False."
                 raise ParameterError(msg)
-            from dascore.io.index.explicit import ExplicitSelectCatalog  # noqa: PLC0415
+            from dascore.io._index.explicit import (  # noqa: PLC0415
+                ExplicitSelectCatalog,
+            )
 
             other_coords = drop_selector_names(_coords, set(explicit))
             other_kwargs = {k: v for k, v in kwargs.items() if k not in explicit}
@@ -2047,7 +2049,7 @@ class Spool(NodeRepr, NamespaceOwner):
         themselves re-applied at load through the plan resolver. `stamp`
         maps attrs to record on every output, `dtypes` their presented dtypes.
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.io._index.planned import derived_catalog  # noqa: PLC0415
 
         rows = self._df.reset_index(drop=True)
         working = rows.reset_index(drop=True)
@@ -2090,7 +2092,7 @@ class Spool(NodeRepr, NamespaceOwner):
         residuals adjust the working envelopes so plans reflect the
         loading truth.
         """
-        from dascore.io.index.planned import (  # noqa: PLC0415
+        from dascore.io._index.planned import (  # noqa: PLC0415
             PlanResolver,
             collapse_working_df,
         )
@@ -2122,7 +2124,7 @@ class Spool(NodeRepr, NamespaceOwner):
         The relation with each patch cut at the holes its coordinate holds.
 
         The index states a coordinate's runs (see
-        [`with_runs`](`dascore.utils.chunk_plan.with_runs`)); one stored
+        [`with_runs`](`dascore.utils._chunk_plan.with_runs`)); one stored
         without them, past `max_index_runs`, is read from its source.
         """
         if df.empty or "_patch_row" not in df.columns:
@@ -2178,7 +2180,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return the plan `chunk` would execute, without touching any data.
 
-        The returned [`ChunkPlan`](`dascore.utils.chunk_plan.ChunkPlan`) is a
+        The returned [`ChunkPlan`](`dascore.utils.chunk.ChunkPlan`) is a
         read-only diagnostic: its `outputs` table describes each patch the
         chunked spool would contain (envelopes, step, carried attributes),
         its `members` table shows exactly which slice of which source patch
@@ -2556,7 +2558,7 @@ class Spool(NodeRepr, NamespaceOwner):
         `stamp` maps attrs to record to their per-output values, `dtypes`
         them to their presented dtypes.
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.io._index.planned import derived_catalog  # noqa: PLC0415
 
         # read from the plan: its values are normalized (eg a dimensionless
         # tolerance is a plain multiple)
@@ -2751,7 +2753,7 @@ class Spool(NodeRepr, NamespaceOwner):
           deprecated in favour of this method, concatenates a list of
           patches directly, relative to the first.
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+        from dascore.io._index.planned import derived_catalog  # noqa: PLC0415
 
         if check_behavior is not None:
             msg = (
@@ -2794,7 +2796,7 @@ class Spool(NodeRepr, NamespaceOwner):
         the first question only an inventory can answer. See
         [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`).
         """
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+        from dascore.io._index.catalog import PatchCatalog  # noqa: PLC0415
 
         out = cls()
         out._catalog = PatchCatalog.from_directory(path, index_path, snap=snap)
@@ -2839,7 +2841,7 @@ class Spool(NodeRepr, NamespaceOwner):
         path = path if isinstance(path, UPath) else Path(path)
         if not path.exists():
             raise FileNotFoundError(f"{path} does not exist")
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+        from dascore.io._index.catalog import PatchCatalog  # noqa: PLC0415
 
         if file_format and file_version:
             # A caller which already knows the format saves opening the
@@ -2918,7 +2920,7 @@ class Spool(NodeRepr, NamespaceOwner):
         Use one writer and no concurrent readers while updating a directory
         spool.
         """
-        from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
+        from dascore.io._index.catalog import LiveResolver  # noqa: PLC0415
 
         catalog = self._catalog
         derived_msg = (
@@ -3009,8 +3011,8 @@ class Spool(NodeRepr, NamespaceOwner):
         here). Because the state is enumerated — never ``__dict__`` —
         new instance attributes cannot silently join equality.
         """
-        from dascore.io.index.catalog import _SOURCE_SUFFIX  # noqa: PLC0415
-        from dascore.io.index.schema import SOURCE_STAT_COLUMNS  # noqa: PLC0415
+        from dascore.io._index.catalog import _SOURCE_SUFFIX  # noqa: PLC0415
+        from dascore.io._index.schema import SOURCE_STAT_COLUMNS  # noqa: PLC0415
 
         def _private(column, suffix) -> bool:
             # the generated `_<coord><suffix>` column, not an attr which

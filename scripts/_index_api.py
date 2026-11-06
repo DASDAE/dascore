@@ -87,12 +87,14 @@ def _yield_get_submodules(obj, base_path):
         return
     submodules = path.parent.glob("*")
     for submod_path in submodules:
+        # A leading underscore marks a module private; it gets no API pages.
+        if submod_path.name.startswith("_"):
+            continue
         is_dir = submod_path.is_dir()
-        is_init = submod_path.name.endswith("__init__.py")
         # this is a directory, look for corresponding __init__.py
         if is_dir and (submod_path / "__init__.py").exists():
             mod_name = str(submod_path.relative_to(base_path)).replace(os.sep, ".")
-        elif submod_path.name.endswith(".py") and not is_init:
+        elif submod_path.name.endswith(".py"):
             mod_name = (
                 str(submod_path.relative_to(base_path))
                 .replace(".py", "")

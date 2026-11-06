@@ -132,6 +132,17 @@ class TestOptionalSubmodules:
         with pytest.raises(ModuleNotFoundError, match="no_such_submodule"):
             dict(_yield_get_submodules(module, base))
 
+    def test_private_submodules_skipped(self, package):
+        """Underscored modules and packages are private, so get no pages."""
+        module, base = package
+        for name in ("needs_dep.py", "broken.py"):
+            (base / "optpkg" / name).unlink()
+        (base / "optpkg" / "_hidden.py").write_text("VALUE = 2\n")
+        (base / "optpkg" / "_subpkg").mkdir()
+        (base / "optpkg" / "_subpkg" / "__init__.py").write_text("")
+        found = dict(_yield_get_submodules(module, base))
+        assert set(found) == {"optpkg.plain"}
+
     @pytest.mark.parametrize("missing", ["opt", "opt.submodule"])
     def test_dependency_prefix_warns_and_skips(self, monkeypatch, missing):
         """A dependency sharing the project's prefix is still external."""

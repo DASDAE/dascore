@@ -2,12 +2,11 @@
 Execute spool views: turn member instructions into loaded patches.
 
 This is the consumer of the members (instruction) table that
-`dascore.utils.chunk_plan` produces and every spool view carries: it
+`dascore.utils._chunk_plan` produces and every spool view carries: it
 joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
 outputs. When the output size is known, a merge whose members the rows
-fully describe becomes a
-[`Recipe`](`dascore.lazy.recipe.Recipe`) -- the window
+fully describe becomes a recipe (`dascore._lazy.recipe.Recipe`) -- the window
 of a stored array each member is, read into one output -- and any other
 such merge streams loaded patches into a pre-allocated buffer; the rest
 concatenate. The spool owns *what* rows exist; this module owns *how* a
@@ -26,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore._lazy.recipe import Recipe
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.source import ArraySource
@@ -36,9 +36,9 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.lazy.recipe import Recipe
+from dascore.io._index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import conversion_factors, get_quantity, units_match
+from dascore.utils._chunk_plan import _SOURCE_COLUMNS
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import (
     _is_missing,
@@ -46,7 +46,6 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.chunk import _READ_PAD
-from dascore.utils.chunk_plan import _SOURCE_COLUMNS
 from dascore.utils.identity import (
     ids_enabled,
     operation_context,

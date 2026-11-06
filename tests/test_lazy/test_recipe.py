@@ -16,12 +16,12 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore._lazy import recipe as recipe_module
+from dascore._lazy.block import AXIS_FIELDS, NEW_AXIS
+from dascore._lazy.columns import SOURCE_FIELDS
+from dascore._lazy.recipe import Recipe, RecipeTable, _tiles, concat, stack
 from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberIOError, ParameterError
-from dascore.lazy import recipe as recipe_module
-from dascore.lazy.block import AXIS_FIELDS, NEW_AXIS
-from dascore.lazy.columns import SOURCE_FIELDS
-from dascore.lazy.recipe import Recipe, RecipeTable, _tiles, concat, stack
 from dascore.utils.array_api import backend_name
 from dascore.utils.hdf5 import H5Reader
 from tests.test_lazy.conftest import (

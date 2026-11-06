@@ -2011,7 +2011,7 @@ def concatenate_planned(
     """
     Concatenate the members of one planned output, as the plan decided.
 
-    A concat plan (`dascore.utils.chunk_plan.build_concat_plan`) has
+    A concat plan (`dascore.utils._chunk_plan.build_concat_plan`) has
     already decided kind, dimensions, and the dimensions' identities, so
     none of that is asked again. The attrs fold as a merge folds them
     (`combine_patch_attrs`, differing values policed by `conflict`).

@@ -19,7 +19,8 @@ from markdown_it import MarkdownIt
 
 import dascore as dc
 from dascore.cli import main
-from dascore.utils import doc_cache, doc_corpus
+from dascore.utils import _doc_corpus as doc_corpus
+from dascore.utils import doc_cache
 
 
 @pytest.fixture(scope="module")

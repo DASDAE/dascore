@@ -10,15 +10,15 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
-from dascore.io.index.backend import get_backend
-from dascore.io.index.ingest import (
+from dascore.io._index.backend import get_backend
+from dascore.io._index.ingest import (
     SourceRecord,
     coord_dtype_is_stateable,
     patch_record,
     summaries_to_records,
 )
-from dascore.io.index.query import Query
-from dascore.io.index.schema import INDEX_VERSION
+from dascore.io._index.query import Query
+from dascore.io._index.schema import INDEX_VERSION
 from tests.test_io.test_index.test_heterogeneity_stress import make_random_summaries
 
 # The coordinate discovery this replaces: a scan of every link.

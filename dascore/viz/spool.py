@@ -12,8 +12,8 @@ from matplotlib.colors import LogNorm
 
 from dascore.exceptions import ParameterError
 from dascore.units import Quantity
-from dascore.utils.chunk_plan import _REPORT_COLUMNS
-from dascore.utils.display import (
+from dascore.utils._chunk_plan import _REPORT_COLUMNS
+from dascore.utils._display import (
     _SECONDS_IN_DAY,
     ACQUISITION_ATTR,
     group_names,

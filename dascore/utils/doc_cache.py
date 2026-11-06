@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from filelock import FileLock
 
 import dascore as dc
-from dascore.utils.doc_corpus import (
+from dascore.utils._doc_corpus import (
     PACKAGE_PATH,
     DocumentationError,
     _read_readme,

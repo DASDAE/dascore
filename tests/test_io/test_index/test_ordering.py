@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io._index.indexer import DBDirectoryIndexer
 
 
 @pytest.fixture(scope="module")

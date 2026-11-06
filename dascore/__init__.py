@@ -1,11 +1,12 @@
 """DASCore - A library for fiber optic sensing."""
-from __future__ import annotations
+
+# No `from __future__ import annotations` here: it would bind `annotations`
+# in this namespace, leaving dc.annotations correct only while the loader
+# import below happens to rebind it.
 
 # Aliased because importing dascore.warnings binds the submodule to the
 # `warnings` name in this namespace, which would shadow the standard library.
-import warnings as std_warnings
-
-from rich import print  # noqa
+import warnings as _std_warnings
 
 from dascore.core.patch import Patch
 from dascore.core.patch_meta import PatchMeta
@@ -45,8 +46,61 @@ from dascore.core.processor import PatchProcessor
 from dascore.utils.time import to_datetime64, to_timedelta64, to_float
 from dascore.version import __last_version__, __version__
 
-# flag for disabling progress bar when debugging
-_debug = False
+# The supported top-level API. `tests/test_public_api.py` pins it, together
+# with the public modules and the Patch and Spool methods. The `io` and
+# `warnings` subpackages stay attributes (dc.io, dc.warnings) but are not
+# star-exported, since they would shadow the standard library modules.
+__all__ = [
+    "AnnotationSet",
+    "BaseSpool",
+    "CoordManager",
+    "DascoreConfig",
+    "Inventory",
+    "Patch",
+    "PatchAttrs",
+    "PatchMeta",
+    "PatchProcessor",
+    "PatchSummary",
+    "Spool",
+    "__version__",
+    "annotations",
+    "config",
+    "config_context",
+    "constants",
+    "core",
+    "examples",
+    "exceptions",
+    "get_config",
+    "get_coord",
+    "get_coord_manager",
+    "get_example_inventory",
+    "get_example_patch",
+    "get_example_spool",
+    "get_format",
+    "get_quantity",
+    "get_unit",
+    "inventory",
+    "models",
+    "patch_function",
+    "proc",
+    "read",
+    "read_array",
+    "reset_config",
+    "scan",
+    "scan_payloads",
+    "scan_to_df",
+    "set_config",
+    "spool",
+    "to_datetime64",
+    "to_float",
+    "to_timedelta64",
+    "transform",
+    "units",
+    "utils",
+    "viz",
+    "write",
+    "xarray",
+]
 
 
 def __getattr__(name: str):
@@ -65,4 +119,4 @@ def __getattr__(name: str):
 
 
 # Ensure warnings are issued only once (per warning/line)
-std_warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")
+_std_warnings.filterwarnings("once", category=UserWarning, module=r"dascore\..*")

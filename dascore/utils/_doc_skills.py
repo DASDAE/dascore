@@ -6,14 +6,14 @@ import re
 
 import yaml
 
-from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import (
+from dascore.utils._doc_corpus import (
     DOC_PATH,
     PACKAGE_PATH,
     DocumentationError,
     _frontmatter,
     source_paths,
 )
+from dascore.utils.doc_cache import documentation_cache, read_document
 
 
 def get_skills() -> dict[str, dict[str, str]]:

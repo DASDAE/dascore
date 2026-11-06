@@ -27,8 +27,8 @@ from dascore.exceptions import (
     TimeOverflowError,
     UnitError,
 )
-from dascore.io.index.ingest import TypedValue, typed_value
-from dascore.io.index.schema import glob_expr, quote
+from dascore.io._index.ingest import TypedValue, typed_value
+from dascore.io._index.schema import glob_expr, quote
 from dascore.units import convert_units, get_quantity
 from dascore.utils.misc import glob_to_regex, is_range
 from dascore.utils.pd import resolve_selector_namespaces

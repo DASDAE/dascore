@@ -10,7 +10,7 @@ with business there import from those modules directly.
 
 from __future__ import annotations
 
-from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.query import Query
+from dascore.io._index.catalog import PatchCatalog
+from dascore.io._index.query import Query
 
 __all__ = ["PatchCatalog", "Query"]

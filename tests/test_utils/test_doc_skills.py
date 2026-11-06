@@ -7,9 +7,9 @@ import yaml
 
 import dascore as dc
 from dascore.cli import main
-from dascore.utils import doc_skills
+from dascore.utils import _doc_skills as doc_skills
+from dascore.utils._doc_corpus import DocumentationError
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
 
 
 class TestSkills:

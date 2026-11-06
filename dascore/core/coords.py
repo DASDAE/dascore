@@ -61,17 +61,17 @@ from dascore.units import (
     percent,
     units_match,
 )
-from dascore.utils.array import (
-    _coerce_text_array,
-    _is_text_coercible_array,
-    hash_array,
-)
-from dascore.utils.display import (
+from dascore.utils._display import (
     RichRepr,
     get_nice_text,
     range_texts,
     rate_text,
     span_text,
+)
+from dascore.utils.array import (
+    _coerce_text_array,
+    _is_text_coercible_array,
+    hash_array,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.gaps import GapTolerance, RunRecord, run_holes
