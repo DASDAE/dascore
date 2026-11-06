@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__experimental__ = True
+
 from typing import Any, get_args
 
 import numpy as np
@@ -511,10 +513,6 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
 class Enrich(PatchProcessor):
     """
     Copy inventory metadata onto a patch.
-
-    Experimental: this may change in any minor release. See what
-    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-    means.
 
     The patch resolves its inventory context from its ``acquisition_key`` and
     its time, then the acquisition's channel map places each channel on the

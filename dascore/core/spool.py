@@ -126,7 +126,7 @@ from dascore.utils.display import (
     span_text,
     split_block,
 )
-from dascore.utils.docs import compose_docstring
+from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
     ExplicitRanges,
@@ -1360,13 +1360,12 @@ class Spool(NodeRepr, NamespaceOwner):
             out[position] = by_id.get(patch_row)
         return out
 
+    @compose_docstring(experimental=experimental_note)
     def attach_inventory(self, inventory=None) -> Self:
         """
         Attach a DASDAE inventory to this spool.
 
-        Experimental: this may change in any minor release. See what
-        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-        means.
+        {experimental}
 
         Attaching is lazy and does not modify yielded patches. It replaces any
         previous inventory and clears configured enrichment; call ``enrich`` to copy
@@ -1456,13 +1455,12 @@ class Spool(NodeRepr, NamespaceOwner):
         )
         raise InvalidInventoryError(msg)
 
+    @compose_docstring(experimental=experimental_note)
     def remove_inventory(self) -> Self:
         """
         Return a spool carrying no inventory.
 
-        Experimental: this may change in any minor release. See what
-        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-        means.
+        {experimental}
 
         Any enrichment set up by [`Spool.enrich`](`dascore.core.spool.Spool.enrich`)
         goes with it, since there is nothing left to enrich from. A spool
@@ -1494,6 +1492,7 @@ class Spool(NodeRepr, NamespaceOwner):
         coords_desc=enrich_coords_description,
         on_missing_desc=enrich_on_missing_description,
         conflict_desc=enrich_conflict_description,
+        experimental=experimental_note,
     )
     def enrich(
         self,
@@ -1510,9 +1509,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Enrich each patch this spool yields from an inventory.
 
-        Experimental: this may change in any minor release. See what
-        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-        means.
+        {experimental}
 
         Enrichment runs lazily as patches are extracted and survives subsequent
         spool operations. It never removes patches: ``on_unresolved`` controls
@@ -1687,6 +1684,7 @@ class Spool(NodeRepr, NamespaceOwner):
             return np.full(len(working), None, dtype=object)
         return resolve_contexts(self._resolved_inventory(), *columns)
 
+    @compose_docstring(experimental=experimental_note)
     def conform_to_inventory(
         self,
         *,
@@ -1695,9 +1693,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a spool the inventory describes exactly, patch for patch.
 
-        Experimental: this may change in any minor release. See what
-        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-        means.
+        {experimental}
 
         This eager metadata step resolves every row, drops unmatched patches, and
         splits rows at optical-path changes without loading patch data. Splits occur
@@ -2589,13 +2585,12 @@ class Spool(NodeRepr, NamespaceOwner):
         )
         return self._new_from_catalog(catalog)
 
+    @compose_docstring(experimental=experimental_note)
     def cut(self, annotations: dc.AnnotationSet, /, **pads) -> Self:
         """
         Return one lazy patch per feature of an annotation set.
 
-        Experimental: this may change in any minor release. See what
-        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-        means.
+        {experimental}
 
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along

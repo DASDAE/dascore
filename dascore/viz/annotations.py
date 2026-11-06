@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__experimental__ = True
+
 import itertools
 import string
 from collections import defaultdict
@@ -126,10 +128,6 @@ def plot(
 ) -> plt.Axes:
     """
     Draw every feature of the set on an axis, e.g. over a waterfall.
-
-    Experimental: this may change in any minor release. See what
-    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-    means.
 
     Parameters
     ----------

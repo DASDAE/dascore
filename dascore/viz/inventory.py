@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__experimental__ = True
+
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
@@ -375,10 +377,6 @@ def path(
     """
     Plot what lies along one optical path, against optical distance.
 
-    Experimental: this may change in any minor release. See what
-    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-    means.
-
     Every track becomes a lane: one per acquisition recording through
     the path, spanning the distances its channels cover, the optical
     components which give the path its length, how it is coupled to the
@@ -635,10 +633,6 @@ def map_path(
 ) -> plt.Axes:
     """
     Plot where an inventory's fiber physically goes.
-
-    Experimental: this may change in any minor release. See what
-    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-    means.
 
     The polyline is the path's geometry read through the inventory's
     coordinate reference system. Stretches which state no position are
@@ -964,10 +958,6 @@ def timeline(
 ) -> plt.Axes:
     """
     Plot when each part of an inventory was valid.
-
-    Experimental: this may change in any minor release. See what
-    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-    means.
 
     One lane per acquisition and per optical path lineage, drawn against
     time. An epoch which states no start or no end is unbounded rather

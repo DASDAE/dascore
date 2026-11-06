@@ -10,11 +10,7 @@ DASCore loosely follows [semantic versioning](https://semver.org/): features nor
 
 ## Experimental features
 
-Some parts of DASCore are experimental: currently the inventory (`dascore.core.inventory`, `dascore.core.inventory_loader`) and annotations (`dascore.core.annotations`, `dascore.core.annotation_loader`). Their API pages carry an "Experimental" banner, and their modules set `__experimental__ = True`.
-
-- Experimental APIs and file formats may change in any minor release (1.x) without a deprecation period.
-- Such changes are still listed in the release notes.
-- Files written in an experimental format carry a format version. A newer DASCore either reads a file or refuses it with a clear error; it never misreads one.
+Experimental APIs and file formats, such as the inventory and annotations, may change in any minor release (1.x) without a deprecation period; such changes are still listed in the release notes. Files written in an experimental format carry a format version, which a newer DASCore either reads or refuses with a clear error, never misreads.
 
 ## Contribution workflow
 

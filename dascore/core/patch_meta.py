@@ -29,6 +29,7 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
+from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.identity import (
     _without_ids,
     ids_enabled,
@@ -433,6 +434,7 @@ class PatchMeta(NodeRepr):
             origin=origin, ord=ord, prefix=prefix
         ).run(self)
 
+    @compose_docstring(experimental=experimental_note)
     def enrich(
         self,
         inventory: Inventory,
@@ -447,9 +449,7 @@ class PatchMeta(NodeRepr):
         """
         Copy inventory metadata onto a patch.
 
-        Experimental: this may change in any minor release. See what
-        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-        means.
+        {experimental}
         """
         return dascore.proc.inventory.Enrich(
             inventory=inventory,

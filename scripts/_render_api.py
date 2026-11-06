@@ -6,7 +6,6 @@ import hashlib
 import inspect
 import json
 import os
-import sys
 import typing
 from collections import defaultdict
 from functools import cache
@@ -16,6 +15,8 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
+from dascore.utils.docs import experimental_note
+
 RENDER_FUNCS = {}
 DOC_PATH = Path(__file__).absolute().parent.parent / "dascore" / "docs"
 API_DOC_PATH = DOC_PATH / "api"
@@ -24,16 +25,8 @@ TEMPLATE_PATH = DOC_PATH / "_templates"
 GITHUB_PATH = "https://github.com"
 GITHUB_REPOSITORY = "DASDAE/dascore"
 GITHUB_REF = "/master"
-# Where "experimental" is defined; the banner on experimental pages links here.
-EXPERIMENTAL_LINK = (
-    "`dascore/docs/contributing/general_guidelines`#experimental-features"
-)
 EXPERIMENTAL_BANNER = (
-    '::: {.callout-warning title="Experimental"}\n'
-    "This is part of an experimental module: it may change in any minor "
-    "release without a deprecation period. See what "
-    f"[experimental]({EXPERIMENTAL_LINK}) means.\n"
-    ":::\n\n"
+    f'::: {{.callout-warning title="Experimental"}}\n{experimental_note}\n:::\n\n'
 )
 
 
@@ -69,19 +62,9 @@ def sha_256(path_or_str: Path | str) -> str:
 
 
 def is_experimental(obj) -> bool:
-    """
-    Return True if an object is, or is defined in, an experimental module.
-
-    A module marks itself with ``__experimental__ = True``; that flag is the
-    one place this is stated, so the pages follow the code.
-    """
-    if inspect.ismodule(obj):
-        module = obj
-    else:
-        # A generated processor function is defined where its class is.
-        source = getattr(obj, "__processor__", None) or obj
-        module = sys.modules.get(getattr(source, "__module__", None) or "")
-    return getattr(module, "__experimental__", False) is True
+    """Return True if an object's module sets `__experimental__`."""
+    obj = getattr(obj, "__processor__", None) or obj
+    return getattr(inspect.getmodule(obj), "__experimental__", False)
 
 
 def build_table(df: pd.DataFrame, caption=None):
@@ -553,8 +536,7 @@ class Render:
         banner = EXPERIMENTAL_BANNER if is_experimental(data["object"]) else ""
         out = (
             f"# {self._data['name']}\n\n"
-            f"{self._get_parent_source_block(data)}\n\n"
-            f"{banner}"
+            f"{self._get_parent_source_block(data)}\n\n{banner}"
             f"{signature}\n"
             f"{docstr()}\n"
             f"{''.join(tables)}\n"

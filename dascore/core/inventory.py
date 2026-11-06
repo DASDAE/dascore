@@ -10,20 +10,14 @@ patches. Patches carry a ``acquisition_key``
 resolves against an inventory.
 
 Each object documents the rules it enforces.
-
-Note
-----
-This module is experimental: its API and file format may change in any
-minor release, without a deprecation period. See what
-[experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-means.
 """
 
 from __future__ import annotations
 
+__experimental__ = True
+
 import difflib
 import itertools
-import numbers
 from collections.abc import Mapping, Sized
 from contextlib import suppress
 from functools import cache
@@ -96,10 +90,6 @@ from dascore.utils.misc import (
 )
 from dascore.utils.namespace import NamespaceOwner
 
-# Marks this module experimental; the API docs builder reads it to put
-# an Experimental banner on its pages.
-__experimental__ = True
-
 CouplingType = Literal[
     "conduit",
     "trench",
@@ -112,10 +102,6 @@ CouplingType = Literal[
     "other",
 ]
 VALID_COUPLING_TYPES = get_args(CouplingType)
-
-# The newest inventory schema_version this DASCore reads. A document stating
-# a newer one was written by a newer DASCore and is refused, never misread.
-INVENTORY_SCHEMA_VERSION = 1
 
 # Coordinates are stored on the canonical (x, y, z) axes; these labels are
 # resolvable aliases whose meaning the inventory CRS declares.
@@ -2128,13 +2114,13 @@ def _yaml_label(text: str) -> str:
     return f"{text!r}" if short else "the given YAML text"
 
 
+# The newest inventory schema_version this DASCore reads.
+SCHEMA_VERSION = 1
+
+
 class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     """
     Top-level DASDAE inventory manifest.
-
-    Experimental: this may change in any minor release. See what
-    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
-    means.
 
     Stores document metadata, shareable resources keyed by resource_id, the
     inventory-wide coordinate reference system, and network containers.
@@ -2145,7 +2131,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     _namespace_entry_point_group: ClassVar[str] = "dascore.inventory_namespace"
 
     schema_version: int = Field(
-        default=INVENTORY_SCHEMA_VERSION,
+        default=SCHEMA_VERSION,
         description="Version of the inventory manifest envelope.",
     )
     # Empty unless stated, as CreationInfo's strings are, so the same files
@@ -2172,26 +2158,15 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     @field_validator("schema_version", mode="before")
     @classmethod
     def _check_schema_version(cls, value):
-        """
-        Refuse a schema_version this DASCore cannot read.
-
-        Checked before pydantic coerces, so `"1"`, `1.0` or `true` are refused
-        rather than read as a version nobody wrote.
-        """
-        if isinstance(value, bool) or not isinstance(value, numbers.Integral):
-            msg = f"schema_version must be an integer, not {value!r}."
-            raise InvalidInventoryError(msg)
-        if value > INVENTORY_SCHEMA_VERSION:
+        """Refuse a version this DASCore cannot read, rather than misread it."""
+        if type(value) is not int or not 1 <= value <= SCHEMA_VERSION:
             msg = (
-                f"schema_version {value} was written by a newer DASCore, which "
-                f"this one cannot read (it reads 1 through "
-                f"{INVENTORY_SCHEMA_VERSION}). Upgrade DASCore to read it."
+                f"schema_version {value!r} is not one this DASCore reads (1 to "
+                f"{SCHEMA_VERSION}). A newer one was written by a newer DASCore; "
+                "upgrade DASCore to read it."
             )
             raise InvalidInventoryError(msg)
-        if value < 1:
-            msg = f"schema_version must be at least 1, not {value}."
-            raise InvalidInventoryError(msg)
-        return int(value)
+        return value
 
     @field_validator("resources", mode="before")
     @classmethod

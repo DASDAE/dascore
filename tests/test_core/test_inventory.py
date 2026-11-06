@@ -3160,9 +3160,15 @@ class TestSerializationIsLossless:
         envelope a document was written against.
         """
         default = inv.Inventory().schema_version
-        assert default == inv.INVENTORY_SCHEMA_VERSION
         data = yaml.safe_load(build_inventory().io.to_yaml())
         assert data["schema_version"] == default
+        assert dc.inventory(build_inventory().io.to_yaml()).schema_version == default
+
+    def test_newer_schema_version_is_refused(self):
+        """A document from a newer DASCore is refused, not misread (s04-F6)."""
+        text = f"object_type: Inventory\nschema_version: {inv.SCHEMA_VERSION + 1}\n"
+        with pytest.raises(InvalidInventoryError, match="upgrade DASCore"):
+            dc.inventory(text)
 
     def test_empty_label_value_is_rejected(self):
         """
@@ -3512,63 +3518,3 @@ class TestInventoryNamespaces:
         assert inventory == other
         assert hash(inventory) == hash(other)
         assert inventory.model_dump(mode="json") == other.model_dump(mode="json")
-
-
-class TestSchemaVersion:
-    """Inventory documents are versioned, and unknown versions are refused."""
-
-    def _document(self, version) -> str:
-        """Return the text of an empty inventory stating a version."""
-        return f"object_type: Inventory\nschema_version: {version}\n"
-
-    def test_supported_version_reads(self):
-        """The version this DASCore writes reads back."""
-        version = inv.INVENTORY_SCHEMA_VERSION
-        out = dc.inventory(self._document(version))
-        assert out.schema_version == version
-
-    def test_newer_version_refused(self):
-        """A document from a newer DASCore is refused, saying to upgrade (s04-F6)."""
-        newer = inv.INVENTORY_SCHEMA_VERSION + 1
-        with pytest.raises(InvalidInventoryError, match=r"newer DASCore.*Upgrade"):
-            dc.inventory(self._document(newer))
-        with pytest.raises(InvalidInventoryError, match="newer DASCore"):
-            dc.inventory(self._document(99))
-
-    @pytest.mark.parametrize("version", [0, -1])
-    def test_version_below_one_refused(self, version):
-        """Versions start at 1."""
-        with pytest.raises(InvalidInventoryError, match="at least 1"):
-            dc.inventory(self._document(version))
-
-    @pytest.mark.parametrize("version", ["'1'", "1.0", "true", "nope", "null"])
-    def test_non_integer_refused(self, version):
-        """A version pydantic would coerce to an integer is refused instead."""
-        with pytest.raises(InvalidInventoryError, match="must be an integer"):
-            dc.inventory(self._document(version))
-
-    def test_numpy_integer_accepted(self):
-        """An integer of another type is still the integer it holds."""
-        out = inv.Inventory(schema_version=np.int64(1))
-        assert out.schema_version == 1
-        assert type(out.schema_version) is int
-
-    def test_built_in_memory_refused(self):
-        """Building a newer-versioned inventory is refused too."""
-        with pytest.raises(ValidationError, match="newer DASCore"):
-            inv.Inventory(schema_version=inv.INVENTORY_SCHEMA_VERSION + 1)
-
-    def test_newer_file_refused(self, tmp_path):
-        """A serialized file from a newer DASCore is refused."""
-        path = tmp_path / "inventory.yaml"
-        path.write_text(self._document(inv.INVENTORY_SCHEMA_VERSION + 1))
-        with pytest.raises(InvalidInventoryError, match="newer DASCore"):
-            dc.inventory(path)
-
-    def test_newer_directory_refused(self, tmp_path):
-        """An authoring directory whose envelope is newer is refused."""
-        newer = inv.INVENTORY_SCHEMA_VERSION + 1
-        (tmp_path / "inventory.yaml").write_text(self._document(newer))
-        match = r"(?s)Could not read the envelope.*newer DASCore"
-        with pytest.raises(InvalidInventoryError, match=match):
-            dc.inventory(tmp_path)

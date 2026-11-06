@@ -13,6 +13,15 @@ import pandas as pd
 
 import dascore as dc
 
+# The note on objects which are experimental but whose module is not flagged
+# with `__experimental__`; the API docs banner uses it too.
+experimental_note = (
+    "Experimental: this may change in any minor release without a "
+    "deprecation period; see what [experimental]("
+    "`dascore/docs/contributing/general_guidelines`#experimental-features"
+    ") means."
+)
+
 
 def format_dtypes(dtype_dict: dict[str, Any]) -> str:
     """
