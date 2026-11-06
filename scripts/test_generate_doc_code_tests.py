@@ -186,6 +186,33 @@ print("run")
         assert out.chunks == (Chunk(start_line=12, source='print("run")\n'),)
 
 
+class TestIncludes:
+    """Cells in a file a page includes belong to that page."""
+
+    def test_follows_includes(self, tmp_path):
+        """An included file's cells are extracted, pointing at that file."""
+        skill = _write(
+            tmp_path / "skills" / "SKILL.md",
+            '---\nname: example\n---\n\n```{python}\nprint("included")\n```\n',
+        )
+        path = _write(
+            tmp_path / "docs" / "page.qmd",
+            "---\ntitle: Example\n---\n{{< include ../skills/SKILL.md >}}\n",
+        )
+        out = extract_qmd_file(path)
+        assert out.chunks == (
+            Chunk(start_line=5, source='print("included")\n', path=skill.resolve()),
+        )
+
+    def test_skill_pages_keep_their_cells(self):
+        """A real page whose body is an included skill still yields its cells."""
+        page = DOCS_PATH / "recipes" / "tunnel_inventory.qmd"
+        chunks = extract_qmd_file(page).chunks
+        assert chunks and all(x.path is not None for x in chunks)
+        module = render_test_module(page, chunks)
+        assert "### dascore/.agents/skills/make-inventory/SKILL.md:" in module
+
+
 class TestOutputPaths:
     """Tests for source-to-test path mapping."""
 

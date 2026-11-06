@@ -59,6 +59,7 @@ class TestAuthoredDocuments:
         [
             ("---\ntitle: no closing delimiter", "Unterminated"),
             ("{{< include ../outside.md >}}", "escapes"),
+            ("---\njust text\n---\nBody", "mapping"),
             ("{{< include page.qmd >}}", "Circular"),
         ],
     )
@@ -67,6 +68,17 @@ class TestAuthoredDocuments:
         source, output = sources
         (source / "page.qmd").write_text(body)
         with pytest.raises(doc_corpus.DocumentationError, match=message):
+            doc_corpus.write_corpus(output)
+
+    def test_include_beside_skills(self, sources, monkeypatch):
+        """Only the skill directory may be included, not what sits beside it."""
+        source, output = sources
+        agents = source.parent / "agents"
+        (agents / "skills").mkdir(parents=True)
+        (agents / "notes.md").write_text("Private notes.")
+        monkeypatch.setattr(doc_corpus, "SKILL_PATH", agents / "skills")
+        (source / "page.qmd").write_text("{{< include ../agents/notes.md >}}")
+        with pytest.raises(doc_corpus.DocumentationError, match="escapes"):
             doc_corpus.write_corpus(output)
 
     def test_included_skill(self, sources, monkeypatch):
@@ -84,7 +96,7 @@ class TestAuthoredDocuments:
             "---\ntitle: Page title\n---\n\n"
             "{{< include ../skills/example/SKILL.md >}}\n"
         )
-        front, body = doc_corpus._read_page(page)
+        front, body = doc_corpus._read_source(page)
         assert front == {
             "name": "example",
             "description": "From the skill",

@@ -304,6 +304,18 @@ class TestCache:
             assert first["identity"]["source"] != second["identity"]["source"]
             assert doc_cache.read_document(root, second, "example") == "second"
 
+    def test_skill_sources(self, cache, monkeypatch):
+        """Editing a skill file invalidates the corpus built from it."""
+        skill = cache.parent / "skills" / "example" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("before")
+        monkeypatch.setattr(doc_cache, "SKILL_PATH", skill.parent.parent)
+        with doc_cache.documentation_cache() as (_, before):
+            pass
+        skill.write_text("after")
+        with doc_cache.documentation_cache() as (_, after):
+            assert before["identity"] != after["identity"]
+
     def test_nested_sources(self, cache):
         """Nested API edits invalidate the corpus; generated website files do not."""
         nested = cache.parent / "core" / "operation.py"
@@ -537,6 +549,16 @@ class TestUsageErrors:
         assert "usage:" in captured.err
         assert "error:" in captured.err
         assert "Traceback" not in captured.err
+
+    def test_closed_pipe(self, monkeypatch, capfd):
+        """A reader that stops early, such as `head`, ends the command quietly."""
+
+        def closed():
+            raise BrokenPipeError
+
+        monkeypatch.setattr("dascore.cli.read_bootstrap", closed)
+        assert main(["skill", "--bootstrap"]) == 1
+        assert capfd.readouterr().err == ""
 
 
 class TestKeywordMetadata:

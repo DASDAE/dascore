@@ -12,18 +12,21 @@ from dascore.utils.doc_corpus import (
     DOC_PATH,
     SKILL_PATH,
     DocumentationError,
-    _read_page,
+    _read_source,
     source_paths,
 )
 
-# What an installed skill says in place of its procedure, which would go stale.
+# Skills that must work where the project's DASCore has no command line (an
+# older release, or no environment yet), so they are installed whole.
+_STANDALONE = frozenset({"dascore", "migrate-to-v1", "start-task", "test-beta"})
+
+# What any other installed skill says in place of its procedure, which would
+# go stale.
 _INSTALLED_BODY = (
     "\nThe procedure for this skill ships with DASCore and changes between "
-    "versions, so read the current text before acting:\n\n"
-    "1. Use the project's Python environment, selected as the `dascore` skill "
-    "describes. Prefer that environment's executable over a global `python` or "
-    "`dascore` command.\n"
-    "2. Run `<python> -m dascore skill {name}` and follow what it prints.\n\n"
+    "versions. Run `<python> -m dascore skill {name}` with the project's "
+    "Python, selected as the `dascore` skill describes, and follow what it "
+    "prints.\n\n"
     "If the command reports an unknown skill, the project's DASCore predates "
     "it. Say so rather than working from memory.\n"
 )
@@ -48,7 +51,7 @@ def get_skills() -> dict[str, dict[str, str]]:
             raise DocumentationError(
                 f"Skill {name!r} refers to an unknown document: {target!r}."
             )
-        front, _body = _read_page(pages[target])
+        front, _body = _read_source(pages[target])
         if not all(
             isinstance(front.get(key), str) and front[key].strip()
             for key in ("title", "description")
@@ -79,20 +82,23 @@ def install_skills(directory: Path | str) -> list[Path]:
     """
     Write an entry for every shipped skill into an agent's skill directory.
 
-    The entry point is copied whole. Every other entry keeps the skill's name
-    and description and tells the agent to read the current procedure from the
-    project's DASCore, so an installed skill cannot go stale.
+    A skill that must work without the project's DASCore is copied whole.
+    Every other entry keeps the skill's name and description and tells the
+    agent to read the current procedure from the project's DASCore, so it
+    cannot go stale.
     """
     out = []
     for source in sorted(SKILL_PATH.glob("*/SKILL.md")):
         name = source.parent.name
         text = source.read_text(encoding="utf-8")
-        if name != "dascore":
+        if name not in _STANDALONE:
             front = text.split("\n---\n", 1)[0]
             text = f"{front}\n---\n{_INSTALLED_BODY.format(name=name)}"
-        target = Path(directory) / name / source.name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        target = Path(directory).expanduser() / name / source.name
+        # A directory linked to the package holds the skill files themselves.
+        if not (target.exists() and target.samefile(source)):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
         out.append(target)
     return out
 

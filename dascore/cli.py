@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -104,9 +105,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
         args.run(args)
+        # Flush here so a closed pipe is handled below, not at interpreter exit.
+        sys.stdout.flush()
     except SystemExit as exc:
         assert isinstance(exc.code, int)
         return exc.code
+    except BrokenPipeError:
+        # The reader, such as `head`, stopped early. Point stdout at devnull so
+        # the interpreter's own exit flush stays quiet as well.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+        return 1
     except (DocumentationError, OSError) as exc:
         sys.stderr.write(f"dascore: {exc}\n")
         return 1

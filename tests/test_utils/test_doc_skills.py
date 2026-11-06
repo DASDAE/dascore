@@ -8,21 +8,7 @@ import yaml
 import dascore as dc
 from dascore.cli import main
 from dascore.utils import doc_skills
-from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import DOC_PATH, SKILL_PATH, DocumentationError
-
-# The shipped catalog, in listing order.
-_CATALOG = {
-    "dascore": "recipes/dascore",
-    "make-inventory": "recipes/tunnel_inventory",
-    "make-annotations": "tutorial/annotations",
-    "make-namespace": "contributing/extending_dascore",
-    "migrate-to-v1": "migrations/dascore_1.0_migration",
-    "test-beta": "migrations/test_latest_beta",
-    "add-format": "contributing/new_format",
-    "start-task": "contributing/start_task",
-    "draft-release": "contributing/draft_release",
-}
 
 
 class TestSkills:
@@ -34,12 +20,6 @@ class TestSkills:
         with dc.config_context(docs_cache_dir=tmp_path):
             yield
 
-    def test_catalog(self):
-        """The catalog exposes each catalogued procedure with its metadata."""
-        skills = doc_skills.get_skills()
-        assert {name: info["target"] for name, info in skills.items()} == _CATALOG
-        assert all(x["title"] and x["description"] for x in skills.values())
-
     def test_skill_files(self):
         """Each shipped skill is a named file, and catalogued pages include theirs."""
         shipped = {}
@@ -47,7 +27,7 @@ class TestSkills:
             front = yaml.safe_load(path.read_text(encoding="utf-8").split("---", 2)[1])
             assert front["name"] == path.parent.name and front["description"]
             shipped[front["name"]] = front["description"]
-        assert set(_CATALOG) <= set(shipped)
+        assert set(doc_skills.get_skills()) == set(shipped)
         for name, info in doc_skills.get_skills().items():
             # The entry point's page is its routing recipe, not the bootstrap file.
             if name == "dascore":
@@ -59,47 +39,66 @@ class TestSkills:
             include = f"{{{{< include ../../.agents/skills/{name}/SKILL.md >}}}}"
             assert page.endswith(f"\n---\n{include}\n")
 
-    @pytest.mark.parametrize("name", list(_CATALOG))
-    def test_same_document(self, cache, name):
-        """Skill retrieval returns the exact canonical cached documentation page."""
-        target = doc_skills.get_skills()[name]["target"]
-        text = doc_skills.read_skill(name)
-        with documentation_cache() as (root, manifest):
-            assert text == read_document(root, manifest, target)
-
     def test_cli(self, cache, capsys):
         """Discovery lists canonical pages and retrieval serves their contents."""
         assert main(["skills"]) == 0
         listed = capsys.readouterr().out
         for name, info in doc_skills.get_skills().items():
             assert f"{name}: {info['description']}" in listed
-        assert main(["skill", "make-inventory"]) == 0
-        assert capsys.readouterr().out == doc_skills.read_skill("make-inventory")
+        for name in doc_skills.get_skills():
+            assert main(["skill", name]) == 0
+            printed = capsys.readouterr().out
+            assert printed == doc_skills.read_skill(name)
+            # The skill file's own front matter stays out of the printed page.
+            assert f"name: {name}" not in printed
 
-    def test_install(self, tmp_path, capsys):
+    def test_install(self, tmp_path, capsys, monkeypatch):
         """One command installs an entry for every skill, replacing older ones."""
         target = tmp_path / "agent" / "skills"
-        stale = target / "dascore" / "SKILL.md"
-        stale.parent.mkdir(parents=True)
-        stale.write_text("An older copy.")
-        assert main(["skills", "--install", str(target)]) == 0
+        for name in ("dascore", "make-inventory"):
+            stale = target / name / "SKILL.md"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("An older copy.")
+        # Agents often quote the path, which leaves `~` for the command to expand.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        assert main(["skills", "--install", "~/agent/skills"]) == 0
         installed = capsys.readouterr().out.split()
         sources = sorted(SKILL_PATH.glob("*/SKILL.md"))
         assert installed == [str(target / x.parent.name / x.name) for x in sources]
-        assert {x.parent.name for x in sources} == set(_CATALOG)
+        assert doc_skills._STANDALONE < {x.parent.name for x in sources}
+        descriptions = {k: v["description"] for k, v in doc_skills.get_skills().items()}
         for source in sources:
             name = source.parent.name
             shipped = source.read_text(encoding="utf-8")
             entry = (target / name / source.name).read_text(encoding="utf-8")
-            if name == "dascore":
-                # The entry point is what selects the environment, so it is whole.
+            if name in doc_skills._STANDALONE:
+                # These must work where the project's DASCore has no CLI.
                 assert entry == shipped
                 continue
             # Other entries keep the metadata and defer the procedure to the CLI.
-            front, body = entry.split("\n---\n", 1)
-            assert front == shipped.split("\n---\n", 1)[0]
+            front, body = entry.removeprefix("---\n").split("\n---\n", 1)
+            assert yaml.safe_load(front) == {
+                "name": name,
+                "description": descriptions[name],
+            }
             assert f"-m dascore skill {name}`" in body
-            assert shipped.split("\n---\n", 1)[1].strip() not in entry
+            procedure = shipped.split("\n---\n", 1)[1].splitlines()
+            assert not {x for x in procedure if x.strip()} & set(body.splitlines())
+
+    def test_install_into_package(self, tmp_path, monkeypatch):
+        """Installing into a directory that is the shipped skills changes nothing."""
+        shipped = tmp_path / "skills"
+        for name in ("dascore", "make-inventory"):
+            source = SKILL_PATH / name / "SKILL.md"
+            copy = shipped / name / "SKILL.md"
+            copy.parent.mkdir(parents=True)
+            copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        monkeypatch.setattr(doc_skills, "SKILL_PATH", shipped)
+        before = (shipped / "make-inventory" / "SKILL.md").read_text(encoding="utf-8")
+        doc_skills.install_skills(shipped)
+        after = (shipped / "make-inventory" / "SKILL.md").read_text(encoding="utf-8")
+        assert before == after
 
     @pytest.mark.parametrize(
         "args, code, message",
@@ -108,7 +107,7 @@ class TestSkills:
             (
                 ["skill", "unknown"],
                 1,
-                f"Available skills: {', '.join(_CATALOG)}",
+                "Available skills: dascore, make-inventory",
             ),
             (["skill", "dascore", "--bootstrap"], 2, "Use a skill name"),
         ],
