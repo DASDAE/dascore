@@ -385,17 +385,8 @@ def _call_name(func) -> str:
     # By its source rather than its address, which is reused once it is
     # collected. One which holds state its source does not show -- a
     # closure from a factory -- is refused, and its result's id is random.
-    return _source_name(getattr(func, "raw_function", func))
-
-
-# Bounded, and holding function references for the reason `_signature_of`
-# does. Read once per function object: a loop over a spool should not
-# reread a script for every patch, and a script edited on disk mid-run
-# should not rename the code already running.
-@lru_cache(maxsize=2048)
-def _source_name(func) -> str:
-    """Return `callable_name` of a function, worked out once."""
-    return callable_name(func)
+    # Not cached: its defaults are part of the name, and can be mutated.
+    return callable_name(getattr(func, "raw_function", func))
 
 
 def _label(func) -> str:

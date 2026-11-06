@@ -343,6 +343,18 @@ class TestCallOperationId:
         assert ids[0] != ids[1]
         assert ids[0] == call_operation_id(made[0], (2,), {})
 
+    def test_a_mutated_default_is_another_call(self):
+        """A function named by its source is named by its defaults as they are now."""
+
+        @dc.patch_function()
+        def scaled(patch, factors=[2]):
+            """Scale by a default which can be mutated."""
+            return patch
+
+        before = call_operation_id(scaled)
+        scaled.raw_function.__defaults__[0][0] = 3
+        assert call_operation_id(scaled) != before
+
     @pytest.mark.concurrency
     def test_an_edited_script_changes_the_data_id(self, tmp_path):
         """Run as a script, an edited body is a new `data_id`; the same one is not."""

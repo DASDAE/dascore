@@ -859,8 +859,8 @@ def _check_returns_self(cls: type[PatchProcessor], func) -> None:
 
 
 # Bounded, and holding the classes it names, so an address it used is never
-# reused underneath it. Read once per class: `inspect.getsource` is slow,
-# and a file edited mid-run should not rename the code already running.
+# reused underneath it. Read once per class, since `inspect.getsource` of a
+# class is slow; a class's name takes no defaults which could change.
 @functools.lru_cache(maxsize=2048)
 def _class_name(cls: type[PatchProcessor]) -> str:
     """
