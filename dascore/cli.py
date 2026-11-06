@@ -83,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
         "--install",
         type=Path,
         metavar="DIRECTORY",
-        help="Copy every skill into this agent skills directory",
+        help="Write an entry for every skill into this agent skills directory",
     )
     skills.set_defaults(run=_skills)
     skill = commands.add_parser(
