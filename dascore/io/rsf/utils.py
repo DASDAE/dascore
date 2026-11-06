@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 import warnings
+from contextlib import suppress
 from fractions import Fraction
 from pathlib import Path
 
@@ -20,18 +22,40 @@ _HEADER_MAX = 1 << 20
 _BLOCK = 1 << 16
 # A line binds when it opens with a key=value token.
 _BINDS = re.compile(r"\s*[A-Za-z_]\w*=")
-_TOKEN = re.compile(r"([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|\S*)")
+_TOKEN = re.compile(r"""([A-Za-z_]\w*)=("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S*)""")
 _AXIS = re.compile(r"n([1-9])")
 _ORDERS = {"native": "=", "xdr": ">"}
 _KINDS = {"float": "f4", "double": "f8", "int": "i4", "short": "i2", "complex": "c8"}
+# Keys that describe the file rather than the patch; an attr of the same
+# name is written with the prefix.
+RESERVED = re.compile(
+    r"(?:n|o|d|label|unit|epoch|coord)\d+|coord_\w+|esize|data_format|in|starttime"
+)
+PREFIX = "dascore_"
+# What opens a history line DASCore wrote, before the version.
+HISTORY = "# dascore "
 
 
-def _read_header(handle) -> tuple[dict[str, str], int | None] | None:
+def _unquote(value: str) -> str:
+    """Return a value's text, without its quotes and with escapes resolved."""
+    if value[:1] not in {'"', "'"}:
+        return value
+    return re.sub(rf"\\([\\{value[0]}])", r"\1", value[1:-1])
+
+
+def _get_bindings(text: str):
+    """Yield each key and value token of the header lines that bind."""
+    for line in text.split("\n"):
+        if _BINDS.match(line):
+            yield from _TOKEN.findall(line)
+
+
+def _read_header(handle) -> tuple[dict[str, str], int | None, str] | None:
     """
-    Return a header's bindings and the offset of a packed binary.
+    Return a header's bindings, the offset of a packed binary, and its text.
 
     The offset is None when no separator follows the header text, and
-    None is returned in place of both for anything but an RSF header.
+    None is returned in place of all three for anything but an RSF header.
     """
     raw = b""
     while len(raw) <= _HEADER_MAX and (block := handle.read(_BLOCK)):
@@ -45,18 +69,13 @@ def _read_header(handle) -> tuple[dict[str, str], int | None] | None:
         text = head.decode()
     except UnicodeDecodeError:
         text = head.decode("latin-1")
-    hdr = {}
-    for line in text.split("\n"):
-        if _BINDS.match(line):
-            for key, value in _TOKEN.findall(line):
-                quoted = value[:1] in {'"', "'"}
-                hdr[key] = value[1:-1] if quoted else value
+    hdr = {key: _unquote(value) for key, value in _get_bindings(text)}
     if "in" not in hdr or "n1" not in hdr:
         return None
-    return hdr, (len(head) + len(sep) if sep else None)
+    return hdr, (len(head) + len(sep) if sep else None), text
 
 
-def _get_header(handle, path) -> tuple[dict[str, str], int | None]:
+def _get_header(handle, path) -> tuple[dict[str, str], int | None, str]:
     """Return the header of an RSF file, or raise if it has none."""
     if (out := _read_header(handle)) is None:
         msg = f"{path} does not hold an RSF header."
@@ -114,6 +133,38 @@ def _get_coords(hdr) -> dict:
     return coords
 
 
+def _get_attr_value(value: str):
+    """Return a bare value as the JSON it spells, a quoted one as its text."""
+    text = _unquote(value)
+    # a quoted JSON object is a nested attr
+    if value[:1] not in {'"', "'"} or text.startswith("{"):
+        with suppress(ValueError):
+            return json.loads(text)
+    return text
+
+
+def _get_attrs(text: str) -> dict:
+    """
+    Return the attrs and the history DASCore wrote into a header.
+
+    Keys that describe the file are skipped and the prefix that kept an
+    attr off one is removed. A patch attr field takes the value's text,
+    an extra the typed value; see `_get_attr_value`. Only the history
+    lines DASCore wrote are read; another program's are prose.
+    """
+    fields = dc.PatchAttrs.model_fields
+    out = {}
+    for key, value in _get_bindings(text):
+        if not RESERVED.fullmatch(key):
+            name = key.removeprefix(PREFIX)
+            out[name] = _unquote(value) if name in fields else _get_attr_value(value)
+    lines = text.split("\n")
+    if history := [x[len(HISTORY) :] for x in lines if x.startswith(HISTORY)]:
+        # each line holds the version before the entry
+        out["history"] = tuple(x.partition(" ")[2] for x in history)
+    return out
+
+
 def _get_layout(path) -> tuple[Path, int, np.dtype, tuple[int, ...]]:
     """
     Return the file holding the samples, their offset, dtype and shape.
@@ -123,7 +174,7 @@ def _get_layout(path) -> tuple[Path, int, np.dtype, tuple[int, ...]]:
     """
     path = Path(path)
     with path.open("rb") as handle:
-        hdr, offset = _get_header(handle, path)
+        hdr, offset, _ = _get_header(handle, path)
     dtype, shape, source = _get_dtype(hdr), _get_shape(hdr), hdr["in"]
     if source != "stdin":
         # an absolute source replaces the parent when joined

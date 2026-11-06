@@ -402,3 +402,134 @@ class TestRsfRead:
         path = _write_rsf(tmp_path / "n.rsf", ["n1=abc", 'in="stdin"'])
         with pytest.raises(InvalidFiberFileError, match="invalid axis"):
             RSFV1().get_metadata(path)
+
+
+@pytest.fixture(scope="module")
+def attrs_patch(fractional_patch):
+    """A float32 patch with set, extra, nested and colliding attrs and history."""
+    attrs = {
+        "data_type": "strain_rate",
+        "data_units": "1/s",
+        "tag": "shot 1",
+        "gauge_length": 10.5,
+        "channel_count": np.int64(3),
+        "loop": True,
+        "empty": None,
+        "station": 'a "quoted" \\ name',
+        "nest": {"a": [1, 2], "b": {"c": "x=y"}},
+        "in": "collides",
+        "n1": 7,
+        "dascore_note": "prefixed",
+        "time_min": 0.0,
+        "history": ("pass_filter(time=(None, 10))", "decimate(time=2)"),
+    }
+    return fractional_patch.update(attrs=attrs)
+
+
+@pytest.fixture(scope="module")
+def header(attrs_patch, tmp_path_factory):
+    """The header lines written for the attrs patch."""
+    path = tmp_path_factory.mktemp("rsf") / "attrs.rsf"
+    RSFV1().write(attrs_patch, path)
+    _, head, _ = _split_combined(path.read_bytes())
+    return head.decode().splitlines()
+
+
+class TestRsfAttrs:
+    """Tests for the attrs and history the writer stores and the reader restores."""
+
+    def test_history_lines(self, header):
+        """History opens the header, one line per entry, '=' written as ':'."""
+        assert header[:2] == [
+            f"# dascore {dc.__version__} pass_filter(time:(None, 10))",
+            f"# dascore {dc.__version__} decimate(time:2)",
+        ]
+        assert not any(x.startswith("#") for x in header[2:])
+
+    def test_attr_lines(self, header):
+        """Set attrs are one line each, quoted unless a number or a bool."""
+        assert {
+            'data_type="strain_rate"',
+            'data_units="1 / s"',
+            "gauge_length=10.5",
+            "channel_count=3",
+            "loop=true",
+            "empty=null",
+            r'station="a \"quoted\" \\ name"',
+            r'nest="{\"a\": [1, 2], \"b\": {\"c\": \"x=y\"}}"',
+        } <= set(header)
+
+    def test_reserved_names(self, header):
+        """A name that is an RSF key, or carries the prefix, gets the prefix."""
+        assert {
+            'dascore_in="collides"',
+            "dascore_n1=7",
+            'dascore_dascore_note="prefixed"',
+        } <= set(header)
+        assert header.count('in="stdin"') == 1
+
+    def test_skipped(self, header):
+        """Defaults, ids, and an attr naming a coordinate field are not written."""
+        keys = {x.partition("=")[0] for x in header if "=" in x}
+        assert not keys & {"data_category", "origin_id", "data_id", "time_min"}
+
+    def test_deterministic(self, attrs_patch, tmp_path):
+        """Two writes of the same patch are byte-identical."""
+        RSFV1().write(attrs_patch, tmp_path / "a.rsf")
+        RSFV1().write(attrs_patch, tmp_path / "b.rsf")
+        raw = (tmp_path / "a.rsf").read_bytes()
+        assert raw == (tmp_path / "b.rsf").read_bytes()
+
+    @pytest.mark.parametrize("split", [False, True])
+    def test_roundtrip(self, split, attrs_patch, tmp_path):
+        """Attrs read back equal; history entries read back with ':' for '='."""
+        path = tmp_path / "attrs.rsf"
+        data_path = tmp_path / "data.rsf" if split else None
+        RSFV1().write(attrs_patch, path, data_path=data_path)
+        patch = dc.spool(path)[0]
+        skip = {"history", "origin_id", "data_id", "time_min"}
+        expected = {i: v for i, v in dict(attrs_patch.attrs).items() if i not in skip}
+        out = {i: v for i, v in dict(patch.attrs).items() if i not in skip}
+        assert out == expected
+        assert patch.attrs.history == (
+            "pass_filter(time:(None, 10))",
+            "decimate(time:2)",
+        )
+
+    def test_datetime(self, fractional_patch, tmp_path):
+        """A datetime attr is written as ISO 8601 UTC and reads back as text."""
+        when = np.datetime64("2024-01-01T00:00:00.5")
+        patch = fractional_patch.update_attrs(event_time=when)
+        RSFV1().write(patch, tmp_path / "t.rsf")
+        out = dc.spool(tmp_path / "t.rsf")[0].attrs
+        assert out["event_time"] == "2024-01-01T00:00:00.500000000Z"
+        assert out.history == ()
+
+    def test_madagascar(self, tmp_path):
+        """Madagascar's and gabbro's history lines are prose; its keys are extras."""
+        lines = [
+            "4.2-git\tsfspike\t/home/user:\tuser@host\tThu Nov  5 22:06:23 2026",
+            "",
+            "\to1=0",
+            '\tlabel1="Time"',
+            '\tdata_format="native_float"',
+            "\tesize=4",
+            '\tin="stdout"',
+            '\tunit1="s"',
+            "\td1=0.004",
+            "\tn1=4",
+            '\tin="stdin"',
+            "",
+            "4.2-git\tsfmath\t/home/user:\tuser@host\tThu Nov  5 22:06:23 2026",
+            "# spike 0.4.0 n1:4",
+            "",
+            "\tinput=0",
+            "\ttitle=Spike",
+            '\tin="stdin"',
+        ]
+        data = np.arange(4, dtype=np.float32)
+        patch = dc.spool(_write_rsf(tmp_path / "m8r.rsf", lines, data))[0]
+        assert np.array_equal(patch.data, data)
+        assert patch.attrs.history == ()
+        assert (patch.attrs["input"], patch.attrs["title"]) == (0, "Spike")
+        assert "sfspike" not in str(dict(patch.attrs))
