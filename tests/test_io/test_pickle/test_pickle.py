@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import pathlib
 import pickle
 import weakref
 from io import BytesIO
@@ -11,8 +12,26 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import InvalidFiberFileError, PickleFormatDisabledError
 from dascore.io import ArraySource
 from dascore.io.pickle.core import PickleIO
+
+
+class _Marker:
+    """Harmless gadget: unpickling writes a marker file and nothing else."""
+
+    def __init__(self, path):
+        self.path = pathlib.Path(path)
+
+    def __reduce__(self):
+        """Rebuild by writing the marker file."""
+        return pathlib.Path.write_text, (self.path, "unpickled")
+
+
+def _write_payload(path, marker):
+    """Write a pickle which names a DASCore Patch first, then the gadget."""
+    path.write_bytes(pickle.dumps((dc.Patch, _Marker(marker)), protocol=4))
+    return path
 
 
 @pytest.fixture(scope="session")
@@ -227,3 +246,86 @@ class TestDecodeLifetime:
         assert not isinstance(metadata[0], dc.Patch)
         assert not stream.closed
         assert refs and all(ref() is None for ref in refs)
+
+
+class TestOptIn:
+    """
+    Unpickling runs only with allow_pickle_format on, and detection never does.
+
+    Reported by Aaron Girard in his pre-v1.0 review (s06-F10).
+    """
+
+    @pytest.fixture
+    def payload(self, tmp_path):
+        """A pickle whose payload writes a marker file, and that marker."""
+        marker = tmp_path / "marker"
+        return _write_payload(tmp_path / "payload.pkl", marker), marker
+
+    @pytest.fixture
+    def opted_out(self):
+        """The default config, which the test session otherwise overrides."""
+        with dc.config_context(allow_pickle_format=False):
+            yield
+
+    def test_get_format_refuses(self, payload, opted_out):
+        """dc.get_format names the setting and runs no payload."""
+        path, marker = payload
+        with pytest.raises(PickleFormatDisabledError, match="allow_pickle_format"):
+            dc.get_format(path)
+        assert not marker.exists()
+
+    def test_directory_scan_skips(self, tmp_path, opted_out):
+        """Indexing a directory warns, skips the file, and runs no payload."""
+        marker = tmp_path / "marker"
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        _write_payload(data_dir / "record.h5", marker)
+        with pytest.warns(UserWarning, match="allow_pickle_format"):
+            spool = dc.spool(data_dir).update()
+        assert not len(spool)
+        assert not marker.exists()
+
+    def test_read_refuses(self, pickle_patch_path, opted_out):
+        """Naming the format does not get past the setting."""
+        with pytest.raises(PickleFormatDisabledError, match="arbitrary code"):
+            dc.read(pickle_patch_path, file_format="PICKLE")
+        with pytest.raises(PickleFormatDisabledError):
+            dc.read(pickle_patch_path)
+
+    def test_reader_refuses(self, random_patch, opted_out):
+        """The reader itself refuses before it unpickles a stream."""
+        stream = BytesIO(pickle.dumps(random_patch))
+        with pytest.raises(PickleFormatDisabledError):
+            PickleIO().read(stream)
+
+    def test_detection_does_not_unpickle(self, payload):
+        """With the setting on, detection still reads only the header."""
+        path, marker = payload
+        assert dc.get_format(path)[0] == "PICKLE"
+        assert not marker.exists()
+
+    @pytest.mark.parametrize("protocol", range(pickle.HIGHEST_PROTOCOL + 1))
+    @pytest.mark.parametrize("obj", ["patch", "spool"])
+    def test_every_protocol_detected(self, random_patch, protocol, obj):
+        """The header names the pickled class for every protocol."""
+        obj = random_patch if obj == "patch" else dc.spool([random_patch])
+        assert PickleIO().get_format(BytesIO(pickle.dumps(obj, protocol)))
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            pickle.dumps({"a": 1}),
+            pickle.dumps(pathlib.PurePosixPath("a")),
+            b"\x93.",  # STACK_GLOBAL with no names before it
+        ],
+    )
+    def test_other_pickles_not_detected(self, data):
+        """A pickle that does not start with a DASCore class is not PICKLE."""
+        assert not PickleIO().get_format(BytesIO(data))
+
+    def test_corrupt_pickle(self, tmp_path, random_patch):
+        """A cut-off DASCore pickle is an invalid file, not a crash."""
+        path = tmp_path / "cut.pkl"
+        path.write_bytes(pickle.dumps(random_patch)[:300])
+        with pytest.raises(InvalidFiberFileError, match="unpickle"):
+            dc.read(path)

@@ -312,13 +312,17 @@ def _chunk_is_executable(chunk_lines: list[str]) -> bool:
 _INCLUDE = re.compile(r"\{\{<\s*include\s+([^>]+?)\s*>\}\}")
 
 
-def _read_body(path: Path) -> tuple[list[str], list[tuple[Path, int, str]]]:
+def _read_body(
+    path: Path, stack: tuple[Path, ...] = ()
+) -> tuple[list[str], list[tuple[Path, int, str]]]:
     """
     Return a file's front matter and its body lines, following includes.
 
     Each body line carries the file it was written in and its offset there, so
     source comments point at the file that holds the code.
     """
+    if path in stack:
+        raise ValueError(f"Circular documentation include: {path}")
     # Read with explicit UTF-8 so Windows does not fall back to cp1252.
     lines = path.read_text(encoding=TEXT_ENCODING).splitlines()
     front_matter, body = _split_front_matter(lines)
@@ -333,7 +337,8 @@ def _read_body(path: Path) -> tuple[list[str], list[tuple[Path, int, str]]]:
         else:
             # Quarto pastes the included file here, so its cells run as well.
             target = include[1].strip().strip("\"'")
-            out.extend(_read_body((path.parent / target).resolve())[1])
+            included = (path.parent / target).resolve()
+            out.extend(_read_body(included, (*stack, path))[1])
     return front_matter, out
 
 
