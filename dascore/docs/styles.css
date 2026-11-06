@@ -112,3 +112,65 @@ the light and dark themes. */
     width: auto;
     flex: none;
 }
+
+/* The site-wide announcement banner (website.announcement in _quarto.yml).
+Quarto draws it as a thin alert strip; these rules make it a full-width
+banner in the project's teal, the same in light and dark themes. */
+#quarto-announcement {
+    margin: 0;
+    padding: 0.9rem 3rem;
+    border: none;
+    border-radius: 0;
+    background: linear-gradient(90deg, #12493f 0%, #1d7363 50%, #12493f 100%);
+    color: #ffffff;
+    font-size: 1.05rem;
+    justify-content: center;
+    text-align: center;
+}
+
+#quarto-announcement .quarto-announcement-content {
+    flex: 1;
+    text-align: center;
+}
+
+#quarto-announcement .quarto-announcement-content p {
+    margin: 0;
+}
+
+#quarto-announcement strong {
+    font-weight: 700;
+    letter-spacing: 0.01em;
+}
+
+#quarto-announcement .quarto-announcement-icon {
+    font-size: 1.3rem;
+    color: #ffffff;
+}
+
+#quarto-announcement a {
+    color: #ffffff;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+#quarto-announcement a:hover,
+#quarto-announcement a:focus-visible {
+    color: #d6f5ee;
+}
+
+#quarto-announcement .quarto-announcement-action {
+    color: #ffffff;
+    opacity: 0.8;
+}
+
+#quarto-announcement .quarto-announcement-action:hover {
+    opacity: 1;
+}
+
+@media (max-width: 576px) {
+    #quarto-announcement {
+        padding: 0.75rem 1rem;
+        font-size: 0.95rem;
+    }
+}

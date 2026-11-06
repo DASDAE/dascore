@@ -45,6 +45,19 @@ website:
   repo-actions: [edit]
   page-navigation: true
 
+  # Site-wide banner above the navbar. Links start with "/" so quarto
+  # resolves them from the project root; relative links break on nested pages.
+  announcement:
+    icon: megaphone-fill
+    dismissable: true
+    position: above-navbar
+    type: primary
+    content: >-
+      **DASCore 1.0 beta is out!**
+      Read the [announcement](/migrations/dascore_1.0_announcement.qmd),
+      check the [migration guide](/migrations/dascore_1.0_migration.qmd),
+      and [help us test it](/migrations/test_latest_beta.qmd).
+
   navbar:
     logo: _static/logo.png
     logo-alt: "DASCore logo."
