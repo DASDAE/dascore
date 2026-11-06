@@ -1192,6 +1192,51 @@ class TestDirSpoolPassthrough:
         assert len(spool) == 1
 
 
+class TestPatchRowsNeverReused:
+    """A patch row, once handed out, never names another patch."""
+
+    @staticmethod
+    def _rows(back) -> set[int]:
+        df = back._fetch_df("SELECT patch_row FROM patches")
+        return set(df["patch_row"].astype(int))
+
+    @pytest.fixture()
+    def back(self, tmp_path):
+        """A file backend holding the contract summaries."""
+        out = get_backend(tmp_path / "rows.sqlite3")
+        out.write_sources(summaries_to_records(make_summaries()))
+        yield out
+        out.close()
+
+    def test_rewritten_top_source_gets_new_rows(self, back):
+        """Replacing the source holding the top rows allocates above them."""
+        records = summaries_to_records(make_summaries())
+        before = self._rows(back)
+        back.write_sources(records[-1:])
+        assert min(self._rows(back) - before) > max(before)
+
+    @pytest.mark.parametrize("remove", ["delete", "clear"])
+    def test_rows_after_removal_are_new(self, back, remove):
+        """Rows freed by a delete or clear are not handed out again."""
+        records = summaries_to_records(make_summaries())
+        before = self._rows(back)
+        if remove == "delete":
+            back.delete_sources([records[-1].source_path])
+        else:
+            back.clear()
+        back.write_sources(records[-1:])
+        assert min(self._rows(back) - before) > max(before)
+
+    def test_index_without_floor_seeds_it(self, back):
+        """An index written before the floor existed seeds it before deleting."""
+        records = summaries_to_records(make_summaries())
+        back._execute("DROP TABLE patch_row_floor")
+        before = self._rows(back)
+        back.delete_sources([records[-1].source_path])
+        back.write_sources(records[-1:])
+        assert min(self._rows(back) - before) > max(before)
+
+
 class TestFinalCoverage:
     """Remaining edge branches."""
 
