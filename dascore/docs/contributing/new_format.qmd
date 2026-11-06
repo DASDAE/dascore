@@ -3,5 +3,4 @@ title: Adding a New Format
 keywords: [io, file format, FiberIO, reader, writer]
 engine: jupyter
 ---
-
 {{< include ../../.agents/skills/add-format/SKILL.md >}}

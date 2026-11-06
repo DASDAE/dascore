@@ -9,7 +9,7 @@ import dascore as dc
 from dascore.cli import main
 from dascore.utils import doc_skills
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import SKILL_PATH, DocumentationError
+from dascore.utils.doc_corpus import DOC_PATH, SKILL_PATH, DocumentationError
 
 # The shipped catalog, in listing order.
 _CATALOG = {
@@ -48,8 +48,14 @@ class TestSkills:
         assert set(_CATALOG) <= set(shipped)
         for name, info in doc_skills.get_skills().items():
             # The entry point's page is its routing recipe, not the bootstrap file.
-            if name != "dascore":
-                assert info["description"] == shipped[name]
+            if name == "dascore":
+                continue
+            assert info["description"] == shipped[name]
+            # A blank line before the include makes Quarto print the skill's
+            # front matter on pages whose code cells it executes.
+            page = (DOC_PATH / f"{info['target']}.qmd").read_text(encoding="utf-8")
+            include = f"{{{{< include ../../.agents/skills/{name}/SKILL.md >}}}}"
+            assert page.endswith(f"\n---\n{include}\n")
 
     @pytest.mark.parametrize("name", list(_CATALOG))
     def test_same_document(self, cache, name):

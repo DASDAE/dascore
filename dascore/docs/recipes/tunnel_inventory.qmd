@@ -5,5 +5,4 @@ execute:
   warning: false
 engine: jupyter
 ---
-
 {{< include ../../.agents/skills/make-inventory/SKILL.md >}}

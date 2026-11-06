@@ -20,7 +20,7 @@ Read the section relevant to your change.
 ## Docs
 
 - Edit `.qmd` files under `dascore/docs/`; API docs come from docstrings. Do not hard-wrap prose.
-- A skill's text lives in `dascore/.agents/skills/<name>/SKILL.md`. Its docs page only includes that file, and `dascore/docs/skills.yml` maps the skill to the page. Write links in a skill file relative to the page that includes it.
+- A skill's text lives in `dascore/.agents/skills/<name>/SKILL.md`. Its docs page only includes that file, and `dascore/docs/skills.yml` maps the skill to the page. Write links in a skill file relative to the page that includes it. Keep the include on the line directly after the page's front matter; a blank line there makes Quarto print the skill's front matter.
 - Edit `scripts/_templates/_quarto.yml` for site structure; `dascore/docs/_quarto.yml` is generated.
 - For changes needing a docs build: `python scripts/build_api_docs.py` then `quarto render dascore/docs`.
 - The changelog stub is pinned by `tests/test_changelog.py`; PR entries are validated by `.github/scripts/check_pr_changelog.py`.

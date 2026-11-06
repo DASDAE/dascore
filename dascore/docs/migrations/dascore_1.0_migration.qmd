@@ -2,5 +2,4 @@
 title: Migrate to DASCore 1.0
 keywords: [migration, upgrade, deprecation, breaking changes, "1.0"]
 ---
-
 {{< include ../../.agents/skills/migrate-to-v1/SKILL.md >}}
