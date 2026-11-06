@@ -1,5 +1,6 @@
 """IO module for reading and writing RSF file format support of MADAGASCAR."""
-# from __future__ import annotations
+
+from __future__ import annotations
 
 # import segyio
 import datetime as dt
@@ -8,13 +9,17 @@ import warnings
 import numpy as np
 
 import dascore as dc
-from dascore.exceptions import CoordError
+from dascore.constants import snap_type, windows_type
+from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.core import FiberIO
-from dascore.io.utils import _DASCORE_DIR, require_grid
+from dascore.io.utils import _DASCORE_DIR, require_grid, slice_dataset
 from dascore.units import get_quantity_str
+from dascore.utils.io import BinaryReader, LocalPath
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 from dascore.warnings import DASCoreWarning
+
+from .utils import _get_coords, _get_dtype, _get_header, _get_layout, _read_header
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
 
@@ -46,6 +51,34 @@ class RSFV1(FiberIO):
     # also specify a version so when version 2 is released you can
     # just make another class in the same module named rsfV2.
     version = "1"
+
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the version when the resource starts with an RSF header."""
+        return self.version if _read_header(resource) is not None else None
+
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: snap_type = ()
+    ) -> list[dc.PatchMeta]:
+        """Describe the patch from the header alone."""
+        path = getattr(resource, "name", resource)
+        hdr, _ = _get_header(resource, path)
+        try:
+            coords = _get_coords(hdr)
+        except ValueError as exc:
+            msg = f"RSF header {path} has an invalid axis: {exc}"
+            raise InvalidFiberFileError(msg) from exc
+        dtype = _get_dtype(hdr).newbyteorder("=")
+        cm = dc.core.get_coord_manager(coords=coords, dims=tuple(coords))
+        return [dc.PatchMeta(coords=cm, dtype=str(dtype))]
+
+    def read_array(
+        self, resource: LocalPath, windows: windows_type = (), key: str = ""
+    ) -> np.ndarray:
+        """Memory-map the samples, n1 fastest, and select the windows."""
+        binary, offset, dtype, shape = _get_layout(resource)
+        data = np.memmap(binary, dtype, "r", offset, shape, order="F")
+        out = slice_dataset(data, windows)
+        return out if dtype.isnative else out.astype(dtype.newbyteorder("="))
 
     def write(self, spool, resource, data_path=None, **kwargs):
         """

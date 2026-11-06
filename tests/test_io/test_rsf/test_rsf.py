@@ -8,7 +8,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.rsf import RSFV1
 from dascore.warnings import DASCoreWarning
 
@@ -217,3 +217,188 @@ class TestRsfEpoch:
         with pytest.raises(CoordError, match="finite start"):
             RSFV1().write(patch, path)
         assert not path.exists()
+
+
+def _write_rsf(path, lines, data=None, data_path=None):
+    """Write a hand-made RSF header, packing data unless data_path is given."""
+    text = "\n".join(lines) + "\n"
+    if data_path is not None:
+        Path(data_path).write_bytes(data.tobytes("F"))
+        path.write_text(text)
+        return path
+    raw = text.encode() + b"\n" + SEPARATOR
+    path.write_bytes(raw if data is None else raw + data.tobytes("F"))
+    return path
+
+
+@pytest.fixture(scope="module")
+def f4_patch(random_patch):
+    """The random patch with float32 data."""
+    return random_patch.new(data=random_patch.data.astype(np.float32))
+
+
+@pytest.fixture(scope="module")
+def combined_path(f4_patch, tmp_path_factory):
+    """A packed RSF file written by DASCore."""
+    path = tmp_path_factory.mktemp("rsf") / "combined.rsf"
+    RSFV1().write(f4_patch, path)
+    return path
+
+
+@pytest.fixture(scope="module")
+def split_path(f4_patch, tmp_path_factory):
+    """A header and binary pair written by DASCore."""
+    path = tmp_path_factory.mktemp("rsf") / "split.rsf"
+    RSFV1().write(f4_patch, path, data_path=path.parent / "bin/data.rsf")
+    return path
+
+
+class TestRsfRead:
+    """Tests for reading RSF files, including the writer's own output."""
+
+    @pytest.mark.parametrize("name", ["combined_path", "split_path"])
+    def test_roundtrip(self, name, f4_patch, request):
+        """The writer's output reads back with the same samples and coords."""
+        path = request.getfixturevalue(name)
+        assert dc.get_format(path) == ("rsf", "1")
+        patch = dc.spool(path)[0]
+        assert patch.dims == f4_patch.dims
+        assert patch.dtype == np.float32
+        assert np.array_equal(patch.data, f4_patch.data)
+        assert patch.get_coord("time") == f4_patch.get_coord("time")
+        distance = patch.get_coord("distance")
+        assert np.array_equal(distance.values, f4_patch.get_coord("distance").values)
+        assert distance.units == f4_patch.get_coord("distance").units
+
+    def test_exact_time(self, fractional_patch, tmp_path):
+        """A 1024 Hz axis with a nanosecond start reads back exactly."""
+        path = tmp_path / "frac.rsf"
+        RSFV1().write(fractional_patch, path)
+        patch = dc.spool(path)[0]
+        assert patch.get_coord("time") == fractional_patch.get_coord("time")
+        assert patch.get_coord("distance").units is None
+        assert np.array_equal(patch.data, fractional_patch.data)
+
+    def test_window(self, combined_path, f4_patch):
+        """A selection reads only the requested window."""
+        time = f4_patch.get_coord("time")
+        span = (time.values[10], time.values[20])
+        patch = dc.read(combined_path, time=span, distance=(5, 9))[0]
+        expected = f4_patch.select(time=span, distance=(5, 9))
+        assert np.array_equal(patch.data, expected.data)
+        assert patch.coords == expected.coords
+
+    def test_scan_header_only(self, f4_patch, tmp_path):
+        """A scan reads the header, so it works with the binary missing."""
+        binary = tmp_path / "data.rsf"
+        RSFV1().write(f4_patch, tmp_path / "hdr.rsf", data_path=binary)
+        Path(f"{binary}@").unlink()
+        (meta,) = dc.scan(tmp_path / "hdr.rsf")
+        assert meta.dims == f4_patch.dims
+        assert meta.shape == f4_patch.shape
+
+    def test_relative_in(self, tmp_path, monkeypatch):
+        """A relative in= resolves against the header's directory, then cwd."""
+        data = np.arange(6, dtype=np.float32).reshape(2, 3)
+        lines = ["n1=2", "n2=3", 'in="data.rsf@"']
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        _write_rsf(sub / "a.rsf", lines, data, data_path=sub / "data.rsf@")
+        assert np.array_equal(dc.spool(sub / "a.rsf")[0].data, data)
+        monkeypatch.chdir(sub)
+        _write_rsf(tmp_path / "b.rsf", lines)
+        assert np.array_equal(dc.spool(tmp_path / "b.rsf")[0].data, data)
+
+    @pytest.mark.parametrize("order", ["native", "xdr"])
+    @pytest.mark.parametrize("kind", ["float", "double", "int", "short", "complex"])
+    def test_data_formats(self, order, kind, tmp_path):
+        """Native and xdr samples of each supported kind read back as native."""
+        kinds = {
+            "float": "f4",
+            "double": "f8",
+            "int": "i4",
+            "short": "i2",
+            "complex": "c8",
+        }
+        dtype = np.dtype(kinds[kind])
+        data = (np.arange(12) * (1 + 1j if kind == "complex" else 1)).reshape(3, 4)
+        data = data.astype(dtype)
+        stored = data.astype(dtype.newbyteorder(">")) if order == "xdr" else data
+        lines = [f'data_format="{order}_{kind}"', "n1=3", "n2=4", 'in="stdin"']
+        path = _write_rsf(tmp_path / "fmt.rsf", lines, stored)
+        patch = dc.spool(path)[0]
+        assert patch.dims == ("axis1", "axis2")
+        assert patch.dtype == dtype
+        assert np.array_equal(patch.data, data)
+
+    def test_starttime(self, tmp_path):
+        """Without epoch<i>, starttime gives the axis labelled time its start."""
+        lines = ["n1=4", "d1=0.5", 'label1="time"', "starttime=1.5", 'in="stdin"']
+        path = _write_rsf(tmp_path / "t.rsf", lines, np.zeros(4, np.float32))
+        time = dc.spool(path)[0].get_coord("time")
+        assert time.min() == np.datetime64("1970-01-01T00:00:01.5", "ns")
+        assert time.step == np.timedelta64(500, "ms")
+
+    def test_epoch_needs_seconds(self, tmp_path):
+        """An epoch on an axis whose unit is not s is ignored with a warning."""
+        lines = ["n1=4", 'unit1="Hz"', 'epoch1="2024-01-01T00:00:00Z"', 'in="stdin"']
+        path = _write_rsf(tmp_path / "f.rsf", lines, np.zeros(4, np.float32))
+        with pytest.warns(DASCoreWarning, match="epoch1"):
+            coord = dc.spool(path)[0].get_coord("axis1")
+        assert coord.dtype == np.float64
+
+    def test_missing_axis(self, tmp_path):
+        """An unbound n<i> below the highest is one sample."""
+        lines = ["n1=2", "n3=3", "label3=time", 'in="stdin"']
+        path = _write_rsf(tmp_path / "m.rsf", lines, np.zeros(6, np.float32))
+        assert dc.spool(path)[0].shape == (2, 1, 3)
+
+    def test_latin1_header(self, tmp_path):
+        """A header that is not UTF-8 is read as latin-1."""
+        path = tmp_path / "l.rsf"
+        raw = b'n1=2\nlabel1="\xb5strain"\nin="stdin"\n\n' + SEPARATOR
+        path.write_bytes(raw + np.zeros(2, "f4").tobytes())
+        assert dc.spool(path)[0].dims == ("\xb5strain",)
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            b"",
+            b"just text\n",
+            b"n1=3\nn2=4\n",
+            b"\x89HDF\r\n\x1a\n\x00\x00",
+            b"a" * 2**21,
+        ],
+    )
+    def test_not_rsf(self, content, tmp_path):
+        """Text without in= and n1, binary, and huge text are not RSF."""
+        path = tmp_path / "other.rsf"
+        path.write_bytes(content)
+        assert RSFV1().get_version(path) is None
+        with pytest.raises(InvalidFiberFileError, match="RSF header"):
+            RSFV1().get_metadata(path)
+
+    @pytest.mark.parametrize(
+        "lines, data, match",
+        [
+            (["n1=4", 'in="stdin"'], None, "no binary separator"),
+            (["n1=4", 'in="missing.rsf@"'], None, "does not exist"),
+            (["n1=5", 'in="stdin"'], np.zeros(4, "f4"), "exactly 20 bytes"),
+            (["n1=4", 'data_format="ascii_float"', 'in="stdin"'], None, "ascii"),
+        ],
+    )
+    def test_bad_binary(self, lines, data, match, tmp_path):
+        """A binary that is missing, misplaced or mis-sized raises on read."""
+        path = tmp_path / "bad.rsf"
+        if data is None:
+            path.write_text("\n".join(lines))
+        else:
+            _write_rsf(path, lines, data)
+        with pytest.raises(InvalidFiberFileError, match=match):
+            RSFV1().read(path)
+
+    def test_bad_axis(self, tmp_path):
+        """An n<i> that is not a count raises when the metadata is built."""
+        path = _write_rsf(tmp_path / "n.rsf", ["n1=abc", 'in="stdin"'])
+        with pytest.raises(InvalidFiberFileError, match="invalid axis"):
+            RSFV1().get_metadata(path)

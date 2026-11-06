@@ -925,7 +925,7 @@ class TestScan:
                 assert inspect.unwrap(getattr(type(reader), name)) is getattr(
                     FiberIO, name
                 )
-            if reader.name in {"WAV", "rsf"}:
+            if reader.name == "WAV":
                 continue  # Write-only formats cannot describe or load a resource.
             for name in ("get_version", "get_metadata", "read_array"):
                 assert inspect.unwrap(getattr(type(reader), name)) is not getattr(
@@ -1196,8 +1196,10 @@ class TestWrite:
 
     def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
         """If the writer can read, ensure round-tripping patch is equal."""
-        if fiber_io_writer.name in {"WAV", "rsf"}:
+        if fiber_io_writer.name == "WAV":
             pytest.skip("FiberIO doesn't implement read")
+        if fiber_io_writer.name == "rsf":
+            pytest.skip("RSF stores float32 samples and no attrs")
         new = fiber_io_writer.read(written_fiber_path)[0]
         assert new == random_patch
 
