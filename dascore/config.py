@@ -21,8 +21,10 @@ def _get_cache_root() -> Path:
 
 
 def _get_remote_cache_root() -> Path:
-    """Return the OS-appropriate temp directory used for remote-file caching."""
-    return Path(gettempdir()) / "dascore" / "remote_cache"
+    """Return the current user's temp directory used for remote-file caching."""
+    # A shared temp dir such as Linux /tmp is open to every user.
+    user = f"-{os.getuid()}" if hasattr(os, "getuid") else ""
+    return Path(gettempdir()) / f"dascore-remote-cache{user}"
 
 
 class DascoreConfig(BaseModel):
@@ -179,7 +181,10 @@ class DascoreConfig(BaseModel):
     # Remote IO and local materialization policy.
     remote_cache_dir: Path = Field(
         default_factory=_get_remote_cache_root,
-        description="Temporary directory used to materialize remote files locally.",
+        description=(
+            "Temporary directory used to materialize remote files locally. "
+            "It must belong to the current user and be writable by no one else."
+        ),
     )
     allow_remote_cache: bool = Field(
         default=True,

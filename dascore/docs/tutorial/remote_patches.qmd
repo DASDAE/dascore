@@ -40,18 +40,19 @@ Remote behavior is controlled through `dascore.config`:
 
 | Setting | Purpose |
 |---|---|
-| `remote_cache_dir` | Directory for materialized remote files |
+| `remote_cache_dir` | Directory for materialized remote files; it must belong to the current user and be writable by no one else |
 | `allow_remote_cache` | Permit caching for data reads |
 | `allow_remote_cache_for_metadata` | Permit caching for metadata operations |
 | `warn_on_remote_cache` | Warn on the first download into the cache |
 
 ```{python}
 from pathlib import Path
+from tempfile import mkdtemp
 
 from dascore.config import config_context
 
 with config_context(
-    remote_cache_dir=Path("/tmp/dascore-remote-cache"),
+    remote_cache_dir=Path(mkdtemp()),
     allow_remote_cache=True,
     allow_remote_cache_for_metadata=False,
 ):
@@ -70,6 +71,8 @@ with config_context(allow_remote_cache_for_metadata=True):
 `scan_payloads` avoids the data array but may still transfer and retain exact coordinate arrays. Prefer `scan` or `scan_to_df` for broad directory listings.
 
 Warnings occur on the first materialization when `warn_on_remote_cache=True`, making an unexpected local download visible without repeating the message for every file.
+
+A cached copy records the size and version fields (such as `ETag` or `Last-Modified`) the remote reported when it was downloaded. The first use of the copy in a session asks the remote again and downloads a new copy if they differ, so a file rewritten under the same name is not read stale. A copy without a record, such as a file placed in the directory by something other than DASCore, is not read; when the remote cannot be asked, for instance offline, the copy is kept. The default directory is per user under the system temp directory.
 
 # Reads and spools
 

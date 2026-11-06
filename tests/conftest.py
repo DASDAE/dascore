@@ -262,6 +262,14 @@ def swap_index_map_path(tmp_path_factory):
         yield
 
 
+@pytest.fixture(scope="session", autouse=True)
+def swap_remote_cache_dir(tmp_path_factory):
+    """Give each test process its own remote cache, which tests clear freely."""
+    remote_cache = tmp_path_factory.mktemp("remote_cache")
+    with _permanent_config(remote_cache_dir=remote_cache):
+        yield
+
+
 # --- Coordinate fixtures
 
 COORD_MANAGERS = []

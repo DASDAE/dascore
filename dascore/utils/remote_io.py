@@ -34,6 +34,26 @@ _REMOTE_RESOURCE_CACHE: dict[str, UPath] = {}
 # file at once while unrelated downloads still run together. Entries are
 # never removed; the dict is bounded by the resources a session touches.
 _REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
+# The fields of fsspec's info() which change when a remote file is
+# rewritten, across the http, s3, gcs, azure and memory backends.
+_VERSION_FIELDS = (
+    "size",
+    "ETag",
+    "etag",
+    "Content-MD5",
+    "md5Hash",
+    "Digest",
+    "generation",
+    "Last-Modified",
+    "LastModified",
+    "last_modified",
+    "mtime",
+    "updated",
+    "created",
+)
+# Cached copies already found current this session, so each is checked
+# against its remote once rather than on every open.
+_CURRENT_COPIES: set[Path] = set()
 _REMOTE_CACHE_SCOPE: ContextVar[str] = ContextVar(
     "remote_cache_scope", default="default"
 )
@@ -213,10 +233,31 @@ def get_remote_cache_scope() -> str:
 
 
 def get_remote_cache_path() -> Path:
-    """Return the on-disk directory used for remote file caching."""
+    """
+    Return the on-disk directory used for remote file caching.
+
+    A cached copy is read in place of the remote file, so the directory
+    must belong to the current user and be writable by no one else; a
+    new one is created that way.
+    """
     path = get_config().remote_cache_dir
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _check_private(path)
     return path
+
+
+def _check_private(path: Path) -> None:
+    """Raise unless only the current user can write to a cache directory."""
+    if not hasattr(os, "getuid"):  # Windows has no POSIX owner or mode bits.
+        return
+    stat = path.stat()
+    if stat.st_uid != os.getuid() or stat.st_mode & 0o022:
+        msg = (
+            f"The remote cache directory {path} must belong to the current "
+            "user and be writable by no one else. Set `remote_cache_dir` to "
+            "a private directory."
+        )
+        raise RemoteCacheError(msg)
 
 
 def _safe_remote_name(path: UPath) -> str:
@@ -252,6 +293,40 @@ def _remote_cache_local_path(remote_id: str, cache_root: Path, resource: UPath) 
     """
     digest = sha256(remote_id.encode()).hexdigest()
     return cache_root / digest / _safe_remote_name(resource)
+
+
+def _version_path(local_path: Path) -> Path:
+    """Return the file recording which version of the remote a copy holds."""
+    return local_path.with_name(f"{local_path.name}.remote-version.json")
+
+
+def _remote_version(resource: UPath) -> dict[str, str] | None:
+    """Return the version fields a remote file reports, or None if it will not."""
+    try:
+        info = resource.fs.info(resource.path)
+    except Exception:
+        return None
+    return {x: str(info[x]) for x in _VERSION_FIELDS if x in info}
+
+
+def _is_current(resource: UPath, local_path: Path) -> bool:
+    """
+    Whether a cached copy holds the version of the remote it was made from.
+
+    A copy with no readable record is stale. A remote which cannot be
+    asked, for instance when offline, keeps the copy it has.
+    """
+    if local_path in _CURRENT_COPIES:
+        return True
+    try:
+        recorded = json.loads(_version_path(local_path).read_text())
+    except (OSError, ValueError):
+        return False
+    current = _remote_version(resource)
+    if current is not None and current != recorded:
+        return False
+    _CURRENT_COPIES.add(local_path)
+    return True
 
 
 def _redact_remote_resource(resource: UPath | str) -> str:
@@ -298,6 +373,7 @@ def clear_remote_file_cache():
     shutil.rmtree(get_remote_cache_path(), ignore_errors=True)
     get_remote_cache_path().mkdir(parents=True, exist_ok=True)
     _REMOTE_RESOURCE_CACHE.clear()
+    _CURRENT_COPIES.clear()
     _materialize_remote_file.cache_clear()
 
 
@@ -341,7 +417,7 @@ def _materialize_remote_file(remote_id: str, cache_root: Path) -> Path:
     local_path = _remote_cache_local_path(remote_id, cache_root, resource)
     # setdefault is atomic, so every caller gets the same lock object.
     with _REMOTE_KEY_LOCKS.setdefault((remote_id, cache_root), RLock()):
-        if not local_path.exists():
+        if not (local_path.exists() and _is_current(resource, local_path)):
             _download_to_cache(resource, local_path)
     return local_path
 
@@ -370,7 +446,12 @@ def _download_to_cache(resource: UPath, local_path: Path) -> None:
         raise RemoteCacheError(msg)
     if config.warn_on_remote_cache:
         _warn_remote_cache_download(resource, local_path)
+    # Asked before the download, so a rewrite during it reads as stale later.
+    version = _remote_version(resource)
+    _CURRENT_COPIES.discard(local_path)
     _download_remote_file(resource, local_path)
+    _version_path(local_path).write_text(json.dumps(version))
+    _CURRENT_COPIES.add(local_path)
 
 
 def ensure_local_file(resource) -> Path:
@@ -396,7 +477,9 @@ def _get_cached_local_file(resource) -> Path | None:
     cache_root = _normalize_cache_root(get_remote_cache_path())
     remote_id = normalize_remote_id(remote)
     local_path = _remote_cache_local_path(remote_id, cache_root, remote)
-    return local_path if local_path.exists() else None
+    if local_path.exists() and _is_current(remote, local_path):
+        return local_path
+    return None
 
 
 def get_local_handle(resource, opener):

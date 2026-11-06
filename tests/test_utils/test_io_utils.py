@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
@@ -16,7 +17,7 @@ from upath import UPath
 import dascore as dc
 import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
-from dascore.config import config_context
+from dascore.config import _get_remote_cache_root, config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
@@ -1075,6 +1076,98 @@ class TestIOResourceManager:
         with remote_cache_scope("metadata"):
             with pytest.warns(UserWarning, match="allow_remote_cache_for_metadata"):
                 _warn_remote_cache_download(resource, tmp_path / "metadata_warning.txt")
+
+
+def _new_session():
+    """Forget what this process knows of the cache, as a new session would."""
+    remote_io._materialize_remote_file.cache_clear()
+    remote_io._CURRENT_COPIES.clear()
+
+
+class TestRemoteCacheTrust:
+    """Tests that a cached copy is used only while it matches its remote."""
+
+    @pytest.fixture(autouse=True)
+    def clear_remote_cache(self):
+        """Ensure remote cache state doesn't leak between tests."""
+        with config_context(warn_on_remote_cache=False):
+            clear_remote_file_cache()
+            yield
+            clear_remote_file_cache()
+
+    @pytest.fixture
+    def remote(self):
+        """A remote file already copied into the cache."""
+        path = UPath("memory://dascore/cache_trust/data.bin")
+        path.write_bytes(b"old")
+        ensure_local_file(path)
+        return path
+
+    def test_rewritten(self, remote):
+        """A remote rewritten at the same size is downloaded again."""
+        remote.write_bytes(b"new")
+        _new_session()
+        assert _get_cached_local_file(remote) is None
+        assert ensure_local_file(remote).read_bytes() == b"new"
+
+    def test_unchanged(self, remote, monkeypatch):
+        """An unchanged remote is read from the cache without a download."""
+        _new_session()
+        monkeypatch.setattr(remote_io, "_download_remote_file", None)
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+        assert ensure_local_file(remote).read_bytes() == b"old"
+
+    def test_unreachable(self, remote, monkeypatch):
+        """A remote which cannot be asked keeps the copy it has."""
+        _new_session()
+
+        def _offline(*_args, **_kwargs):
+            raise OSError("offline")
+
+        monkeypatch.setattr(type(remote.fs), "info", _offline)
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+
+    def test_planted(self):
+        """A file placed at the cache path by something else is not read."""
+        path = UPath("memory://dascore/cache_trust/planted.bin")
+        path.write_bytes(b"real")
+        remote_id = remote_io.normalize_remote_id(path)
+        cache_root = get_remote_cache_path()
+        local = remote_io._remote_cache_local_path(remote_id, cache_root, path)
+        local.parent.mkdir(parents=True)
+        local.write_bytes(b"fake")
+        assert _get_cached_local_file(path) is None
+        assert ensure_local_file(path).read_bytes() == b"real"
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX owners and modes")
+class TestRemoteCacheDir:
+    """Tests that the remote cache directory is private to its user."""
+
+    def test_default_per_user(self):
+        """Each user gets a separate default directory."""
+        assert _get_remote_cache_root().name.endswith(f"-{os.getuid()}")
+
+    def test_created_private(self, tmp_path):
+        """A new cache directory is open to its owner alone."""
+        with config_context(remote_cache_dir=tmp_path / "new"):
+            assert not get_remote_cache_path().stat().st_mode & 0o077
+
+    def test_writable_by_others(self, tmp_path):
+        """A directory others can write to is refused."""
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        shared.chmod(0o777)
+        with config_context(remote_cache_dir=shared):
+            with pytest.raises(RemoteCacheError, match="writable by no one"):
+                get_remote_cache_path()
+
+    def test_other_owner(self, tmp_path, monkeypatch):
+        """A directory belonging to another user is refused."""
+        monkeypatch.setattr(os, "getuid", lambda: os.stat(tmp_path).st_uid + 1)
+        with config_context(remote_cache_dir=tmp_path):
+            with pytest.raises(RemoteCacheError, match="current user"):
+                get_remote_cache_path()
 
 
 class TestRemoteIOFallback:
