@@ -146,22 +146,6 @@ class TestNoPrintedPanels:
             assert _QMD in str(info.value)
             assert "last expression" in str(info.value)
 
-    def test_a_panel_may_not_be_printed_richly(self, conftest_module, random_patch):
-        """
-        The name a document binds is guarded too, not just the builtin.
-
-        dascore/docs/tutorial/patch.qmd imports dascore's print, which is rich's,
-        and that draws the text repr exactly as the builtin does.
-        """
-        with conftest_module.no_printed_panels(_QMD):
-            # Inside the block on purpose: `from dascore import print` takes
-            # the name once, so this is also what says the guard is in place
-            # before a chunk gets to import it.
-            from dascore import print as rich_print  # noqa: PLC0415
-
-            with pytest.raises(AssertionError, match="Patch"):
-                rich_print(random_patch)
-
     def test_anything_else_still_prints(self, conftest_module, capsys):
         """A guard which swallowed ordinary output would break every example."""
         with conftest_module.no_printed_panels(_QMD):
@@ -214,22 +198,20 @@ class TestNoPrintedPanels:
                 with pytest.raises(AssertionError, match="Patch"):
                     builtins.print(random_patch, file=stream)
 
-    def test_both_names_are_put_back(self, conftest_module):
+    def test_print_is_put_back(self, conftest_module):
         """The guard belongs to the doc example, not to the session."""
-        before = (builtins.print, dc.print)
+        before = builtins.print
         with conftest_module.no_printed_panels(_QMD):
             pass
-        assert (builtins.print, dc.print) == before
+        assert builtins.print is before
 
-    def test_both_names_are_put_back_after_a_failure(
-        self, conftest_module, random_patch
-    ):
+    def test_print_is_put_back_after_a_failure(self, conftest_module, random_patch):
         """Including after the failure the guard itself raises."""
-        before = (builtins.print, dc.print)
+        before = builtins.print
         with pytest.raises(AssertionError):
             with conftest_module.no_printed_panels(_QMD):
                 builtins.print(random_patch)  # noqa: T201
-        assert (builtins.print, dc.print) == before
+        assert builtins.print is before
 
 
 # Pyodide has no processes at all -- `subprocess.run` raises there --

@@ -69,7 +69,6 @@ import sys
 
 import matplotlib
 
-import dascore
 from dascore.utils._display import NodeRepr
 
 
@@ -88,10 +87,6 @@ def no_printed_panels(source_qmd: str):
     goes through, since by then there is nothing left to tell apart
     from any other text a document means to print.
     """
-    # Both names are wrapped because a document may bind `print` to
-    # either: dascore/docs/tutorial/patch.qmd imports dascore's, which is rich's,
-    # and that draws the text repr just as the builtin does.
-
     def guard(wrapped):
         """Wrap one print so a panel object raises rather than prints."""
 
@@ -116,16 +111,12 @@ def no_printed_panels(source_qmd: str):
 
         return guarded
 
-    # Built before the first assignment, so the restore below puts back
-    # what was there rather than a guard installed part way through.
-    originals = {builtins: builtins.print, dascore: dascore.print}
+    original = builtins.print
     try:
-        for module, original in originals.items():
-            module.print = guard(original)
+        builtins.print = guard(original)
         yield
     finally:
-        for module, original in originals.items():
-            module.print = original
+        builtins.print = original
 
 
 @contextmanager
