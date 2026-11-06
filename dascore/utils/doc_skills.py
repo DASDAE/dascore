@@ -19,7 +19,10 @@ from dascore.utils.doc_corpus import (
 
 
 def get_skills() -> dict[str, dict[str, str]]:
-    """Read skill membership, each page's title, and its skill's description."""
+    """Read skill membership and each page's title and description.
+
+    A page without a description takes its included skill's.
+    """
     catalog = yaml.safe_load((DOC_PATH / "skills.yml").read_text(encoding="utf-8"))
     if not isinstance(catalog, dict):
         raise DocumentationError("The skill catalog must map names to document IDs.")

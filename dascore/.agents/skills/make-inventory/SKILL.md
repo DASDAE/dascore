@@ -1,6 +1,6 @@
 ---
 name: make-inventory
-description: Create, validate, repair, serialize, and attach an inventory using a worked tunnel deployment.
+description: Create, validate, repair, serialize, and attach a DASCore inventory of a fiber deployment, following a worked tunnel example.
 ---
 
 ::: {.callout-warning title="Experimental"}

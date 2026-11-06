@@ -516,6 +516,24 @@ class TestProcesses:
         assert (root / "manifest.json").is_file()
         assert not root.with_name(root.name + ".previous").exists()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows reports a closed pipe differently"
+    )
+    def test_closed_pipe(self, tmp_path):
+        """A reader that stops early, such as `head`, leaves stderr empty."""
+        process = subprocess.Popen(
+            [sys.executable, "-m", "dascore", "skill", "--bootstrap"],
+            cwd=tmp_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        # Close the read end before the command has anything to write.
+        process.stdout.close()
+        stderr = process.stderr.read()
+        assert process.wait(timeout=60) == 1
+        assert stderr == ""
+
     @pytest.mark.parametrize(
         "command",
         [

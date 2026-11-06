@@ -1,6 +1,6 @@
 ---
 name: make-annotations
-description: Build an annotation set from a table of picks, ranges, paths, or polygons, then query, plot, and save it.
+description: Build a DASCore annotation set from a table of picks, ranges, paths, or polygons, then query, plot, and save it.
 ---
 
 ::: {.callout-warning title="Experimental"}
