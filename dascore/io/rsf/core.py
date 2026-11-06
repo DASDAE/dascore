@@ -137,8 +137,14 @@ class RSFV1(FiberIO):
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
             outdatapath = _coerce_output_path(str(data_path) + "@")
-            outdatapath.parent.mkdir(exist_ok=True, parents=True)
             in_path = outdatapath.resolve() if is_local_path(data_path) else outdatapath
+            # RSF has no escape for these inside a quoted header value.
+            if '"' in str(in_path) or "\n" in str(in_path):
+                msg = (
+                    f"RSF cannot record a data path with a quote or newline: {in_path}"
+                )
+                raise ValueError(msg)
+            outdatapath.parent.mkdir(exist_ok=True, parents=True)
             hdr_info.append(f'in="{in_path}"')
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)

@@ -154,6 +154,15 @@ class TestRsfWrite:
         expected = random_patch.data.astype(np.float32).tobytes("F")
         assert newdatapath.read_bytes() == expected
 
+    def test_split_quoted_path(self, fractional_patch):
+        """A data_path the header cannot quote is refused before any write."""
+        path = UPath("memory://dascore/test_hdr_quoted.rsf")
+        datapath = UPath('memory://dascore/binary/we"ird.rsf')
+        with pytest.raises(ValueError, match="quote or newline"):
+            RSFV1().write(fractional_patch, path, data_path=datapath)
+        assert not path.exists()
+        assert not UPath(f"{datapath}@").exists()
+
 
 class TestRsfEpoch:
     """Tests for the absolute time the writer stores on a datetime time axis."""
