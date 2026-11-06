@@ -449,7 +449,7 @@ class SQLiteIndexBackend:
         lives in a side table that each writer creates on demand, seeded
         from the rows present at creation, so older indexes work without a
         rebuild. Writers call this before deleting any patch. Rows a writer
-        unaware of the table added still count, so they are never reused.
+        unaware of the table added raise the mark before anything is deleted.
         """
         self._execute(
             "CREATE TABLE IF NOT EXISTS patch_row_floor (key INTEGER PRIMARY KEY "
@@ -459,10 +459,11 @@ class SQLiteIndexBackend:
             "INSERT OR IGNORE INTO patch_row_floor "
             "SELECT 0, coalesce(max(patch_row), 0) + 1 FROM patches"
         )
-        df = self._fetch_df(
-            "SELECT max(next_row, (SELECT coalesce(max(patch_row), 0) + 1 "
-            "FROM patches)) AS next_row FROM patch_row_floor"
+        self._execute(
+            "UPDATE patch_row_floor SET next_row = max(next_row, "
+            "(SELECT coalesce(max(patch_row), 0) + 1 FROM patches))"
         )
+        df = self._fetch_df("SELECT next_row FROM patch_row_floor")
         return int(df["next_row"].iloc[0])
 
     @staticmethod

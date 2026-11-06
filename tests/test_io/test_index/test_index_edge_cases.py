@@ -1242,12 +1242,13 @@ class TestPatchRowsNeverReused:
         back.close()
 
     def test_rows_added_without_the_floor_count(self, path):
-        """Rows a writer unaware of the floor added are not reused."""
+        """Rows a writer unaware of the floor added are not reused once deleted."""
         records = summaries_to_records(make_summaries())
         back = get_backend(path)
         # an older writer appends a row above the floor without moving it
         back._execute("UPDATE patch_row_floor SET next_row = 1")
         top = max(self._rows(back))
+        back.delete_sources([records[-1].source_path])
         back.write_sources(records[-1:])
         assert min(self._rows(back, records[-1].source_path)) > top
         back.close()
