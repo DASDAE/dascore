@@ -38,11 +38,11 @@ def build_inventory() -> inv.Inventory:
         sample_rate=500.0,
         gauge_length=10.0,
         spatial_interval=1.0,
-        distance_map=inv.DistanceMap(channel=(0.0,), distance=(0.0,)),
+        distance_map=inv.DistanceMap(channel=(0.0,), optical_distance=(0.0,)),
     )
     geometry = inv.Geometry(
         name="survey",
-        distance=(0.0, 100.0, 200.0),
+        optical_distance=(0.0, 100.0, 200.0),
         columns={"x": (0.0, 1.0, 2.0), "y": (0.0, 0.0, 0.0), "z": (0.0, 0.0, 1.0)},
     )
     path = inv.OpticalPath(
@@ -117,7 +117,7 @@ def build_full_inventory() -> inv.Inventory:
         geometry=(
             inv.Geometry(
                 name="trench",
-                distance=(100.0, 400.0),
+                optical_distance=(100.0, 400.0),
                 columns={
                     "x": (-117.0, -117.0),
                     "y": (40.0, 40.1),
@@ -167,7 +167,9 @@ def build_full_inventory() -> inv.Inventory:
         interrogator=interrogator,
         interrogator_port="1",
         extra_fields={"native_key": "", "count": 0},
-        distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(100.0, 400.0)),
+        distance_map=inv.DistanceMap(
+            channel=(0.0, 300.0), optical_distance=(100.0, 400.0)
+        ),
     )
     channel = inv.Channel(
         code="HSF",
@@ -228,7 +230,7 @@ class TestGeometryColumns:
         """Chainage is a curve along the fiber and no part of a position."""
         chainage = inv.Geometry(
             name="chainage",
-            distance=(0.0, 100.0),
+            optical_distance=(0.0, 100.0),
             columns={"chainage": (1200.0, 1300.0)},
             units={"chainage": "m"},
         )
@@ -239,7 +241,7 @@ class TestGeometryColumns:
     def test_a_segment_with_no_axes_is_legal(self):
         """A path may be described without ever being placed in space."""
         depth = inv.Geometry(
-            distance=(0.0, 40.0), columns={"borehole_depth": (0.0, 40.0)}
+            optical_distance=(0.0, 40.0), columns={"borehole_depth": (0.0, 40.0)}
         )
         inventory = self._inventory(depth)
         assert inventory.check() is inventory
@@ -250,7 +252,7 @@ class TestGeometryColumns:
     def test_axes_are_all_or_none(self):
         """Half a position is not a position."""
         partial = inv.Geometry(
-            name="partial", distance=(0.0, 10.0), columns={"x": (0.0, 1.0)}
+            name="partial", optical_distance=(0.0, 10.0), columns={"x": (0.0, 1.0)}
         )
         with pytest.raises(InvalidInventoryError, match="every axis or none"):
             self._inventory(partial).check()
@@ -262,7 +264,7 @@ class TestGeometryColumns:
         )
         doubled = inv.Geometry(
             name="doubled",
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={
                 "x": (0.0, 1.0),
                 "easting": (0.0, 1.0),
@@ -274,16 +276,20 @@ class TestGeometryColumns:
 
     def test_overlap_is_refused_per_column(self):
         """Two segments may overlap unless they state the same column."""
-        first = inv.Geometry(distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)})
-        second = inv.Geometry(distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)})
+        first = inv.Geometry(
+            optical_distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)}
+        )
+        second = inv.Geometry(
+            optical_distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)}
+        )
         with pytest.raises(InvalidInventoryError, match="columns \\['depth'\\]"):
             self._inventory(first, second).check()
 
     def test_column_overlap_reported_once_per_pair(self):
         """Two shared columns are one fault, stated in optical distance."""
         columns = {"chainage": (0.0, 1.0), "depth": (0.0, 1.0)}
-        first = inv.Geometry(name="a", distance=(0.0, 17.0), columns=columns)
-        second = inv.Geometry(name="b", distance=(1.0, 14.0), columns=columns)
+        first = inv.Geometry(name="a", optical_distance=(0.0, 17.0), columns=columns)
+        second = inv.Geometry(name="b", optical_distance=(1.0, 14.0), columns=columns)
         array = self._inventory(first, second).networks[0].fiber_arrays[0]
         path = array.optical_paths[0].model_copy(update={"name": "lab"})
         with pytest.raises(InvalidInventoryError) as info:
@@ -297,10 +303,12 @@ class TestGeometryColumns:
     def test_different_columns_may_overlap(self):
         """Each column is its own function track, so they are independent."""
         depth = inv.Geometry(
-            name="hole 1", distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)}
+            name="hole 1", optical_distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)}
         )
         azimuth = inv.Geometry(
-            name="hole 1", distance=(50.0, 80.0), columns={"azimuth": (5.0, 8.0)}
+            name="hole 1",
+            optical_distance=(50.0, 80.0),
+            columns={"azimuth": (5.0, 8.0)},
         )
         inventory = self._inventory(depth, azimuth)
         assert inventory.check() is inventory
@@ -309,12 +317,12 @@ class TestGeometryColumns:
         """The bare `geometry` coordinate is that name, so there is one."""
         depth = inv.Geometry(
             name="depth survey",
-            distance=(0.0, 60.0),
+            optical_distance=(0.0, 60.0),
             columns={"depth": (0.0, 6.0)},
         )
         azimuth = inv.Geometry(
             name="azimuth survey",
-            distance=(50.0, 80.0),
+            optical_distance=(50.0, 80.0),
             columns={"azimuth": (5.0, 8.0)},
         )
         with pytest.raises(InvalidInventoryError, match="share its name"):
@@ -322,13 +330,15 @@ class TestGeometryColumns:
 
     def test_a_reserved_column_name(self):
         """A column becomes a coordinate, so it cannot shadow one."""
-        clash = inv.Geometry(distance=(0.0, 10.0), columns={"time": (0.0, 1.0)})
+        clash = inv.Geometry(optical_distance=(0.0, 10.0), columns={"time": (0.0, 1.0)})
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             self._inventory(clash).check()
 
     def test_a_column_which_is_also_a_label_group(self):
         """One name is one coordinate, whichever track would define it."""
-        column = inv.Geometry(distance=(0.0, 10.0), columns={"zone": (0.0, 1.0)})
+        column = inv.Geometry(
+            optical_distance=(0.0, 10.0), columns={"zone": (0.0, 1.0)}
+        )
         label = inv.OpticalPathLabel(
             distance_min=0.0, distance_max=10.0, group="zone", value=1.0
         )
@@ -339,7 +349,7 @@ class TestGeometryColumns:
         """The CRS states the units of its own axes."""
         segment = inv.Geometry(
             name="axed",
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
             units={"x": "furlong"},
         )
@@ -350,7 +360,7 @@ class TestGeometryColumns:
         """A unit sitting on nothing is a typo no reader would find."""
         with pytest.raises(ValidationError, match="has no column"):
             inv.Geometry(
-                distance=(0.0, 10.0),
+                optical_distance=(0.0, 10.0),
                 columns={"depth": (0.0, 1.0)},
                 units={"dpeth": "m"},
             )
@@ -358,12 +368,12 @@ class TestGeometryColumns:
     def test_one_unit_per_column(self):
         """Two segments cannot measure one column in two units."""
         meters = inv.Geometry(
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={"depth": (0.0, 1.0)},
             units={"depth": "m"},
         )
         feet = inv.Geometry(
-            distance=(20.0, 30.0),
+            optical_distance=(20.0, 30.0),
             columns={"depth": (0.0, 1.0)},
             units={"depth": "ft"},
         )
@@ -377,7 +387,7 @@ class TestGeometryColumns:
             units=("meter", "meter", "meter"),
         )
         segment = inv.Geometry(
-            distance=(0.0, 40.0),
+            optical_distance=(0.0, 40.0),
             columns={"depth": (0.0, 40.0)},
             units={"depth": "m"},
         )
@@ -387,8 +397,12 @@ class TestGeometryColumns:
 
     def test_a_column_never_bridges_two_segments(self):
         """Distance between two segments is uncovered, whatever they hold."""
-        first = inv.Geometry(distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)})
-        second = inv.Geometry(distance=(20.0, 30.0), columns={"depth": (2.0, 3.0)})
+        first = inv.Geometry(
+            optical_distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)}
+        )
+        second = inv.Geometry(
+            optical_distance=(20.0, 30.0), columns={"depth": (2.0, 3.0)}
+        )
         path = self._inventory(first, second).networks[0].fiber_arrays[0]
         values = path.optical_paths[0].column_at("depth", [5.0, 15.0, 25.0])
         assert not np.isnan(values[0]) and not np.isnan(values[2])
@@ -396,7 +410,9 @@ class TestGeometryColumns:
 
     def test_a_column_no_segment_states(self):
         """None, so the caller's on_missing policy rules rather than a nan."""
-        segment = inv.Geometry(distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)})
+        segment = inv.Geometry(
+            optical_distance=(0.0, 10.0), columns={"depth": (0.0, 1.0)}
+        )
         path = self._inventory(segment).networks[0].fiber_arrays[0].optical_paths[0]
         assert path.column_at("azimuth", [5.0]) is None
 
@@ -424,12 +440,12 @@ class TestGeometryColumnReviewFindings:
         """Checking columns by name alone would let these two through."""
         canonical = inv.Geometry(
             name="a",
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={"x": (0.0, 10.0), "y": (0.0, 10.0), "z": (0.0, 10.0)},
         )
         labelled = inv.Geometry(
             name="b",
-            distance=(5.0, 15.0),
+            optical_distance=(5.0, 15.0),
             columns={
                 "longitude": (100.0, 110.0),
                 "latitude": (100.0, 110.0),
@@ -447,12 +463,12 @@ class TestGeometryColumnReviewFindings:
         """One fault is one message, naming both segments and the distances."""
         first = inv.Geometry(
             name="a",
-            distance=(0.0, 17.0),
+            optical_distance=(0.0, 17.0),
             columns={"x": (0.0, 17.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
         )
         second = inv.Geometry(
             name="b",
-            distance=(1.0, 14.0),
+            optical_distance=(1.0, 14.0),
             columns={"x": (5.0, 6.0), "y": (5.0, 6.0), "z": (5.0, 6.0)},
         )
         with pytest.raises(InvalidInventoryError) as info:
@@ -469,7 +485,7 @@ class TestGeometryColumnReviewFindings:
         segments = [
             inv.Geometry(
                 name=name,
-                distance=span,
+                optical_distance=span,
                 columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
             )
             for name, span in (("a", (0.0, 10.0)), ("b", (10.0, 20.0)))
@@ -481,7 +497,7 @@ class TestGeometryColumnReviewFindings:
         """Otherwise whichever spelling came last would win, silently."""
         doubled = inv.Geometry(
             name="doubled",
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={
                 "x": (0.0, 10.0),
                 "longitude": (100.0, 110.0),
@@ -497,12 +513,12 @@ class TestGeometryColumnReviewFindings:
         """The position track's coverage is the segments which place it."""
         placed = inv.Geometry(
             name="placed",
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
         )
         measured = inv.Geometry(
             name="measured",
-            distance=(10.0, 20.0),
+            optical_distance=(10.0, 20.0),
             columns={"borehole_depth": (0.0, 10.0)},
         )
         crs = inv.CoordinateReferenceSystem()
@@ -512,7 +528,7 @@ class TestGeometryColumnReviewFindings:
     def test_a_dotted_column_name(self):
         """A dotted name is how a field of a typed track is asked for."""
         dotted = inv.Geometry(
-            distance=(0.0, 10.0), columns={"coupling.depth": (0.0, 1.0)}
+            optical_distance=(0.0, 10.0), columns={"coupling.depth": (0.0, 1.0)}
         )
         with pytest.raises(InvalidInventoryError, match="dotted name"):
             self._inventory(dotted).check()
@@ -521,7 +537,7 @@ class TestGeometryColumnReviewFindings:
         """model_copy would skip the validators and leave a mutable dict."""
         segment = inv.Geometry(
             name="run",
-            distance=(0.0, 10.0),
+            optical_distance=(0.0, 10.0),
             columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
         )
         out = self._path(segment).select(distance=(2.0, 8.0))
@@ -536,7 +552,7 @@ class TestGeometryColumnReviewFindings:
             coordinate_labels=("easting", "northing"), units=("meter", "meter")
         )
         segment = inv.Geometry(
-            distance=(0.0, 10.0), columns={"z": (0.0, 1.0)}, units={"z": "m"}
+            optical_distance=(0.0, 10.0), columns={"z": (0.0, 1.0)}, units={"z": "m"}
         )
         inventory = self._inventory(segment, crs=crs)
         assert inventory.check() is inventory
@@ -549,29 +565,31 @@ class TestGeometry:
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
-            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
+            inv.Geometry(optical_distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_one_point_suggests_a_repeated_position(self):
         """A spool written as one row is told how to write it as two."""
         with pytest.raises(ValidationError, match="same position"):
-            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
+            inv.Geometry(optical_distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
         """Strictly increasing."""
         with pytest.raises(ValidationError, match="strictly increasing"):
             inv.Geometry(
-                distance=(1.0, 1.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                optical_distance=(1.0, 1.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
             )
 
     def test_paired_lengths(self):
         """Paired lengths."""
-        with pytest.raises(ValidationError, match="one value per distance"):
-            inv.Geometry(distance=(0.0, 1.0), columns={"x": (0.0,), "y": (0.0,)})
+        with pytest.raises(ValidationError, match="one per optical_distance point"):
+            inv.Geometry(
+                optical_distance=(0.0, 1.0), columns={"x": (0.0,), "y": (0.0,)}
+            )
 
     def test_coil_repeated_coordinates(self):
         """A coil interpolates to a constant coordinate."""
         coil = inv.Geometry(
-            distance=(1200.0, 1300.0),
+            optical_distance=(1200.0, 1300.0),
             columns={"x": (500.0, 500.0), "y": (120.0, 120.0)},
         )
         out = coil.interpolate([1200.0, 1250.0, 1299.0])
@@ -581,7 +599,7 @@ class TestGeometry:
     def test_uncovered_is_nan(self):
         """Uncovered is nan."""
         geo = inv.Geometry(
-            distance=(10.0, 20.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+            optical_distance=(10.0, 20.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
         )
         out = geo.interpolate([5.0, 25.0])
         assert all(np.all(np.isnan(x)) for x in out.values())
@@ -748,8 +766,8 @@ class TestPathTracks:
                 inv.FiberSegment(distance_min=0.0, distance_max=100.0),
             ),
             geometry=(
-                inv.Geometry(distance=(0.0, 60.0), **seg),
-                inv.Geometry(distance=(50.0, 80.0), **seg),
+                inv.Geometry(optical_distance=(0.0, 60.0), **seg),
+                inv.Geometry(optical_distance=(50.0, 80.0), **seg),
             ),
         )
         with pytest.raises(InvalidInventoryError, match="overlap in optical distance"):
@@ -897,7 +915,7 @@ class TestDistanceMap:
     def test_at_least_one_input_axis(self):
         """A map with no input axis maps nothing."""
         with pytest.raises(ValidationError, match="at least one input axis"):
-            inv.DistanceMap(distance=(5.0,))
+            inv.DistanceMap(optical_distance=(5.0,))
 
     def test_two_input_axes(self):
         """
@@ -908,56 +926,62 @@ class TestDistanceMap:
         """
         dmap = inv.DistanceMap(
             channel=(0.0, 100.0),
-            instrument_distance=(10.0, 112.0),
-            distance=(500.0, 600.0),
+            acquisition_distance=(10.0, 112.0),
+            optical_distance=(500.0, 600.0),
         )
-        assert dmap.axes == ("channel", "instrument_distance")
+        assert dmap.axes == ("channel", "acquisition_distance")
         assert np.isclose(dmap.map_to_distance([50], axis="channel")[0], 550.0)
-        out = dmap.map_to_distance([61], axis="instrument_distance")
+        out = dmap.map_to_distance([61], axis="acquisition_distance")
         assert np.isclose(out[0], 550.0)
 
     def test_axis_lengths_must_match(self):
         """Every axis states the same control points."""
         with pytest.raises(ValidationError, match="same"):
             inv.DistanceMap(
-                channel=(0.0, 1.0), instrument_distance=(0.0,), distance=(5.0, 6.0)
+                channel=(0.0, 1.0),
+                acquisition_distance=(0.0,),
+                optical_distance=(5.0, 6.0),
             )
 
     def test_nonfinite_distance_raises(self):
         """A control point at NaN places nothing."""
         with pytest.raises(ValidationError, match="must be finite"):
-            inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, np.inf))
+            inv.DistanceMap(channel=(0.0, 1.0), optical_distance=(5.0, np.inf))
 
     def test_unwritten_axis_raises(self):
         """A map cannot be read on an axis it was not written in."""
-        dmap = inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, 6.0))
+        dmap = inv.DistanceMap(channel=(0.0, 1.0), optical_distance=(5.0, 6.0))
         with pytest.raises(InvalidInventoryError, match="not written in"):
-            dmap.map_to_distance([0.5], axis="instrument_distance")
+            dmap.map_to_distance([0.5], axis="acquisition_distance")
 
     def test_two_point_map(self):
         """Two point map."""
-        dmap = inv.DistanceMap(channel=(512.0, 1710.0), distance=(500.0, 1698.0))
+        dmap = inv.DistanceMap(
+            channel=(512.0, 1710.0), optical_distance=(500.0, 1698.0)
+        )
         out = dmap.map_to_distance([512, 1111, 1710])
         assert np.isclose(out[0], 500.0)
         assert np.isclose(out[-1], 1698.0)
 
     def test_outside_coverage_is_nan(self):
         """Outside coverage is nan."""
-        dmap = inv.DistanceMap(channel=(512.0, 1710.0), distance=(500.0, 1698.0))
+        dmap = inv.DistanceMap(
+            channel=(512.0, 1710.0), optical_distance=(500.0, 1698.0)
+        )
         assert np.isnan(dmap.map_to_distance([2000.0])[0])
 
     def test_single_point_needs_slope(self):
         """Single point needs slope."""
-        dmap = inv.DistanceMap(channel=(512.0,), distance=(500.0,))
+        dmap = inv.DistanceMap(channel=(512.0,), optical_distance=(500.0,))
         with pytest.raises(InvalidInventoryError, match="slope"):
             dmap.map_to_distance([600.0])
         out = dmap.map_to_distance([612.0], slope=1.0)
         assert np.isclose(out[0], 600.0)
 
-    def test_instrument_distance_axis(self):
-        """Instrument distance axis."""
+    def test_acquisition_distance_axis(self):
+        """Acquisition distance axis."""
         dmap = inv.DistanceMap(
-            instrument_distance=(0.0, 2000.0), distance=(-12.4, 1985.2)
+            acquisition_distance=(0.0, 2000.0), optical_distance=(-12.4, 1985.2)
         )
         out = dmap.map_to_distance([0.0])
         assert np.isclose(out[0], -12.4)
@@ -968,19 +992,19 @@ class TestAcquisition:
 
     def test_single_point_channel_map_is_affine(self):
         """One point states an origin; spatial_interval is the slope."""
-        dmap = inv.DistanceMap(channel=(0.0,), distance=(10.0,))
+        dmap = inv.DistanceMap(channel=(0.0,), optical_distance=(10.0,))
         acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([0, 5]), [10.0, 20.0])
 
     def test_single_point_instrument_map_is_an_offset(self):
         """Interrogator meters map onto path meters one for one."""
-        dmap = inv.DistanceMap(instrument_distance=(-120.5,), distance=(0.0,))
+        dmap = inv.DistanceMap(acquisition_distance=(-120.5,), optical_distance=(0.0,))
         acq = inv.Acquisition(code="RAW", spatial_interval=2.0, distance_map=dmap)
         assert np.allclose(acq.channel_to_distance([-120.5, -20.5]), [0.0, 100.0])
 
     def test_map_mapping_used_when_present(self):
         """Map mapping used when present."""
-        dmap = inv.DistanceMap(channel=(0.0, 10.0), distance=(100.0, 120.0))
+        dmap = inv.DistanceMap(channel=(0.0, 10.0), optical_distance=(100.0, 120.0))
         acq = inv.Acquisition(code="RAW", distance_map=dmap)
         assert np.isclose(acq.channel_to_distance([5])[0], 110.0)
 
@@ -1301,7 +1325,7 @@ class TestPathOperations:
         piece = path.select(distance=(50.0, 150.0))
         assert piece.distance_min == 50.0
         assert np.isclose(piece.optical_length, 100.0)
-        assert piece.geometry[0].distance[0] == 50.0
+        assert piece.geometry[0].optical_distance[0] == 50.0
         piece.check()
 
     def test_split_and_rejoin(self, path):
@@ -1452,7 +1476,7 @@ class TestReviewRegressions:
     def test_columnless_geometry_raises(self):
         """A segment which measures nothing describes nothing."""
         with pytest.raises(ValidationError, match="states no columns"):
-            inv.Geometry(distance=(0.0, 1.0), columns={})
+            inv.Geometry(optical_distance=(0.0, 1.0), columns={})
 
     def test_station_extra_fields_forbidden(self):
         """Coordinates are canonical (x, y, z); label fields are not stored."""
@@ -1732,10 +1756,11 @@ class TestInternalReviewRegressions:
             ),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                    optical_distance=(0.0, 10.0),
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
                 ),
                 inv.Geometry(
-                    distance=(20.0, 30.0),
+                    optical_distance=(20.0, 30.0),
                     columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
@@ -1800,10 +1825,11 @@ class TestCodexReviewRegressions:
             )
         with pytest.raises(ValidationError, match="finite"):
             inv.Geometry(
-                distance=(0.0, np.inf), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                optical_distance=(0.0, np.inf),
+                columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
             )
         with pytest.raises(ValidationError, match="finite"):
-            inv.DistanceMap(channel=(0.0, np.inf), distance=(0.0, 1.0))
+            inv.DistanceMap(channel=(0.0, np.inf), optical_distance=(0.0, 1.0))
 
 
 class TestCoverageCompleteness:
@@ -1853,19 +1879,19 @@ class TestCoverageCompleteness:
     def test_distance_map_length_mismatch_raises(self):
         """Distance map length mismatch raises."""
         with pytest.raises(ValidationError, match="same length"):
-            inv.DistanceMap(channel=(1.0, 2.0), distance=(5.0,))
+            inv.DistanceMap(channel=(1.0, 2.0), optical_distance=(5.0,))
 
     def test_distance_map_empty_raises(self):
         """Distance map empty raises."""
         with pytest.raises(ValidationError, match="at least 1 control point"):
-            inv.DistanceMap(channel=(), distance=())
+            inv.DistanceMap(channel=(), optical_distance=())
 
     def test_distance_map_non_increasing_raises(self):
         """Distance map non increasing raises."""
         with pytest.raises(ValidationError, match="values must be strictly"):
-            inv.DistanceMap(channel=(2.0, 1.0), distance=(5.0, 6.0))
+            inv.DistanceMap(channel=(2.0, 1.0), optical_distance=(5.0, 6.0))
         with pytest.raises(ValidationError, match="distance values"):
-            inv.DistanceMap(channel=(1.0, 2.0), distance=(6.0, 5.0))
+            inv.DistanceMap(channel=(1.0, 2.0), optical_distance=(6.0, 5.0))
 
     def test_coordinates_at_without_geometry(self):
         """Coordinates at without geometry."""
@@ -1883,8 +1909,8 @@ class TestCoverageCompleteness:
                 inv.FiberSegment(distance_min=0.0, distance_max=100.0),
             ),
             geometry=(
-                inv.Geometry(distance=(0.0, 20.0), **seg),
-                inv.Geometry(distance=(80.0, 100.0), **seg),
+                inv.Geometry(optical_distance=(0.0, 20.0), **seg),
+                inv.Geometry(optical_distance=(80.0, 100.0), **seg),
             ),
         )
         piece = path.select(distance=(40.0, 60.0))
@@ -2029,7 +2055,7 @@ class TestDisplay:
         """A measured map names its axes rather than listing its points."""
         acquisition = tunnel.networks[0].fiber_arrays[0].acquisitions[0]
         out = str(acquisition.distance_map)
-        assert "-> distance" in out
+        assert "-> optical_distance" in out
         assert "control points" in out
 
     def test_child_styles_do_not_bleed(self, tunnel):
@@ -2788,10 +2814,11 @@ class TestPrReviewFindings:
             ),
             geometry=(
                 inv.Geometry(
-                    distance=(0.0, 10.0), columns={"x": (0.0, 1.0), "y": (0.0, 1.0)}
+                    optical_distance=(0.0, 10.0),
+                    columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
                 ),
                 inv.Geometry(
-                    distance=(20.0, 30.0),
+                    optical_distance=(20.0, 30.0),
                     columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
                 ),
             ),
@@ -2809,7 +2836,7 @@ class TestPrReviewFindings:
             geometry=(
                 inv.Geometry(
                     name="flat",
-                    distance=(0.0, 10.0),
+                    optical_distance=(0.0, 10.0),
                     columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
                 ),
             ),
@@ -2862,7 +2889,8 @@ class TestConstraintsMatchDescriptions:
         """A nan control point would read as uncovered distance."""
         with pytest.raises(ValidationError, match="must hold finite"):
             inv.Geometry(
-                distance=(0.0, 1.0), columns={"x": (np.nan, 1.0), "y": (0.0, 1.0)}
+                optical_distance=(0.0, 1.0),
+                columns={"x": (np.nan, 1.0), "y": (0.0, 1.0)},
             )
 
     def test_point_coordinates_must_be_finite(self):
@@ -3258,22 +3286,22 @@ class TestDistanceMapAxisAgreement:
         with pytest.raises(ValidationError, match="varies along the fiber"):
             inv.DistanceMap(
                 channel=(0.0, 100.0, 200.0),
-                instrument_distance=(0.0, 150.0, 200.0),
-                distance=(0.0, 100.0, 200.0),
+                acquisition_distance=(0.0, 150.0, 200.0),
+                optical_distance=(0.0, 100.0, 200.0),
             )
 
     def test_constant_spacing_is_fine(self):
         """A fixed spacing between the axes is the normal case."""
         dmap = inv.DistanceMap(
             channel=(0.0, 100.0, 200.0),
-            instrument_distance=(0.0, 50.0, 100.0),
-            distance=(0.0, 100.0, 200.0),
+            acquisition_distance=(0.0, 50.0, 100.0),
+            optical_distance=(0.0, 100.0, 200.0),
         )
-        assert dmap.axes == ("channel", "instrument_distance")
+        assert dmap.axes == ("channel", "acquisition_distance")
 
     def test_bad_axis_name_raises(self):
         """A map is read on an input axis, not on any of its fields."""
-        dmap = inv.DistanceMap(channel=(0.0, 1.0), distance=(5.0, 6.0))
+        dmap = inv.DistanceMap(channel=(0.0, 1.0), optical_distance=(5.0, 6.0))
         with pytest.raises(InvalidInventoryError, match="not a DistanceMap input"):
             dmap.map_to_distance([0.5], axis="distance")
 
@@ -3354,7 +3382,7 @@ class TestGetNames:
         number a channel inside it carries.
         """
         excluded = {"coupling.distance_min", "coupling.distance_max"}
-        excluded |= {"geometry.distance", "geometry.columns"}
+        excluded |= {"geometry.optical_distance", "geometry.columns"}
         assert not set(names.coords) & excluded
 
     def test_coords_omit_absent_tracks(self):

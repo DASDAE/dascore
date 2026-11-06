@@ -65,24 +65,24 @@ def _main_path(epoch: int) -> inv.OpticalPath:
             # Two surveyed runs with an unsurveyed gap from 300 to 350.
             inv.Geometry(
                 name="west",
-                distance=(100.0, 300.0),
+                optical_distance=(100.0, 300.0),
                 columns={"x": (0.0, 200.0), "y": (0.0, 0.0), "z": (0.0, -1.0)},
             ),
             inv.Geometry(
                 name="east",
-                distance=(350.0, 500.0),
+                optical_distance=(350.0, 500.0),
                 columns={"x": (250.0, 400.0), "y": (0.0, 5.0), "z": (-1.0, 0.0)},
             ),
             # Columns of those same stretches, so they share the runs' names.
             inv.Geometry(
                 name="west",
-                distance=(100.0, 300.0),
+                optical_distance=(100.0, 300.0),
                 columns={"chainage": (0.0, 200.0), "depth": (0.5, 1.5)},
                 units={"chainage": "m"},
             ),
             inv.Geometry(
                 name="east",
-                distance=(350.0, 500.0),
+                optical_distance=(350.0, 500.0),
                 columns={"chainage": (250.0, 400.0)},
                 units={"chainage": "m"},
             ),
@@ -135,7 +135,9 @@ def build_site_inventory() -> inv.Inventory:
             data_type="strain_rate",
             spatial_interval=1.0,
             interrogator=inv.Interrogator(manufacturer="Fake", model="FI-1"),
-            distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(100.0, 400.0)),
+            distance_map=inv.DistanceMap(
+                channel=(0.0, 300.0), optical_distance=(100.0, 400.0)
+            ),
             **common,
         ),
         inv.Acquisition(
@@ -145,7 +147,7 @@ def build_site_inventory() -> inv.Inventory:
             spatial_interval=1.0,
             interrogator=inv.Interrogator(serial_number="sn-9"),
             # One point states an origin but no extent, so it draws as a tick.
-            distance_map=inv.DistanceMap(channel=(0.0,), distance=(100.0,)),
+            distance_map=inv.DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
             **common,
         ),
         inv.Acquisition(code="AUX", location_code="01", interrogator="int-1", **common),
@@ -232,7 +234,9 @@ def build_grouped_inventory(group: str, codes=("RAW",)) -> inv.Inventory:
             data_category="DAS",
             sample_rate=100.0,
             gauge_length=10.0,
-            distance_map=inv.DistanceMap(channel=(0.0, 300.0), distance=(0.0, 300.0)),
+            distance_map=inv.DistanceMap(
+                channel=(0.0, 300.0), optical_distance=(0.0, 300.0)
+            ),
         )
         for code in codes
     )
@@ -806,7 +810,7 @@ class TestPath:
             geometry=(
                 inv.Geometry(
                     name="run",
-                    distance=(100.0, 300.0),
+                    optical_distance=(100.0, 300.0),
                     columns={"chainage": (0.0, 200.0)},
                     units={"chainage": "m"},
                 ),
@@ -871,12 +875,12 @@ class TestMap:
             geometry=(
                 inv.Geometry(
                     name="west",
-                    distance=(0.0, 50_000.0),
+                    optical_distance=(0.0, 50_000.0),
                     columns={"x": (0.0, 500.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
                 ),
                 inv.Geometry(
                     name="east",
-                    distance=(50_010.0, 100_000.0),
+                    optical_distance=(50_010.0, 100_000.0),
                     columns={
                         "x": (600.0, 1000.0),
                         "y": (0.0, 0.0),
@@ -956,7 +960,7 @@ class TestMap:
             geometry=(
                 inv.Geometry(
                     name="down",
-                    distance=(0.0, 40.0),
+                    optical_distance=(0.0, 40.0),
                     # Straight down: nothing to see in plan view at all.
                     columns={"x": (5.0, 5.0), "y": (2.0, 2.0), "z": (0.0, -40.0)},
                 ),
@@ -997,7 +1001,7 @@ class TestMap:
                 geometry=(
                     inv.Geometry(
                         name="run",
-                        distance=(0.0, 200.0),
+                        optical_distance=(0.0, 200.0),
                         columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
@@ -1097,7 +1101,7 @@ class TestMap:
                 geometry=(
                     inv.Geometry(
                         name="run",
-                        distance=(0.0, 200.0),
+                        optical_distance=(0.0, 200.0),
                         columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
@@ -1160,7 +1164,7 @@ class TestMap:
                 geometry=(
                     inv.Geometry(
                         name="run",
-                        distance=(0.0, 200.0),
+                        optical_distance=(0.0, 200.0),
                         columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
@@ -1225,7 +1229,7 @@ class TestMap:
                 geometry=(
                     inv.Geometry(
                         name="run",
-                        distance=(0.0, 200.0),
+                        optical_distance=(0.0, 200.0),
                         columns={
                             "x": (0.0, 100.0),
                             "y": (float(location), float(location)),
@@ -1272,7 +1276,7 @@ class TestMap:
             geometry=(
                 inv.Geometry(
                     name="run",
-                    distance=(0.0, 100.0),
+                    optical_distance=(0.0, 100.0),
                     columns={"x": (0.0, 1.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
                 ),
             ),
