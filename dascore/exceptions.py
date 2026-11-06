@@ -27,6 +27,10 @@ class UnknownFiberFormatError(IOError, DASCoreError):
     """Raised when the format of an alleged fiber file is not recognized."""
 
 
+class PickleFormatDisabledError(UnknownFiberFormatError):
+    """Raised when reading a pickle needs the ``allow_pickle_format`` opt-in."""
+
+
 class UnknownExampleError(DASCoreError):
     """Raised when an unregistered example is requested."""
 

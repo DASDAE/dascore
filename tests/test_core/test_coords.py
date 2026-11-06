@@ -30,7 +30,7 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, TimeOverflowError
 from dascore.units import get_quantity, percent
 from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
 from dascore.utils.misc import all_close, register_func, suppress_warnings
@@ -3501,3 +3501,33 @@ class TestDeclaredStepSnap:
         values[1::2] += 0.1 * 5e-7
         out = get_coord(data=values, step=0.1, snap=False)
         assert np.array_equal(out.values, values)
+
+
+class TestSnapTimeUnits:
+    """Snapping time labels stored in any unit keeps their span."""
+
+    @pytest.mark.parametrize("unit", ["ns", "us", "ms", "s"])
+    @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
+    def test_snap_keeps_ends(self, unit, kind):
+        """The snapped grid keeps the first and last labels for every unit."""
+        offsets = np.array([0, 1001, 1999, 3000, 4000], dtype=f"m8[{unit}]")
+        zero = np.timedelta64(0, unit)
+        start = np.datetime64("2024-01-01", unit) if kind == "datetime64" else zero
+        labels = start + offsets
+        out = get_coord(data=labels, snap=False).snap()
+        assert out.evenly_sampled and len(out) == len(labels)
+        assert out.min() == labels[0] and out.max() == labels[-1]
+        assert out.step == np.timedelta64(1000, unit)
+
+    def test_snap_calendar_units(self):
+        """Month labels snap to a grid between their actual first and last."""
+        labels = np.array(["2024-01", "2024-02", "2024-04"], dtype="datetime64[M]")
+        out = get_coord(data=labels, snap=False).snap()
+        assert out.min() == labels[0] and out.max() == labels[-1]
+
+    @pytest.mark.parametrize("unit", ["s", "Y"])
+    def test_snap_wide_span_raises(self, unit):
+        """A span too long for a nanosecond step raises instead of wrapping."""
+        labels = np.array(["1700", "1800", "2250"], dtype=f"datetime64[{unit}]")
+        with pytest.raises(TimeOverflowError):
+            get_coord(data=labels, snap=False).snap()

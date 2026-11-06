@@ -72,6 +72,18 @@ with dc.config_context(display_html_open_lines=0):
 folded_html
 ```
 
+# Unpickling settings
+
+Unpickling a file can run arbitrary code, so both settings that allow it default to `False`. Turn one on only for files you trust, and prefer `config_context` so it ends with the block.
+
+- `allow_pickle_format` lets DASCore detect and read the PICKLE format. Without it, reading a DASCore pickle raises `PickleFormatDisabledError`, and scans skip it with a warning. Detection reads only the header and never unpickles, but while the setting is on, a scan unpickles every file whose header names a DASCore patch or spool, whatever its extension.
+- `allow_dasdae_format_unpickle` lets DASCore read DASDAE files written by DASCore 0.1.x, which store coordinate metadata as a pickle. Without it, they raise `DASDAEUnpickleError`.
+
+```python
+with dc.config_context(allow_pickle_format=True):
+    spool = dc.read("trusted_patch.pkl")
+```
+
 For `allow_remote_cache`, HDF5 block-cache settings, and metadata-versus-read behavior, see [Working with remote patches](remote_patches.qmd).
 
 Remote settings include the cache directory, separate permissions for metadata and data materialization, first-download warnings, HDF5 block size, block count, and garbage-collection warnings. Keep conservative metadata defaults unless a workflow explicitly accepts downloads.

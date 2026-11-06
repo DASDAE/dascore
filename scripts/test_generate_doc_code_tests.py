@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from generate_doc_code_tests import (
     DOCS_PATH,
     REPO_ROOT,
@@ -203,6 +204,12 @@ class TestIncludes:
         assert out.chunks == (
             Chunk(start_line=5, source='print("included")\n', path=skill.resolve()),
         )
+
+    def test_circular_include(self, tmp_path):
+        """A file that includes itself is reported, not recursed into."""
+        path = _write(tmp_path / "page.qmd", "{{< include page.qmd >}}\n")
+        with pytest.raises(ValueError, match="Circular"):
+            extract_qmd_file(path.resolve())
 
     def test_skill_pages_keep_their_cells(self):
         """A real page whose body is an included skill still yields its cells."""

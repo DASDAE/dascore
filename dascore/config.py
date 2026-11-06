@@ -200,6 +200,14 @@ class DascoreConfig(BaseModel):
             "compatibility with trusted historical files."
         ),
     )
+    allow_pickle_format: bool = Field(
+        default=False,
+        description=(
+            "Allow the PICKLE format to be detected and read. Unpickling a "
+            "file can run arbitrary code, so enable this only for files you "
+            "trust, and keep in mind a directory scan reads every file in it."
+        ),
+    )
     remote_download_block_size: int = Field(
         default=1_048_576,
         description="Block size in bytes for general remote file downloads.",
