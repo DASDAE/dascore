@@ -302,6 +302,7 @@ def _attrs_from_row(
             # Directory overrides are strings, even for numeric source attrs.
             if name in out and isinstance(out[name], int | float | np.number):
                 out[name] = np.dtype(dtype).type(out[name])
+    out = _row_defaults(row) | out
     out["dims"] = dims
     # the lineage ids are source columns, so the comprehension drops
     # them; a merged patch folds them, and folding nothing is not the
@@ -311,6 +312,12 @@ def _attrs_from_row(
         if not _is_null(value := row.get(name)):
             out[name] = value
     return dc.PatchAttrs.from_dict(out)
+
+
+def _row_defaults(row: Mapping) -> dict[str, Any]:
+    """The declared defaults of the vendor attrs model a row was read with."""
+    stored = row.get("_attr_defaults")
+    return json.loads(stored) if isinstance(stored, str) and stored else {}
 
 
 def _is_null(value) -> bool:
@@ -816,7 +823,8 @@ class PatchAssembler:
             return None
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
-        return self._assemble(data, dims, merge_dim, coords, attrs)
+        defaults = _row_defaults(df_dict_list[0])
+        return self._assemble(data, dims, merge_dim, coords, attrs, defaults)
 
     def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
@@ -970,9 +978,17 @@ class PatchAssembler:
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
         return self._assemble(buffer, dims, merge_dim, coords, attrs)
 
-    def _assemble(self, data, dims, merge_dim, coords, attrs):
+    def _assemble(self, data, dims, merge_dim, coords, attrs, defaults=None):
         """Build the merged patch from the members' data, coords and attrs."""
         coords, attrs = self._merged_meta(merge_dim, coords, attrs)
+        # The merge drops empty and conflicting attrs, which the first
+        # member's vendor model fills with its defaults; rows rebuild base
+        # attrs, so restate them.
+        if defaults:
+            present = attrs.model_dump()
+            attrs = attrs.update(
+                **{k: v for k, v in defaults.items() if k not in present}
+            )
         # The fold named the result; building it is not another array.
         with operation_context():
             return dc.Patch(data=data, coords=coords, attrs=attrs, dims=list(dims))

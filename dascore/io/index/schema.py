@@ -33,11 +33,12 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 33 states a coordinate's
-# step beside its jittered and gapped flags and offset bounds, its runs in
-# coord_runs, and the snap and max_shift an index was scanned under, and
-# scans each format under its own default snap through one shared grid.
-# Version 32 reads H5Simple times
+# changes, not only when a column does. Version 34 keeps a vendor attrs
+# model's declared defaults (`attr_defaults`), so its rows are complete.
+# Version 33 states a coordinate's step beside its jittered and gapped
+# flags and offset bounds, its runs in coord_runs, and the snap and
+# max_shift an index was scanned under, and scans each format under its
+# own default snap through one shared grid. Version 32 reads H5Simple times
 # stated "<unit> relative to ..." as timedelta offsets, not epoch datetimes.
 # Version 31 snaps ProdML time to a
 # grid of the stored length, comparing the stated end with the last label to
@@ -65,7 +66,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 33
+INDEX_VERSION = 34
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -162,6 +163,8 @@ class PatchRow(NamedTuple):
     attrs_complete: int
     # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
     attr_dtypes: str | None
+    # JSON mapping of the vendor attrs model's declared field defaults.
+    attr_defaults: str | None
     # Space separated byte offsets of the data array's chunks of
     # `data_chunk_rows` rows, for a reader marked as returning stored bytes;
     # else NULL.
@@ -414,6 +417,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "data_size",
         "attrs_complete",
         "attr_dtypes",
+        "attr_defaults",
         "data_offsets",
         "data_chunk_rows",
         # These named structural columns until version 9 dropped them.
@@ -478,6 +482,7 @@ SPOOL_LATE_RENAMES = MappingProxyType(
         "data_size": "_data_size",
         "attrs_complete": "_attrs_complete",
         "attr_dtypes": "_attr_dtypes",
+        "attr_defaults": "_attr_defaults",
         "data_offsets": "_data_offsets",
         "data_chunk_rows": "_data_chunk_rows",
         "mtime_ns": SOURCE_STAT_COLUMNS[0],

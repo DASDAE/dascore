@@ -39,6 +39,7 @@ from dascore.exceptions import (
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
+from dascore.io.neubrex.core import NeubrexDASPatchAttrs
 from dascore.lazy.recipe import Recipe
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
@@ -3017,21 +3018,19 @@ class TestChunkFromIndex:
         moved = dc.spool(tmp_path).update().chunk(time=None)[0]
         assert moved.attrs["channel_count"] == "renamed"
 
-    @pytest.mark.parametrize("case", ["empty", "envelope", "vendor", "skipped"])
+    @pytest.mark.parametrize("case", ["empty", "envelope", "skipped"])
     def test_unreconstructable_attributes_keep_the_patch_path(
         self, tmp_path, route, monkeypatch, case
     ):
-        """Missing custom attrs, flat collisions, and vendor models survive merging."""
+        """Missing custom attrs and flat collisions survive merging."""
         spool = ex.get_example_spool("random_das", length=2, time_gap=0)
         for num, patch in enumerate(spool):
             if case == "empty":
                 patch = patch.update_attrs(empty_extra="")
             elif case == "envelope":
                 patch = patch.update_attrs(distance_units="custom")
-            elif case == "skipped":
-                patch = patch.update_attrs(coords="user metadata")
             else:
-                patch = patch.update(attrs=FebusPatchAttrs())
+                patch = patch.update_attrs(coords="user metadata")
             patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
         with suppress_warnings(UserWarning):
             indexed = dc.spool(tmp_path).update()
@@ -3044,6 +3043,38 @@ class TestChunkFromIndex:
         assert dict(out.attrs) == dict(expected.attrs)
         assert np.array_equal(out.data, expected.data)
         assert out.coords == expected.coords
+
+    @pytest.mark.parametrize("gauges", [(None, None), (10.0, 20.0)])
+    def test_vendor_model_merges_from_the_index(self, tmp_path, route, gauges):
+        """A vendor model's defaults ride in the row, so no patch is read."""
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        for num, (patch, gauge) in enumerate(zip(spool, gauges)):
+            attrs = patch.attrs.model_dump() | {"gauge_length": gauge}
+            patch = patch.update(attrs=FebusPatchAttrs(**attrs))
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        indexed = dc.spool(tmp_path).update()
+        out = indexed.chunk(time=None, conflict="drop")[0]
+        assert route.counts == {"patch": 0, "array": 2}
+        route.force_patches()
+        expected = indexed.chunk(time=None, conflict="drop")[0]
+        assert out.attrs.gauge_length is expected.attrs.gauge_length is None
+        assert dict(out.attrs) == dict(expected.attrs)
+        assert out.attrs.zone == expected.attrs.zone == ""
+        assert np.array_equal(out.data, expected.data)
+
+    def test_mixed_models_merge_as_loaded(self, tmp_path, route):
+        """Vendor defaults are not compared as values against a plain model."""
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        models = (NeubrexDASPatchAttrs, dc.PatchAttrs)
+        for num, (patch, model) in enumerate(zip(spool, models)):
+            patch = patch.update(attrs=model(**patch.attrs.model_dump()))
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        indexed = dc.spool(tmp_path).update()
+        out = indexed.chunk(time=None, conflict="drop")[0]
+        assert route.counts == {"patch": 0, "array": 2}
+        route.force_patches()
+        expected = indexed.chunk(time=None, conflict="drop")[0]
+        assert dict(out.attrs) == dict(expected.attrs)
 
     def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, route):
         """An attr no column holds is on the patch, so no row stands in."""
