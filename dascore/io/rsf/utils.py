@@ -122,6 +122,9 @@ def _get_coords(hdr) -> dict:
         units = hdr.get(f"unit{i}") or None
         origin, step = hdr.get(f"o{i}", "0"), hdr.get(f"d{i}", "1")
         epoch = _get_epoch(hdr, i, name, units)
+        if epoch is None and name == "time" and units == "s":
+            # a time axis of offsets, which the writer gives no epoch
+            epoch = np.timedelta64(0, "ns")
         if epoch is None:
             coord = dc.get_coord(
                 start=float(origin), step=float(step), shape=(n,), units=units

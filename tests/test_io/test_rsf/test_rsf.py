@@ -279,6 +279,13 @@ class TestRsfRead:
         assert patch.get_coord("distance").units is None
         assert np.array_equal(patch.data, fractional_patch.data)
 
+    def test_relative_time(self, fractional_patch, tmp_path):
+        """A time axis of offsets reads back as offsets, not as seconds or dates."""
+        start, step = dc.to_timedelta64(5.0), dc.to_timedelta64(0.004)
+        time = dc.get_coord(start=start, step=step, shape=(8,))
+        RSFV1().write(fractional_patch.update_coords(time=time), tmp_path / "r.rsf")
+        assert dc.spool(tmp_path / "r.rsf")[0].get_coord("time") == time
+
     def test_window(self, combined_path, f4_patch):
         """A selection reads only the requested window."""
         time = f4_patch.get_coord("time")
