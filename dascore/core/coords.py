@@ -3418,7 +3418,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         else:
             dur = max_v - min_v
             if is_timedelta64(dur):  # hack to handle dts int division.
-                raw = float(dur.astype(np.int64)) / (len(self) - 1)
+                raw = float(dc.to_timedelta64(dur).astype(np.int64)) / (len(self) - 1)
                 step = np.timedelta64(int(np.round(raw)), "ns")
             else:
                 step = dur / (len(self) - 1)

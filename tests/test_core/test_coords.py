@@ -3510,3 +3510,20 @@ class TestDeclaredStepSnap:
         values[1::2] += 0.1 * 5e-7
         out = get_coord(data=values, step=0.1, snap=False)
         assert np.array_equal(out.values, values)
+
+
+class TestSnapTimeUnits:
+    """Snapping time labels stored in any unit keeps their span."""
+
+    @pytest.mark.parametrize("unit", ["ns", "us", "ms", "s"])
+    @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
+    def test_snap_keeps_ends(self, unit, kind):
+        """The snapped grid keeps the first and last labels for every unit."""
+        offsets = np.array([0, 1001, 1999, 3000, 4000], dtype=f"m8[{unit}]")
+        zero = np.timedelta64(0, unit)
+        start = np.datetime64("2024-01-01", unit) if kind == "datetime64" else zero
+        labels = start + offsets
+        out = get_coord(data=labels, snap=False).snap()
+        assert out.evenly_sampled and len(out) == len(labels)
+        assert out.min() == labels[0] and out.max() == labels[-1]
+        assert out.step == np.timedelta64(1000, unit)
