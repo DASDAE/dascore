@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from dascore.compat import is_array
 from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor
 from dascore.utils.misc import broadcast_for_index, iterate
@@ -14,7 +15,7 @@ from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    _require_evenly_sampled,
+    _refuse_holes_and_jitter,
 )
 
 _TRAP_FUNC = getattr(np, "trapezoid" if hasattr(np, "trapezoid") else "trapz")
@@ -44,29 +45,37 @@ def _get_definite_coords(meta, dims):
     return meta.coords.update(**new_coords)
 
 
-def _get_definite_integral(array, dxs, axes):
-    """Get a definite integral along axes, each sampled every dx."""
+def _get_definite_integral(array, dxs_or_vals, axes):
+    """Get a definite integral along axes."""
     ndims = len(array.shape)
-    for dx, ax in zip(dxs, axes):
+    for dxs_or_val, ax in zip(dxs_or_vals, axes):
         # Numpy 2/3 compat code
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
-        array = _TRAP_FUNC(array, dx=dx, axis=ax)[indexer]
+        if is_array(dxs_or_val):
+            array = _TRAP_FUNC(array, x=dxs_or_val, axis=ax)[indexer]
+        else:
+            array = _TRAP_FUNC(array, dx=dxs_or_val, axis=ax)[indexer]
     return array
 
 
-def _get_indefinite_integral(array, dxs, axes):
+def _get_indefinite_integral(array, dxs_or_vals, axes):
     """
     Get indefinite integral along dimensions.
 
-    Each step is the trapezoid between adjacent samples, sampled every dx.
+    We need to calculate the distance weighted average for the areas between
+    samples for the integration dimension.
     """
-    for dx, ax in zip(dxs, axes):
+    for dx_or_val, ax in zip(dxs_or_vals, axes):
         out = np.zeros_like(array)
+        if is_array(dx_or_val):
+            intervals = dx_or_val[1:] - dx_or_val[:-1]
+            indexer = broadcast_for_index(array.ndim, ax, slice(None), fill=None)
+            dx_or_val = intervals[indexer]
         ndim = len(out.shape)
         stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
         start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
         # Average each adjacent pair to form trapezoids.
-        avs = (array[stop_indexer] + array[start_indexer]) * (dx / 2)
+        avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
         out[stop_indexer] = np.cumsum(avs, axis=ax)
         array = out
     return array
@@ -107,9 +116,11 @@ class Integrate(PatchProcessor):
     cannot name all the way through clears `data_type` rather than
     leaving a stale one on it.
 
-    A dimension with missing samples (holes in its step) raises; use
-    [split_gaps](`dascore.Patch.split_gaps`) or
-    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+    A dimension with missing samples (holes in its step) or labels off its
+    step's grid (jitter) raises; use [split_gaps](`dascore.Patch.split_gaps`),
+    [fill_gaps](`dascore.Patch.fill_gaps`) or
+    [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with no
+    step is an irregular axis, integrated by its label spacing.
 
     Examples
     --------
@@ -130,14 +141,14 @@ class Integrate(PatchProcessor):
     def get_metadata(self, meta):
         """Return the integral's coords, units and data_type, and the spacing."""
         dims = iterate(self.dim if self.dim is not None else meta.dims)
-        _require_evenly_sampled(meta, dims, "integrate")
-        dxs, axes = _get_dx_or_spacing_and_axes(meta, dims)
+        _refuse_holes_and_jitter(meta, dims, "integrate")
+        dxs_or_vals, axes = _get_dx_or_spacing_and_axes(meta, dims)
         coords = _get_definite_coords(meta, dims) if self.definite else meta.coords
         new_units = _get_data_units_from_dims(meta, dims, mul)
         data_type = _get_data_type_from_dims(meta, dims, differentiate=False)
         attrs = meta.attrs.update(data_units=new_units, data_type=data_type)
         out = meta.new(attrs=attrs, coords=coords)
-        return out, {"axes": axes, "spacing": dxs}
+        return out, {"axes": axes, "spacing": dxs_or_vals}
 
     def numpy_kernel(self, data, *, axes, spacing):
         """Return the integral of the data along the axes."""

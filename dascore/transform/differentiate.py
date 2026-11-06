@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from dascore.compat import is_array
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import broadcast_for_index, iterate, optional_import
@@ -14,7 +15,7 @@ from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    _require_evenly_sampled,
+    _refuse_holes_and_jitter,
 )
 
 
@@ -54,8 +55,13 @@ def _strided_diff(order, data, axes, dx_or_spacing, step):
     for step_ in range(step):
         current_slice = slice(step_, None, step)
         slicer = broadcast_for_index(data.ndim, axes[0], current_slice)
-        # Skipping columns/rows multiplies the spacing by the step.
-        sub = _get_diff(order, data[slicer], axes, [dx_or_space * step])
+        # Need to either double DX or slice the coordinate spacing to
+        # account for the fact we are skipping some columns/rows.
+        if is_array(dx_or_space):
+            _dx_or_space = dx_or_space[current_slice]
+        else:
+            _dx_or_space = dx_or_space * step
+        sub = _get_diff(order, data[slicer], axes, [_dx_or_space])
         if new_data is None:
             new_data = np.empty_like(data, dtype=sub.dtype)
         new_data[slicer] = sub
@@ -65,7 +71,7 @@ def _strided_diff(order, data, axes, dx_or_spacing, step):
 
 def _derivative_metadata(meta, dims, step):
     """Return the attrs of a derivative over dims, and the kernel's plan."""
-    _require_evenly_sampled(meta, dims, "differentiate")
+    _refuse_holes_and_jitter(meta, dims, "differentiate")
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(meta, dims)
     if step > 1 and len(axes) > 1:
         msg = "Step in patch.differentiate can only be used along one axis."
@@ -144,9 +150,11 @@ class Differentiate(_Derivative):
     quantity with no label here, and clears `data_type` rather than
     leaving a stale one on it.
 
-    A dimension with missing samples (holes in its step) raises; use
-    [split_gaps](`dascore.Patch.split_gaps`) or
-    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+    A dimension with missing samples (holes in its step) or labels off its
+    step's grid (jitter) raises; use [split_gaps](`dascore.Patch.split_gaps`),
+    [fill_gaps](`dascore.Patch.fill_gaps`) or
+    [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with no
+    step is an irregular axis, differentiated by its label spacing.
 
     Examples
     --------
