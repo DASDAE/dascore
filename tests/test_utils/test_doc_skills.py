@@ -17,9 +17,11 @@ _CATALOG = {
     "make-inventory": "recipes/tunnel_inventory",
     "make-annotations": "tutorial/annotations",
     "make-namespace": "contributing/extending_dascore",
-    "add-format": "contributing/new_format",
     "migrate-to-v1": "migrations/dascore_1.0_migration",
     "test-beta": "migrations/test_latest_beta",
+    "add-format": "contributing/new_format",
+    "start-task": "contributing/start_task",
+    "draft-release": "contributing/draft_release",
 }
 
 

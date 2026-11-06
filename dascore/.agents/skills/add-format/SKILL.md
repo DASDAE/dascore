@@ -1,6 +1,6 @@
 ---
 name: add-format
-description: Add a file format with a FiberIO subclass, covering metadata, array windows, attrs, tests, and entry-point registration.
+description: DASCore development. Add a file format with a FiberIO subclass, covering metadata, array windows, attrs, tests, and entry-point registration.
 ---
 
 Adding IO support requires a `FiberIO` subclass, a small fixture, common IO registration, any format-specific tests, and a package entry point. This guide uses a fictional `jingle` format with extension `.jgl`.

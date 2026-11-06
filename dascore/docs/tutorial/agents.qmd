@@ -22,10 +22,21 @@ Install the `dascore` entry point once; it discovers the workflows available in 
 | `make-inventory` | [Create an inventory](../recipes/tunnel_inventory.qmd) | Create, validate, repair, and attach observing-system metadata. |
 | `make-annotations` | [Annotations](annotations.qmd) | Turn a table of picks, ranges, or shapes into an annotation set. |
 | `make-namespace` | [Extending DASCore](../contributing/extending_dascore.qmd) | Add methods to DASCore objects from a namespace or plugin package. |
-| `add-format` | [Adding a New Format](../contributing/new_format.qmd) | Read or write a new file format. |
 | `migrate-to-v1` | [Migrate to DASCore 1.0](../migrations/dascore_1.0_migration.qmd) | Update projects using the 0.1.x APIs. |
 | `test-beta` | [Test the latest pre-release](../migrations/test_latest_beta.qmd) | Try a pre-release in isolation and draft problem reports. |
 
 Run `dascore skills` to list available workflows, or `dascore skill <name>` to read one. Each linked page is the same procedure served by the CLI. The migration and beta-testing pages can also be given directly to an agent without installing the skill.
 
-Every skill is a `SKILL.md` file under `dascore/.agents/skills/` in the installed package, where tools that link skills from a project's dependencies find them. The same directory holds `start-task` and `draft-release` for work on DASCore itself.
+## Development skills
+
+These are for work on DASCore itself. Their descriptions begin with "DASCore development".
+
+| Skill | Documentation | Purpose |
+| --- | --- | --- |
+| `add-format` | [Adding a New Format](../contributing/new_format.qmd) | Read or write a new file format. |
+| `start-task` | [Start a task](../contributing/start_task.qmd) | Set up a worktree and environment for a change. |
+| `draft-release` | [Draft a release](../contributing/draft_release.qmd) | Propose the next version and its release notes. |
+
+## Where skills live
+
+Every skill is a `SKILL.md` file under `dascore/.agents/skills/` in the installed package, where tools that link skills from a project's dependencies find them.

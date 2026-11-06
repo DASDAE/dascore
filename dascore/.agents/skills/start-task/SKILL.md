@@ -1,9 +1,7 @@
 ---
 name: start-task
-description: Set up an isolated DASCore task worktree and environment when starting implementation work.
+description: DASCore development. Set up an isolated task worktree and environment when starting work on DASCore itself.
 ---
-
-# Start a task
 
 Read the repository's `AGENTS.md` and local instructions if present.
 

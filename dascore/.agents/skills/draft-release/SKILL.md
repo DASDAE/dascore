@@ -1,9 +1,7 @@
 ---
 name: draft-release
-description: Draft the next DASCore release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into the release branch (usually dev) since last release via gh, and printing the proposed version and categorized changelog.
+description: DASCore development. Draft the next DASCore release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into the release branch (usually dev) since last release via gh, and printing the proposed version and categorized changelog.
 ---
-
-# draft-release
 
 Draft the next release version and changelog from merged PRs.
 
