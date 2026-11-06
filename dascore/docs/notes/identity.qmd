@@ -66,6 +66,8 @@ Equal IDs mean the same array under either grade. Unequal IDs promise nothing: t
 
 An ID is never knowingly false. When an operation's parameters cannot be described faithfully (a closure, a lambda, an object of an unknown type), or an input carries no ID, the call still succeeds and its result receives a random `data_id` with a `DASCoreWarning`.
 
+An operation is named by its registry tag when it is defined in an imported module. One defined in a script or a notebook (in `__main__`), or inside another function, is named by a digest of its source and defaults instead, because two scripts can define one name with different code. Editing such a function changes the IDs of what it makes; editing code it calls does not. A function whose source cannot be read, such as one run with `python -c`, gives its results a random `data_id`.
+
 ### Pinning
 
 [`pin_id`](`dascore.Patch.pin_id`) replaces a weak ID with a strong one. It hashes the data (its dtype, a time's resolution included, and its mask), the dims, every coordinate's ID together with the dims it rides, and every attribute except the history and the two IDs — so pinning twice changes nothing.

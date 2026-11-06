@@ -29,6 +29,7 @@ from pydantic.fields import FieldInfo
 
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import (
+    SCRIPT_MODULE,
     PatchMarker,
     callable_name,
     extract_patches,
@@ -350,17 +351,32 @@ def _as_key(value, budget: int = _KEY_LIMIT):
     return (type(value), value)
 
 
+def _identifying_tag(func) -> str | None:
+    """
+    Return the tag a call to a patch function is identified by, if any.
+
+    None for a function with no tag, and for one defined in a script or a
+    notebook: its tag is only its name, which two scripts -- or one cell
+    before and after an edit -- share while running different code.
+    """
+    tag = patch_function_tag(func)
+    if tag is None or tag.partition(_SEPARATOR)[0] == SCRIPT_MODULE:
+        return None
+    return tag
+
+
 def _call_name(func) -> str:
     """
     Return the name a call is identified by.
 
-    The registry tag when the function has one. When it does not -- a patch
-    function defined inside another call -- something was still done to the
+    The registry tag when the function has one which names it outside this
+    process. When it does not -- a patch function defined inside another
+    call, or in a script or a notebook -- something was still done to the
     patch, and a `data_id` which did not move would claim it was not.
     So the call is named by where it was written instead: enough to tell it
     from another operation, and honestly not resolvable.
     """
-    if (tag := patch_function_tag(func)) is not None:
+    if (tag := _identifying_tag(func)) is not None:
         return tag
     # By its source rather than its address, which is reused once it is
     # collected. One which holds state its source does not show -- a

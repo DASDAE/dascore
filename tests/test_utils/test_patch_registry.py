@@ -14,6 +14,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import get_quantity
 from dascore.utils.patch_registry import (
     _bind,
+    _identifying_tag,
     call_operation_id,
     patch_function_tag,
     register_patch_function,
@@ -308,6 +309,52 @@ class TestCallOperationId:
         second = call_operation_id(dc.proc.select, (), {"distance": hundred_cm})
         assert first != second
         assert call_operation_id(dc.proc.select, (), {"distance": one_meter}) == first
+
+    def test_a_script_function_is_its_source(self, own_registry):
+        """Two scripts' `clean` share a tag, but not an operation id."""
+
+        def first(patch, factor=1):
+            return patch.new(data=patch.data * 2)
+
+        def second(patch, factor=1):
+            return patch.new(data=patch.data * 3)
+
+        made = []
+        for func in (first, second):
+            func.__module__ = "__main__"
+            func.__name__ = func.__qualname__ = "clean"
+            made.append(dc.patch_function()(func))
+        assert patch_function_tag(made[0]) == "__main__:clean"
+        assert _identifying_tag(made[0]) is None
+        assert resolve_patch_function("__main__:clean") is made[1]
+        ids = [call_operation_id(x, (), {"factor": 2}) for x in made]
+        assert ids[0] != ids[1]
+        assert ids[0] == call_operation_id(made[0], (2,), {})
+
+    @pytest.mark.concurrency
+    def test_an_edited_script_changes_the_data_id(self, tmp_path):
+        """Run as a script, an edited body is a new `data_id`; the same one is not."""
+        script = (
+            "import dascore as dc\n"
+            "@dc.patch_function()\n"
+            "def clean(patch):\n"
+            "    return patch.new(data=patch.data * {})\n"
+            "print(clean(dc.get_example_patch().pin_id()).attrs.data_id)\n"
+        )
+
+        def data_id(name, factor):
+            """Run the script with one body and return its result's data_id."""
+            path = tmp_path / f"{name}.py"
+            path.write_text(script.format(factor))
+            cmd = [sys.executable, "-I", "-W", "ignore", str(path)]
+            run = subprocess.run(
+                cmd, check=True, timeout=120, capture_output=True, text=True
+            )
+            return run.stdout.split()[-1]
+
+        doubled = data_id("first", 2)
+        assert doubled != data_id("edited", 3)
+        assert doubled == data_id("again", 2)
 
     @pytest.mark.parametrize(
         ("func", "args", "kwargs", "expected"),
