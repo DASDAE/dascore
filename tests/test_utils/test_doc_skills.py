@@ -111,7 +111,7 @@ class TestSkills:
         captured = capsys.readouterr()
         assert not captured.out and message in captured.err
         if code == 2:
-            assert "Usage:" in captured.err
+            assert "usage:" in captured.err
 
     def test_bootstrap(self, capsys, tmp_path):
         """Export is verbatim and does not require building the corpus."""

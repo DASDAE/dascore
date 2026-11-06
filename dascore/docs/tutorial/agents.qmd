@@ -10,7 +10,7 @@ Ask your agent:
 
 > Run `dascore skills --install <directory>`, giving your personal skills directory, to install every DASCore skill.
 
-The command copies each skill into that directory and replaces older copies, so run it again after upgrading DASCore. Reload the agent if needed, then ask it to use DASCore on your data. If the command is unavailable, see [Local documentation](local_documentation.qmd).
+The command copies each skill into that directory and replaces older copies, so run it again after upgrading DASCore. Reload the agent if needed, then ask it to use DASCore on your data. If `dascore` is not on your path, run `python -m dascore` with the project's Python; see [Local documentation](local_documentation.qmd).
 
 ## Included skills
 
