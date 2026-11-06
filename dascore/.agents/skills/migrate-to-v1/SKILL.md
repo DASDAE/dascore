@@ -114,7 +114,7 @@ The coordinate classes were unified into one run-based [`NumericCoord`](`dascore
 
 `dc.get_coord(data=..., step=...)` now checks that the values sit on the stated grid and raises when they do not; 0.1.x ignored the step.
 
-Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. Operations which need evenly sampled data (`differentiate`, `integrate`, `taper`, `sobel_filter`, filtered `decimate`) raise `CoordError` on a coordinate with holes, jitter, or no step, where 0.1.x computed on the labels. Use `fill_gaps` or `split_gaps`, or `snap_coords`, first.
+Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. `differentiate`, `integrate`, `taper`, `sobel_filter`, and filtered `decimate` raise `CoordError` on a coordinate with holes or with labels off its step's grid (jitter), where 0.1.x computed on the labels. Use `fill_gaps`, `split_gaps`, or `snap_coords` first. A coordinate with no step, such as irregular sensor positions, is still an irregular axis these operations compute on by its labels, as in 0.1.x.
 
 **Silent:** `dc.get_coord(data=...)` without a `step` reads labels exactly by default: labels within 0.1% of one spacing of a grid, which 0.1.x snapped onto it, are now jittered or have no step. Pass `snap=True` for the 0.1.x result, or call `snap_coords` on the patch. A stated `step` still absorbs float rounding unless `snap=False`.
 
