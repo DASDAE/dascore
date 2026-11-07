@@ -6,12 +6,11 @@ import hashlib
 import json
 import os
 import shutil
-from contextlib import contextmanager
+import time
+from contextlib import contextmanager, suppress
 from importlib import metadata
 from pathlib import Path
-from tempfile import TemporaryDirectory
-
-from filelock import FileLock
+from tempfile import mkdtemp
 
 import dascore as dc
 from dascore.utils.doc_corpus import (
@@ -24,6 +23,9 @@ from dascore.utils.doc_corpus import (
 )
 
 _FORMAT_VERSION = 1
+# Idle time after which a corpus or staging directory is presumed abandoned; long
+# enough that agents keep a reported corpus directory for a working session.
+_STALE_SECONDS = 24 * 3600
 
 
 def _source_identity():
@@ -67,54 +69,71 @@ def _load_manifest(root, identity):
         return None
 
 
+def _publish(root, identity, rebuild):
+    """Build a corpus in private staging and rename it into place as `root`."""
+    staging = Path(mkdtemp(prefix=".", dir=root.parent))
+    try:
+        manifest = write_corpus(staging)
+        if identity != _source_identity():
+            raise DocumentationError(
+                "DASCore sources changed during the documentation build; "
+                "retry the command."
+            )
+        manifest["identity"] = identity
+        (staging / "manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+        # Vacate a damaged or rebuilt corpus; the sweep deletes it later.
+        if root.exists() and (rebuild or _load_manifest(root, identity) is None):
+            with suppress(FileNotFoundError):  # a concurrent rebuild moved it
+                os.replace(root, staging.with_name(staging.name + "-old"))
+        try:
+            os.replace(staging, root)
+        except OSError:
+            # Another process published the same corpus first; use theirs.
+            if (manifest := _load_manifest(root, identity)) is None:
+                raise
+        return manifest
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _sweep(parent):
+    """Delete this version's corpora, staging, and old-layout files left unused."""
+    cutoff = time.time() - _STALE_SECONDS
+    for path in parent.iterdir():
+        # Another process may delete or (on Windows) hold the same entry open.
+        with suppress(FileNotFoundError, PermissionError):
+            if path.lstat().st_mtime > cutoff:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink()
+
+
 @contextmanager
 def documentation_cache(rebuild: bool = False):
     """
-    Prepare the local Markdown corpus and hold its process lock while reading.
+    Prepare the local Markdown corpus and yield its absolute path and manifest.
 
-    The cache root is `get_config().docs_cache_dir / dascore.__version__`.
-    Yield the absolute corpus path and manifest. A failed rebuild retains the preceding
-    complete corpus; source changes in editable installs invalidate the cache.
+    Each source identity has its own corpus under
+    `get_config().docs_cache_dir / dascore.__version__`. A corpus is built in
+    private staging and published by renaming, so concurrent processes need no
+    lock: a build that fails before publishing leaves the previous corpus in place,
+    and the loser of a simultaneous first build uses the winner's corpus. Each use
+    refreshes the corpus's modification time; corpora unused for a day are deleted.
     """
-    root = (dc.get_config().docs_cache_dir / dc.__version__).resolve()
-    root.parent.mkdir(parents=True, exist_ok=True)
-    backup = root.with_name(root.name + ".previous")
-    with FileLock(str(root.with_name(root.name + ".lock")), timeout=60):
-        # Recover a process interrupted between moving the old and new corpus.
-        if backup.exists() and not root.exists():
-            os.replace(backup, root)
-        # No other builder for this version can own staging files under the lock.
-        for abandoned in root.parent.glob(f".{root.name}-*"):
-            if abandoned.is_dir():
-                shutil.rmtree(abandoned)
-        identity = _source_identity()
-        manifest = None if rebuild else _load_manifest(root, identity)
-        if manifest is None:
-            with TemporaryDirectory(prefix=f".{root.name}-", dir=root.parent) as temp:
-                staging = Path(temp)
-                manifest = write_corpus(staging)
-                if identity != _source_identity():
-                    raise DocumentationError(
-                        "DASCore sources changed during the documentation build; "
-                        "retry the command."
-                    )
-                manifest["identity"] = identity
-                (staging / "manifest.json").write_text(
-                    json.dumps(manifest, indent=2), encoding="utf-8"
-                )
-                if backup.exists():
-                    shutil.rmtree(backup)
-                if root.exists():
-                    os.replace(root, backup)
-                try:
-                    os.replace(staging, root)
-                except OSError:
-                    if backup.exists():
-                        os.replace(backup, root)
-                    raise
-        if backup.exists():
-            shutil.rmtree(backup)
-        yield root, manifest
+    parent = (dc.get_config().docs_cache_dir / dc.__version__).resolve()
+    parent.mkdir(parents=True, exist_ok=True)
+    identity = _source_identity()
+    root = parent / identity["source"][:16]
+    manifest = None if rebuild else _load_manifest(root, identity)
+    if manifest is None:
+        manifest = _publish(root, identity, rebuild)
+    os.utime(root)
+    _sweep(parent)
+    yield root, manifest
 
 
 def read_document(root: Path, manifest: dict, target: str) -> str:
