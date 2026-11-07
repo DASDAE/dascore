@@ -2949,11 +2949,13 @@ class Spool(NodeRepr, NamespaceOwner):
             relative to it. Only these are walked: new and changed sources
             under them are scanned and missing ones dropped, so naming newly
             written files (or the folder they land in) avoids walking the
-            whole archive. A source moved out of them disappears until it is
-            named or a full update runs; None, the default, walks everything
+            whole archive, and a new index can be built one folder at a time.
+            A source moved out of them disappears until it is named or a full
+            update runs; None, the default, walks everything
             and catches removals and moves elsewhere. Paths outside the spool,
-            hidden, or inside an indexed source raise ValueError. The first
-            update of an index always walks everything. Other spools ignore it.
+            hidden, or inside an indexed source raise ValueError. An index
+            DASCore rebuilt, or whose first update never finished, ignores
+            paths with a warning and walks everything. Other spools ignore it.
 
         Notes
         -----

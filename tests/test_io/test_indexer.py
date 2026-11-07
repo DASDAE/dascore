@@ -550,13 +550,39 @@ class TestScopedUpdate:
         archive.update(paths=[archive.path], progress=None)
         assert self._sources(archive) == {"live/a.h5"}
 
-    def test_first_update_walks_everything(self, tmp_path):
-        """A scoped first update still indexes the whole directory."""
+    def test_first_update_scoped(self, tmp_path):
+        """
+        A scoped first update indexes only its scope, and reopening does not
+        walk the rest; a full update adds it.
+        """
         for name in ("live", "old"):
             (tmp_path / name).mkdir()
             dc.get_example_patch().io.write(tmp_path / name / "a.h5", "dasdae")
         spool = dc.spool(tmp_path).update(paths="live", progress=None)
+        assert len(spool) == 1
+        assert len(dc.spool(tmp_path)) == 1
+        assert len(dc.spool(tmp_path).update(progress=None)) == 2
+
+    def test_reset_index_walks_everything(self, archive):
+        """
+        A scoped update of an index cleared for a new decode, even by an
+        earlier spool, walks the whole directory, so the index is not marked
+        complete holding one scope.
+        """
+        with pytest.warns(UserWarning, match="rescanning"):
+            dc.spool(archive.path, snap=False)
+        with pytest.warns(UserWarning, match="ignoring paths"):
+            spool = dc.spool(archive.path, snap=False).update(paths="live")
         assert len(spool) == 2
+
+    def test_other_spool_sees_scoped_first_update(self, tmp_path):
+        """A spool opened before a scoped first update does not walk the rest."""
+        for name in ("live", "old"):
+            (tmp_path / name).mkdir()
+            dc.get_example_patch().io.write(tmp_path / name / "a.h5", "dasdae")
+        first, second = dc.spool(tmp_path), dc.spool(tmp_path)
+        first.update(paths="live", progress=None)
+        assert len(second) == 1
 
     def test_spool_update_paths(self, archive):
         """Spool.update passes paths, a single one included, to its indexer."""

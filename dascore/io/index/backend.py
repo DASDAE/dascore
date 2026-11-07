@@ -1488,13 +1488,18 @@ class SQLiteIndexBackend:
         return dict(zip(keys, df["patch_row"].astype(int), strict=True))
 
     def clear(self) -> None:
-        """Delete every source and coordinate, as before a first scan."""
+        """
+        Delete every source and coordinate, as before a first scan.
+
+        The marker becomes -1 rather than 0, so the next update knows this
+        index held an archive and walks it whole, even in another process.
+        """
         with self._transaction():
             self._patch_row_floor()
             self._execute("DELETE FROM sources")
             self._execute("DELETE FROM coord_runs")
             self._execute("DELETE FROM coord_defs")
-            self._execute("UPDATE meta_data SET last_indexed_ns = 0")
+            self._execute("UPDATE meta_data SET last_indexed_ns = -1")
 
     def holds_runs(self) -> bool:
         """Whether any coordinate the index holds is several runs."""
