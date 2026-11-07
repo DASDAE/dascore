@@ -37,7 +37,7 @@ from dascore.utils.misc import (
 
 # --- Getting format/version
 
-_POWER = re.compile(r"(?<=[A-Za-z])(\d+)")
+_POWER = re.compile(r"\b([A-Za-z]+)(\d+)\b")
 
 _EXPECTED_ATTRS = (
     "NumberOfLoci",
@@ -288,7 +288,7 @@ def _get_data_unit_and_type(node):
     if (units := out.get("data_units")) is not None:
         # Energistics symbols write a power as a trailing digit (rad2/Hz).
         units = str(unbyte(units))
-        units = parse_units(units) or parse_units(_POWER.sub(r"**\1", units))
+        units = parse_units(units) or parse_units(_POWER.sub(r"\1**\2", units))
         if units is None:
             out.pop("data_units")
         else:
@@ -587,8 +587,9 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     t_coord = _get_time_coord(node_info.parent_node, snap=snap)
     # FbeDataUnit may sit on FbeData[i], Fbe[i] or Processed; nearest wins.
     parent = node_info.parent_node
-    for node in (parent.parent, parent, node_info.node):
-        out.update(_get_data_unit_and_type(node))
+    nodes = (node_info.node, parent, parent.parent)
+    node = next((x for x in nodes if "FbeDataUnit" in x.attrs), node_info.node)
+    out.update(_get_data_unit_and_type(node))
     dtype = str(node_info.node.dtype)
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
