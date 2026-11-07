@@ -373,13 +373,25 @@ def _download_to_cache(resource: UPath, local_path: Path) -> None:
     _download_remote_file(resource, local_path)
 
 
-def ensure_local_file(resource) -> Path:
-    """Return a stable local path for one resource for the current session."""
+def ensure_local_file(resource, revalidate: bool = False) -> Path:
+    """
+    Return a stable local path for one resource for the current session.
+
+    With `revalidate`, the cached copy is keyed by the resource's current
+    fsspec info as well (e.g. its size, ETag, and Last-Modified), so a
+    resource which changed since it was cached is downloaded again rather
+    than served stale. That costs one metadata request per call.
+    """
     if is_pathlike(resource) and is_local_path(resource):
         return Path(resource)
     if is_pathlike(resource):
         cache_root = _normalize_cache_root(get_remote_cache_path())
         remote_id = normalize_remote_id(resource)
+        if revalidate:
+            remote = coerce_to_upath(resource)
+            info = str(remote.fs.info(remote.path))
+            remote_id = f"{remote_id}#{sha256(info.encode()).hexdigest()}"
+            _REMOTE_RESOURCE_CACHE[remote_id] = remote
         return _materialize_remote_file(remote_id, cache_root)
     name = getattr(resource, "name", None)
     if name and is_local_path(name):

@@ -1340,7 +1340,7 @@ class TestStoredIds:
         ids = []
         for name in ("one", "two"):
             index = tmp_path / f"{name}.sqlite"
-            spool = dc.spool(data, index_path=index).update()
+            spool = dc.spool(data, index=index).update()
             ids.append(spool.get_contents()["origin_id"].iloc[0])
         assert ids[0] == ids[1] == dc.read(data / "a.hdf5")[0].attrs.origin_id
 
