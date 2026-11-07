@@ -3,6 +3,7 @@ Tests for sintela binary format.
 """
 
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -162,3 +163,21 @@ class TestPacketContinuity:
         # packet duration first would put it a whole tolerance away.
         stamps = np.array([[0, 0], [500_001, 166_667_000_000]], dtype="<u8")
         _check_packet_continuity(np.array([0, 500_001]), stamps, header)
+
+    @pytest.mark.skipif(
+        sys.platform in {"win32", "emscripten"}, reason="needs sparse files"
+    )
+    def test_file_over_4_gib(self, packets, tmp_path):
+        """A file past 4 GiB scans; its size overflowed uint32 arithmetic."""
+        size, count = len(packets[0]), 2**32 // len(packets[0]) + 2
+        last = self._shift(packets[0], "count", (count - 1) * 500)
+        last = self._shift(last, "time", (count - 1) * 2 * self.half_packet_ns)
+        path = tmp_path / "big.raw"
+        with open(path, "wb") as fi:
+            fi.write(packets[0])
+            fi.seek((count - 1) * size)
+            fi.write(last)
+        assert path.stat().st_size > 2**32
+        (summary,) = dc.scan(path)
+        assert summary.shape == (count * 500, 662)
+        assert summary.get_coord_summary("distance").dtype == "float64"
