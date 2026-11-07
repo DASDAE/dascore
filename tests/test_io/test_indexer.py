@@ -565,9 +565,12 @@ class TestScopedUpdate:
 
     def test_reset_index_walks_everything(self, archive):
         """
-        A scoped update of an index cleared for a new decode walks the whole
-        directory, so the index is not marked complete holding one scope.
+        A scoped update of an index cleared for a new decode, even by an
+        earlier spool, walks the whole directory, so the index is not marked
+        complete holding one scope.
         """
+        with pytest.warns(UserWarning, match="rescanning"):
+            dc.spool(archive.path, snap=False)
         with pytest.warns(UserWarning, match="ignoring paths"):
             spool = dc.spool(archive.path, snap=False).update(paths="live")
         assert len(spool) == 2

@@ -957,7 +957,7 @@ class PatchCatalog:
             raise FileNotFoundError(f"Spool index {index} does not exist")
         backend = get_backend(index, read_only=True)
         metadata = backend.get_metadata()
-        if not metadata["last_indexed_ns"]:
+        if metadata["last_indexed_ns"] <= 0:
             backend.close()
             msg = f"The read-only index {index} has not completed its first update."
             raise InvalidIndexError(msg)
