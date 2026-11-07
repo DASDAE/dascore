@@ -392,6 +392,26 @@ class TestProducerVariants:
         assert out.shape == (count, 2)
         assert out.get_coord("time").max() == time[-1]
 
+    @pytest.mark.parametrize(
+        ("owner", "unit", "expected"),
+        [
+            ("Fbe[0]", b"rad2/Hz", "rad**2/Hz"),
+            ("Processed", b"radians^2/Hz", "rad**2/Hz"),
+            ("FbeData[0]", b"not a unit", None),
+        ],
+    )
+    def test_fbe_data_units(self, tmp_path, owner, unit, expected):
+        """FbeDataUnit is read from FbeData[i], Fbe[i] or Processed."""
+        path = shutil.copy(fetch("prodml_fbe_1.h5"), tmp_path / "fbe.h5")
+        with h5py.File(path, "r+") as h5:
+            fbe = h5["Acquisition/Processed/Fbe[0]"]
+            del fbe.attrs["FbeDataUnit"]
+            nodes = {"Fbe[0]": fbe, "Processed": fbe.parent}
+            nodes["FbeData[0]"] = fbe["FbeData[0]"]
+            nodes[owner].attrs["FbeDataUnit"] = unit
+        units = dc.spool(path)[0].attrs.data_units
+        assert units == (expected and dc.get_quantity(expected))
+
     def test_fbe_loci_on_processed_group(self, tmp_path):
         """
         FBE loci attributes stored on Processed rather than Fbe[0] (Sintela

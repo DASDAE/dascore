@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
+    parse_units,
     require_grid,
     resolve_keyed_source,
     should_snap,
@@ -34,6 +36,8 @@ from dascore.utils.misc import (
 )
 
 # --- Getting format/version
+
+_POWER = re.compile(r"(?<=[A-Za-z])(\d+)")
 
 _EXPECTED_ATTRS = (
     "NumberOfLoci",
@@ -281,6 +285,14 @@ def _get_data_unit_and_type(node):
     # some vendors (eg Fosina) use "unitless", which pint can't parse
     if str(out.get("data_units", "")).upper() in {"UNKNOWN", "UNITLESS"}:
         out.pop("data_units")
+    if (units := out.get("data_units")) is not None:
+        # Energistics symbols write a power as a trailing digit (rad2/Hz).
+        units = str(unbyte(units))
+        units = parse_units(units) or parse_units(_POWER.sub(r"**\1", units))
+        if units is None:
+            out.pop("data_units")
+        else:
+            out["data_units"] = units
     if (data_type := out.get("data_type")) is not None:
         clean = data_type.lower().replace(" ", "_")
         out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
@@ -573,7 +585,10 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get information about the processed patches."""
     out = dict(base_info)
     t_coord = _get_time_coord(node_info.parent_node, snap=snap)
-    out.update(_get_data_unit_and_type(node_info.node))
+    # FbeDataUnit may sit on FbeData[i], Fbe[i] or Processed; nearest wins.
+    parent = node_info.parent_node
+    for node in (parent.parent, parent, node_info.node):
+        out.update(_get_data_unit_and_type(node))
     dtype = str(node_info.node.dtype)
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
@@ -581,7 +596,6 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     # given by StartLocusIndex and NumberOfLoci, read together from Fbe[i]
     # or, as Sintela ONYX writes them, from Processed. Acquisition's own
     # values describe the raw loci, so they are never used here.
-    parent = node_info.parent_node
     owner = parent if "NumberOfLoci" in parent.attrs else parent.parent
     ind_1 = int(unbyte(owner.attrs.get("StartLocusIndex", 0)))
     count = int(unbyte(owner.attrs["NumberOfLoci"]))
