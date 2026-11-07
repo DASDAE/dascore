@@ -2926,6 +2926,7 @@ class Spool(NodeRepr, NamespaceOwner):
         *,
         client: ExecutorType | None = None,
         paths: Sequence[str | Path] | None = None,
+        retry_unreadable: bool = False,
     ) -> Self:
         """
         Updates the contents of the spool, return the updated spool.
@@ -2956,6 +2957,11 @@ class Spool(NodeRepr, NamespaceOwner):
             hidden, or inside an indexed source raise ValueError. An index
             DASCore rebuilt, or whose first update never finished, ignores
             paths with a warning and walks everything. Other spools ignore it.
+        retry_unreadable
+            If True, a directory spool also rescans walked sources that gave
+            no patches, whether no reader claimed them or their scan failed,
+            so a reader fix takes effect. Otherwise these are rescanned only
+            once they change. Other spools ignore it.
 
         Notes
         -----
@@ -2990,7 +2996,12 @@ class Spool(NodeRepr, NamespaceOwner):
         if catalog.is_view:
             raise InvalidSpoolError(derived_msg)
         if catalog.syncer is not None:
-            catalog.update(progress=progress, client=client, paths=paths)
+            catalog.update(
+                progress=progress,
+                client=client,
+                paths=paths,
+                retry_unreadable=retry_unreadable,
+            )
             return self._new_from_catalog(catalog)
         if self._file_path is not None:
             from dascore.io.core import FiberIO  # noqa: PLC0415

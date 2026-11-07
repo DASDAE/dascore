@@ -18,6 +18,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
+from dascore.io.core import FiberIO
 from dascore.io.index import indexer as indexer_mod
 from dascore.io.index.indexer import (
     DBDirectoryIndexer,
@@ -457,6 +458,55 @@ class TestUpdate:
         assert after_absolute[first] == after_relative[first]
         assert after_absolute[second] > after_relative[second]
         indexer.close()
+
+    def test_retry_unreadable(self, tmp_path, monkeypatch):
+        """
+        A source whose scan failed is skipped by later updates until
+        retry_unreadable rescans it, as after a reader fix, even if it moved;
+        readable sources are not rescanned.
+        """
+        dc.get_example_patch().io.write(tmp_path / "good.h5", "dasdae")
+        dc.spool(tmp_path).update(progress=None)
+        dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+        scan = fiber_io.scan
+
+        def broken(*args, **kwargs):
+            raise ValueError("reader bug")
+
+        monkeypatch.setattr(fiber_io, "scan", broken)
+        with pytest.warns(UserWarning, match="reader bug"):
+            assert len(dc.spool(tmp_path).update(progress=None)) == 1
+        monkeypatch.setattr(fiber_io, "scan", scan)
+        assert len(dc.spool(tmp_path).update(progress=None)) == 1
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "a.h5").rename(tmp_path / "sub" / "a.h5")
+        scanned = []
+        monkeypatch.setattr(
+            fiber_io,
+            "scan",
+            lambda self, path, **kw: scanned.append(path) or scan(self, path, **kw),
+        )
+        spool = dc.spool(tmp_path).update(progress=None, retry_unreadable=True)
+        assert len(spool) == 2
+        assert len(scanned) == 1  # good.h5 is not rescanned
+
+    def test_retry_unreadable_moved_into_scope(self, tmp_path, monkeypatch):
+        """A retried source moved into a scoped update drops its old row."""
+        (tmp_path / "old").mkdir()
+        dc.get_example_patch().io.write(tmp_path / "old" / "a.h5", "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+        scan = fiber_io.scan
+        monkeypatch.setattr(fiber_io, "scan", lambda *a, **k: int("bad"))
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
+        monkeypatch.setattr(fiber_io, "scan", scan)
+        (tmp_path / "new").mkdir()
+        (tmp_path / "old" / "a.h5").rename(tmp_path / "new" / "a.h5")
+        indexer.update(paths="new", progress=None, retry_unreadable=True)
+        sources = set(indexer._backend.get_sources()["source_path"])
+        indexer.close()
+        assert sources == {"new/a.h5"}
 
 
 class TestScopedUpdate:

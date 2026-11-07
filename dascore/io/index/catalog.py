@@ -1651,12 +1651,18 @@ class PatchCatalog:
         *,
         client: ExecutorType | None = None,
         paths=None,
+        retry_unreadable: bool = False,
     ) -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
         # The scan itself is long-running file IO; it manages its own
         # state, so only the cache invalidation needs the revision lock.
         if self._syncer is not None:
-            self._syncer.update(paths, progress=progress, client=client)
+            self._syncer.update(
+                paths,
+                progress=progress,
+                client=client,
+                retry_unreadable=retry_unreadable,
+            )
         self._invalidate()
         return self
 
