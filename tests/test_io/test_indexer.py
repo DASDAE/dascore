@@ -572,11 +572,17 @@ class TestScopedUpdate:
         indexer.update(paths=["live"], progress=None)
         indexer.close()
 
-    def test_missing_root_raises(self, archive):
+    def test_missing_root_raises(self, tmp_path):
         """A full update of a vanished root raises rather than emptying."""
-        archive.path.rename(archive.path.with_name("moved"))
+        data = tmp_path / "data"
+        data.mkdir()
+        dc.get_example_patch().io.write(data / "a.h5", "dasdae")
+        index_path = tmp_path / "index.sqlite3"  # outside, so data can move
+        indexer = DBDirectoryIndexer(data, index_path=index_path).update(progress=None)
+        data.rename(tmp_path / "moved")
         with pytest.raises(FileNotFoundError):
-            archive.update(progress=None)
+            indexer.update(progress=None)
+        indexer.close()
 
     @pytest.mark.parametrize(
         ("bad", "match"),
