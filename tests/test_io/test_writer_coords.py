@@ -17,6 +17,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import CoordError, MissingOptionalDependencyError
 from dascore.io import FiberIO
+from dascore.io.arrow import ArrowV1
 from dascore.io.dasdae import DASDAEV1, DASDAEV2
 from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.pickle import PickleIO
@@ -29,6 +30,7 @@ from dascore.utils.misc import suppress_warnings
 
 # Every writer DASCore ships, checked against the plugin manager below.
 WRITERS = [
+    ArrowV1(),
     DASDAEV1(),
     DASDAEV2(),
     NetCDFCFV18(),
@@ -45,7 +47,7 @@ WRITERS = [
     ZarrV3(),
 ]
 # Formats which store any coordinate's labels with its step.
-EXACT = {"DASDAE 2", "PICKLE ", "NETCDF_CF 1.8", "ZARR 2", "ZARR 3"}
+EXACT = {"ARROW 1", "DASDAE 2", "PICKLE ", "NETCDF_CF 1.8", "ZARR 2", "ZARR 3"}
 # File names, for formats which care.
 NAMES = {"WAV": "out.wav", "RSF": "out.rsf", "ZARR": "out.zarr"}
 

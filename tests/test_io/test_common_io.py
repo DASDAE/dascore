@@ -33,6 +33,7 @@ from dascore.io import BinaryReader, FiberIO
 from dascore.io import utils as io_utils
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
+from dascore.io.arrow import ArrowV1
 from dascore.io.asdf import ASDFV1
 from dascore.io.core import _default_snap, _required_resource_type
 from dascore.io.dasdae import DASDAEV1, DASDAEV2
@@ -79,6 +80,8 @@ from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 # (see `_write_dasdae_v2`) so the format sits in the same matrix as the
 # version it succeeds.
 _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
+# Nor any Arrow patch; one is written from the same example.
+_ARROW_PATH = Path(mkdtemp("arrow")) / "example.arrow"
 # Nor is any zarr store; one is written for each zarr format when the
 # optional dependencies are installed.
 _HAS_ZARR = all(importlib.util.find_spec(x) for x in ("zarr", "xarray"))
@@ -103,6 +106,7 @@ _ASDF_PATH = Path(mkdtemp("asdf")) / "example_asdf.h5"
 def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
+    dc.write(dc.get_example_patch("random_das"), _ARROW_PATH, "arrow")
     for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
         writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
         writer.write(dc.get_example_patch("random_das"), path)
@@ -129,6 +133,7 @@ def _write_dasdae_v2():
 COMMON_IO_READ_TESTS = {
     AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
+    ArrowV1(): (str(_ARROW_PATH),),
     ASDFV1(): (str(_ASDF_PATH),),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     DASDAEV2(): (str(_DASDAE_V2_PATH),),
@@ -176,6 +181,7 @@ COMMON_IO_READ_TESTS = {
 # generic patches. If the patch has to be in some special form, for example
 # only flat patches can be written to WAV, don't put it here.
 COMMON_IO_WRITE_TESTS = (
+    ArrowV1(),
     PickleIO(),
     DASDAEV1(),
     DASDAEV2(),
@@ -198,7 +204,7 @@ SKIP_DATA_FILES = {
 # have converted away at the parse boundary.
 # Formats which hand back the attrs stored in the file rather than building
 # them from a header, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF", "ZARR"})
+_PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR"})
 
 VENDOR_ATTRS = frozenset(
     {
