@@ -3469,6 +3469,12 @@ def _spool_from_obj(obj, **kwargs) -> Spool:
     raise ValueError(msg)
 
 
+# Keep spool's singledispatch hooks so other packages can register types.
+spool.register = _spool_from_obj.register  # ty: ignore[unresolved-attribute]
+spool.dispatch = _spool_from_obj.dispatch  # ty: ignore[unresolved-attribute]
+spool.registry = _spool_from_obj.registry  # ty: ignore[unresolved-attribute]
+
+
 @_spool_from_obj.register(str)
 @_spool_from_obj.register(Path)
 @_spool_from_obj.register(UPath)
