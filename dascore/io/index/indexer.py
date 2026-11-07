@@ -541,9 +541,6 @@ class DBDirectoryIndexer:
                 strict=True,
             )
         }
-        if retry_unreadable:
-            # Unknown stats rescan these sources, at a new path if moved.
-            stored.update(dict.fromkeys(self._backend.unread_sources()))
         # Only a new, empty index may be built one scope at a time; one that
         # was rebuilt, cleared, or partly built must first be walked whole,
         # or it would be marked complete while holding only the scopes.
@@ -561,12 +558,16 @@ class DBDirectoryIndexer:
             stale = [path for path in stored if path not in files]
         else:
             stale = self._scoped_stale(scopes, stored, files)
+        retry = self._backend.unread_sources() if retry_unreadable else set()
         changed = [
             rel
             for rel, (mtime, size, _) in files.items()
-            if stored.get(rel) != (mtime, size)
+            if stored.get(rel) != (mtime, size) or rel in retry
         ]
         moves = self._detect_moves(stale, stored, files)
+        # A retried source that moved drops its old row and rescans at its
+        # new path, instead of carrying the empty row across.
+        moves = {old: new for old, new in moves.items() if old not in retry}
         if moves:
             new_attrs = {old: hive_path_attrs(new) for old, new in moves.items()}
             self._backend.move_sources(moves, new_attrs)

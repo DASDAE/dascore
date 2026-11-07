@@ -491,6 +491,23 @@ class TestUpdate:
         assert len(spool) == 2
         assert len(scanned) == 1  # good.h5 is not rescanned
 
+    def test_retry_unreadable_moved_into_scope(self, tmp_path, monkeypatch):
+        """A retried source moved into a scoped update drops its old row."""
+        (tmp_path / "old").mkdir()
+        dc.get_example_patch().io.write(tmp_path / "old" / "a.h5", "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+        scan = fiber_io.scan
+        monkeypatch.setattr(fiber_io, "scan", lambda *a, **k: int("bad"))
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
+        monkeypatch.setattr(fiber_io, "scan", scan)
+        (tmp_path / "new").mkdir()
+        (tmp_path / "old" / "a.h5").rename(tmp_path / "new" / "a.h5")
+        indexer.update(paths="new", progress=None, retry_unreadable=True)
+        sources = set(indexer._backend.get_sources()["source_path"])
+        indexer.close()
+        assert sources == {"new/a.h5"}
+
 
 class TestScopedUpdate:
     """update(paths=...) walks, prunes and rescans only the named scopes."""
