@@ -2952,8 +2952,8 @@ class Spool(NodeRepr, NamespaceOwner):
             whole archive. A source moved out of them disappears until it is
             named or a full update runs; None, the default, walks everything
             and catches removals and moves elsewhere. Paths outside the spool,
-            hidden, or inside an indexed source raise ValueError. The first
-            update of an index always walks everything. Other spools ignore it.
+            hidden, or inside an indexed source raise ValueError, so a large
+            archive can be indexed one folder at a time. Other spools ignore it.
 
         Notes
         -----

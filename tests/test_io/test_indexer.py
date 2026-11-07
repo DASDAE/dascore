@@ -550,13 +550,18 @@ class TestScopedUpdate:
         archive.update(paths=[archive.path], progress=None)
         assert self._sources(archive) == {"live/a.h5"}
 
-    def test_first_update_walks_everything(self, tmp_path):
-        """A scoped first update still indexes the whole directory."""
+    def test_first_update_scoped(self, tmp_path):
+        """
+        A scoped first update indexes only its scope, and the spool does not
+        walk the rest on access; a full update adds it.
+        """
         for name in ("live", "old"):
             (tmp_path / name).mkdir()
             dc.get_example_patch().io.write(tmp_path / name / "a.h5", "dasdae")
         spool = dc.spool(tmp_path).update(paths="live", progress=None)
-        assert len(spool) == 2
+        assert len(spool) == 1
+        assert len(dc.spool(tmp_path)) == 1
+        assert len(dc.spool(tmp_path).update(progress=None)) == 2
 
     def test_spool_update_paths(self, archive):
         """Spool.update passes paths, a single one included, to its indexer."""

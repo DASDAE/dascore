@@ -509,7 +509,7 @@ class DBDirectoryIndexer:
         changes stay in the calling thread. The caller owns the client.
         Paths (files or directories under the root) limit the walk, rescans
         and pruning to those scopes, except that a source moved into a scope
-        drops its old row. None, or a never-updated index, walks everything.
+        drops its old row. None walks everything.
         """
         progress = validate_progress_level(progress)
         self._check_decode()
@@ -532,9 +532,7 @@ class DBDirectoryIndexer:
                 strict=True,
             )
         }
-        # A first update indexes everything, whatever paths names.
-        scoped = paths is not None and self._initial_update_done
-        scopes = self._scopes(paths, stored) if scoped else None
+        scopes = None if paths is None else self._scopes(paths, stored)
         files = self._walk(scopes)
         if scopes is None:
             stale = [path for path in stored if path not in files]
