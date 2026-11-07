@@ -207,9 +207,9 @@ def _check_run(stamps, header, first=0, offsets=None):
         raise InvalidFiberFileError(msg)
 
 
-def _find_run_starts(rid, header, count) -> dict[int, np.ndarray]:
+def _find_run_starts(rid, header, count) -> tuple[list[int], dict]:
     """
-    Return the stamps of each packet that starts a run, keyed by packet.
+    Return the packets that start a run, and the stamps read, by packet.
 
     A dropped or repeated packet breaks the sample count. Packets whose
     counts are ``num_samples`` per packet apart are taken as one run
@@ -218,21 +218,22 @@ def _find_run_starts(rid, header, count) -> dict[int, np.ndarray]:
     which matters for large files on network shares. A drop and a repeat
     that cancel within a span go unseen until read_array checks it.
     """
+    num_samples = int(header["num_samples"])
     stamps = dict(zip([0, count - 1], _read_stamps(rid, header, [0, count - 1])))
     starts, spans = [0], [(0, count - 1)]
     while spans:
         lo, hi = spans.pop()
         for index in {lo, hi} - stamps.keys():
             stamps[index] = _read_stamps(rid, header, [index])[0]
-        bad_count, _ = _off_grid(stamps[hi][None], stamps[lo], hi - lo, header)
-        if not bad_count.any():
+        # Python ints: a scan is mostly this check, once, on a whole file.
+        if int(stamps[hi][0]) - int(stamps[lo][0]) == (hi - lo) * num_samples:
             continue
         if hi - lo == 1:
             starts.append(hi)
             continue
         mid = (lo + hi) // 2
         spans += [(lo, mid), (mid, hi)]
-    return {x: stamps[x] for x in sorted(starts)}
+    return sorted(starts), stamps
 
 
 def _get_complete_header(rid):
@@ -340,17 +341,18 @@ def _scan_runs(rid, attr_class=PatchAttrs):
     """Return the header and (key, attrs, coords) of each run of packets."""
     header = _get_complete_header(rid)
     count = int(header["num_packets"])
-    starts = _find_run_starts(rid, header, count)
+    starts, stamps = _find_run_starts(rid, header, count)
     runs = list(pairwise([*starts, count]))
     attrs = attr_class(**_get_attr_dict(header))
     out = []
     for start, stop in runs:
         # Only the run's ends are checked here; read_array checks every packet.
-        last = _read_stamps(rid, header, [stop - 1])
-        ends = np.stack([starts[start], last[0]])
+        if stop - 1 not in stamps:
+            stamps[stop - 1] = _read_stamps(rid, header, [stop - 1])[0]
+        ends = np.stack([stamps[start], stamps[stop - 1]])
         _check_run(ends, header, start, [0, stop - 1 - start])
         key = _run_key(start, stop) if len(runs) > 1 else ""
-        time = _get_time_coord(header, starts[start][1], stop - start)
+        time = _get_time_coord(header, stamps[start][1], stop - start)
         coords = {"time": time, "distance": _get_dist_coord(header)}
         out.append((key, attrs, get_coord_manager(coords=coords, dims=DIMS)))
     return header, out

@@ -83,7 +83,10 @@ class SintelaBinaryV3(FiberIO):
         dtype = str(np.dtype(header["dtype"]))
         return [
             dc.PatchMeta(
-                attrs=attrs, coords=coords, dtype=dtype, source=ArraySource(key=key)
+                attrs=attrs,
+                coords=coords,
+                dtype=dtype,
+                source=ArraySource(key=key) if key else None,
             )
             for key, attrs, coords in runs
         ]
