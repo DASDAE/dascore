@@ -436,13 +436,16 @@ class TestReadChecks:
         assert part.base is None or part.base.size == part.size
 
 
-def test_detects_without_pyarrow(tmp_path, monkeypatch):
-    """Without pyarrow, Arrow files are still claimed, so reading says why."""
-    path = tmp_path / "p.arrow"
-    dc.write(dc.get_example_patch(), path, "ARROW")
+class TestDetection:
+    """Format detection."""
 
-    def missing(name, **kwargs):
-        raise MissingOptionalDependencyError(f"{name} is not installed")
+    def test_detects_without_pyarrow(self, tmp_path, monkeypatch):
+        """Without pyarrow, Arrow files are still claimed, so reading says why."""
+        path = tmp_path / "p.arrow"
+        dc.write(dc.get_example_patch(), path, "ARROW")
 
-    monkeypatch.setattr(arrow_core, "optional_import", missing)
-    assert ArrowV1().get_format(path) == ("ARROW", "1")
+        def missing(name, **kwargs):
+            raise MissingOptionalDependencyError(f"{name} is not installed")
+
+        monkeypatch.setattr(arrow_core, "optional_import", missing)
+        assert ArrowV1().get_format(path) == ("ARROW", "1")
