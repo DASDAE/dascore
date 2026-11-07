@@ -459,6 +459,94 @@ class TestUpdate:
         indexer.close()
 
 
+class TestScopedUpdate:
+    """update(paths=...) walks, prunes and rescans only the named scopes."""
+
+    @pytest.fixture()
+    def archive(self, tmp_path):
+        """A directory with one indexed file in each of live/ and old/."""
+        patch = dc.get_example_patch()
+        for name in ("live", "old"):
+            (tmp_path / name).mkdir()
+            patch.io.write(tmp_path / name / "a.h5", "dasdae")
+        indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
+        yield indexer
+        indexer.close()
+
+    @pytest.fixture()
+    def walked(self, monkeypatch):
+        """Record the roots each update walks."""
+        roots = []
+        real = indexer_mod._iter_filesystem
+
+        def wrapper(path, *args, **kwargs):
+            roots.append(Path(path))
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(indexer_mod, "_iter_filesystem", wrapper)
+        return roots
+
+    @staticmethod
+    def _sources(indexer):
+        return set(indexer._backend.source_stats()["source_path"])
+
+    def test_new_file_without_full_walk(self, archive, walked):
+        """Naming a new file indexes it and walks nothing else."""
+        new = archive.path / "live" / "b.h5"
+        dc.get_example_patch().io.write(new, "dasdae")
+        archive.update(paths=[new], progress=None)
+        assert walked == [new]
+        assert "live/b.h5" in self._sources(archive)
+
+    def test_directory_scope_prunes_only_inside(self, archive, walked):
+        """Removals inside the scope drop; those outside wait for a full update."""
+        (archive.path / "live" / "a.h5").unlink()
+        (archive.path / "old" / "a.h5").unlink()
+        archive.update(paths=["live"], progress=None)
+        assert walked == [archive.path / "live"]
+        assert self._sources(archive) == {"old/a.h5"}
+        archive.update(progress=None)
+        assert not self._sources(archive)
+
+    def test_deleted_file_path_drops_it(self, archive):
+        """Naming a file that no longer exists removes its rows."""
+        path = archive.path / "live" / "a.h5"
+        path.unlink()
+        archive.update(paths=[path], progress=None)
+        assert self._sources(archive) == {"old/a.h5"}
+
+    def test_move_within_scope(self, archive, monkeypatch):
+        """A rename inside the scope is a move, not a rescan."""
+        live = archive.path / "live"
+        (live / "a.h5").rename(live / "c.h5")
+        monkeypatch.setattr(dc, "scan", lambda *a, **k: pytest.fail("rescanned"))
+        archive.update(paths=["live"], progress=None)
+        assert self._sources(archive) == {"live/c.h5", "old/a.h5"}
+
+    def test_move_into_scope(self, archive):
+        """A file moved in from outside the scope leaves no old row behind."""
+        (archive.path / "old" / "a.h5").rename(archive.path / "live" / "c.h5")
+        archive.update(paths=["live"], progress=None)
+        assert self._sources(archive) == {"live/a.h5", "live/c.h5"}
+
+    def test_spool_update_paths(self, archive):
+        """Spool.update passes paths to its indexer."""
+        spool = dc.spool(archive.path)
+        dc.get_example_patch().io.write(archive.path / "live" / "b.h5", "dasdae")
+        assert len(spool.update(paths=["live/b.h5"], progress=None)) == 3
+
+    @pytest.mark.parametrize("bad", ["../elsewhere", "/"])
+    def test_outside_root_raises(self, archive, bad):
+        """Paths outside the spool directory are refused."""
+        with pytest.raises(ValueError, match="not inside the spool"):
+            archive.update(paths=[bad], progress=None)
+
+    def test_inside_source_raises(self, archive):
+        """A path inside an indexed source (a directory unit) is refused."""
+        with pytest.raises(ValueError, match="inside an indexed source"):
+            archive.update(paths=["live/a.h5/member"], progress=None)
+
+
 class TestNameResolution:
     """Unknown names raise per the selector spec."""
 
