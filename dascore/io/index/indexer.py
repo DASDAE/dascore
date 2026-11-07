@@ -359,7 +359,8 @@ class DBDirectoryIndexer:
         uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}
-        if scopes is None:
+        if scopes is None or not self.path.is_dir():
+            # A vanished root raises here rather than reading as deletions.
             self._walk_root(self.path, files)
         for scope in scopes or ():
             # A scope that no longer exists contributes nothing, so its rows

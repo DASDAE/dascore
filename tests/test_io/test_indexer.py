@@ -572,8 +572,9 @@ class TestScopedUpdate:
         indexer.update(paths=["live"], progress=None)
         indexer.close()
 
-    def test_missing_root_raises(self, tmp_path):
-        """A full update of a vanished root raises rather than emptying."""
+    @pytest.mark.parametrize("paths", [None, ["a.h5"]])
+    def test_missing_root_raises(self, tmp_path, paths):
+        """An update of a vanished root raises rather than emptying."""
         data = tmp_path / "data"
         data.mkdir()
         dc.get_example_patch().io.write(data / "a.h5", "dasdae")
@@ -581,7 +582,7 @@ class TestScopedUpdate:
         indexer = DBDirectoryIndexer(data, index_path=index_path).update(progress=None)
         data.rename(tmp_path / "moved")
         with pytest.raises(FileNotFoundError):
-            indexer.update(progress=None)
+            indexer.update(paths=paths, progress=None)
         indexer.close()
 
     @pytest.mark.parametrize(
