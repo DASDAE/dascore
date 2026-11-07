@@ -1073,7 +1073,7 @@ class TestIndexerEdges:
         indexer = DBDirectoryIndexer(tmp_path)
         index_path = indexer.index_path
 
-        def fail_walk():
+        def fail_walk(scopes=None):
             raise OSError("simulated walk failure")
 
         monkeypatch.setattr(indexer, "_walk", fail_walk)

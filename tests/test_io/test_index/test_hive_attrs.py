@@ -429,14 +429,18 @@ class TestEdgeCases:
             spool = Spool._from_directory(tmp_path).update(progress=None)
         spool.indexer.close()
 
-    def test_restricted_update_still_moves(self, hive_spool, hive_dir, scan_calls):
-        """update(paths=...) applies moves outside the restriction."""
+    def test_restricted_update_leaves_moves_outside(
+        self, hive_spool, hive_dir, scan_calls
+    ):
+        """update(paths=...) leaves moves outside its scope to a full update."""
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=R"
         )
-        hive_spool.indexer.update(paths=[hive_dir / "does_not_exist"], progress=None)
+        scoped = hive_spool.update(paths=[hive_dir / "does_not_exist"], progress=None)
+        assert scoped.get_contents()["station"].iloc[0] == "A"
+        full = hive_spool.update(progress=None)
         assert not scan_calls
-        assert hive_spool.get_contents()["station"].iloc[0] == "R"
+        assert full.get_contents()["station"].iloc[0] == "R"
 
     def test_old_index_version_rebuilds(self, hive_dir):
         """An index stamped with an older version rebuilds transparently."""

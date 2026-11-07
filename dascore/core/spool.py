@@ -2925,6 +2925,7 @@ class Spool(NodeRepr, NamespaceOwner):
         progress: PROGRESS_LEVELS = "standard",
         *,
         client: ExecutorType | None = None,
+        paths: Sequence[str | Path] | None = None,
     ) -> Self:
         """
         Updates the contents of the spool, return the updated spool.
@@ -2943,6 +2944,16 @@ class Spool(NodeRepr, NamespaceOwner):
             writes stay in the calling thread. None keeps scanning serial.
             The caller owns the executor and may reuse it across updates.
             Single-file and in-memory spools do not use it.
+        paths
+            Files or directories inside a directory spool, absolute or
+            relative to it. Only these are walked: new and changed sources
+            under them are scanned and missing ones dropped, so naming newly
+            written files (or the folder they land in) avoids walking the
+            whole archive. A source moved out of them disappears until it is
+            named or a full update runs; None, the default, walks everything
+            and catches removals and moves elsewhere. Paths outside the spool,
+            hidden, or inside an indexed source raise ValueError. The first
+            update of an index always walks everything. Other spools ignore it.
 
         Notes
         -----
@@ -2977,7 +2988,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if catalog.is_view:
             raise InvalidSpoolError(derived_msg)
         if catalog.syncer is not None:
-            catalog.update(progress=progress, client=client)
+            catalog.update(progress=progress, client=client, paths=paths)
             return self._new_from_catalog(catalog)
         if self._file_path is not None:
             from dascore.io.core import FiberIO  # noqa: PLC0415
