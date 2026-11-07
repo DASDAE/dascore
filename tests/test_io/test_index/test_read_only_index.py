@@ -13,6 +13,7 @@ import dascore as dc
 from dascore.config import config_context
 from dascore.constants import INDEX_NAME
 from dascore.exceptions import (
+    InvalidIndexError,
     InvalidIndexVersionError,
     InvalidSpoolError,
     ParameterError,
@@ -92,6 +93,21 @@ class TestIndexArgument:
         assert index.read_bytes() == before
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
             spool._catalog.backend._con.execute("CREATE TABLE t (a)")
+
+    def test_relative_index(self, data_dir, monkeypatch):
+        """A relative index keeps reading its files after the cwd changes."""
+        monkeypatch.chdir(data_dir.parent)
+        spool = dc.spool(index=f"{data_dir.name}/{INDEX_NAME}")
+        monkeypatch.chdir(data_dir)
+        _assert_same_spool(spool, dc.spool(data_dir))
+
+    def test_unfinished_index_raises(self, tmp_path):
+        """An index whose first update never finished raises, not reads empty."""
+        path = tmp_path / "data"
+        dc.examples.spool_to_directory(dc.get_example_spool(), path)
+        dc.spool(path)  # creates the index without scanning
+        with pytest.raises(InvalidIndexError, match="first update"):
+            dc.spool(index=path / INDEX_NAME)
 
     def test_pickled_spool_stays_read_only(self, data_dir):
         """A pickled read-only spool reopens the same index read-only."""

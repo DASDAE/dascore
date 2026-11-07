@@ -38,7 +38,7 @@ from dascore.compat import UPath
 from dascore.config import config_context, get_config
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.exceptions import InvalidIndexError, MissingPatchError, ParameterError
 from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
 from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats, snap_text
@@ -957,6 +957,10 @@ class PatchCatalog:
             raise FileNotFoundError(f"Spool index {index} does not exist")
         backend = get_backend(index, read_only=True)
         metadata = backend.get_metadata()
+        if not metadata["last_indexed_ns"]:
+            backend.close()
+            msg = f"The read-only index {index} has not completed its first update."
+            raise InvalidIndexError(msg)
         stored = (metadata["snap"], metadata["max_shift"])
         decode = (snap_text(snap), get_config().max_shift)
         if stored != decode:

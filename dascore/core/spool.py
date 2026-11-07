@@ -2835,10 +2835,13 @@ class Spool(NodeRepr, NamespaceOwner):
 
         index = coerce_to_upath(index)
         root = index.parent if root is None else root
+        # local paths are pinned, so a later chdir or unpickling elsewhere
+        # reads the same files
+        if is_local_path(root):
+            root = coerce_to_local_path(root).absolute()
+        local_index = ensure_local_file(index, revalidate=True).absolute()
         out = cls()
-        out._catalog = PatchCatalog.from_index(
-            ensure_local_file(index, revalidate=True), root, snap=snap
-        )
+        out._catalog = PatchCatalog.from_index(local_index, root, snap=snap)
         return out
 
     @classmethod
