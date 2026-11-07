@@ -12,7 +12,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.sintela import SintelaBinaryV3
-from dascore.io.sintela.utils import _check_packet_continuity, _get_complete_header
+from dascore.io.sintela.utils import _get_complete_header, _off_grid
 from dascore.utils.downloader import fetch
 
 
@@ -118,21 +118,35 @@ class TestPacketContinuity:
         value = int(np.frombuffer(packet[start : start + 8], dtype="<u8")[0])
         return packet[:start] + np.uint64(value + delta).tobytes() + packet[start + 8 :]
 
-    def test_dropped_packet_raises(self, packets, tmp_path):
-        """A missing middle packet raises rather than shifting later samples."""
-        path = tmp_path / "dropped.raw"
+    def test_dropped_packet_splits(self, packets, tmp_path):
+        """A missing middle packet splits the file into a patch per run."""
+        whole = dc.spool(fetch("sintela_binary_v3_test_1.raw"))[0]
+        (tmp_path / "dir").mkdir()
+        path = tmp_path / "dir" / "dropped.raw"
         path.write_bytes(b"".join(packets[:2] + packets[3:]))
-        with pytest.raises(InvalidFiberFileError, match=r"packet 3 .* sample count"):
-            SintelaBinaryV3().scan(path)
-        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* sample count"):
-            SintelaBinaryV3().read_array(path)
+        summaries = SintelaBinaryV3().scan(path)
+        assert [x.shape[0] for x in summaries] == [1000, 1000]
+        for spool in (dc.read(path), dc.spool(path.parent).update()):
+            first, second = spool.sort("time")
+            assert first.equals(whole.select(time=(0, 1000), samples=True))
+            assert second.equals(whole.select(time=(1500, None), samples=True))
 
-    def test_time_jump_raises(self, packets, tmp_path):
-        """Packets whose start time jumps raise despite contiguous counts."""
+    def test_time_jump_splits(self, packets, tmp_path):
+        """Packets whose start time jumps start a run despite contiguous counts."""
         path = tmp_path / "time_jump.raw"
         tail = [self._shift(x, "time", 60 * 10**9) for x in packets[3:]]
         path.write_bytes(b"".join(packets[:3] + tail))
-        with pytest.raises(InvalidFiberFileError, match=r"packet 4 .* start time"):
+        first, second = SintelaBinaryV3().scan(path)
+        gap = second.get_coord("time").min() - first.get_coord("time").max()
+        assert gap == np.timedelta64(60 * 10**9 + 10**6, "ns")
+
+    def test_clock_drift_raises(self, packets, tmp_path):
+        """Start times creeping off a run's grid raise; each step is in tolerance."""
+        path = tmp_path / "drift.raw"
+        step = int(0.8 * self.half_packet_ns)
+        drifted = [self._shift(x, "time", i * step) for i, x in enumerate(packets)]
+        path.write_bytes(b"".join(drifted))
+        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* packet 0"):
             SintelaBinaryV3().scan(path)
 
     def test_inner_count_checked_on_read(self, packets, tmp_path):
@@ -141,7 +155,7 @@ class TestPacketContinuity:
         bad = self._shift(packets[2], "count", 1)
         path.write_bytes(b"".join([*packets[:2], bad, *packets[3:]]))
         assert len(SintelaBinaryV3().scan(path)) == 1
-        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* sample count"):
+        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* breaks"):
             SintelaBinaryV3().read_array(path)
 
     @pytest.mark.parametrize("shift", [-1, 1])
@@ -153,7 +167,7 @@ class TestPacketContinuity:
         near_path.write_bytes(b"".join([*packets[:2], near, *packets[3:]]))
         far_path.write_bytes(b"".join([*packets[:2], far, *packets[3:]]))
         assert dc.read(near_path)[0].shape[0] == len(packets) * 500
-        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* start time"):
+        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* breaks"):
             dc.read(far_path)
 
     def test_no_drift_over_long_files(self):
@@ -162,7 +176,7 @@ class TestPacketContinuity:
         # 500001 samples at 3 kHz end 166.667 s in, exactly; rounding the
         # packet duration first would put it a whole tolerance away.
         stamps = np.array([[0, 0], [500_001, 166_667_000_000]], dtype="<u8")
-        _check_packet_continuity(np.array([0, 500_001]), stamps, header)
+        assert not _off_grid(stamps, stamps[0], np.array([0, 500_001]), header).any()
 
     @pytest.mark.skipif(
         sys.platform in {"win32", "emscripten"}, reason="needs sparse files"
