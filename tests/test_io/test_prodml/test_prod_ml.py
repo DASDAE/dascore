@@ -391,3 +391,20 @@ class TestProducerVariants:
         out = dc.read(path)[0]
         assert out.shape == (count, 2)
         assert out.get_coord("time").max() == time[-1]
+
+    def test_fbe_loci_on_processed_group(self, tmp_path):
+        """
+        FBE loci attributes stored on Processed rather than Fbe[0] (Sintela
+        ONYX) still give the band its slice of the acquisition distance.
+        """
+        path = shutil.copy(fetch("prodml_fbe_1.h5"), tmp_path / "fbe.h5")
+        with h5py.File(path, "r+") as h5:
+            fbe = h5["Acquisition/Processed/Fbe[0]"]
+            total = int(fbe.attrs.pop("NumberOfLoci"))
+            del fbe.attrs["StartLocusIndex"]
+            fbe.parent.attrs["NumberOfLoci"] = total
+            fbe.parent.attrs["StartLocusIndex"] = 2
+        before = dc.read(fetch("prodml_fbe_1.h5"))[0].get_coord("distance")
+        after = dc.read(path)[0].get_coord("distance")
+        assert len(after) == total
+        assert np.allclose(after.values, before.values + 2 * before.step)
