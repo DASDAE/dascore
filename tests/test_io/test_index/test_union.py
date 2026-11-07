@@ -289,11 +289,11 @@ class TestExportPushdown:
         abs_path = str((tmp_path / "a.h5").resolve())
         assert Path(abs_path).is_absolute()
         rec = SourceRecord(source_path=abs_path, source_format="X", format_version="1")
-        assert _absolutize_record(rec, str(tmp_path)) is rec
+        assert _absolutize_record(rec, str(tmp_path), {}) is rec
         uri = SourceRecord(
             source_path="s3://bucket/a.h5", source_format="X", format_version="1"
         )
-        assert _absolutize_record(uri, str(tmp_path)) is uri
+        assert _absolutize_record(uri, str(tmp_path), {}) is uri
 
     def test_dir_union_absolutizes_relative_paths(self, tmp_path):
         """A directory member's relative source path is absolutized on union."""

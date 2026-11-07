@@ -4627,7 +4627,9 @@ def get_coord(
         Cannot be combined with other value inputs.
     runs
         The runs (see [`NumericCoord`](`dascore.core.coords.NumericCoord`))
-        the coordinate holds, normally from a dumped coordinate.
+        the coordinate holds, normally from a dumped coordinate. A blank
+        run is rebuilt as it was, unless its start, stop and step state an
+        evenly sampled range of its own length, which it becomes.
     sources
         The arrays the stored runs window, keyed by id; they accompany
         ``runs`` in a dumped coordinate. An id is taken on trust rather
@@ -4772,8 +4774,17 @@ def get_coord(
         out = NumericCoord(
             runs=runs, sources=sources or {}, units=units, dtype=dtype, step=step
         )
-        # a blank stating a whole range is that range, as the shape path reads
-        return out.new(shape=out.shape) if out._partial else out
+        blank = out._blank
+        if blank is None or any(
+            _is_null(x) for x in (blank.start, blank.stop, out.step)
+        ):
+            return out
+        # a blank stating a whole range of its own length is that range; an
+        # exact range trusts the shape, so it must also end at the stop
+        full = out.new(shape=out.shape)
+        grid = full._grid if full.shape == out.shape else None
+        end = None if grid is None else grid.labels(len(full), full.dtype)[()]
+        return full if end is not None and _same_step(end, blank.stop) else out
 
     data = _get_array(data, values)
     shape = _get_shape(shape)

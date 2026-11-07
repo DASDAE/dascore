@@ -182,8 +182,9 @@ class SQLiteIndexBackend:
     result frames.
     """
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, read_only: bool = False):
         self._path = str(path)
+        self.read_only = read_only
         # On a serialized build, drop the thread affinity so the shared
         # backend can be used (and finalized) from worker threads, e.g.
         # a thread-pool Spool.map over one catalog.
@@ -194,6 +195,9 @@ class SQLiteIndexBackend:
         self._con.isolation_level = None
         self._con.execute("PRAGMA foreign_keys = ON")
         self._con.execute("PRAGMA busy_timeout = 30000")
+        # A read-only index refuses every write, schema creation included.
+        if read_only:
+            self._con.execute("PRAGMA query_only = ON")
         # Catalog views share this backend object, so tying connection
         # cleanup to *its* collection is safe (close() stays idempotent
         # for explicit use). The finalizer tolerates cross-thread firing.
@@ -222,11 +226,11 @@ class SQLiteIndexBackend:
                 "owning catalog/spool instead."
             )
             raise TypeError(msg)
-        return {"_path": self._path}
+        return {"_path": self._path, "read_only": self.read_only}
 
     def __setstate__(self, state: dict) -> None:
         """Reconnect to the database file."""
-        self.__init__(state["_path"])
+        self.__init__(state["_path"], state["read_only"])
 
     # --- statements ---------------------------------------------------
 
@@ -344,7 +348,8 @@ class SQLiteIndexBackend:
 
         An index of another version raises InvalidIndexVersionError, which
         the directory indexer answers by rebuilding the index. A newer one
-        raises InvalidIndexError instead, so its file is left alone.
+        raises InvalidIndexError instead, so its file is left alone, unless
+        the index is read-only, which nothing rebuilds.
         """
 
         def _incomplete(missing):
@@ -365,9 +370,13 @@ class SQLiteIndexBackend:
             msg = (
                 f"Spool index version {version} was written by a newer DASCore, "
                 f"which this version (index version {INDEX_VERSION}) cannot read. "
-                "Upgrade DASCore, or give this version its own index_path."
+                "Upgrade DASCore, or give this version its own index."
             )
-            raise InvalidIndexError(msg)
+            # Only the directory indexer rebuilds on a version error, and it
+            # must not rebuild a newer index; a read-only one never rebuilds.
+            raise (InvalidIndexVersionError if self.read_only else InvalidIndexError)(
+                msg
+            )
         if version != INDEX_VERSION:
             msg = (
                 f"Spool index version {version} is incompatible with supported "
@@ -439,6 +448,32 @@ class SQLiteIndexBackend:
         df = self._fetch_df(f"SELECT max({column}) AS m FROM {table}")
         value = df["m"].iloc[0]
         return 1 if pd.isnull(value) else int(value) + 1
+
+    def _patch_row_floor(self) -> int:
+        """
+        Return the first patch row never handed out.
+
+        Catalog views pin patch rows, so a row, once allocated, must never
+        name another patch after its own is deleted. The high-water mark
+        lives in a side table that each writer creates on demand, seeded
+        from the rows present at creation, so older indexes work without a
+        rebuild. Writers call this before deleting any patch. Rows a writer
+        unaware of the table added raise the mark before anything is deleted.
+        """
+        self._execute(
+            "CREATE TABLE IF NOT EXISTS patch_row_floor (key INTEGER PRIMARY KEY "
+            "CHECK (key = 0), next_row INTEGER NOT NULL) STRICT"
+        )
+        self._execute(
+            "INSERT OR IGNORE INTO patch_row_floor "
+            "SELECT 0, coalesce(max(patch_row), 0) + 1 FROM patches"
+        )
+        self._execute(
+            "UPDATE patch_row_floor SET next_row = max(next_row, "
+            "(SELECT coalesce(max(patch_row), 0) + 1 FROM patches))"
+        )
+        df = self._fetch_df("SELECT next_row FROM patch_row_floor")
+        return int(df["next_row"].iloc[0])
 
     @staticmethod
     def _units_compatible(to_units: str, from_units: str) -> bool:
@@ -602,11 +637,11 @@ class SQLiteIndexBackend:
             max_df = self._fetch_df("SELECT max(ordinal) AS m FROM sources")
             max_ordinal = max_df["m"].iloc[0]
             next_ordinal = 0 if pd.isnull(max_ordinal) else int(max_ordinal) + 1
+            patch_row = self._patch_row_floor()
             for base_uri, paths in by_base.items():
                 self._delete_by_paths(paths, base_uri=base_uri)
             column_map, skip_units = self._ensure_attr_columns(records)
             source_row = self._next_id("sources", "source_row")
-            patch_row = self._next_id("patches", "patch_row")
             now = time.time_ns()
             source_rows, patch_rows, link_rows = [], [], []
             defs_needed: dict[str, object] = {}
@@ -685,6 +720,7 @@ class SQLiteIndexBackend:
                         )
                     patch_row += 1
                 source_row += 1
+            self._execute("UPDATE patch_row_floor SET next_row = ?", (patch_row,))
             self._bulk_insert("sources", SourceRow._fields, source_rows)
             self._bulk_insert("patches", PatchRow._fields, patch_rows)
             for columns, rows in attr_groups.items():
@@ -792,6 +828,7 @@ class SQLiteIndexBackend:
     def delete_sources(self, source_paths: list[str], base_uri: str = "") -> None:
         """Remove sources (identified by base_uri + path) and dependents."""
         with self._transaction():
+            self._patch_row_floor()
             self._delete_by_paths(source_paths, base_uri=base_uri)
 
     def move_sources(
@@ -1453,6 +1490,7 @@ class SQLiteIndexBackend:
     def clear(self) -> None:
         """Delete every source and coordinate, as before a first scan."""
         with self._transaction():
+            self._patch_row_floor()
             self._execute("DELETE FROM sources")
             self._execute("DELETE FROM coord_runs")
             self._execute("DELETE FROM coord_defs")
@@ -1558,11 +1596,11 @@ class IndexedRuns(NamedTuple):
     jittered: bool
 
 
-def get_backend(path: str | Path) -> SQLiteIndexBackend:
+def get_backend(path: str | Path, read_only: bool = False) -> SQLiteIndexBackend:
     """
-    Create the spool-index backend at path.
+    Create the spool-index backend at path, or open an existing one read-only.
 
     The seam a second engine would reopen: everything above the backend
     asks for one through this rather than naming a class.
     """
-    return SQLiteIndexBackend(path)
+    return SQLiteIndexBackend(path, read_only=read_only)

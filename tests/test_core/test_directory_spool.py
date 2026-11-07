@@ -310,7 +310,7 @@ class TestDirectoryIndex:
         bank_path = tmp_path_factory.mktemp("bank")
         index_path = tmp_path_factory.mktemp("index") / "index.h5"
         random_patch.io.write(bank_path / "contents.h5", "dasdae")
-        spool1 = dc.spool(bank_path, index_path=index_path)
+        spool1 = dc.spool(bank_path, index=index_path)
         spool1.update()
         # ensure the index was created in the expected place
         assert spool1.indexer.index_path == index_path
@@ -321,7 +321,7 @@ class TestDirectoryIndex:
         spool2 = dc.spool(bank_path)
         assert spool2.indexer.index_path == spool1.indexer.index_path
         # next ensure the index path is used
-        spool3 = dc.spool(bank_path, index_path=index_path)
+        spool3 = dc.spool(bank_path, index=index_path)
         df = spool3.get_contents()
         assert len(df) == 1
         patch = spool3[0]
