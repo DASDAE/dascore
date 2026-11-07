@@ -148,7 +148,12 @@ from dascore.utils.patch import (
     get_patch_names,
     stack_patches,
 )
-from dascore.utils.paths import coerce_to_upath, is_local_path, is_memory_uri
+from dascore.utils.paths import (
+    coerce_to_local_path,
+    coerce_to_upath,
+    is_local_path,
+    is_memory_uri,
+)
 from dascore.utils.pd import (
     drop_selector_names,
     get_dim_names_from_columns,
@@ -157,6 +162,7 @@ from dascore.utils.pd import (
     resolve_selector_namespaces,
     selector_spec_names,
 )
+from dascore.utils.remote_io import ensure_local_file
 from dascore.utils.time import to_float, to_timedelta64
 
 if TYPE_CHECKING:
@@ -2817,6 +2823,28 @@ class Spool(NodeRepr, NamespaceOwner):
         return out
 
     @classmethod
+    def _from_index(cls, index, root=None, snap=None) -> Self:
+        """
+        Create a read-only spool over an existing index.
+
+        The index's relative source paths resolve against `root`, the
+        index's parent by default; either may be remote. A remote index
+        is downloaded to the remote-file cache, and again once it changes.
+        """
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+
+        index = coerce_to_upath(index)
+        root = index.parent if root is None else root
+        # local paths are pinned, so a later chdir or unpickling elsewhere
+        # reads the same files
+        if is_local_path(root):
+            root = coerce_to_local_path(root).absolute()
+        local_index = ensure_local_file(index, revalidate=True).absolute()
+        out = cls()
+        out._catalog = PatchCatalog.from_index(local_index, root, snap=snap)
+        return out
+
+    @classmethod
     def _from_file(
         cls,
         path,
@@ -2903,7 +2931,8 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Only root spools can update. Directory roots re-index, single-file roots
         rescan, and in-memory roots are already current. Derived spools raise; update
-        their root and reapply the operations.
+        their root and reapply the operations. Spools reading an index read-only
+        (see [`spool`](`dascore.spool`)) raise.
 
         Parameters
         ----------
@@ -2933,6 +2962,12 @@ class Spool(NodeRepr, NamespaceOwner):
         from dascore.io.index.catalog import LiveResolver  # noqa: PLC0415
 
         catalog = self._catalog
+        if catalog.read_only:
+            msg = (
+                "A read-only spool cannot update; update its index where the "
+                "data is local, then reopen it."
+            )
+            raise InvalidSpoolError(msg)
         derived_msg = (
             "update() is only allowed on a root spool; this spool is the "
             "result of an operation (select/slice/sort/chunk/combine). "
@@ -3343,23 +3378,37 @@ class Spool(NodeRepr, NamespaceOwner):
 BaseSpool = Spool
 
 
-@singledispatch
-def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
+def spool(
+    obj: path_types | Spool | PatchType | Sequence[PatchType] | None = None,
+    *,
+    index: path_types | None = None,
+    **kwargs,
+) -> Spool:
     """
-    Create a spool from a data source.
+    Create a spool from a data source, an index, or both.
 
     This is the main function for loading in DASCore.
 
     Parameters
     ----------
     obj
-        An object from which a spool can be derived.
+        An object from which a spool can be derived: a path, a patch, a
+        sequence of patches, or a spool. With `index`, the data root of
+        the index's relative paths (default: the index's parent).
+    index
+        Path to a spool index. With a local directory `obj` and a local
+        `index`, the directory is indexed at `index` as usual. Otherwise
+        (no `obj`, or either one remote, e.g. an HTTP URL) the index opens
+        read-only: nothing is scanned, `update` raises, and a `snap` or
+        `dascore.config.max_shift` other than the recorded one raises. A
+        remote index is cached locally and re-downloaded when it changes.
     **kwargs
         For a path, `file_format` and `file_version` name its format, and
         `snap` chooses which dimensions its patches read on a grid, as in
         [`read`](`dascore.read`). A directory's index records the `snap`,
         and `dascore.config.max_shift`, it was scanned under, and rescans
-        when opened with others.
+        when opened with others. `index_path` is the deprecated spelling
+        of `index`.
 
     Examples
     --------
@@ -3371,19 +3420,64 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
     >>>
     >>> # get a spool from a directory of files
     >>> directory_path = dc.examples.spool_to_directory(dc.get_example_spool())
-    >>> directory_spool = dc.spool(directory_path)
+    >>> directory_spool = dc.spool(directory_path).update()
+    >>>
+    >>> # open the directory's index read-only; its data root is the
+    >>> # index's directory. An HTTP URL of an index works the same way.
+    >>> index = directory_path / ".dascore_index.sqlite3"
+    >>> read_only_spool = dc.spool(index=index)
     >>>
     >>> # get a spool from a single patch
     >>> patch = dc.get_example_patch()
     >>> spool = dc.spool(patch)
     """
+    if "index_path" in kwargs:
+        # index_path still passes through to the directory spool.
+        if index is not None:
+            msg = "Pass index or the deprecated index_path, not both."
+            raise ParameterError(msg)
+        msg = "index_path is deprecated; use index."
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+    if index is None:
+        if obj is None:
+            raise ParameterError("spool needs a data source, an index, or both.")
+        return _spool_from_obj(obj, **kwargs)
+    if obj is not None and not isinstance(obj, path_types):
+        msg = f"index applies only to a data root path, not {type(obj).__name__}."
+        raise ParameterError(msg)
+    return _spool_from_index(obj, index, **kwargs)
+
+
+def _spool_from_index(root, index, snap=None) -> Spool:
+    """Index a local directory where the index says, else open it read-only."""
+    if root is not None:
+        root = coerce_to_upath(resolve_example_uri(root))
+    if root is not None and is_local_path(root):
+        if not root.is_dir():
+            msg = f"{root} is not a directory, so it cannot be an index's data root."
+            raise InvalidSpoolError(msg)
+        if is_local_path(index):
+            index = coerce_to_local_path(index)
+            return Spool._from_directory(root, index_path=index, snap=snap)
+    return Spool._from_index(index, root, snap=snap)
+
+
+@singledispatch
+def _spool_from_obj(obj, **kwargs) -> Spool:
+    """Create a spool from an object, dispatched on its type."""
     msg = f"Could not get spool from: {obj}"
     raise ValueError(msg)
 
 
-@spool.register(str)
-@spool.register(Path)
-@spool.register(UPath)
+# Keep spool's singledispatch hooks so other packages can register types.
+spool.register = _spool_from_obj.register  # ty: ignore[unresolved-attribute]
+spool.dispatch = _spool_from_obj.dispatch  # ty: ignore[unresolved-attribute]
+spool.registry = _spool_from_obj.registry  # ty: ignore[unresolved-attribute]
+
+
+@_spool_from_obj.register(str)
+@_spool_from_obj.register(Path)
+@_spool_from_obj.register(UPath)
 def _spool_from_str(path, snap=None, **kwargs):
     """Get a spool from a path; its patches read under `snap`."""
     path = coerce_to_upath(resolve_example_uri(path))
@@ -3413,26 +3507,26 @@ def _spool_from_str(path, snap=None, **kwargs):
         raise InvalidSpoolError(msg)
 
 
-@spool.register(Spool)
+@_spool_from_obj.register(Spool)
 def _spool_from_spool(spool, **kwargs):
     """Return a spool from a spool."""
     return spool
 
 
-@spool.register(list)
-@spool.register(tuple)
+@_spool_from_obj.register(list)
+@_spool_from_obj.register(tuple)
 def _spool_from_patch_list(patch_list, **kwargs):
     """Return a spool from a sequence of patches."""
     return Spool(patch_list)
 
 
-@spool.register(dc.Patch)
+@_spool_from_obj.register(dc.Patch)
 def _spool_from_patch(patch):
     """Get a spool from a single patch."""
     return Spool([patch])
 
 
-@spool.register(dc.PatchMeta)
+@_spool_from_obj.register(dc.PatchMeta)
 def _spool_from_patch_meta(patch_meta, **kwargs):
     """Refuse metadata, which a spool has nothing to read from."""
     raise InvalidSpoolError(_spool_input_message(patch_meta))
