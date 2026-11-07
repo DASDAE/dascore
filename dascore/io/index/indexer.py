@@ -219,6 +219,8 @@ class DBDirectoryIndexer:
         self.path = Path(coerce_to_local_path(path)).absolute()
         self.index_path = Path(self._find_index_path(index_path))
         self.snap, self.max_shift = snap, get_config().max_shift
+        # Set when the index was rebuilt or cleared here, so it is not new.
+        self._reset = False
         try:
             self._backend = get_backend(self.index_path)
         except InvalidIndexVersionError:
@@ -227,6 +229,7 @@ class DBDirectoryIndexer:
             # schema version; rebuild it rather than asking the user to.
             self.index_path.unlink()
             self._backend = get_backend(self.index_path)
+            self._reset = True
         # Schema creation alone is not a successful directory scan. Read the
         # transactional marker so a new process retries an interrupted first
         # update instead of trusting a merely nonempty SQLite file.
@@ -250,6 +253,7 @@ class DBDirectoryIndexer:
             )
             warnings.warn(msg, UserWarning, stacklevel=5)
             self._backend.clear()
+            self._reset = True
         if stored != decode:
             self._backend.set_decode(*decode)
         self._initial_update_done = bool(
@@ -318,6 +322,8 @@ class DBDirectoryIndexer:
 
     def ensure_updated(self) -> bool:
         """Run the initial update if the index was never populated."""
+        if not self._initial_update_done:
+            self._check_decode()  # another spool may have built it since
         if self._initial_update_done:
             return False
         self.update(progress=None)
@@ -509,7 +515,8 @@ class DBDirectoryIndexer:
         changes stay in the calling thread. The caller owns the client.
         Paths (files or directories under the root) limit the walk, rescans
         and pruning to those scopes, except that a source moved into a scope
-        drops its old row. None walks everything.
+        drops its old row. None, or an index that was rebuilt or never
+        finished its first update, walks everything.
         """
         progress = validate_progress_level(progress)
         self._check_decode()
@@ -532,7 +539,18 @@ class DBDirectoryIndexer:
                 strict=True,
             )
         }
-        scopes = None if paths is None else self._scopes(paths, stored)
+        # Only a new, empty index may be built one scope at a time; one that
+        # was rebuilt, cleared, or partly built must first be walked whole,
+        # or it would be marked complete while holding only the scopes.
+        partial = not self._initial_update_done and (stored or self._reset)
+        if paths is not None and partial:
+            msg = (
+                f"The index of {self.path} was rebuilt or never finished its "
+                f"first update; ignoring paths and walking the whole directory."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        scoped = paths is not None and not partial
+        scopes = self._scopes(paths, stored) if scoped else None
         files = self._walk(scopes)
         if scopes is None:
             stale = [path for path in stored if path not in files]
