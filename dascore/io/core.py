@@ -57,7 +57,6 @@ from dascore.core.summary import (
 from dascore.exceptions import (
     DASDAEUnpickleError,
     DependencyError,
-    InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
@@ -2182,15 +2181,10 @@ def _iter_scan_results(
                     except PermissionError:
                         _warn_permission_denied(patch_source)
                         continue
-                    # This happens if the file is corrupt see #346; a parser
-                    # missing a key or offset raises a LookupError.
-                    except (
-                        OSError,
-                        InvalidFiberFileError,
-                        ValueError,
-                        TypeError,
-                        LookupError,
-                    ) as exc:
+                    # A corrupt file (#346) or a reader bug on one file, such
+                    # as an overflow, skips that file rather than ending the
+                    # scan of a whole archive.
+                    except Exception as exc:
                         error = f"{type(exc).__name__}: {exc}"
                         msg = f"Failed to scan {patch_source}: {error}"
                         warnings.warn(msg, UserWarning)

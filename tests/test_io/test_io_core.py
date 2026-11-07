@@ -277,6 +277,8 @@ class _ScanBehaviorFormatter(FiberIO):
             raise KeyError("Data/Temperature")
         if behavior == "index_error":
             raise IndexError("offset past the end")
+        if behavior == "overflow_error":
+            raise OverflowError("out of bounds for uint32")
         if behavior == "remote_cache_error":
             raise RemoteCacheError("metadata cache blocked")
         if behavior == "patch_attrs":
@@ -1741,6 +1743,7 @@ class TestReloadableSourcePath:
             ("invalid_file", "InvalidFiberFileError"),
             ("key_error", "KeyError"),
             ("index_error", "IndexError"),
+            ("overflow_error", "OverflowError"),
         ],
     )
     def test_bad_checksum(self, tmp_path, behavior, error):
