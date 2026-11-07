@@ -117,9 +117,10 @@ def _get_number_of_packets(fid, header, size):
     """Get the number of packets in the file."""
     # get filesize without depending on input being a file.
     file_size = get_buffer_size(fid)
-    samples = header["num_samples"]
-    channels = header["num_channels"]
-    packet_size = size + (channels * samples * 4)
+    # Python ints: uint32 arithmetic overflows past 4 GiB under NEP 50.
+    samples = int(header["num_samples"])
+    channels = int(header["num_channels"])
+    packet_size = int(size) + (channels * samples * 4)
     num_packets, remainder = divmod(file_size, packet_size)
     if remainder:
         msg = "Sintela binary file size not divisible by packet size."
@@ -202,7 +203,7 @@ def _get_time_coord(header):
     """Get the time coordinate."""
     starttime = np.asarray(header["start_time_ns"]).astype("datetime64[ns]")[()]
     timestep = step_from_rate(header["sample_rate"])
-    total_len = header["num_packets"] * header["num_samples"]
+    total_len = header["num_packets"] * int(header["num_samples"])
     return get_coord(start=starttime, step=timestep, shape=(total_len,))
 
 
@@ -239,7 +240,7 @@ def _get_attr_dict(header):
 
 def _get_data_shape(header) -> tuple[int, int]:
     """The (time, channel) shape the file's packets hold."""
-    return header["num_packets"] * header["num_samples"], header["num_channels"]
+    return header["num_packets"] * int(header["num_samples"]), header["num_channels"]
 
 
 def _read_sample_range(fid, header, start=0, stop=None):
