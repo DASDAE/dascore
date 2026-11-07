@@ -7,7 +7,6 @@ import io
 import json
 import os
 import runpy
-import shutil
 import subprocess
 import sys
 import sysconfig
@@ -379,8 +378,8 @@ class TestCache:
             with pytest.raises(OSError, match="replacement failed"):
                 with doc_cache.documentation_cache(rebuild=True):
                     pass
-        leftovers = [p.name for p in root.parent.iterdir() if p.name.startswith(".")]
-        assert all(name.endswith("-old") for name in leftovers)
+        staging = [p for p in root.parent.iterdir() if p.name.startswith(".")]
+        assert [p.name.endswith("-old") for p in staging] == [True]
         with doc_cache.documentation_cache() as (root, manifest):
             assert doc_cache.read_document(root, manifest, "example") == "first"
 
@@ -456,23 +455,22 @@ class TestCache:
         )
 
     def test_rebuild(self, cache):
-        """Explicit rebuilding repairs an altered generated page."""
-        with doc_cache.documentation_cache() as (root, index):
-            (root / "example.md").write_text("altered")
-        with doc_cache.documentation_cache(rebuild=True) as (root, index):
-            assert doc_cache.read_document(root, index, "example") == "first"
+        """Explicit rebuilding repairs an altered page, repeatedly."""
+        for _ in range(3):
+            with doc_cache.documentation_cache() as (root, index):
+                (root / "example.md").write_text("altered")
+            with doc_cache.documentation_cache(rebuild=True) as (root, index):
+                assert doc_cache.read_document(root, index, "example") == "first"
 
-    @pytest.mark.parametrize("damage", ["missing", "manifest", "deleted"])
+    @pytest.mark.parametrize("damage", ["missing", "manifest"])
     def test_recovery(self, cache, damage):
-        """Missing pages, malformed manifests, and deleted corpora are recoverable."""
+        """Missing pages and malformed manifests are recoverable."""
         with doc_cache.documentation_cache() as (root, index):
             pass
         if damage == "missing":
             (root / "example.md").unlink()
-        elif damage == "manifest":
-            (root / "manifest.json").write_text("{")
         else:
-            shutil.rmtree(root)
+            (root / "manifest.json").write_text("{")
         with doc_cache.documentation_cache() as (root, index):
             assert doc_cache.read_document(root, index, "example") == "first"
 

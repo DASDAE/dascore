@@ -23,8 +23,9 @@ from dascore.utils.doc_corpus import (
 )
 
 _FORMAT_VERSION = 1
-# Idle time after which a corpus or staging directory is presumed abandoned.
-_STALE_SECONDS = 3600
+# Idle time after which a corpus or staging directory is presumed abandoned; long
+# enough that agents keep a reported corpus directory for a working session.
+_STALE_SECONDS = 24 * 3600
 
 
 def _source_identity():
@@ -97,13 +98,13 @@ def _publish(root, identity, rebuild):
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def _sweep(parent, keep):
-    """Delete this version's corpora and staging left unused for an hour."""
+def _sweep(parent):
+    """Delete this version's corpora, staging, and old-layout files left unused."""
     cutoff = time.time() - _STALE_SECONDS
     for path in parent.iterdir():
         # Another process may delete or (on Windows) hold the same entry open.
         with suppress(FileNotFoundError, PermissionError):
-            if path == keep or path.lstat().st_mtime > cutoff:
+            if path.lstat().st_mtime > cutoff:
                 continue
             if path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)
@@ -119,9 +120,9 @@ def documentation_cache(rebuild: bool = False):
     Each source identity has its own corpus under
     `get_config().docs_cache_dir / dascore.__version__`. A corpus is built in
     private staging and published by renaming, so concurrent processes need no
-    lock: a failed build leaves the previous corpus in place, and the loser of a
-    simultaneous first build uses the winner's corpus. Each use refreshes the
-    corpus's modification time; corpora unused for an hour are deleted.
+    lock: a build that fails before publishing leaves the previous corpus in place,
+    and the loser of a simultaneous first build uses the winner's corpus. Each use
+    refreshes the corpus's modification time; corpora unused for a day are deleted.
     """
     parent = (dc.get_config().docs_cache_dir / dc.__version__).resolve()
     parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +132,7 @@ def documentation_cache(rebuild: bool = False):
     if manifest is None:
         manifest = _publish(root, identity, rebuild)
     os.utime(root)
-    _sweep(parent, root)
+    _sweep(parent)
     yield root, manifest
 
 

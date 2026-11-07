@@ -149,5 +149,6 @@ class TestDocumentationDistribution:
             "https://raw.githubusercontent.com/DASDAE/dascore/v0.0.1/"
             "dascore/docs/_static/tunnel_deployment.svg"
         ) in result.stdout
-        manifest = json.loads((work / "cache/0.0.1/manifest.json").read_text())
+        (manifest_path,) = (work / "cache/0.0.1").glob("*/manifest.json")
+        manifest = json.loads(manifest_path.read_text())
         assert manifest["identity"]["version"] == "0.0.1"
