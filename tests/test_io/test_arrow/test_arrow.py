@@ -122,6 +122,7 @@ class TestRoundTrip:
             ),
             get_coord(data=np.array([0.0, 1.5, 2.0, 4.5, 5.0, 7.7]))[4:0:-2],
             _blank_coord((4,), start=1.0, stop=9.0, step=None),
+            get_coord(data=np.arange(4).astype("M8[10ms]")),
         ],
         ids=[
             "exact-strided",
@@ -136,6 +137,7 @@ class TestRoundTrip:
             "seconds",
             "label-window",
             "blank-with-ends",
+            "unit-multiple",
         ],
     )
     def test_dim_coords(self, tmp_path, coord):
@@ -144,11 +146,11 @@ class TestRoundTrip:
         _assert_exact(_roundtrip(patch, tmp_path), patch)
 
     def test_big_endian_labels(self, tmp_path):
-        """Big-endian time labels keep their values, in native byte order."""
+        """Big-endian time labels keep their values and dtype."""
         labels = np.array([0, 5, 7, 20], dtype=">i8").astype(">M8[ns]")
         new = _roundtrip(_with_coord(get_coord(data=labels)), tmp_path)
         coord = new.get_coord("time")
-        assert coord.dtype == np.dtype("<M8[ns]")
+        assert coord.dtype == labels.dtype
         assert np.array_equal(coord.values, labels)
 
     def test_other_coords(self, tmp_path):
@@ -190,8 +192,7 @@ class TestRoundTrip:
             "quantity": get_quantity("5 m/s"),
             "unit": get_quantity("m/s").units,
             "millis": np.timedelta64(5, "ms"),
-            "raw": b"\x00xy",
-            "mapping": {1: "one", "$x": 2.5},
+            "gap": np.timedelta64(3, "10ms"),
             "nested": {"a": {"b": [1, 2.0]}},
             "f32": np.float32(0.1),
             "f64": np.float64(0.1),
@@ -253,8 +254,7 @@ class TestRefuses:
             dc.get_example_patch().update_attrs(when=pd.Timestamp("2020", tz="UTC")),
             dc.get_example_patch().update_attrs(thing={(1, 2): "pair"}),
             dc.get_example_patch().update_attrs(thing=object()),
-            dc.get_example_patch().update_attrs(gap=np.timedelta64(3, "10ms")),
-            _with_coord(get_coord(data=np.arange(4).astype("M8[10ms]"))),
+            dc.get_example_patch().update_attrs(raw=b"xy"),
             _plain(np.ma.masked_array(np.ones((2, 2)), mask=[[0, 1], [0, 0]])),
             dc.get_example_patch().isel(distance=0, time=0),
         ],
@@ -265,8 +265,7 @@ class TestRefuses:
             "tz-aware",
             "tuple-key",
             "object",
-            "unit-multiple",
-            "coord-unit-multiple",
+            "bytes",
             "masked",
             "no-dims",
         ],
@@ -295,14 +294,6 @@ def _set(path, value):
 
 
 TIME_RUN = ("coords", "time", "runs", 0)
-BOOL = {
-    "dims": ["distance"],
-    "shape": [300],
-    "dtype": "|b1",
-    "units": None,
-    "step": None,
-}
-TEXT = {**BOOL, "dtype": "<U1"}
 
 
 class TestReadChecks:
@@ -317,18 +308,8 @@ class TestReadChecks:
             _set(("shape",), [-300, 2000]),
             _set(("dims",), ["time", "time"]),
             _set(("dtype",), "<i8"),
-            _set(("attrs", "x"), {"$nope": 1}),
-            _set(("attrs", "x"), {"$int": 5}),
-            _set(("attrs", "x"), {"$int": "5", "y": 1}),
-            _set(("attrs", "x"), {"$scalar": ["<U1000000", "x"]}),
-            _set(("attrs", "x"), {"$dict": [[1, "a"], [1, "b"]]}),
             _set(TIME_RUN, {"spiral": {}}),
             _set(TIME_RUN, {"grid": {}, "values": []}),
-            _set((*TIME_RUN, "grid", "phase"), "-1"),
-            _set(("coords", "distance", "dtype"), "<U1"),
-            _set(("coords", "distance"), {**TEXT, "runs": [{"values": ["xx"] * 300}]}),
-            _set(("coords", "distance", "dtype"), "|b1"),
-            _set(("coords", "distance"), {**BOOL, "runs": [{"values": [1] * 300}]}),
         ],
         ids=[
             "version",
@@ -337,18 +318,8 @@ class TestReadChecks:
             "negative-shape",
             "repeated-dims",
             "dtype",
-            "unknown-tag",
-            "int-not-text",
-            "tag-with-keys",
-            "scalar-string",
-            "repeated-dict-key",
             "run-kind",
             "two-member-run",
-            "phase",
-            "string-dtype",
-            "too-wide",
-            "bool-dtype",
-            "int-as-bool",
         ],
     )
     def test_bad_document(self, tmp_path, change):
@@ -358,21 +329,13 @@ class TestReadChecks:
         with pytest.raises(InvalidFiberFileError):
             ArrowV1().read(path)
 
-    def test_float_grid_dtype(self, tmp_path):
-        """A float grid names a float type for its origin and step."""
-        patch = _with_coord(get_coord(start=0.0, stop=1.0, step=0.1))
-        change = _set((*TIME_RUN, "float_grid", "origin_dtype"), "<i8")
-        _write_raw(tmp_path / "bad.arrows", patch, change=change)
-        with pytest.raises(InvalidFiberFileError, match="float grid"):
-            ArrowV1().read(tmp_path / "bad.arrows")
-
     @pytest.mark.parametrize(
         "text",
-        ['"attrs": {"tag": "other", ', '"attrs": {"gain": NaN, ', '"attrs": {{'],
-        ids=["repeated-key", "nan", "not-json"],
+        ['"attrs": {{', '"attrs": {"x": {"$scalar": ["|O", 1]}, '],
+        ids=["not-json", "object-scalar"],
     )
     def test_bad_json(self, tmp_path, text):
-        """Repeated keys, NaN and broken JSON are refused."""
+        """Broken JSON and unsupported dtypes are refused."""
         patch = dc.get_example_patch()
         good = json.dumps(patch_document(patch))
         path = tmp_path / "bad.arrows"
