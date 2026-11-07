@@ -279,6 +279,8 @@ class _ScanBehaviorFormatter(FiberIO):
             raise IndexError("offset past the end")
         if behavior == "overflow_error":
             raise OverflowError("out of bounds for uint32")
+        if behavior == "warning_error":
+            raise SnapWarning("labels off the grid")
         if behavior == "remote_cache_error":
             raise RemoteCacheError("metadata cache blocked")
         if behavior == "patch_attrs":
@@ -1753,6 +1755,12 @@ class TestReloadableSourcePath:
         with pytest.warns(UserWarning, match=f"Failed to scan .*{behavior}.*{error}"):
             scan = dc.scan(tmp_path)
         assert len(scan) == 1
+
+    def test_warning_as_error_is_not_swallowed(self, tmp_path):
+        """A warning a caller filtered into an error propagates from scan."""
+        path = _misbehaving_scan_path(tmp_path, "warning_error")
+        with pytest.raises(SnapWarning, match="off the grid"):
+            dc.scan(path)
 
     def test_remote_cache_error_is_not_swallowed(self, tmp_path):
         """Remote cache policy errors during scan should propagate to callers."""

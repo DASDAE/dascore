@@ -2174,9 +2174,15 @@ def _iter_scan_results(
                     except DependencyError as exc:
                         warnings.warn(str(exc), UserWarning, stacklevel=2)
                         continue
-                    # A caller's error, such as a snap naming no dimension,
-                    # is not a broken file.
-                    except (RemoteCacheError, DASDAEUnpickleError, ParameterError):
+                    # A caller's error, such as a snap naming no dimension or a
+                    # warning filtered into an error, is not a broken file.
+                    except (
+                        RemoteCacheError,
+                        DASDAEUnpickleError,
+                        ParameterError,
+                        Warning,
+                        MemoryError,
+                    ):
                         raise
                     except PermissionError:
                         _warn_permission_denied(patch_source)
