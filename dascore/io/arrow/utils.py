@@ -68,6 +68,7 @@ def _malformed_is_invalid(func):
             AttributeError,
             IndexError,
             KeyError,
+            OverflowError,
             PatchError,
             RecursionError,
             TypeError,
@@ -96,7 +97,10 @@ def _float_json(value):
 
 def _time_json(value) -> list[str]:
     """Write a datetime64 or timedelta64 as its count and unit."""
-    return [_int_text(value.view(np.int64)), np.datetime_data(value.dtype)[0]]
+    unit, multiple = np.datetime_data(value.dtype)
+    if multiple != 1:  # e.g. 10ms; the count alone would read as 1 ms steps
+        raise _UnsupportedError(f"can't store times in units of {multiple}{unit}")
+    return [_int_text(value.view(np.int64)), unit]
 
 
 def _scalar_json(value):
@@ -112,6 +116,11 @@ def _attr_json(value):
     """Encode one attribute value in the format's tagged JSON."""
     if value is None or isinstance(value, bool | str):
         return value
+    # Numpy scalars first: float64 is a float, and timedelta64 an integer.
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return {f"${type(value).__name__}": _time_json(value)}
+    if isinstance(value, np.bool_ | np.integer | np.floating):
+        return {"$scalar": [value.dtype.str, _attr_json(value.item())]}
     if isinstance(value, int):
         return value if abs(value) < _SAFE_INT else {"$int": _int_text(value)}
     if isinstance(value, float):
@@ -124,11 +133,8 @@ def _attr_json(value):
     if isinstance(value, pd.Timedelta | datetime.timedelta):
         unit = "ns" if isinstance(value, pd.Timedelta) else "us"
         value = cast(pd.Timedelta, pd.Timedelta(value)).as_unit(unit).to_timedelta64()
-    # Before numpy scalars: timedelta64 is a numpy integer.
     if isinstance(value, np.datetime64 | np.timedelta64):
         return {f"${type(value).__name__}": _time_json(value)}
-    if isinstance(value, np.bool_ | np.integer | np.floating):
-        return {"$scalar": [value.dtype.str, _attr_json(value.item())]}
     if isinstance(value, bytes):
         return {"$bytes": value.hex()}
     if isinstance(value, list | tuple):
@@ -268,7 +274,7 @@ def _run_json(run: dict, sources: dict) -> dict:
     """Write one run of a dumped numeric coordinate."""
     if "id" in run:  # stored labels, sent as the window's values
         index = run["offset"] + run["stride"] * np.arange(run["count"])
-        return {"values": _label_json(sources[run["id"]][index])}
+        return {"values": _label_json(np.atleast_1d(sources[run["id"]])[index])}
     if "shape" in run:  # blank
         ends = {
             k: run[k] if run[k] is None else _scalar_json(run[k])
@@ -298,7 +304,10 @@ def _run_json(run: dict, sources: dict) -> dict:
 def coord_to_json(coord, dims) -> dict:
     """Write a coordinate as the format's coordinate document."""
     dtype = np.dtype(coord.dtype)
+    unsized = dtype.kind in "mM" and np.datetime_data(dtype.str)[1] != 1
     if dtype.kind not in "biufmMU" or (dtype.kind == "f" and dtype.itemsize > 8):
+        unsized = True
+    if unsized:
         raise _UnsupportedError(f"can't store a coordinate of dtype {dtype}")
     dump = coord.model_dump()
     if isinstance(coord, CoordString):
@@ -359,7 +368,7 @@ def json_to_coord(doc: dict):
     shape = tuple(_count(x) for x in doc["shape"])
     parts = [_json_run(run, dtype, shape) for run in doc["runs"]]
     if dtype.kind == "U":
-        return get_coord(data=np.concatenate(parts))
+        return get_coord(data=parts[0] if len(parts) == 1 else np.concatenate(parts))
     step = _json_scalar(doc["step"], dtype, "m")
     return get_coord(runs=tuple(parts), dtype=dtype, step=step, units=doc["units"])
 
@@ -382,6 +391,8 @@ def arrow_type(dtype: np.dtype):
 
 def patch_document(patch: dc.Patch) -> dict:
     """Return the ``dascore:patch`` document for a patch."""
+    if np.ma.isMaskedArray(patch.data):
+        raise _UnsupportedError("masked data can't be stored; fill it first")
     dtype = np.dtype(patch.dtype).newbyteorder("=")
     arrow_type(dtype)
     coords = {
@@ -450,9 +461,8 @@ def document_meta(doc: dict, snap=()) -> dc.PatchMeta:
             coord = stored_coord(coord.values, True, name=name, units=coord.units)
         coords[name] = (tuple(cdoc["dims"]), coord)
     manager = get_coord_manager(coords, dims=dims, shape=tuple(doc["shape"]))
+    _check(manager.shape == tuple(doc["shape"]), "coordinates don't fit the shape")
     attrs = {k: _json_attr(v) for k, v in doc["attrs"].items()}
-    if isinstance(attrs.get("history"), list):
-        attrs["history"] = tuple(attrs["history"])
     # The stored id survives the read, as DASDAE's does.
     if stored := attrs.get("origin_id", ""):
         attrs[STORED_ORIGIN_ID] = stored
@@ -493,7 +503,6 @@ def data_batches(patch: dc.Patch, schema):
 def batch_values(batch, dtype: np.dtype) -> np.ndarray:
     """Return a checked batch's values as a numpy array (a view where possible)."""
     column = batch.column(0)
-    column.validate(full=True)
     _check(not column.null_count, "data holds nulls")
     if dtype.kind == "b":
         return column.to_numpy(zero_copy_only=False)

@@ -9,14 +9,13 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import BinaryReader, BinaryWriter, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.misc import optional_import
 
 from .utils import (
-    FORMAT_NAME,
     METADATA_KEY,
-    MIN_BATCH_VALUES,
     _bad,
     _check,
     _UnsupportedError,
@@ -31,16 +30,35 @@ from .utils import (
 # The first bytes of an Arrow IPC file, and of an IPC stream's first message.
 _FILE_MAGIC = b"ARROW1"
 _STREAM_START = b"\xff\xff\xff\xff"
+# The largest schema message read; it holds the patch's metadata.
+_MAX_METADATA_BYTES = 256 * 1024**2
+
+
+def _check_head(resource) -> bool:
+    """
+    Return True for an Arrow IPC file and False for a stream; refuse others.
+
+    Needs no pyarrow, so detection works without it.
+    """
+    start = resource.tell()
+    head = resource.read(8)
+    resource.seek(start)
+    if head.startswith(_FILE_MAGIC):
+        return True
+    # A stream's first message states its length; refuse a huge one before
+    # Arrow allocates it (any file starting with these 4 bytes gets here).
+    size = int.from_bytes(head[4:8], "little", signed=True)
+    ok = head.startswith(_STREAM_START) and 0 < size <= _MAX_METADATA_BYTES
+    _check(ok, "not an Arrow IPC file or stream")
+    return False
 
 
 def _open(resource):
     """Return a resource's schema and an iterator over its record batches."""
+    is_file = _check_head(resource)
     pa = optional_import("pyarrow")
-    start = resource.tell()
-    head = resource.read(len(_FILE_MAGIC))
-    resource.seek(start)
     try:
-        if head == _FILE_MAGIC:
+        if is_file:
             reader = pa.ipc.open_file(resource)
             count = reader.num_record_batches
             return reader.schema, (reader.get_batch(i) for i in range(count))
@@ -58,13 +76,9 @@ def _read_values(batches, doc) -> np.ndarray:
     parts, seen = [], 0
     try:
         for batch in batches:
-            # Every batch but the last holds the minimum, so a short batch
-            # that isn't last shows up when the next one arrives.
-            small = parts and len(parts[-1]) < min(MIN_BATCH_VALUES, total)
-            _check(not small, "a batch other than the last is too small")
             parts.append(batch_values(batch, dtype))
             seen += len(parts[-1])
-            _check(len(parts[-1]) and seen <= total, "more values than the shape")
+            _check(seen <= total, "more values than the shape holds")
     except (pa.ArrowException, OSError) as exc:
         if isinstance(exc, dc.exceptions.InvalidFiberFileError):
             raise
@@ -104,18 +118,17 @@ class ArrowV1(FiberIO):
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
         """Return the version if the resource is an Arrow patch."""
         start = resource.tell()
-        head = resource.read(len(_FILE_MAGIC))
-        resource.seek(start)
-        if not (head == _FILE_MAGIC or head.startswith(_STREAM_START)):
-            return None
         try:
-            schema, _ = _open(resource)
-            doc = json.loads((schema.metadata or {}).get(METADATA_KEY, b"{}"))
-        except (dc.exceptions.InvalidFiberFileError, ValueError):
+            _check_head(resource)
+            read_document(_open(resource)[0])
+        except dc.exceptions.InvalidFiberFileError:
             return None
+        except MissingOptionalDependencyError:
+            # Claimed, so reading names the missing package.
+            return self.version
         finally:
             resource.seek(start)
-        return self.version if doc.get("format") == FORMAT_NAME else None
+        return self.version
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = ()
@@ -130,7 +143,9 @@ class ArrowV1(FiberIO):
         """Read and check the patch's values, then take the requested window."""
         schema, batches = _open(resource)
         array = _read_values(batches, read_document(schema))
-        return slice_dataset(array, windows)
+        out = slice_dataset(array, windows)
+        # A copy, so a small window doesn't keep the whole patch in memory.
+        return out if out.size == array.size else out.copy()
 
     def write(
         self,

@@ -7,15 +7,22 @@ import json
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pytest
 
 import dascore as dc
 from dascore.core.coords import _blank_coord, concat_coords, get_coord
-from dascore.exceptions import InvalidFiberFileError, PatchError
+from dascore.exceptions import (
+    InvalidFiberFileError,
+    MissingOptionalDependencyError,
+    PatchError,
+)
 from dascore.io.arrow import ArrowV1
+from dascore.io.arrow import core as arrow_core
 from dascore.io.arrow.utils import METADATA_KEY, data_batches, patch_document
+from dascore.io.sr4731.utils import SR4731PatchAttrs
 from dascore.units import get_quantity
+
+pa = pytest.importorskip("pyarrow")
 
 T0 = np.datetime64("2020-01-01T00:00:00", "ns")
 BIG = np.ones((5000, 1000), dtype=np.float32)
@@ -79,6 +86,17 @@ class TestRoundTrip:
         patch = dc.get_example_patch()
         new = _roundtrip(patch, tmp_path, stream=stream, compression=compression)
         _assert_exact(new, patch)
+        raw = (tmp_path / ("p.arrows" if stream else "p.arrow")).read_bytes()
+        assert raw.startswith(b"ARROW1") is not stream
+
+    @pytest.mark.parametrize("compression", ["zstd", "lz4"])
+    def test_compression_applies(self, tmp_path, compression):
+        """Compressed files are smaller than uncompressed ones."""
+        patch = _plain(BIG)
+        dc.write(patch, tmp_path / "plain.arrow", "ARROW")
+        dc.write(patch, tmp_path / "small.arrow", "ARROW", compression=compression)
+        sizes = [(tmp_path / x).stat().st_size for x in ("small.arrow", "plain.arrow")]
+        assert sizes[0] < sizes[1] / 10
 
     @pytest.mark.parametrize(
         "coord",
@@ -133,6 +151,8 @@ class TestRoundTrip:
             good=("distance", np.arange(300) % 2 == 0),
             grid=(("distance", "time"), rng.random((300, 2000))),
             extra=((), np.arange(5.0)),
+            scalar=((), np.array(42.0)),
+            label=((), np.array("foo")),
         )
         _assert_exact(_roundtrip(patch, tmp_path), patch)
         blank = _plain(np.zeros((3, 4)))
@@ -166,6 +186,7 @@ class TestRoundTrip:
             "mapping": {1: "one", "$x": 2.5},
             "nested": {"a": {"b": [1, 2.0]}},
             "f32": np.float32(0.1),
+            "f64": np.float64(0.1),
             "flag": np.bool_(True),
             "big": 2**60,
         }
@@ -186,6 +207,14 @@ class TestRoundTrip:
         assert new["span"] == np.timedelta64(3_000_000_000, "ns")
         assert new["when"] == np.datetime64("2020-01-01T01:02:03", "us")
         assert new["nanos"] == np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+
+    def test_attrs_class(self, tmp_path):
+        """A registered attrs subclass comes back as itself."""
+        patch = dc.get_example_patch()
+        attrs = SR4731PatchAttrs.from_dict(patch.attrs.model_dump())
+        patch = patch.update(attrs=attrs)
+        assert type(patch.attrs) is SR4731PatchAttrs
+        _assert_exact(_roundtrip(patch, tmp_path), patch)
 
     def test_batches(self, tmp_path):
         """A large patch is split into whole first-dim slices."""
@@ -216,8 +245,21 @@ class TestRefuses:
             dc.get_example_patch().update_attrs(when=pd.Timestamp("2020", tz="UTC")),
             dc.get_example_patch().update_attrs(thing={(1, 2): "pair"}),
             dc.get_example_patch().update_attrs(thing=object()),
+            dc.get_example_patch().update_attrs(gap=np.timedelta64(3, "10ms")),
+            _with_coord(get_coord(data=np.arange(4).astype("M8[10ms]"))),
+            _plain(np.ma.masked_array(np.ones((2, 2)), mask=[[0, 1], [0, 0]])),
         ],
-        ids=["complex", "days", "complex-coord", "tz-aware", "tuple-key", "object"],
+        ids=[
+            "complex",
+            "days",
+            "complex-coord",
+            "tz-aware",
+            "tuple-key",
+            "object",
+            "unit-multiple",
+            "coord-unit-multiple",
+            "masked",
+        ],
     )
     def test_unsupported(self, tmp_path, patch):
         """Complex data, unsupported dtypes and unencodable attrs raise."""
@@ -250,6 +292,7 @@ BOOL = {
     "units": None,
     "step": None,
 }
+TEXT = {**BOOL, "dtype": "<U1"}
 
 
 class TestReadChecks:
@@ -272,9 +315,8 @@ class TestReadChecks:
             _set(TIME_RUN, {"spiral": {}}),
             _set(TIME_RUN, {"grid": {}, "values": []}),
             _set((*TIME_RUN, "grid", "phase"), "-1"),
-            _set(("coords", "distance", "runs"), [{"values": ["1"] * 300}]),
             _set(("coords", "distance", "dtype"), "<U1"),
-            _set(("coords", "distance", "runs"), [{"values": ["xx"] * 300}]),
+            _set(("coords", "distance"), {**TEXT, "runs": [{"values": ["xx"] * 300}]}),
             _set(("coords", "distance", "dtype"), "|b1"),
             _set(("coords", "distance"), {**BOOL, "runs": [{"values": [1] * 300}]}),
         ],
@@ -293,7 +335,6 @@ class TestReadChecks:
             "run-kind",
             "two-member-run",
             "phase",
-            "text-labels-as-floats",
             "string-dtype",
             "too-wide",
             "bool-dtype",
@@ -317,13 +358,15 @@ class TestReadChecks:
 
     @pytest.mark.parametrize(
         "text",
-        ['{"format": "x", "format": "dascore.patch"}', '{"format": NaN}', "{"],
+        ['"attrs": {"tag": "other", ', '"attrs": {"gain": NaN, ', '"attrs": {{'],
         ids=["repeated-key", "nan", "not-json"],
     )
     def test_bad_json(self, tmp_path, text):
         """Repeated keys, NaN and broken JSON are refused."""
+        patch = dc.get_example_patch()
+        good = json.dumps(patch_document(patch))
         path = tmp_path / "bad.arrows"
-        _write_raw(path, dc.get_example_patch(), text=text)
+        _write_raw(path, patch, text=good.replace('"attrs": {', text, 1))
         with pytest.raises(InvalidFiberFileError):
             ArrowV1().read(path)
 
@@ -353,11 +396,11 @@ class TestReadChecks:
 
     @pytest.mark.parametrize(
         "sizes",
-        [[2_000_000], [10, 4_999_990], [5_000_000, 0], [5_000_000, 10]],
-        ids=["missing", "small-batch", "empty-batch", "extra"],
+        [[2_000_000], [5_000_000, 10]],
+        ids=["missing", "extra"],
     )
     def test_batch_accounting(self, tmp_path, sizes):
-        """Too few or too many values, or batches the rules forbid."""
+        """Too few or too many values are refused."""
         flat = pa.array(np.ones(sum(sizes), dtype=np.float32))
         starts = np.cumsum([0, *sizes])
         batches = [
@@ -391,3 +434,42 @@ class TestReadChecks:
             assert ArrowV1().get_format(path) is False
         with pytest.raises(InvalidFiberFileError, match="no dascore:patch"):
             ArrowV1().read(plain)
+
+    def test_coordinate_shape(self, tmp_path):
+        """A coordinate shorter than its dim is refused, not trimmed to."""
+        path = tmp_path / "bad.arrows"
+        patch = _with_coord(get_coord(start=0, stop=3, step=1))
+
+        def change(doc):
+            doc["coords"]["time"] = patch_document(patch.select(time=(0, 1)))["coords"][
+                "time"
+            ]
+
+        _write_raw(path, patch, change=change)
+        with pytest.raises(InvalidFiberFileError, match="fit"):
+            ArrowV1().read(path)
+
+    def test_huge_first_message(self, tmp_path):
+        """A file starting like a stream with a huge message isn't read."""
+        path = tmp_path / "big.bin"
+        path.write_bytes(b"\xff\xff\xff\xff" + (2**31 - 1).to_bytes(4, "little"))
+        assert ArrowV1().get_format(path) is False
+
+    def test_window_is_a_copy(self, tmp_path):
+        """A windowed read doesn't hold the whole patch."""
+        path = tmp_path / "p.arrow"
+        dc.write(_plain(BIG), path, "ARROW")
+        part = ArrowV1().read_array(path, windows=(slice(0, 2),))
+        assert part.base is None or part.base.size == part.size
+
+
+def test_detects_without_pyarrow(tmp_path, monkeypatch):
+    """Without pyarrow, Arrow files are still claimed, so reading says why."""
+    path = tmp_path / "p.arrow"
+    dc.write(dc.get_example_patch(), path, "ARROW")
+
+    def missing(name, **kwargs):
+        raise MissingOptionalDependencyError(f"{name} is not installed")
+
+    monkeypatch.setattr(arrow_core, "optional_import", missing)
+    assert ArrowV1().get_format(path) == ("ARROW", "1")

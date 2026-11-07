@@ -80,7 +80,9 @@ from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 # (see `_write_dasdae_v2`) so the format sits in the same matrix as the
 # version it succeeds.
 _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
-# Nor any Arrow patch; one is written from the same example.
+# Nor any Arrow patch; one is written from the same example when pyarrow
+# is installed.
+_ARROW_IOS = (ArrowV1(),) if importlib.util.find_spec("pyarrow") else ()
 _ARROW_PATH = Path(mkdtemp("arrow")) / "example.arrow"
 # Nor is any zarr store; one is written for each zarr format when the
 # optional dependencies are installed.
@@ -106,7 +108,8 @@ _ASDF_PATH = Path(mkdtemp("asdf")) / "example_asdf.h5"
 def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
-    dc.write(dc.get_example_patch("random_das"), _ARROW_PATH, "arrow")
+    if _ARROW_IOS:
+        dc.write(dc.get_example_patch("random_das"), _ARROW_PATH, "arrow")
     for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
         writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
         writer.write(dc.get_example_patch("random_das"), path)
@@ -133,7 +136,7 @@ def _write_dasdae_v2():
 COMMON_IO_READ_TESTS = {
     AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
-    ArrowV1(): (str(_ARROW_PATH),),
+    **{io: (str(_ARROW_PATH),) for io in _ARROW_IOS},
     ASDFV1(): (str(_ASDF_PATH),),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     DASDAEV2(): (str(_DASDAE_V2_PATH),),
@@ -181,7 +184,7 @@ COMMON_IO_READ_TESTS = {
 # generic patches. If the patch has to be in some special form, for example
 # only flat patches can be written to WAV, don't put it here.
 COMMON_IO_WRITE_TESTS = (
-    ArrowV1(),
+    *_ARROW_IOS,
     PickleIO(),
     DASDAEV1(),
     DASDAEV2(),
