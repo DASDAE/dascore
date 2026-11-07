@@ -185,19 +185,19 @@ class SQLiteIndexBackend:
     def __init__(self, path: str | Path, read_only: bool = False):
         self._path = str(path)
         self.read_only = read_only
-        # A read-only index is opened through SQLite's own read-only mode,
-        # so nothing (schema creation included) can write to it.
-        target = Path(path).absolute().as_uri() + "?mode=ro" if read_only else path
         # On a serialized build, drop the thread affinity so the shared
         # backend can be used (and finalized) from worker threads, e.g.
         # a thread-pool Spool.map over one catalog.
         self._con = sqlite3.connect(
-            target, uri=read_only, check_same_thread=not _SQLITE_SERIALIZED
+            self._path, check_same_thread=not _SQLITE_SERIALIZED
         )
         # autocommit off; we manage transactions explicitly.
         self._con.isolation_level = None
         self._con.execute("PRAGMA foreign_keys = ON")
         self._con.execute("PRAGMA busy_timeout = 30000")
+        # A read-only index refuses every write, schema creation included.
+        if read_only:
+            self._con.execute("PRAGMA query_only = ON")
         # Catalog views share this backend object, so tying connection
         # cleanup to *its* collection is safe (close() stays idempotent
         # for explicit use). The finalizer tolerates cross-thread firing.

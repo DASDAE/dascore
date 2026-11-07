@@ -2834,9 +2834,7 @@ class Spool(NodeRepr, NamespaceOwner):
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         index = coerce_to_upath(index)
-        root = index.parent if root is None else coerce_to_upath(root)
-        if is_local_path(root):
-            root = coerce_to_local_path(root).absolute()
+        root = index.parent if root is None else root
         out = cls()
         out._catalog = PatchCatalog.from_index(
             ensure_local_file(index, revalidate=True), root, snap=snap
@@ -2963,8 +2961,8 @@ class Spool(NodeRepr, NamespaceOwner):
         catalog = self._catalog
         if catalog.read_only:
             msg = (
-                "This spool reads its index read-only, so it cannot update; "
-                "update the index where its data can be scanned and reopen it."
+                "A read-only spool cannot update; update its index where the "
+                "data is local, then reopen it."
             )
             raise InvalidSpoolError(msg)
         derived_msg = (
@@ -3392,18 +3390,15 @@ def spool(
     ----------
     obj
         An object from which a spool can be derived: a path, a patch, a
-        sequence of patches, or a spool. With `index`, the data root the
-        index's source paths are relative to; it defaults to the index's
-        parent.
+        sequence of patches, or a spool. With `index`, the data root of
+        the index's relative paths (default: the index's parent).
     index
-        The index of a directory of files. With a local directory `obj`
-        and a local `index`, the directory is indexed there, created or
-        updated as without one. Otherwise the index is opened read-only:
-        when `obj` is not given, or either is remote (e.g. an HTTP URL).
-        A read-only spool never scans its data, its `update` raises, and
-        opening it under a `snap` or `dascore.config.max_shift` other
-        than the index records raises. A remote index is downloaded to
-        the remote-file cache, and again once it changes.
+        Path to a spool index. With a local directory `obj` and a local
+        `index`, the directory is indexed at `index` as usual. Otherwise
+        (no `obj`, or either one remote, e.g. an HTTP URL) the index opens
+        read-only: nothing is scanned, `update` raises, and a `snap` or
+        `dascore.config.max_shift` other than the recorded one raises. A
+        remote index is cached locally and re-downloaded when it changes.
     **kwargs
         For a path, `file_format` and `file_version` name its format, and
         `snap` chooses which dimensions its patches read on a grid, as in
@@ -3434,14 +3429,11 @@ def spool(
     >>> spool = dc.spool(patch)
     """
     if "index_path" in kwargs:
-        # Still handled as before, by the directory spool; only warned of.
+        # index_path still passes through to the directory spool.
         if index is not None:
             msg = "Pass index or the deprecated index_path, not both."
             raise ParameterError(msg)
-        msg = (
-            "index_path is deprecated and will be removed in a future version; "
-            "pass index, which takes the same values."
-        )
+        msg = "index_path is deprecated; use index."
         warnings.warn(msg, DeprecationWarning, stacklevel=2)
     if index is None:
         if obj is None:
@@ -3457,11 +3449,13 @@ def _spool_from_index(root, index, snap=None) -> Spool:
     """Index a local directory where the index says, else open it read-only."""
     if root is not None:
         root = coerce_to_upath(resolve_example_uri(root))
-    if root is not None and is_local_path(root) and is_local_path(index):
+    if root is not None and is_local_path(root):
         if not root.is_dir():
             msg = f"{root} is not a directory, so it cannot be an index's data root."
             raise InvalidSpoolError(msg)
-        return Spool._from_directory(root, index_path=index, snap=snap)
+        if is_local_path(index):
+            index = coerce_to_local_path(index)
+            return Spool._from_directory(root, index_path=index, snap=snap)
     return Spool._from_index(index, root, snap=snap)
 
 

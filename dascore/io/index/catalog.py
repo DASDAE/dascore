@@ -426,7 +426,7 @@ def directory_decodes(resolver, sources) -> dict:
     return out
 
 
-def _absolutize_record(record, root, upaths: dict | None = None):
+def _absolutize_record(record, root, upaths: dict):
     """
     Return a source record whose relative path is resolved against root.
 
@@ -438,8 +438,7 @@ def _absolutize_record(record, root, upaths: dict | None = None):
         return record
     if isinstance(root, UPath) and not is_local_path(root):
         upath = root / path
-        if upaths is not None:
-            upaths[str(upath)] = upath
+        upaths[str(upath)] = upath
         return replace(record, source_path=str(upath), base_uri=None)
     # POSIX, as the index stores paths, so one file's rows and decodes match
     resolved = (Path(root) / (path if path != "." else "")).as_posix()
@@ -960,7 +959,7 @@ class PatchCatalog:
         metadata = backend.get_metadata()
         stored = (metadata["snap"], metadata["max_shift"])
         decode = (snap_text(snap), get_config().max_shift)
-        if metadata["last_indexed_ns"] and stored != decode:
+        if stored != decode:
             backend.close()
             msg = (
                 f"The read-only index {index} was scanned with snap={stored[0]} "

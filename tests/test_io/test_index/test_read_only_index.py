@@ -17,7 +17,9 @@ from dascore.exceptions import (
     InvalidSpoolError,
     ParameterError,
 )
+from dascore.io.index.catalog import FileResolver
 from dascore.io.index.schema import INDEX_VERSION
+from dascore.utils import remote_io
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache
 
@@ -41,14 +43,6 @@ def data_dir(tmp_path):
 class TestIndexArgument:
     """The index keyword of dc.spool on local paths."""
 
-    def test_directory_with_index(self, data_dir, tmp_path):
-        """A local directory with an index elsewhere indexes it there."""
-        index = tmp_path / "elsewhere.sqlite3"
-        spool = dc.spool(data_dir, index=index).update()
-        assert spool.indexer.index_path == index
-        assert index.exists()
-        _assert_same_spool(spool, dc.spool(data_dir))
-
     def test_index_path_deprecated(self, data_dir, tmp_path):
         """index_path still works as index does, with a deprecation warning."""
         index = tmp_path / "elsewhere.sqlite3"
@@ -56,6 +50,8 @@ class TestIndexArgument:
             spool = dc.spool(data_dir, index_path=index).update()
         assert spool.indexer.index_path == index
         _assert_same_spool(spool, dc.spool(data_dir, index=index))
+        # a file:// URI names the same local index
+        assert dc.spool(data_dir, index=index.as_uri()).indexer.index_path == index
         with pytest.raises(ParameterError, match="not both"):
             dc.spool(data_dir, index=index, index_path=index)
 
@@ -82,6 +78,8 @@ class TestIndexArgument:
         with pytest.raises(InvalidSpoolError, match="read-only"):
             spool.update()
         assert index.read_bytes() == before
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            spool._catalog.backend._con.execute("CREATE TABLE t (a)")
 
     def test_pickled_spool_stays_read_only(self, data_dir):
         """A pickled read-only spool reopens the same index read-only."""
@@ -110,6 +108,22 @@ class TestIndexArgument:
         with pytest.raises(InvalidIndexVersionError, match=match):
             dc.spool(index=index)
 
+    def test_changed_remote_index_is_fetched_again(self, data_dir, tmp_path):
+        """A remote index which changed is downloaded again when reopened."""
+        index = UPath("memory://read_only_index/changed.sqlite3")
+        index.write_bytes((data_dir / INDEX_NAME).read_bytes())
+        msg = "Downloading remote file"
+        with (
+            config_context(remote_cache_dir=tmp_path / "cache"),
+            suppress_warnings(message=msg),
+        ):
+            assert len(dc.spool(data_dir, index=index)) == 3
+            dc.write(dc.get_example_patch(), data_dir / "new.h5", "DASDAE")
+            index.write_bytes(
+                dc.spool(data_dir).update().indexer.index_path.read_bytes()
+            )
+            assert len(dc.spool(data_dir, index=index)) == 4
+
     def test_bad_arguments_raise(self, data_dir, tmp_path):
         """No source, a non-path source, a file root, or no index raise."""
         index = data_dir / INDEX_NAME
@@ -119,6 +133,8 @@ class TestIndexArgument:
             dc.spool(dc.get_example_patch(), index=index)
         with pytest.raises(InvalidSpoolError, match="not a directory"):
             dc.spool(next(data_dir.glob("*.hdf5")), index=index)
+        with pytest.raises(InvalidSpoolError, match="not a directory"):
+            dc.spool(tmp_path / "missing", index="https://host/index.sqlite3")
         with pytest.raises(FileNotFoundError):
             dc.spool(index=tmp_path / "missing.sqlite3")
 
@@ -171,13 +187,29 @@ class TestRemoteIndex:
         combined = dc.spool(index=url / INDEX_NAME) + extra
         _assert_same_spool(combined, dc.spool(local) + extra)
 
-    def test_root_keeps_index_storage_options(self, served):
-        """The default root keeps the index's storage options, uncached by name."""
+    def test_storage_options_reach_every_read(self, served, monkeypatch):
+        """A remote index's storage options carry to its downloads and reads."""
         local, url = served
         headers = {"Authorization": "Bearer secret-token"}
-        index = UPath(str(url / INDEX_NAME), headers=headers)
-        spool = dc.spool(index=index)
-        assert spool._catalog.resolver._root.storage_options["headers"] == headers
-        assert "secret-token" not in spool._catalog.backend._path
+        seen = []
+        download, read = remote_io._download_remote_file, FileResolver._read
+
+        def _download(path, local_path):
+            seen.append(path.storage_options)
+            return download(path, local_path)
+
+        def _read(self, path, *args, **kwargs):
+            if str(path).startswith("http"):  # not the local spool's reads
+                seen.append(getattr(path, "storage_options", {}))
+            return read(self, path, *args, **kwargs)
+
+        monkeypatch.setattr(remote_io, "_download_remote_file", _download)
+        monkeypatch.setattr(FileResolver, "_read", _read)
+        spool = dc.spool(index=UPath(str(url / INDEX_NAME), headers=headers))
+        extra = dc.spool([dc.get_example_patch()])
+        expected = dc.spool(local)
+        _assert_same_spool(spool, expected)
+        _assert_same_spool((spool + extra)[:-1], expected)
+        _assert_same_spool(spool.chunk(time=None), expected.chunk(time=None))
+        assert seen and all(x.get("headers") == headers for x in seen)
         assert "secret-token" not in repr(spool)
-        _assert_same_spool(spool, dc.spool(local))
