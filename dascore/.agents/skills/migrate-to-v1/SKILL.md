@@ -9,7 +9,7 @@ An agent can follow this guide directly from this page; the project does not nee
 
 ## Workflow
 
-1. Upgrade the environment to meet the minimum versions in DASCore's [`pyproject.toml`](https://github.com/DASDAE/dascore/blob/dev/pyproject.toml), and [install DASCore 1.0](dascore_1.0_announcement.qmd#install-the-beta). Confirm that the project's Python imports 1.0 or a 1.0 pre-release from that environment with `python -c "import dascore; print(dascore.__version__, dascore.__file__)"`.
+1. Upgrade the environment to meet the minimum versions in DASCore's [`pyproject.toml`](https://github.com/DASDAE/dascore/blob/dev/pyproject.toml), and install DASCore 1.0 with `python -m pip install "dascore[all]>=1.0.0b1"`, which admits a DASCore pre-release while keeping other dependencies on stable releases. Confirm that the project's Python imports 1.0 or a 1.0 pre-release from that environment with `python -c "import dascore; print(dascore.__version__, dascore.__file__)"`.
 2. Search the code for every old name in the tables below, and replace each with its 1.0 spelling. Read the installed docstring of each replacement before using it, since arguments changed too.
 3. Search separately for the **silent** changes: coordinate fields written through attrs, `attrs.get` of coordinate fields, gap merging in `chunk`, glob negation, STFT time values, and correlation units.
 4. Plan for existing files: 0.1.x DASDAE files need an explicit opt-in to read, old spool indexes are replaced, and DASDAE files written by 1.0 cannot be read by 0.1.x.

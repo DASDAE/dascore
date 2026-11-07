@@ -326,11 +326,9 @@ def _read_body(
     # Read with explicit UTF-8 so Windows does not fall back to cp1252.
     lines = path.read_text(encoding=TEXT_ENCODING).splitlines()
     front_matter, body = _split_front_matter(lines)
-    # `body` excludes front matter, but we still want source comments to point
-    # back to original line numbers.
-    body_start_line = len(front_matter) + 1 if front_matter else 0
+    # Source comments use line numbers in the original file, front matter included.
     out: list[tuple[Path, int, str]] = []
-    for offset, line in enumerate(body, start=body_start_line + 1):
+    for offset, line in enumerate(body, start=len(lines) - len(body) + 1):
         include = _INCLUDE.fullmatch(line.strip())
         if include is None:
             out.append((path, offset, line))
