@@ -391,15 +391,15 @@ class TestCache:
         def race(staging):
             result = build(staging)
             monkeypatch.setattr(doc_cache, "write_corpus", build)
-            with doc_cache.documentation_cache() as (_, winner):
-                pass
-            race.winner = winner
+            with doc_cache.documentation_cache() as (winner, _):
+                race.inode = winner.stat().st_ino
             return result
 
         monkeypatch.setattr(doc_cache, "write_corpus", race)
         with doc_cache.documentation_cache() as (root, manifest):
-            assert manifest == race.winner
+            assert root.stat().st_ino == race.inode
             assert doc_cache.read_document(root, manifest, "example") == "first"
+        assert [p.name for p in root.parent.iterdir()] == [root.name]
 
     def test_source_change_during_build(self, cache, monkeypatch):
         """A source edit during generation cannot publish mixed documentation."""
@@ -435,6 +435,7 @@ class TestCache:
         with doc_cache.documentation_cache() as (current, manifest):
             assert doc_cache.read_document(current, manifest, "example") == "first"
         assert current == root
+        assert os.path.getmtime(root) > stale + doc_cache._STALE_SECONDS
         assert {p.name for p in root.parent.iterdir()} == {root.name, fresh.name}
         assert other.exists()
 

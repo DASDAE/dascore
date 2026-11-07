@@ -23,7 +23,7 @@ from dascore.utils.doc_corpus import (
 )
 
 _FORMAT_VERSION = 1
-# Age after which no process can still be building or reading a superseded corpus.
+# Idle time after which a corpus or staging directory is presumed abandoned.
 _STALE_SECONDS = 3600
 
 
@@ -84,7 +84,8 @@ def _publish(root, identity, rebuild):
         )
         # Vacate a damaged or rebuilt corpus; the sweep deletes it later.
         if root.exists() and (rebuild or _load_manifest(root, identity) is None):
-            os.replace(root, staging.with_name(staging.name + "-old"))
+            with suppress(FileNotFoundError):  # a concurrent rebuild moved it
+                os.replace(root, staging.with_name(staging.name + "-old"))
         try:
             os.replace(staging, root)
         except OSError:
@@ -97,13 +98,14 @@ def _publish(root, identity, rebuild):
 
 
 def _sweep(parent, keep):
-    """Delete this version's other corpora and staging after they go stale."""
+    """Delete this version's corpora and staging left unused for an hour."""
     cutoff = time.time() - _STALE_SECONDS
     for path in parent.iterdir():
-        with suppress(FileNotFoundError):
+        # Another process may delete or (on Windows) hold the same entry open.
+        with suppress(FileNotFoundError, PermissionError):
             if path == keep or path.lstat().st_mtime > cutoff:
                 continue
-            if path.is_dir() and not path.is_symlink():
+            if path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)
             else:
                 path.unlink()
@@ -118,7 +120,8 @@ def documentation_cache(rebuild: bool = False):
     `get_config().docs_cache_dir / dascore.__version__`. A corpus is built in
     private staging and published by renaming, so concurrent processes need no
     lock: a failed build leaves the previous corpus in place, and the loser of a
-    simultaneous first build uses the winner's corpus.
+    simultaneous first build uses the winner's corpus. Each use refreshes the
+    corpus's modification time; corpora unused for an hour are deleted.
     """
     parent = (dc.get_config().docs_cache_dir / dc.__version__).resolve()
     parent.mkdir(parents=True, exist_ok=True)
@@ -127,6 +130,7 @@ def documentation_cache(rebuild: bool = False):
     manifest = None if rebuild else _load_manifest(root, identity)
     if manifest is None:
         manifest = _publish(root, identity, rebuild)
+    os.utime(root)
     _sweep(parent, root)
     yield root, manifest
 
