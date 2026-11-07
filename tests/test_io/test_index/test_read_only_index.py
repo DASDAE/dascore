@@ -68,6 +68,18 @@ class TestIndexArgument:
         shutil.rmtree(data_dir)
         _assert_same_spool(dc.spool(index=moved / INDEX_NAME), expected)
 
+    def test_remote_root(self, data_dir):
+        """A remote root reads the index's rows, also once combined or chunked."""
+        root = UPath(f"memory://read_only_root/{data_dir.parent.name}")
+        for path in data_dir.glob("*.hdf5"):
+            (root / path.name).write_bytes(path.read_bytes())
+        spool = dc.spool(root, index=data_dir / INDEX_NAME)
+        expected = dc.spool(data_dir)
+        extra = dc.spool([dc.get_example_patch()])
+        _assert_same_spool(spool, expected)
+        _assert_same_spool(spool + extra, expected + extra)
+        _assert_same_spool(spool.chunk(time=None), expected.chunk(time=None))
+
     def test_read_only_never_scans(self, data_dir):
         """A read-only spool neither scans new files nor writes its index."""
         index = data_dir / INDEX_NAME
