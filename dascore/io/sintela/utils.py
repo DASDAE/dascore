@@ -14,6 +14,7 @@ Notes
 
 from __future__ import annotations
 
+import re
 from itertools import pairwise
 
 import numpy as np
@@ -21,11 +22,12 @@ import numpy as np
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import resolve_keyed_source, step_from_rate
+from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
+from dascore.io.utils import step_from_rate
 from dascore.utils.misc import get_buffer_size, maybe_mem_map
 
 SYNC_WORD = 0x11223344
+_RUN_KEY = re.compile(r"packets_(\d+)_(\d+)")
 MAX_TRIGGERS = 8
 DIMS = ("time", "distance")
 
@@ -166,7 +168,7 @@ def _read_stamps(fid, header, indices):
 
 def _off_grid(stamps, base, offsets, header):
     """
-    Return whether each packet is off the grid its base packet starts.
+    Return whether each packet's sample count and start time are off grid.
 
     A packet ``offsets`` packets after ``base`` must hold the samples
     ``offsets * num_samples`` onward from it, so its header's sample count
@@ -179,33 +181,58 @@ def _off_grid(stamps, base, offsets, header):
     packet_ns = num_samples / float(header["sample_rate"]) * 1e9
     # uint64 differences wrap, so a backwards count reads as a huge jump;
     # the int64 view gives signed time offsets.
-    count_off = (stamps[:, 0] - base[..., 0]).astype(np.int64)
-    time_off = (stamps[:, 1] - base[..., 1]).view(np.int64)
+    count_off = (stamps[:, 0] - base[0]).astype(np.int64)
+    time_off = (stamps[:, 1] - base[1]).view(np.int64)
     bad_time = np.abs(time_off - offsets * packet_ns) > packet_ns / 2
-    return (count_off != offsets * num_samples) | bad_time
+    return count_off != offsets * num_samples, bad_time
 
 
-def _packet_runs(stamps, header) -> list[tuple[int, int]]:
+def _check_run(stamps, header, first=0, offsets=None):
     """
-    Return the (start, stop) packets of each contiguous run.
+    Raise unless packets sit on the grid packet ``first`` starts.
 
-    A packet off the grid of the one before it starts a new run. A run
-    whose clock then drifts more than half a packet off its own grid
-    raises, since its time coordinate would be wrong.
+    ``stamps`` belong to the packets ``offsets`` after ``first``, by
+    default every packet of the run in order.
     """
-    breaks = _off_grid(stamps[1:], stamps[:-1], 1, header)
-    bounds = [0, *(np.flatnonzero(breaks) + 1).tolist(), len(stamps)]
-    runs = list(pairwise(bounds))
-    for start, stop in runs:
-        offsets = np.arange(stop - start)
-        bad = _off_grid(stamps[start:stop], stamps[start], offsets, header)
-        if np.any(bad):
-            msg = (
-                f"Sintela binary packet {start + int(np.argmax(bad))} (0-based) "
-                f"has a start time off the grid set by packet {start}."
-            )
-            raise InvalidFiberFileError(msg)
-    return runs
+    offsets = np.arange(len(stamps)) if offsets is None else np.asarray(offsets)
+    bad_count, bad_time = _off_grid(stamps, stamps[0], offsets, header)
+    if np.any(bad := bad_count | bad_time):
+        row = int(np.flatnonzero(bad)[0])
+        field = "sample count" if bad_count[row] else "start time"
+        msg = (
+            f"Sintela binary packet {first + int(offsets[row])} (0-based) has "
+            f"a {field} off the grid set by packet {first}, so the packets "
+            "between are not one contiguous recording."
+        )
+        raise InvalidFiberFileError(msg)
+
+
+def _find_run_starts(rid, header, count) -> dict[int, np.ndarray]:
+    """
+    Return the stamps of each packet that starts a run, keyed by packet.
+
+    A dropped or repeated packet breaks the sample count. Packets whose
+    counts are ``num_samples`` per packet apart are taken as one run
+    without reading those between, so a span is bisected only while its
+    ends disagree: a few reads per break rather than one per packet,
+    which matters for large files on network shares. A drop and a repeat
+    that cancel within a span go unseen until read_array checks it.
+    """
+    stamps = dict(zip([0, count - 1], _read_stamps(rid, header, [0, count - 1])))
+    starts, spans = [0], [(0, count - 1)]
+    while spans:
+        lo, hi = spans.pop()
+        for index in {lo, hi} - stamps.keys():
+            stamps[index] = _read_stamps(rid, header, [index])[0]
+        bad_count, _ = _off_grid(stamps[hi][None], stamps[lo], hi - lo, header)
+        if not bad_count.any():
+            continue
+        if hi - lo == 1:
+            starts.append(hi)
+            continue
+        mid = (lo + hi) // 2
+        spans += [(lo, mid), (mid, hi)]
+    return {x: stamps[x] for x in sorted(starts)}
 
 
 def _get_complete_header(rid):
@@ -254,36 +281,34 @@ def _get_attr_dict(header):
     return out
 
 
-def _run_keys(runs) -> dict[str, tuple[int, int]]:
-    """A lone run needs no key; several are keyed by their first packet."""
-    if len(runs) == 1:
-        return {"": runs[0]}
-    return {str(start): (start, stop) for start, stop in runs}
+def _run_key(start, stop) -> str:
+    """The key naming a run of packets; a digit-only key reads as positional."""
+    return f"packets_{start}_{stop}"
 
 
 def _run_blocks(fid, header, key=""):
     """
     Return the packets of the run ``key`` names as (packets, bytes) rows.
 
-    The memory map makes every packet's stamps one strided gather, so the
-    runs are found from all of them here; a scan that found its ends on
-    one grid did not look between them.
+    No key names the whole file, which must then be one run. The memory
+    map makes the run's stamps one strided gather, so every packet in it
+    is checked here; a scan whose end packets agreed looked at no others.
     """
     fid.seek(0)
     raw = maybe_mem_map(fid)
     blocks = raw.reshape(-1, _packet_size(header))
-    stamps = blocks[:, _STAMP_OFFSET : _STAMP_OFFSET + 16].copy().view("<u8")
-    runs = _packet_runs(stamps, header)
-    if not key and len(runs) > 1:
-        # A scan whose two end packets agreed reported one patch.
-        msg = (
-            f"Sintela binary packet {runs[1][0]} (0-based) breaks the run of "
-            "packets its scan assumed from the file's ends."
-        )
-        raise InvalidFiberFileError(msg)
-    keyed = _run_keys(runs)
-    start, stop = resolve_keyed_source(keyed, key, where="the Sintela binary file")
-    return blocks[start:stop]
+    start, stop = 0, len(blocks)
+    if key:
+        match = _RUN_KEY.fullmatch(key)
+        start, stop = map(int, match.groups()) if match else (0, 0)
+        if not start < stop <= len(blocks):
+            msg = f"No patch named '{key}' in the Sintela binary file."
+            raise PatchAttributeError(msg)
+    run = blocks[start:stop]
+    _check_run(
+        run[:, _STAMP_OFFSET : _STAMP_OFFSET + 16].copy().view("<u8"), header, start
+    )
+    return run
 
 
 def _read_sample_range(blocks, header, start=0, stop=None):
@@ -315,19 +340,17 @@ def _scan_runs(rid, attr_class=PatchAttrs):
     """Return the header and (key, attrs, coords) of each run of packets."""
     header = _get_complete_header(rid)
     count = int(header["num_packets"])
-    # Two seeks show a file with no net dropped or added packet without
-    # walking it, which matters for remote scans; read_array checks every
-    # packet. Otherwise every header is read to find where the runs break.
-    ends = _read_stamps(rid, header, [0, count - 1])
-    if not _off_grid(ends, ends[0], np.array([0, count - 1]), header).any():
-        runs = {"": (0, count)}
-    else:
-        runs = _run_keys(_packet_runs(_read_stamps(rid, header, range(count)), header))
-    stamps = _read_stamps(rid, header, [x for x, _ in runs.values()])
+    starts = _find_run_starts(rid, header, count)
+    runs = list(pairwise([*starts, count]))
     attrs = attr_class(**_get_attr_dict(header))
     out = []
-    for (key, (start, stop)), (_, start_ns) in zip(runs.items(), stamps, strict=True):
-        time = _get_time_coord(header, start_ns, stop - start)
+    for start, stop in runs:
+        # Only the run's ends are checked here; read_array checks every packet.
+        last = _read_stamps(rid, header, [stop - 1])
+        ends = np.stack([starts[start], last[0]])
+        _check_run(ends, header, start, [0, stop - 1 - start])
+        key = _run_key(start, stop) if len(runs) > 1 else ""
+        time = _get_time_coord(header, starts[start][1], stop - start)
         coords = {"time": time, "distance": _get_dist_coord(header)}
         out.append((key, attrs, get_coord_manager(coords=coords, dims=DIMS)))
     return header, out
