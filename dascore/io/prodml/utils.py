@@ -577,14 +577,14 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     dtype = str(node_info.node.dtype)
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
-    # For some reason, the distance coords in raw and fbe data are not the
-    # same. For now, we just assume the FBE distance is a subset of the raw
-    # distance referenced by StartLocusIndex. It may be that the test file used
-    # develop this code was malformed and we need to revise this.
-    start = node_info.parent_node.attrs.get("StartLocusIndex", 0)
-    total = node_info.parent_node.attrs["NumberOfLoci"]
-    ind_1 = int(unbyte(start) if isinstance(start, bytes | np.bytes_) else start)
-    count = int(unbyte(total) if isinstance(total, bytes | np.bytes_) else total)
+    # The FBE distance is assumed to be the slice of the acquisition distance
+    # given by StartLocusIndex and NumberOfLoci, read together from Fbe[i]
+    # or, as Sintela ONYX writes them, from Processed. Acquisition's own
+    # values describe the raw loci, so they are never used here.
+    parent = node_info.parent_node
+    owner = parent if "NumberOfLoci" in parent.attrs else parent.parent
+    ind_1 = int(unbyte(owner.attrs.get("StartLocusIndex", 0)))
+    count = int(unbyte(owner.attrs["NumberOfLoci"]))
     # Put the coords back together.
     distance = d_coord[ind_1 : ind_1 + count]
     coords = dc.get_coord_manager(
