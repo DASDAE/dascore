@@ -462,8 +462,11 @@ class TestUpdate:
     def test_retry_unreadable(self, tmp_path, monkeypatch):
         """
         A source whose scan failed is skipped by later updates until
-        retry_unreadable rescans it, as after a reader fix.
+        retry_unreadable rescans it, as after a reader fix, even if it moved;
+        readable sources are not rescanned.
         """
+        dc.get_example_patch().io.write(tmp_path / "good.h5", "dasdae")
+        dc.spool(tmp_path).update(progress=None)
         dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
         fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
         scan = fiber_io.scan
@@ -473,11 +476,20 @@ class TestUpdate:
 
         monkeypatch.setattr(fiber_io, "scan", broken)
         with pytest.warns(UserWarning, match="reader bug"):
-            assert len(dc.spool(tmp_path).update(progress=None)) == 0
+            assert len(dc.spool(tmp_path).update(progress=None)) == 1
         monkeypatch.setattr(fiber_io, "scan", scan)
-        assert len(dc.spool(tmp_path).update(progress=None)) == 0
+        assert len(dc.spool(tmp_path).update(progress=None)) == 1
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "a.h5").rename(tmp_path / "sub" / "a.h5")
+        scanned = []
+        monkeypatch.setattr(
+            fiber_io,
+            "scan",
+            lambda self, path, **kw: scanned.append(path) or scan(self, path, **kw),
+        )
         spool = dc.spool(tmp_path).update(progress=None, retry_unreadable=True)
-        assert len(spool) == 1
+        assert len(spool) == 2
+        assert len(scanned) == 1  # good.h5 is not rescanned
 
 
 class TestScopedUpdate:

@@ -2958,10 +2958,10 @@ class Spool(NodeRepr, NamespaceOwner):
             DASCore rebuilt, or whose first update never finished, ignores
             paths with a warning and walks everything. Other spools ignore it.
         retry_unreadable
-            If True, a directory spool also rescans the walked sources that
-            gave no patches before: files no reader claimed, and files whose
-            scan failed, for example before a reader fix. Updates otherwise
-            skip them until they change. Other spools ignore it.
+            If True, a directory spool also rescans walked sources that gave
+            no patches, whether no reader claimed them or their scan failed,
+            so a reader fix takes effect. Otherwise these are rescanned only
+            once they change. Other spools ignore it.
 
         Notes
         -----

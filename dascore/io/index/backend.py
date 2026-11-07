@@ -1392,9 +1392,12 @@ class SQLiteIndexBackend:
 
     def source_stats(self) -> pd.DataFrame:
         """Return only the columns incremental change detection needs."""
-        return self._fetch_df(
-            "SELECT source_path, mtime_ns, size_bytes, source_format FROM sources"
-        )
+        return self._fetch_df("SELECT source_path, mtime_ns, size_bytes FROM sources")
+
+    def unread_sources(self) -> set[str]:
+        """Return the paths of sources whose scans gave no patches."""
+        query = "SELECT source_path FROM sources WHERE COALESCE(source_format, '') = ''"
+        return set(self._fetch_df(query)["source_path"])
 
     def get_metadata(self) -> dict:
         """Return index-level metadata."""
