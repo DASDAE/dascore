@@ -227,8 +227,9 @@ def _json_attr(value: Any) -> Any:
 def _label_json(values: np.ndarray) -> list:
     """Write stored labels: integer and time labels as text, floats tagged."""
     flat = np.ravel(values)
-    if flat.dtype.kind in "mM":
-        return [_int_text(x) for x in flat.view(np.int64)]
+    if flat.dtype.kind in "mM":  # in native byte order, so the view reads the ticks
+        native = flat.astype(flat.dtype.newbyteorder("="), copy=False)
+        return [_int_text(x) for x in native.view(np.int64)]
     if flat.dtype.kind in "iu":
         return [_int_text(x) for x in flat]
     if flat.dtype.kind == "f":
@@ -393,6 +394,8 @@ def patch_document(patch: dc.Patch) -> dict:
     """Return the ``dascore:patch`` document for a patch."""
     if np.ma.isMaskedArray(patch.data):
         raise _UnsupportedError("masked data can't be stored; fill it first")
+    if not patch.dims:
+        raise _UnsupportedError("a patch with no dims can't be stored")
     dtype = np.dtype(patch.dtype).newbyteorder("=")
     arrow_type(dtype)
     coords = {

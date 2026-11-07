@@ -143,6 +143,14 @@ class TestRoundTrip:
         patch = _with_coord(coord)
         _assert_exact(_roundtrip(patch, tmp_path), patch)
 
+    def test_big_endian_labels(self, tmp_path):
+        """Big-endian time labels keep their values, in native byte order."""
+        labels = np.array([0, 5, 7, 20], dtype=">i8").astype(">M8[ns]")
+        new = _roundtrip(_with_coord(get_coord(data=labels)), tmp_path)
+        coord = new.get_coord("time")
+        assert coord.dtype == np.dtype("<M8[ns]")
+        assert np.array_equal(coord.values, labels)
+
     def test_other_coords(self, tmp_path):
         """String, bool, multi-dim, dimensionless and blank coordinates."""
         rng = np.random.default_rng(0)
@@ -248,6 +256,7 @@ class TestRefuses:
             dc.get_example_patch().update_attrs(gap=np.timedelta64(3, "10ms")),
             _with_coord(get_coord(data=np.arange(4).astype("M8[10ms]"))),
             _plain(np.ma.masked_array(np.ones((2, 2)), mask=[[0, 1], [0, 0]])),
+            dc.get_example_patch().isel(distance=0, time=0),
         ],
         ids=[
             "complex",
@@ -259,6 +268,7 @@ class TestRefuses:
             "unit-multiple",
             "coord-unit-multiple",
             "masked",
+            "no-dims",
         ],
     )
     def test_unsupported(self, tmp_path, patch):
