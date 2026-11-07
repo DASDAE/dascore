@@ -529,22 +529,67 @@ class TestScopedUpdate:
         archive.update(paths=["live"], progress=None)
         assert self._sources(archive) == {"live/a.h5", "live/c.h5"}
 
+    def test_copy_into_scope_keeps_original(self, archive):
+        """A stat-identical copy into the scope is not taken for a move."""
+        shutil.copy2(archive.path / "old" / "a.h5", archive.path / "live" / "c.h5")
+        archive.update(paths=["live"], progress=None)
+        assert self._sources(archive) == {"live/a.h5", "live/c.h5", "old/a.h5"}
+
+    def test_sibling_with_scope_prefix_untouched(self, archive):
+        """Scope live does not prune live2, which merely shares its prefix."""
+        (archive.path / "live2").mkdir()
+        dc.get_example_patch().io.write(archive.path / "live2" / "a.h5", "dasdae")
+        archive.update(progress=None)
+        (archive.path / "live2" / "a.h5").unlink()
+        archive.update(paths=["live"], progress=None)
+        assert "live2/a.h5" in self._sources(archive)
+
+    def test_root_scope_prunes(self, archive):
+        """Naming the spool root itself prunes like a full update."""
+        (archive.path / "old" / "a.h5").unlink()
+        archive.update(paths=[archive.path], progress=None)
+        assert self._sources(archive) == {"live/a.h5"}
+
+    def test_first_update_walks_everything(self, tmp_path):
+        """A scoped first update still indexes the whole directory."""
+        for name in ("live", "old"):
+            (tmp_path / name).mkdir()
+            dc.get_example_patch().io.write(tmp_path / name / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(paths="live", progress=None)
+        assert len(spool) == 2
+
     def test_spool_update_paths(self, archive):
-        """Spool.update passes paths to its indexer."""
-        spool = dc.spool(archive.path)
-        dc.get_example_patch().io.write(archive.path / "live" / "b.h5", "dasdae")
-        assert len(spool.update(paths=["live/b.h5"], progress=None)) == 3
+        """Spool.update passes paths, a single one included, to its indexer."""
+        (archive.path / "live" / "a.h5").unlink()
+        (archive.path / "old" / "a.h5").unlink()
+        spool = dc.spool(archive.path).update(paths="live", progress=None)
+        assert len(spool) == 1  # old/ waits for a full update
 
-    @pytest.mark.parametrize("bad", ["../elsewhere", "/"])
-    def test_outside_root_raises(self, archive, bad):
-        """Paths outside the spool directory are refused."""
-        with pytest.raises(ValueError, match="not inside the spool"):
+    def test_root_with_dotdot(self, archive):
+        """A root opened through '..' still accepts paths under it."""
+        detour = archive.path / "live" / ".." / "old" / ".."
+        indexer = DBDirectoryIndexer(detour, index_path=archive.index_path)
+        indexer.update(paths=["live"], progress=None)
+        indexer.close()
+
+    def test_missing_root_raises(self, archive):
+        """A full update of a vanished root raises rather than emptying."""
+        archive.path.rename(archive.path.with_name("moved"))
+        with pytest.raises(FileNotFoundError):
+            archive.update(progress=None)
+
+    @pytest.mark.parametrize(
+        ("bad", "match"),
+        [
+            ("../elsewhere", "not inside the spool"),
+            (".hidden", "is hidden"),
+            ("live/a.h5/member", "inside the indexed source live/a.h5"),
+        ],
+    )
+    def test_bad_paths_raise(self, archive, bad, match):
+        """Paths outside the root, hidden, or inside a source are refused."""
+        with pytest.raises(ValueError, match=match):
             archive.update(paths=[bad], progress=None)
-
-    def test_inside_source_raises(self, archive):
-        """A path inside an indexed source (a directory unit) is refused."""
-        with pytest.raises(ValueError, match="inside an indexed source"):
-            archive.update(paths=["live/a.h5/member"], progress=None)
 
 
 class TestNameResolution:

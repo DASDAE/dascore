@@ -359,11 +359,12 @@ class DBDirectoryIndexer:
         uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}
-        roots = [self.path] if scopes is None else [self.path / x for x in scopes]
-        for root in roots:
+        if scopes is None:
+            self._walk_root(self.path, files)
+        for scope in scopes or ():
             # A scope that no longer exists contributes nothing, so its rows
             # are pruned as stale.
-            if root.exists():
+            if (root := self.path / scope).exists():
                 self._walk_root(root, files)
         return files
 
@@ -398,17 +399,23 @@ class DBDirectoryIndexer:
 
     def _scopes(self, paths, stored) -> list[str]:
         """Relative posix scopes for update(paths=...), refusing bad ones."""
+        if isinstance(paths, str | os.PathLike):
+            paths = [paths]
+        base = Path(os.path.abspath(self.path))
         scopes = []
         for one in paths:
-            full = Path(os.path.abspath(self.path / one))
-            if not full.is_relative_to(self.path):
+            full = Path(os.path.abspath(base / one))
+            if not full.is_relative_to(base):
                 msg = f"{one} is not inside the spool directory {self.path}"
                 raise ValueError(msg)
-            rel = full.relative_to(self.path).as_posix()
-            if any(x.as_posix() in stored for x in PurePosixPath(rel).parents):
-                msg = f"{one} is inside an indexed source; update that source"
+            rel = PurePosixPath(full.relative_to(base).as_posix())
+            if any(x.startswith(".") for x in rel.parts):
+                msg = f"{one} is hidden, and the index skips hidden paths"
                 raise ValueError(msg)
-            scopes.append(rel)
+            if source := next((x for x in rel.parents if str(x) in stored), None):
+                msg = f"{one} is inside the indexed source {source}; name that"
+                raise ValueError(msg)
+            scopes.append(str(rel))
         return scopes
 
     def _detect_moves(
@@ -499,8 +506,9 @@ class DBDirectoryIndexer:
         stats and rewritten in place, never rescanned (see _detect_moves).
         An optional client scans batches of changed sources; all database
         changes stay in the calling thread. The caller owns the client.
-        Paths (files or directories under the root) limit the walk, pruning
-        and rescans to those scopes; None updates the whole directory.
+        Paths (files or directories under the root) limit the walk, rescans
+        and pruning to those scopes, except that a source moved into a scope
+        drops its old row. None, or a never-updated index, walks everything.
         """
         progress = validate_progress_level(progress)
         self._check_decode()
@@ -523,7 +531,9 @@ class DBDirectoryIndexer:
                 strict=True,
             )
         }
-        scopes = None if paths is None else self._scopes(paths, stored)
+        # A first update indexes everything, whatever paths names.
+        scoped = paths is not None and self._initial_update_done
+        scopes = self._scopes(paths, stored) if scoped else None
         files = self._walk(scopes)
         if scopes is None:
             stale = [path for path in stored if path not in files]

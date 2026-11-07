@@ -2949,8 +2949,11 @@ class Spool(NodeRepr, NamespaceOwner):
             relative to it. Only these are walked: new and changed sources
             under them are scanned and missing ones dropped, so naming newly
             written files (or the folder they land in) avoids walking the
-            whole archive. None, the default, updates everything; use it to
-            catch removals and moves elsewhere. Other spools ignore it.
+            whole archive. A source moved out of them disappears until it is
+            named or a full update runs; None, the default, walks everything
+            and catches removals and moves elsewhere. Paths outside the spool,
+            hidden, or inside an indexed source raise ValueError. The first
+            update of an index always walks everything. Other spools ignore it.
 
         Notes
         -----
