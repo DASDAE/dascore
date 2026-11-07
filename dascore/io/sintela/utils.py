@@ -347,8 +347,7 @@ def _scan_runs(rid, attr_class=PatchAttrs):
     out = []
     for start, stop in runs:
         # Only the run's ends are checked here; read_array checks every packet.
-        if stop - 1 not in stamps:
-            stamps[stop - 1] = _read_stamps(rid, header, [stop - 1])[0]
+        # Bisection read both packets either side of each break.
         ends = np.stack([stamps[start], stamps[stop - 1]])
         _check_run(ends, header, start, [0, stop - 1 - start])
         key = _run_key(start, stop) if len(runs) > 1 else ""
