@@ -18,6 +18,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
+from dascore.io.core import FiberIO
 from dascore.io.index import indexer as indexer_mod
 from dascore.io.index.indexer import (
     DBDirectoryIndexer,
@@ -457,6 +458,26 @@ class TestUpdate:
         assert after_absolute[first] == after_relative[first]
         assert after_absolute[second] > after_relative[second]
         indexer.close()
+
+    def test_retry_unreadable(self, tmp_path, monkeypatch):
+        """
+        A source whose scan failed is skipped by later updates until
+        retry_unreadable rescans it, as after a reader fix.
+        """
+        dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+        scan = fiber_io.scan
+
+        def broken(*args, **kwargs):
+            raise ValueError("reader bug")
+
+        monkeypatch.setattr(fiber_io, "scan", broken)
+        with pytest.warns(UserWarning, match="reader bug"):
+            assert len(dc.spool(tmp_path).update(progress=None)) == 0
+        monkeypatch.setattr(fiber_io, "scan", scan)
+        assert len(dc.spool(tmp_path).update(progress=None)) == 0
+        spool = dc.spool(tmp_path).update(progress=None, retry_unreadable=True)
+        assert len(spool) == 1
 
 
 class TestScopedUpdate:

@@ -500,6 +500,7 @@ class DBDirectoryIndexer:
         progress: PROGRESS_LEVELS = "standard",
         *,
         client: ExecutorType | None = None,
+        retry_unreadable: bool = False,
     ) -> Self:
         """
         Update the index: scan new/changed sources, drop removed ones.
@@ -517,6 +518,7 @@ class DBDirectoryIndexer:
         and pruning to those scopes, except that a source moved into a scope
         drops its old row. None, or an index that was rebuilt or never
         finished its first update, walks everything.
+        retry_unreadable also rescans walked sources that gave no patches.
         """
         progress = validate_progress_level(progress)
         self._check_decode()
@@ -556,10 +558,15 @@ class DBDirectoryIndexer:
             stale = [path for path in stored if path not in files]
         else:
             stale = self._scoped_stale(scopes, stored, files)
+        unread = (
+            set(stats["source_path"][stats["source_format"].fillna("") == ""])
+            if retry_unreadable
+            else set()
+        )
         changed = [
             rel
             for rel, (mtime, size, _) in files.items()
-            if stored.get(rel) != (mtime, size)
+            if stored.get(rel) != (mtime, size) or rel in unread
         ]
         moves = self._detect_moves(stale, stored, files)
         if moves:
