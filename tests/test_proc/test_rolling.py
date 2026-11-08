@@ -194,26 +194,54 @@ class TestRolling:
         assert isinstance(random_patch.rolling(time=5, samples=True), _NumpyPatchRoller)
 
     @pytest.mark.parametrize("name", ("mean", "median", "min", "max", "std", "sum"))
-    def test_default_long_window_matches_numpy(self, random_patch, name, monkeypatch):
+    @pytest.mark.parametrize("step", (1, 3))
+    def test_default_long_window_uses_pandas(
+        self, random_patch, name, step, monkeypatch
+    ):
         """A 2D patch's long windows reduce via pandas, giving NumPy's output."""
-        expected = getattr(
-            random_patch.rolling(time=200, samples=True, engine="numpy"), name
-        )()
+        kwargs = dict(time=300, step=step, samples=True)
+        expected = getattr(random_patch.rolling(**kwargs, engine="numpy"), name)()
 
         def _fail(*args, **kwargs):
             raise AssertionError("sliding windows used for a long window")
 
         monkeypatch.setattr(rolling_module, "_rolling_numpy", _fail)
-        out = getattr(random_patch.rolling(time=200, samples=True), name)()
+        out = getattr(random_patch.rolling(**kwargs), name)()
         assert out.coords == expected.coords
         assert np.allclose(out.data, expected.data, equal_nan=True)
         suffix = expected.attrs.history[-1].split(")", 1)[1]
         assert out.attrs.history[-1].endswith(suffix)
 
-    def test_default_short_window_and_apply_stay_numpy(self, random_patch, monkeypatch):
-        """Short windows and apply keep NumPy's sliding windows."""
+    @pytest.mark.parametrize(
+        "case", ("short", "centered_step", "3d", "inf", "int64", "complex")
+    )
+    def test_default_falls_back_to_numpy(self, random_patch, case, monkeypatch):
+        """Where pandas would disagree with NumPy, the default stays NumPy."""
+        kwargs = dict(time=200, samples=True)
+        patch = random_patch
+        if case == "short":
+            kwargs.update(time=199, step=2)
+        elif case == "centered_step":
+            kwargs.update(step=2, center=True)
+        elif case == "3d":
+            data = np.random.default_rng(0).random((2, 3, 400))
+            coords = {"a": [0, 1], "b": [0, 1, 2], "time": np.arange(400)}
+            patch = dc.Patch(data=data, coords=coords, dims=tuple(coords))
+        elif case == "inf":
+            data = random_patch.data.copy()
+            data[0, 10] = np.inf
+            patch = random_patch.new(data=data)
+        else:
+            dtype = np.int64 if case == "int64" else np.complex128
+            patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
+        expected = patch.rolling(**kwargs, engine="numpy").max()
         monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
-        random_patch.rolling(time=199, samples=True, step=2).mean()
+        out = patch.rolling(**kwargs).max()
+        assert np.array_equal(out.data, expected.data, equal_nan=True)
+
+    def test_default_apply_stays_numpy(self, random_patch, monkeypatch):
+        """Apply keeps NumPy's sliding windows for long windows too."""
+        monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
         random_patch.rolling(time=200, samples=True).apply(np.mean)
 
     def test_misc(self, random_patch):

@@ -19,7 +19,7 @@ from dascore.utils.patch import (
 from dascore.utils.pd import rolling_df
 from dascore.utils.window import resolve_window
 
-# Window-to-step ratio past which pandas reduces faster than NumPy.
+# Window-to-step ratio from which pandas reduces faster than NumPy.
 _PANDAS_RATIO = 100
 
 rolling_apply_description = """
@@ -138,54 +138,70 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         )
         return self._new_patch(out, function, args, kwargs)
 
-    def _reduce(self, name, function):
-        """Reduce each window by `function`, which pandas calls `name`."""
+    def _reduce(self, function):
+        """Reduce each window by a NumPy function."""
         return self.apply(function)
 
     def mean(self):
         """Apply mean to moving window."""
-        return self._reduce("mean", np.mean)
+        return self._reduce(np.mean)
 
     def median(self):
         """Apply median to moving window."""
-        return self._reduce("median", np.median)
+        return self._reduce(np.median)
 
     def min(self):
         """Apply min to moving window."""
-        return self._reduce("min", np.min)
+        return self._reduce(np.min)
 
     def max(self):
         """Apply max to moving window."""
-        return self._reduce("max", np.max)
+        return self._reduce(np.max)
 
     def std(self):
         """Apply standard deviation to moving window."""
-        return self._reduce("std", np.std)
+        return self._reduce(np.std)
 
     def sum(self):
         """Apply sum to moving window."""
-        return self._reduce("sum", np.sum)
+        return self._reduce(np.sum)
 
 
 class _AutoPatchRoller(_NumpyPatchRoller):
     """
-    The default roller for patches pandas can't take whole.
+    The NumPy roller `rolling` picks by default.
 
-    NumPy's cost grows with the window over the step, pandas' does not, so
-    long windows reduce through pandas, with NumPy's results and history.
+    NumPy's cost grows with the window over the step and pandas' does not,
+    so named reductions of long windows run through pandas where it agrees
+    with NumPy up to rounding.
     """
 
     __slots__ = ()
 
-    def _reduce(self, name, function):
-        """Reduce each window by `function`, which pandas calls `name`."""
-        if self.patch.data.ndim > 2 or self.window < _PANDAS_RATIO * self.step:
+    def _pandas_agrees(self) -> bool:
+        """Whether pandas gives NumPy's windows and values for this data."""
+        data = self.patch.data
+        kind, size = data.dtype.kind, data.dtype.itemsize
+        return (
+            data.ndim <= 2
+            and self.window >= _PANDAS_RATIO * self.step
+            # pandas centres stepped windows a sample off NumPy
+            and not (self.center and self.step > 1)
+            # pandas sums in float64, which would hide int64 overflow
+            and (kind == "f" or (kind in "iu" and size <= 4))
+            # and treats infinities as missing
+            and not (kind == "f" and np.isinf(data).any())
+        )
+
+    def _reduce(self, function):
+        """Reduce each window by a NumPy function, through pandas if faster."""
+        if not self._pandas_agrees():
             return self.apply(function)
         # pandas' std defaults to ddof=1, NumPy's to 0
-        kwargs = {"ddof": 0} if name == "std" else {}
+        kwargs = {"ddof": 0} if function is np.std else {}
         data = _rolling_pandas(
             self.patch.data,
-            name,
+            function.__name__,
             window=self.window,
             step=self.step,
             axis=self.axis,
@@ -333,9 +349,9 @@ def rolling(
         ``"numpy"`` uses ``sliding_window_view`` and ``"pandas"`` uses
         ``pandas.rolling``. None selects pandas when the step is below 10
         and the squeezed patch has fewer than two dimensions. Otherwise it
-        selects NumPy, whose named reductions (mean, sum, std, ...) on a
-        patch of at most two dimensions still run through pandas, with
-        NumPy's results, when the window spans 100 or more steps. Explicit
+        selects NumPy; there, named reductions (mean, sum, std, ...) of
+        windows spanning 100 or more steps run through pandas when it
+        agrees with NumPy up to rounding, which is much faster. Explicit
         pandas supports at most two dimensions and raises `ParameterError`
         above that.
     samples
