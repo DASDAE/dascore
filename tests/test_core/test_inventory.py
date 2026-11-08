@@ -328,9 +328,10 @@ class TestGeometryColumns:
         with pytest.raises(InvalidInventoryError, match="share its name"):
             self._inventory(depth, azimuth).check()
 
-    def test_a_reserved_column_name(self):
+    @pytest.mark.parametrize("name", ["time", "instrument_distance"])
+    def test_a_reserved_column_name(self, name):
         """A column becomes a coordinate, so it cannot shadow one."""
-        clash = inv.Geometry(optical_distance=(0.0, 10.0), columns={"time": (0.0, 1.0)})
+        clash = inv.Geometry(optical_distance=(0.0, 10.0), columns={name: (0.0, 1.0)})
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             self._inventory(clash).check()
 
