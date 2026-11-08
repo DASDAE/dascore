@@ -109,7 +109,8 @@ def _windowed_kurtosis_numpy(data: np.ndarray, nwin: int) -> np.ndarray:
     # exactly zero, so rounding cannot give it a spurious variance.
     median = np.median(data, axis=0)
     data = data - np.where(np.isfinite(median), median, 0)
-    weights = np.ones(nwin)
+    # A window of twice the trace already spans all of it from every sample.
+    weights = np.ones(min(nwin, 2 * len(data)))
     counts = correlate1d(np.ones(len(data)), weights, mode="constant")[:, None]
     m1, m2, m3, m4 = (
         correlate1d(data**power, weights, axis=0, mode="constant") / counts

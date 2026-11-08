@@ -65,7 +65,7 @@ class TestKurtosisHelpers:
         assert out.shape == data.shape
         assert np.isfinite(out).any()
 
-    @pytest.mark.parametrize("nwin", [3, 4, 25])
+    @pytest.mark.parametrize("nwin", [3, 4, 25, 10**12])
     def test_numpy_kurtosis_matches_the_loop(self, nwin):
         """The vectorized kernel places windows as the loop does."""
         data = np.random.default_rng(42).normal(size=(40, 3))
