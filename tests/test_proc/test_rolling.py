@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,6 +16,9 @@ from dascore.proc.rolling import _NumpyPatchRoller, _PandasPatchRoller
 from dascore.units import m
 from dascore.utils.misc import all_close
 from dascore.utils.pd import rolling_df
+
+# dascore.proc re-exports the rolling function over its module name
+rolling_module = importlib.import_module("dascore.proc.rolling")
 
 
 @pytest.fixture(scope="class")
@@ -187,6 +192,29 @@ class TestRolling:
         row = random_patch.isel(distance=slice(0, 1))
         assert isinstance(row.rolling(time=5, samples=True), _PandasPatchRoller)
         assert isinstance(random_patch.rolling(time=5, samples=True), _NumpyPatchRoller)
+
+    @pytest.mark.parametrize("name", ("mean", "median", "min", "max", "std", "sum"))
+    def test_default_long_window_matches_numpy(self, random_patch, name, monkeypatch):
+        """A 2D patch's long windows reduce via pandas, giving NumPy's output."""
+        expected = getattr(
+            random_patch.rolling(time=200, samples=True, engine="numpy"), name
+        )()
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("sliding windows used for a long window")
+
+        monkeypatch.setattr(rolling_module, "_rolling_numpy", _fail)
+        out = getattr(random_patch.rolling(time=200, samples=True), name)()
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+        suffix = expected.attrs.history[-1].split(")", 1)[1]
+        assert out.attrs.history[-1].endswith(suffix)
+
+    def test_default_short_window_and_apply_stay_numpy(self, random_patch, monkeypatch):
+        """Short windows and apply keep NumPy's sliding windows."""
+        monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
+        random_patch.rolling(time=199, samples=True, step=2).mean()
+        random_patch.rolling(time=200, samples=True).apply(np.mean)
 
     def test_misc(self, random_patch):
         """Test miscellaneous functionality."""

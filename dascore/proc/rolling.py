@@ -19,6 +19,9 @@ from dascore.utils.patch import (
 from dascore.utils.pd import rolling_df
 from dascore.utils.window import resolve_window
 
+# Window-to-step ratio past which pandas reduces faster than NumPy.
+_PANDAS_RATIO = 100
+
 rolling_apply_description = """
 Apply a function over the specified moving window.
 
@@ -135,29 +138,62 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         )
         return self._new_patch(out, function, args, kwargs)
 
+    def _reduce(self, name, function):
+        """Reduce each window by `function`, which pandas calls `name`."""
+        return self.apply(function)
+
     def mean(self):
         """Apply mean to moving window."""
-        return self.apply(np.mean)
+        return self._reduce("mean", np.mean)
 
     def median(self):
         """Apply median to moving window."""
-        return self.apply(np.median)
+        return self._reduce("median", np.median)
 
     def min(self):
         """Apply min to moving window."""
-        return self.apply(np.min)
+        return self._reduce("min", np.min)
 
     def max(self):
         """Apply max to moving window."""
-        return self.apply(np.max)
+        return self._reduce("max", np.max)
 
     def std(self):
         """Apply standard deviation to moving window."""
-        return self.apply(np.std)
+        return self._reduce("std", np.std)
 
     def sum(self):
         """Apply sum to moving window."""
-        return self.apply(np.sum)
+        return self._reduce("sum", np.sum)
+
+
+class _AutoPatchRoller(_NumpyPatchRoller):
+    """
+    The default roller for patches pandas can't take whole.
+
+    NumPy's cost grows with the window over the step, pandas' does not, so
+    long windows reduce through pandas, with NumPy's results and history.
+    """
+
+    __slots__ = ()
+
+    def _reduce(self, name, function):
+        """Reduce each window by `function`, which pandas calls `name`."""
+        if self.patch.data.ndim > 2 or self.window < _PANDAS_RATIO * self.step:
+            return self.apply(function)
+        # pandas' std defaults to ddof=1, NumPy's to 0
+        kwargs = {"ddof": 0} if name == "std" else {}
+        data = _rolling_pandas(
+            self.patch.data,
+            name,
+            window=self.window,
+            step=self.step,
+            axis=self.axis,
+            center=self.center,
+            args=(),
+            kwargs=kwargs,
+        )
+        return self._new_patch(data, function)
 
 
 class _PandasPatchRoller(_PatchRollerInfo):
@@ -295,10 +331,13 @@ def rolling(
         Label each window by its center rather than its right edge.
     engine
         ``"numpy"`` uses ``sliding_window_view`` and ``"pandas"`` uses
-        ``pandas.rolling``. None selects pandas only when the step is below 10
-        and the squeezed patch has fewer than two dimensions; otherwise it
-        selects NumPy. Explicit pandas supports at most two dimensions and
-        raises `ParameterError` above that.
+        ``pandas.rolling``. None selects pandas when the step is below 10
+        and the squeezed patch has fewer than two dimensions. Otherwise it
+        selects NumPy, whose named reductions (mean, sum, std, ...) on a
+        patch of at most two dimensions still run through pandas, with
+        NumPy's results, when the window spans 100 or more steps. Explicit
+        pandas supports at most two dimensions and raises `ParameterError`
+        above that.
     samples
         {sample_explanation}
     overlap
@@ -356,7 +395,7 @@ def rolling(
     engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
     if (cls := engines.get(engine)) is None:
         pandas = step < 10 and sum(n != 1 for n in patch.shape) < 2
-        cls = _PandasPatchRoller if pandas else _NumpyPatchRoller
+        cls = _PandasPatchRoller if pandas else _AutoPatchRoller
     roll_hist = (
         f"rolling({dim}={value}, step={step}, overlap={overlap}, "
         f"center={center}, engine={engine})"
