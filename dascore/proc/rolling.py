@@ -189,8 +189,9 @@ class _AutoPatchRoller(_NumpyPatchRoller):
             and self.window >= _PANDAS_RATIO * self.step
             # pandas centres stepped windows a sample off NumPy
             and not (self.center and self.step > 1)
-            # pandas works in float64, so wider types lose precision or overflow
-            and ((kind == "f" and size <= 8) or (kind in "iu" and size <= 4))
+            # pandas works in float64: wider types lose precision, int64 and
+            # float16 sums stop overflowing as NumPy's do
+            and ((kind == "f" and size in (4, 8)) or (kind in "iu" and size <= 4))
             # and treats infinities as missing
             and not (kind == "f" and np.isinf(data).any())
         )

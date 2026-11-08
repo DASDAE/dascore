@@ -214,7 +214,7 @@ class TestRolling:
 
     @pytest.mark.parametrize(
         "case",
-        ("short", "centered_step", "3d", "inf", "int64", "complex", "longdouble"),
+        ("short", "centered_step", "3d", "inf", "int64", "complex", "float16"),
     )
     def test_default_falls_back_to_numpy(self, random_patch, case, monkeypatch):
         """Where pandas would disagree with NumPy, the default stays NumPy."""
@@ -233,7 +233,7 @@ class TestRolling:
             data[0, 10] = np.inf
             patch = random_patch.new(data=data)
         else:
-            dtypes = {"int64": np.int64, "longdouble": np.longdouble}
+            dtypes = {"int64": np.int64, "float16": np.float16}
             dtype = dtypes.get(case, np.complex128)
             patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
         expected = patch.rolling(**kwargs, engine="numpy").max()
