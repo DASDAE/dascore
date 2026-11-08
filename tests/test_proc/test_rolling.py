@@ -213,7 +213,8 @@ class TestRolling:
         assert out.attrs.history[-1].endswith(suffix)
 
     @pytest.mark.parametrize(
-        "case", ("short", "centered_step", "3d", "inf", "int64", "complex")
+        "case",
+        ("short", "centered_step", "3d", "inf", "int64", "complex", "longdouble"),
     )
     def test_default_falls_back_to_numpy(self, random_patch, case, monkeypatch):
         """Where pandas would disagree with NumPy, the default stays NumPy."""
@@ -232,12 +233,22 @@ class TestRolling:
             data[0, 10] = np.inf
             patch = random_patch.new(data=data)
         else:
-            dtype = np.int64 if case == "int64" else np.complex128
+            dtypes = {"int64": np.int64, "longdouble": np.longdouble}
+            dtype = dtypes.get(case, np.complex128)
             patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
         expected = patch.rolling(**kwargs, engine="numpy").max()
         monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
         out = patch.rolling(**kwargs).max()
         assert np.array_equal(out.data, expected.data, equal_nan=True)
+
+    def test_default_other_backend_stays_numpy(self, random_patch, monkeypatch):
+        """Data from another array backend keeps NumPy's sliding windows."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = random_patch.new(data=xp.asarray(random_patch.data))
+        expected = random_patch.rolling(time=200, samples=True).mean()
+        monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
+        out = patch.rolling(time=200, samples=True).mean()
+        assert np.allclose(np.asarray(out.data), expected.data, equal_nan=True)
 
     def test_default_apply_stays_numpy(self, random_patch, monkeypatch):
         """Apply keeps NumPy's sliding windows for long windows too."""

@@ -181,14 +181,16 @@ class _AutoPatchRoller(_NumpyPatchRoller):
     def _pandas_agrees(self) -> bool:
         """Whether pandas gives NumPy's windows and values for this data."""
         data = self.patch.data
+        if not isinstance(data, np.ndarray):  # other array backends
+            return False
         kind, size = data.dtype.kind, data.dtype.itemsize
         return (
             data.ndim <= 2
             and self.window >= _PANDAS_RATIO * self.step
             # pandas centres stepped windows a sample off NumPy
             and not (self.center and self.step > 1)
-            # pandas sums in float64, which would hide int64 overflow
-            and (kind == "f" or (kind in "iu" and size <= 4))
+            # pandas works in float64, so wider types lose precision or overflow
+            and ((kind == "f" and size <= 8) or (kind in "iu" and size <= 4))
             # and treats infinities as missing
             and not (kind == "f" and np.isinf(data).any())
         )
