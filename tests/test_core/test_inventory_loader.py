@@ -2002,6 +2002,11 @@ class TestLegacyDistanceNames:
         with pytest.raises(ValidationError):
             inv.Geometry(distance=(0.0, 1.0), columns={"chainage": (0.0, 1.0)})
 
+    def test_non_sequence_geometry(self):
+        """A geometry that is not a sequence reaches validation unchanged."""
+        with pytest.raises(ValidationError):
+            inv.OpticalPath(geometry=5)
+
     def test_geometry_table_header(self, make_inventory):
         """A geometry.csv ordered by distance reads as optical_distance."""
         files = {
