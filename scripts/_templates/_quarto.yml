@@ -238,6 +238,9 @@ website:
         - text: General Guidelines
           href: contributing/general_guidelines.qmd
 
+        - text: AI Policy
+          href: contributing/ai_policy.qmd
+
         - text: "Adding a new format"
           href: contributing/new_format.qmd
 

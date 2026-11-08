@@ -1,0 +1,7 @@
+---
+title: AI Policy
+---
+
+AI tools are welcome, but you are responsible for what you submit: review it, test it, and be ready to discuss it.
+
+We discourage drive-by AI contributions from people who don't use DAS or work in fiber-optic sensing. If you are new to the field and want to help, start with an existing issue or a [discussion](https://github.com/DASDAE/dascore/discussions).
