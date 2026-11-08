@@ -23,6 +23,7 @@ from functools import cached_property
 
 import numpy as np
 import pandas as pd
+from upath import UPath
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager
@@ -1159,13 +1160,16 @@ def derived_catalog(
     sources = _with_source_range(sources, name, residuals)
     # Resolve source paths once before deriving both members and fill anchors.
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
+    upaths = {}
     if root is not None and "source_path" in sources.columns:
         file_resolver = FileResolver(root)
-        sources = sources.assign(
-            source_path=[
-                str(file_resolver.resolve_path(path)) for path in sources["source_path"]
-            ]
-        )
+        resolved = [file_resolver.resolve_path(x) for x in sources["source_path"]]
+        sources = sources.assign(source_path=[str(x) for x in resolved])
+        # a remote root's storage options (e.g. auth headers) live on its
+        # UPaths, which the loader reopens the rows by
+        upaths = {
+            str(x): x for x in resolved if isinstance(x, UPath) and not is_local_path(x)
+        }
     member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_row",
@@ -1188,6 +1192,7 @@ def derived_catalog(
                 anchors.get("source_path", pd.Series(dtype=str)).astype(str)
             )
         loader.absorb(parent.resolver, paths=member_paths)
+        loader.file._upaths.update(upaths)
         # a directory's members read under the decode it scanned them with
         rows = member_rows if anchors is None else pd.concat([member_rows, anchors])
         columns = ["source_path", "source_format", "source_version"]

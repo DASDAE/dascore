@@ -11,6 +11,6 @@ Load guidance from the DASCore installation used by the current project.
 2. Run that executable with `-m dascore doc`. Check the reported Python executable, package location, and version against the project. Retain the reported documentation directory and absolute virtual-environment executable path for this task; resolving the executable's symlink can bypass the environment.
 3. Prefix every subsequent Python command with the recorded absolute executable path. Invoke the CLI as `<absolute-python> -m dascore ...`, including `skill dascore` to load the routing recipe and `skills` to discover specialized workflows. Read relevant APIs with `doc <name>`. Find unfamiliar APIs or procedures using your file-search tools on the reported Markdown directory, matching API names, keyword metadata, and scientific terms. Point the tools explicitly at that directory; it may be outside the project workspace.
 
-Resolve the environment again for each project. Do not switch DASCore versions merely to obtain guidance. If the selected installation lacks CLI or skill support, use its installed docstrings and explain the limitation; follow the project's dependency conventions when installing optional CLI support.
+Resolve the environment again for each project. Do not switch DASCore versions merely to obtain guidance. If the selected installation lacks CLI or skill support, use its installed docstrings and explain the limitation.
 
 The loaded recipes supply the version-specific procedures. Follow the user's task scope and existing authorization when applying them.

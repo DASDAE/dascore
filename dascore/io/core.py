@@ -57,12 +57,12 @@ from dascore.core.summary import (
 from dascore.exceptions import (
     DASDAEUnpickleError,
     DependencyError,
-    InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
+    PickleFormatDisabledError,
     RemoteCacheError,
     UnknownFiberFormatError,
 )
@@ -571,8 +571,9 @@ class _FiberIOManager:
             # Pass over a reader whose resource needs a download the config
             # refuses, to be built or read further, and drop that resource so
             # no later reader builds or reuses it. Raise the first refusal only
-            # if no reader claims the file.
-            cache_error, refused = None, set()
+            # if no reader claims the file; a format the config disables is
+            # refused the same way.
+            cache_error, refused, disabled = None, set(), None
             for fiber_io in iterator:
                 # We need to wrap this in try except to make it robust to what
                 # may happen in each fiber_ios get_format method, many of which
@@ -593,6 +594,8 @@ class _FiberIOManager:
                     if required_type is not None:
                         refused.add(required_type)
                         man.discard(required_type)
+                except PickleFormatDisabledError as exc:
+                    disabled = disabled or exc
                 except PermissionError:
                     # Denied access is a real error, not a "wrong format"
                     # signal, so it must propagate rather than be swallowed
@@ -612,6 +615,8 @@ class _FiberIOManager:
                     return format_version
             if cache_error is not None:
                 raise cache_error
+            if disabled is not None:
+                raise disabled
             msg = f"Could not determine file format of {man.source}"
             raise UnknownFiberFormatError(msg)
 
@@ -2141,6 +2146,9 @@ def _iter_scan_results(
                             file_version=version,
                             fiber_io_hint=fiber_io_hint,
                         )
+                    except PickleFormatDisabledError as exc:
+                        warnings.warn(f"Skipping {patch_source}: {exc}", UserWarning)
+                        continue
                     except UnknownFiberFormatError:  # skip bad entities
                         continue
                     except PermissionError:
@@ -2166,22 +2174,23 @@ def _iter_scan_results(
                     except DependencyError as exc:
                         warnings.warn(str(exc), UserWarning, stacklevel=2)
                         continue
-                    # A caller's error, such as a snap naming no dimension,
-                    # is not a broken file.
-                    except (RemoteCacheError, DASDAEUnpickleError, ParameterError):
+                    # A caller's error, such as a snap naming no dimension or a
+                    # warning filtered into an error, is not a broken file.
+                    except (
+                        RemoteCacheError,
+                        DASDAEUnpickleError,
+                        ParameterError,
+                        Warning,
+                        MemoryError,
+                    ):
                         raise
                     except PermissionError:
                         _warn_permission_denied(patch_source)
                         continue
-                    # This happens if the file is corrupt see #346; a parser
-                    # missing a key or offset raises a LookupError.
-                    except (
-                        OSError,
-                        InvalidFiberFileError,
-                        ValueError,
-                        TypeError,
-                        LookupError,
-                    ) as exc:
+                    # A corrupt file (#346) or a reader bug on one file, such
+                    # as an overflow, skips that file rather than ending the
+                    # scan of a whole archive.
+                    except Exception as exc:
                         error = f"{type(exc).__name__}: {exc}"
                         msg = f"Failed to scan {patch_source}: {error}"
                         warnings.warn(msg, UserWarning)
@@ -2304,6 +2313,9 @@ def scan(
     An inaccessible root directory raises PermissionError.
     Legacy DASDAE pickled coordinates raise DASDAEUnpickleError unless
     ``allow_dasdae_format_unpickle=True`` is enabled for trusted files.
+    DASCore pickles are skipped with a warning unless
+    ``allow_pickle_format=True`` is enabled for trusted files; unpickling
+    can run arbitrary code.
 
     Parameters
     ----------
@@ -2388,6 +2400,8 @@ def get_format(
     Raises
     ------
     dascore.exceptions.UnknownFiberFormat - Could not determine the fiber format.
+    dascore.exceptions.PickleFormatDisabledError - The file is a DASCore pickle
+        but ``allow_pickle_format`` is off (unpickling can run arbitrary code).
 
     Examples
     --------

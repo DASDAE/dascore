@@ -3,14 +3,6 @@ title: Local documentation
 keywords: [documentation, cli, agents, offline]
 ---
 
-Install the optional command-line dependencies in your project's environment:
-
-```bash
-python -m pip install "dascore[agents]"
-```
-
-The CLI uses Typer. Importing and using DASCore from Python does not require this extra.
-
 Use the documentation that ships with the DASCore installed in your project's Python environment:
 
 ```bash
@@ -25,7 +17,7 @@ The equivalent console command is `dascore doc`. Running it without a target rep
 
 The first request prepares a directory of Markdown files from the packaged tutorials, recipes, and installed API docstrings. Examples remain unevaluated. Documentation text is available offline; images are excluded from package downloads and linked to hosted copies on GitHub. Image links use the installed release tag or development commit when available, falling back to the `dev` branch for development versions without commit metadata. API pages include their defining module and signatures when available; unbound method signatures include the instance parameter.
 
-DASCore stores this corpus below its OS-specific user cache, in `docs/<DASCore version>/`. Subsequent commands reuse it. Changes to an editable installation's source invalidate the corpus even when its version string stays the same. To regenerate it explicitly:
+DASCore stores this corpus below its OS-specific user cache, in a directory under `docs/<DASCore version>/`. Subsequent commands reuse it. Changes to an editable installation's source build a new corpus in a new directory even when its version string stays the same, so run `dascore doc` again to get the current directory. A request deletes the same version's corpora left unused for a day. To regenerate it explicitly:
 
 ```bash
 python -m dascore doc --rebuild

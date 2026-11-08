@@ -1,0 +1,5 @@
+---
+title: Draft a release
+keywords: [release, changelog, version, tag]
+---
+{{< include ../../.agents/skills/draft-release/SKILL.md >}}

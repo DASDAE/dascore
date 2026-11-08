@@ -34,7 +34,7 @@ _POLICY = (
     "DASCore does not keep a changelog. Describe user-facing and breaking "
     "changes in the pull request that makes them, under the headings in "
     ".github/pull_request_template.md; they are collected into the release "
-    "notes when a version is tagged. See .agents/agents.md. The page itself "
+    "notes when a version is tagged. See AGENTS.md. The page itself "
     "must stay exactly as pinned here, since it is published as "
     "dascore.org/changelog.html."
 )

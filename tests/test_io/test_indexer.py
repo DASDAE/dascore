@@ -18,6 +18,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError
+from dascore.io.core import FiberIO
 from dascore.io.index import indexer as indexer_mod
 from dascore.io.index.indexer import (
     DBDirectoryIndexer,
@@ -457,6 +458,221 @@ class TestUpdate:
         assert after_absolute[first] == after_relative[first]
         assert after_absolute[second] > after_relative[second]
         indexer.close()
+
+    def test_retry_unreadable(self, tmp_path, monkeypatch):
+        """
+        A source whose scan failed is skipped by later updates until
+        retry_unreadable rescans it, as after a reader fix, even if it moved;
+        readable sources are not rescanned.
+        """
+        dc.get_example_patch().io.write(tmp_path / "good.h5", "dasdae")
+        dc.spool(tmp_path).update(progress=None)
+        dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+        scan = fiber_io.scan
+
+        def broken(*args, **kwargs):
+            raise ValueError("reader bug")
+
+        monkeypatch.setattr(fiber_io, "scan", broken)
+        with pytest.warns(UserWarning, match="reader bug"):
+            assert len(dc.spool(tmp_path).update(progress=None)) == 1
+        monkeypatch.setattr(fiber_io, "scan", scan)
+        assert len(dc.spool(tmp_path).update(progress=None)) == 1
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "a.h5").rename(tmp_path / "sub" / "a.h5")
+        scanned = []
+        monkeypatch.setattr(
+            fiber_io,
+            "scan",
+            lambda self, path, **kw: scanned.append(path) or scan(self, path, **kw),
+        )
+        spool = dc.spool(tmp_path).update(progress=None, retry_unreadable=True)
+        assert len(spool) == 2
+        assert len(scanned) == 1  # good.h5 is not rescanned
+
+    def test_retry_unreadable_moved_into_scope(self, tmp_path, monkeypatch):
+        """A retried source moved into a scoped update drops its old row."""
+        (tmp_path / "old").mkdir()
+        dc.get_example_patch().io.write(tmp_path / "old" / "a.h5", "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+        scan = fiber_io.scan
+        monkeypatch.setattr(fiber_io, "scan", lambda *a, **k: int("bad"))
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
+        monkeypatch.setattr(fiber_io, "scan", scan)
+        (tmp_path / "new").mkdir()
+        (tmp_path / "old" / "a.h5").rename(tmp_path / "new" / "a.h5")
+        indexer.update(paths="new", progress=None, retry_unreadable=True)
+        sources = set(indexer._backend.get_sources()["source_path"])
+        indexer.close()
+        assert sources == {"new/a.h5"}
+
+
+class TestScopedUpdate:
+    """update(paths=...) walks, prunes and rescans only the named scopes."""
+
+    @pytest.fixture()
+    def archive(self, tmp_path):
+        """A directory with one indexed file in each of live/ and old/."""
+        patch = dc.get_example_patch()
+        for name in ("live", "old"):
+            (tmp_path / name).mkdir()
+            patch.io.write(tmp_path / name / "a.h5", "dasdae")
+        indexer = DBDirectoryIndexer(tmp_path).update(progress=None)
+        yield indexer
+        indexer.close()
+
+    @pytest.fixture()
+    def walked(self, monkeypatch):
+        """Record the roots each update walks."""
+        roots = []
+        real = indexer_mod._iter_filesystem
+
+        def wrapper(path, *args, **kwargs):
+            roots.append(Path(path))
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(indexer_mod, "_iter_filesystem", wrapper)
+        return roots
+
+    @staticmethod
+    def _sources(indexer):
+        return set(indexer._backend.source_stats()["source_path"])
+
+    def test_new_file_without_full_walk(self, archive, walked):
+        """Naming a new file indexes it and walks nothing else."""
+        new = archive.path / "live" / "b.h5"
+        dc.get_example_patch().io.write(new, "dasdae")
+        archive.update(paths=[new], progress=None)
+        assert walked == [new]
+        assert "live/b.h5" in self._sources(archive)
+
+    def test_directory_scope_prunes_only_inside(self, archive, walked):
+        """Removals inside the scope drop; those outside wait for a full update."""
+        (archive.path / "live" / "a.h5").unlink()
+        (archive.path / "old" / "a.h5").unlink()
+        archive.update(paths=["live"], progress=None)
+        assert walked == [archive.path / "live"]
+        assert self._sources(archive) == {"old/a.h5"}
+        archive.update(progress=None)
+        assert not self._sources(archive)
+
+    def test_deleted_file_path_drops_it(self, archive):
+        """Naming a file that no longer exists removes its rows."""
+        path = archive.path / "live" / "a.h5"
+        path.unlink()
+        archive.update(paths=[path], progress=None)
+        assert self._sources(archive) == {"old/a.h5"}
+
+    def test_move_within_scope(self, archive, monkeypatch):
+        """A rename inside the scope is a move, not a rescan."""
+        live = archive.path / "live"
+        (live / "a.h5").rename(live / "c.h5")
+        monkeypatch.setattr(dc, "scan", lambda *a, **k: pytest.fail("rescanned"))
+        archive.update(paths=["live"], progress=None)
+        assert self._sources(archive) == {"live/c.h5", "old/a.h5"}
+
+    def test_move_into_scope(self, archive):
+        """A file moved in from outside the scope leaves no old row behind."""
+        (archive.path / "old" / "a.h5").rename(archive.path / "live" / "c.h5")
+        archive.update(paths=["live"], progress=None)
+        assert self._sources(archive) == {"live/a.h5", "live/c.h5"}
+
+    def test_copy_into_scope_keeps_original(self, archive):
+        """A stat-identical copy into the scope is not taken for a move."""
+        shutil.copy2(archive.path / "old" / "a.h5", archive.path / "live" / "c.h5")
+        archive.update(paths=["live"], progress=None)
+        assert self._sources(archive) == {"live/a.h5", "live/c.h5", "old/a.h5"}
+
+    def test_sibling_with_scope_prefix_untouched(self, archive):
+        """Scope live does not prune live2, which merely shares its prefix."""
+        (archive.path / "live2").mkdir()
+        dc.get_example_patch().io.write(archive.path / "live2" / "a.h5", "dasdae")
+        archive.update(progress=None)
+        (archive.path / "live2" / "a.h5").unlink()
+        archive.update(paths=["live"], progress=None)
+        assert "live2/a.h5" in self._sources(archive)
+
+    def test_root_scope_prunes(self, archive):
+        """Naming the spool root itself prunes like a full update."""
+        (archive.path / "old" / "a.h5").unlink()
+        archive.update(paths=[archive.path], progress=None)
+        assert self._sources(archive) == {"live/a.h5"}
+
+    def test_first_update_scoped(self, tmp_path):
+        """
+        A scoped first update indexes only its scope, and reopening does not
+        walk the rest; a full update adds it.
+        """
+        for name in ("live", "old"):
+            (tmp_path / name).mkdir()
+            dc.get_example_patch().io.write(tmp_path / name / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(paths="live", progress=None)
+        assert len(spool) == 1
+        assert len(dc.spool(tmp_path)) == 1
+        assert len(dc.spool(tmp_path).update(progress=None)) == 2
+
+    def test_reset_index_walks_everything(self, archive):
+        """
+        A scoped update of an index cleared for a new decode, even by an
+        earlier spool, walks the whole directory, so the index is not marked
+        complete holding one scope.
+        """
+        with pytest.warns(UserWarning, match="rescanning"):
+            dc.spool(archive.path, snap=False)
+        with pytest.warns(UserWarning, match="ignoring paths"):
+            spool = dc.spool(archive.path, snap=False).update(paths="live")
+        assert len(spool) == 2
+
+    def test_other_spool_sees_scoped_first_update(self, tmp_path):
+        """A spool opened before a scoped first update does not walk the rest."""
+        for name in ("live", "old"):
+            (tmp_path / name).mkdir()
+            dc.get_example_patch().io.write(tmp_path / name / "a.h5", "dasdae")
+        first, second = dc.spool(tmp_path), dc.spool(tmp_path)
+        first.update(paths="live", progress=None)
+        assert len(second) == 1
+
+    def test_spool_update_paths(self, archive):
+        """Spool.update passes paths, a single one included, to its indexer."""
+        (archive.path / "live" / "a.h5").unlink()
+        (archive.path / "old" / "a.h5").unlink()
+        spool = dc.spool(archive.path).update(paths="live", progress=None)
+        assert len(spool) == 1  # old/ waits for a full update
+
+    def test_root_with_dotdot(self, archive):
+        """A root opened through '..' still accepts paths under it."""
+        detour = archive.path / "live" / ".." / "old" / ".."
+        indexer = DBDirectoryIndexer(detour, index_path=archive.index_path)
+        indexer.update(paths=["live"], progress=None)
+        indexer.close()
+
+    @pytest.mark.parametrize("paths", [None, ["a.h5"]])
+    def test_missing_root_raises(self, tmp_path, paths):
+        """An update of a vanished root raises rather than emptying."""
+        data = tmp_path / "data"
+        data.mkdir()
+        dc.get_example_patch().io.write(data / "a.h5", "dasdae")
+        index_path = tmp_path / "index.sqlite3"  # outside, so data can move
+        indexer = DBDirectoryIndexer(data, index_path=index_path).update(progress=None)
+        data.rename(tmp_path / "moved")
+        with pytest.raises(FileNotFoundError):
+            indexer.update(paths=paths, progress=None)
+        indexer.close()
+
+    @pytest.mark.parametrize(
+        ("bad", "match"),
+        [
+            ("../elsewhere", "not inside the spool"),
+            (".hidden", "is hidden"),
+            ("live/a.h5/member", "inside the indexed source live/a.h5"),
+        ],
+    )
+    def test_bad_paths_raise(self, archive, bad, match):
+        """Paths outside the root, hidden, or inside a source are refused."""
+        with pytest.raises(ValueError, match=match):
+            archive.update(paths=[bad], progress=None)
 
 
 class TestNameResolution:

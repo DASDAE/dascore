@@ -35,6 +35,9 @@ class TestReleaseDocumentation:
         page = package / "docs/index.qmd"
         page.parent.mkdir()
         page.write_text("Current authored docs")
+        skill = package / ".agents/skills/example/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("Current skill text")
         _git(tmp_path, "add", "dascore")
         _git(tmp_path, "commit", "-m", "Package documentation")
         workflow = (
@@ -49,3 +52,4 @@ class TestReleaseDocumentation:
         _git(tmp_path, *args[1:])
         assert code.read_text() == "release"
         assert page.read_text() == "Current authored docs"
+        assert skill.read_text() == "Current skill text"

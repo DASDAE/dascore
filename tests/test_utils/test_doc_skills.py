@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 import yaml
 
 import dascore as dc
 from dascore.cli import main
 from dascore.utils import doc_skills
-from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
+from dascore.utils.doc_corpus import DOC_PATH, SKILL_PATH, DocumentationError
+
+_SCRIPTS = Path(__file__).parents[2] / "scripts"
+
+
+def _load_script(name):
+    """Import a documentation build script, which lives outside the package."""
+    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    # Dataclasses with postponed annotations look their module up by name.
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestSkills:
@@ -21,26 +36,34 @@ class TestSkills:
         with dc.config_context(docs_cache_dir=tmp_path):
             yield
 
-    def test_catalog(self):
-        """The catalog exposes each catalogued procedure with its metadata."""
-        skills = doc_skills.get_skills()
-        assert {name: info["target"] for name, info in skills.items()} == {
-            "dascore": "recipes/dascore",
-            "make-inventory": "recipes/tunnel_inventory",
-            "migrate-to-v1": "migrations/dascore_1.0_migration",
-            "test-beta": "migrations/test_latest_beta",
-        }
-        assert all(x["title"] and x["description"] for x in skills.values())
+    def test_skill_files(self):
+        """Each shipped skill is a named file, and catalogued pages include theirs."""
+        shipped = {}
+        for path in sorted(SKILL_PATH.glob("*/SKILL.md")):
+            front = yaml.safe_load(path.read_text(encoding="utf-8").split("---", 2)[1])
+            assert front["name"] == path.parent.name and front["description"]
+            shipped[front["name"]] = front["description"]
+        assert set(doc_skills.get_skills()) == set(shipped)
+        for name, info in doc_skills.get_skills().items():
+            # The entry point's page is its routing recipe, not the bootstrap file.
+            if name == "dascore":
+                continue
+            assert info["description"] == shipped[name]
+            # A blank line before the include makes Quarto print the skill's
+            # front matter on pages whose code cells it executes.
+            page = (DOC_PATH / f"{info['target']}.qmd").read_text(encoding="utf-8")
+            include = f"{{{{< include ../../.agents/skills/{name}/SKILL.md >}}}}"
+            assert page.endswith(f"\n---\n{include}\n")
 
-    @pytest.mark.parametrize(
-        "name", ["dascore", "make-inventory", "migrate-to-v1", "test-beta"]
-    )
-    def test_same_document(self, cache, name):
-        """Skill retrieval returns the exact canonical cached documentation page."""
-        target = doc_skills.get_skills()[name]["target"]
-        text = doc_skills.read_skill(name)
-        with documentation_cache() as (root, manifest):
-            assert text == read_document(root, manifest, target)
+    @pytest.mark.skipif(not _SCRIPTS.exists(), reason="needs a repository checkout")
+    def test_build_tools_read_skill_files(self):
+        """Code cells and links that moved into skill files are still checked."""
+        generator = _load_script("generate_doc_code_tests")
+        page = DOC_PATH / "recipes" / "tunnel_inventory.qmd"
+        assert generator.extract_qmd_file(page).chunks
+        validator = _load_script("_validate_links")
+        skill = SKILL_PATH / "make-inventory" / "SKILL.md"
+        assert skill in set(validator.get_qmd_files())
 
     def test_cli(self, cache, capsys):
         """Discovery lists canonical pages and retrieval serves their contents."""
@@ -48,8 +71,32 @@ class TestSkills:
         listed = capsys.readouterr().out
         for name, info in doc_skills.get_skills().items():
             assert f"{name}: {info['description']}" in listed
-        assert main(["skill", "make-inventory"]) == 0
-        assert capsys.readouterr().out == doc_skills.read_skill("make-inventory")
+        for name, info in doc_skills.get_skills().items():
+            assert main(["skill", name]) == 0
+            printed = capsys.readouterr().out
+            assert printed == doc_skills.read_skill(name)
+            assert f"\n# {info['title']}\n" in printed
+            # The skill file's own front matter stays out of the printed page.
+            assert f"name: {name}" not in printed
+
+    def test_install(self, tmp_path, capsys, monkeypatch):
+        """One command copies every shipped skill and replaces an older copy."""
+        target = tmp_path / "agent" / "skills"
+        stale = target / "dascore" / "SKILL.md"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("An older copy.")
+        # Agents often quote the path, which leaves `~` for the command to expand.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        assert main(["skills", "--install", "~/agent/skills"]) == 0
+        installed = capsys.readouterr().out.split()
+        sources = sorted(SKILL_PATH.glob("*/SKILL.md"))
+        assert installed == [str(target / x.parent.name / x.name) for x in sources]
+        for source in sources:
+            copy = target / source.parent.name / source.name
+            assert copy.read_text(encoding="utf-8") == source.read_text(
+                encoding="utf-8"
+            )
 
     @pytest.mark.parametrize(
         "args, code, message",
@@ -58,7 +105,7 @@ class TestSkills:
             (
                 ["skill", "unknown"],
                 1,
-                "Available skills: dascore, make-inventory, migrate-to-v1, test-beta",
+                "Available skills: dascore, make-inventory",
             ),
             (["skill", "dascore", "--bootstrap"], 2, "Use a skill name"),
         ],
@@ -69,7 +116,7 @@ class TestSkills:
         captured = capsys.readouterr()
         assert not captured.out and message in captured.err
         if code == 2:
-            assert "Usage:" in captured.err
+            assert "usage:" in captured.err
 
     def test_bootstrap(self, capsys, tmp_path):
         """Export is verbatim and does not require building the corpus."""

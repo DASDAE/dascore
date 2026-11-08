@@ -1155,6 +1155,22 @@ class TestGetSpool:
             assert p1.equals(p2)
             assert p2.equals(p3)
 
+    def test_register_new_type(self, random_patch):
+        """Other packages can teach dc.spool a new input type."""
+
+        class Holder:
+            def __init__(self, patch):
+                self.patch = patch
+
+        @dc.spool.register(Holder)
+        def _from_holder(obj, **kwargs):
+            return dc.spool([obj.patch])
+
+        assert dc.spool.dispatch(Holder) is _from_holder
+        out = dc.spool(Holder(random_patch))
+        assert len(out) == 1
+        assert out[0].equals(random_patch)
+
     def test_spool_from_single_file(self, terra15_das_example_path):
         """Ensure a single file path returns a spool."""
         out1 = dc.spool(terra15_das_example_path)

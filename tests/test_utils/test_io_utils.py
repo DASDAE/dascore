@@ -45,6 +45,9 @@ from dascore.utils.remote_io import (
     is_no_range_http_error,
     remote_cache_scope,
 )
+from dascore.utils.remote_io import (
+    ensure_local_file as ensure_remote_local_file,
+)
 
 
 class _DummyHandle:
@@ -836,6 +839,16 @@ class TestIOResourceManager:
         assert first.exists()
         assert first.read_text() == "hello"
 
+    def test_ensure_local_file_revalidate_fetches_changed_file(self):
+        """A resource changed since it was cached is downloaded again."""
+        path = UPath("memory://dascore/io_resource_test_revalidate.txt")
+        path.write_text("hello")
+        first = ensure_remote_local_file(path, revalidate=True)
+        assert ensure_remote_local_file(path, revalidate=True) == first
+        path.write_text("goodbye!")
+        changed = ensure_remote_local_file(path, revalidate=True)
+        assert changed.read_text() == "goodbye!"
+
     def test_get_cached_local_file_returns_existing_cached_path(self):
         """The cache helper should find already materialized remote resources."""
         path = UPath("memory://dascore/io_resource_test_cached_lookup.txt")
@@ -1019,6 +1032,12 @@ class TestIOResourceManager:
         monkeypatch.setattr(remote_io, "coerce_to_upath", lambda resource: resource)
         out = remote_io._redact_remote_resource(_Resource())
         assert out == "zip+s3://.../archive.h5"
+
+    def test_signed_url_query_not_in_names(self):
+        """A URL's query, e.g. a signed URL's token, is not in names or labels."""
+        path = UPath("https://host/a/index.sqlite3?token=SECRET")
+        assert remote_io._safe_remote_name(path) == "index.sqlite3"
+        assert remote_io._redact_remote_resource(path) == "https://.../index.sqlite3"
 
     def test_ensure_local_file_raises_when_remote_cache_disabled(self):
         """Disabling remote caching should block local materialization."""

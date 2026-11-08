@@ -46,7 +46,7 @@ repos:
     rev: v1.22.4
     hooks:
     -   id: typos
-        files: \.(py|qmd)$
+        files: \.(py|qmd)$|SKILL\.md$
 
     # Lints github actions.
 -   repo: https://github.com/rhysd/actionlint

@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import re
+import shutil
+from pathlib import Path
 
 import yaml
 
 from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import (
     DOC_PATH,
-    PACKAGE_PATH,
+    SKILL_PATH,
     DocumentationError,
-    _frontmatter,
+    _read_source,
     source_paths,
 )
 
 
 def get_skills() -> dict[str, dict[str, str]]:
-    """Read skill membership and each page's authored title and description."""
+    """Read skill membership and each page's title and description.
+
+    A page without a description takes its included skill's.
+    """
     catalog = yaml.safe_load((DOC_PATH / "skills.yml").read_text(encoding="utf-8"))
     if not isinstance(catalog, dict):
         raise DocumentationError("The skill catalog must map names to document IDs.")
@@ -35,7 +40,7 @@ def get_skills() -> dict[str, dict[str, str]]:
             raise DocumentationError(
                 f"Skill {name!r} refers to an unknown document: {target!r}."
             )
-        front, _body = _frontmatter(pages[target].read_text(encoding="utf-8"))
+        front, _body = _read_source(pages[target])
         if not all(
             isinstance(front.get(key), str) and front[key].strip()
             for key in ("title", "description")
@@ -62,8 +67,16 @@ def read_skill(name: str) -> str:
         return read_document(root, manifest, skills[name]["target"])
 
 
+def install_skills(directory: Path | str) -> list[Path]:
+    """Copy every shipped skill into an agent's skill directory, replacing copies."""
+    out = []
+    for source in sorted(SKILL_PATH.glob("*/SKILL.md")):
+        target = Path(directory).expanduser() / source.parent.name
+        shutil.copytree(source.parent, target, dirs_exist_ok=True)
+        out.append(target / source.name)
+    return out
+
+
 def read_bootstrap() -> str:
     """Return the native agent entry point verbatim for explicit installation."""
-    return (PACKAGE_PATH / ".agents" / "skills" / "dascore" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
+    return (SKILL_PATH / "dascore" / "SKILL.md").read_text(encoding="utf-8")

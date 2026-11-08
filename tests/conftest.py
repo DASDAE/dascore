@@ -248,6 +248,13 @@ def allow_legacy_dasdae_coord_unpickle():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def allow_trusted_pickle_format():
+    """Test fixtures write and read their own trusted pickles."""
+    with _permanent_config(allow_pickle_format=True):
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
 def swap_index_map_path(tmp_path_factory):
     """For all tests cases, use a temporary index-map directory."""
     tmp_map_dir = tmp_path_factory.mktemp("cache_paths") / "path_map"

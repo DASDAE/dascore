@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import io
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -304,6 +305,28 @@ class TestCache:
             assert first["identity"]["source"] != second["identity"]["source"]
             assert doc_cache.read_document(root, second, "example") == "second"
 
+    def test_format_change(self, cache, monkeypatch):
+        """A new cache format rebuilds a corpus with unchanged sources."""
+        with doc_cache.documentation_cache() as (_, before):
+            pass
+        monkeypatch.setattr(
+            doc_cache, "_FORMAT_VERSION", before["identity"]["format"] + 1
+        )
+        with doc_cache.documentation_cache() as (_, after):
+            assert after["identity"]["format"] == before["identity"]["format"] + 1
+
+    def test_skill_sources(self, cache, monkeypatch):
+        """Editing a skill file invalidates the corpus built from it."""
+        skill = cache.parent / "skills" / "example" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("before")
+        monkeypatch.setattr(doc_cache, "SKILL_PATH", skill.parent.parent)
+        with doc_cache.documentation_cache() as (_, before):
+            pass
+        skill.write_text("after")
+        with doc_cache.documentation_cache() as (_, after):
+            assert before["identity"] != after["identity"]
+
     def test_nested_sources(self, cache):
         """Nested API edits invalidate the corpus; generated website files do not."""
         nested = cache.parent / "core" / "operation.py"
@@ -340,24 +363,42 @@ class TestCache:
         assert not (root / "partial.md").exists()
 
     def test_failed_publish(self, cache, monkeypatch):
-        """A failed directory replacement rolls back to the preceding corpus."""
-        with doc_cache.documentation_cache() as (root, original):
+        """A failed publish leaves no staging, and the next request rebuilds."""
+        with doc_cache.documentation_cache() as (root, _):
             pass
         replace = doc_cache.os.replace
 
-        def fail_new(source, target):
-            if Path(source).name.startswith(f".{dc.__version__}-"):
+        def fail_staging(source, target):
+            if Path(source).name.startswith("."):
                 raise OSError("replacement failed")
             return replace(source, target)
 
-        monkeypatch.setattr(doc_cache.os, "replace", fail_new)
-        with pytest.raises(OSError, match="replacement failed"):
-            with doc_cache.documentation_cache(rebuild=True):
-                pass
-        assert doc_cache.read_document(root, original, "example") == "first"
-        assert (
-            json.loads((root / "manifest.json").read_text(encoding="utf-8")) == original
-        )
+        with monkeypatch.context() as context:
+            context.setattr(doc_cache.os, "replace", fail_staging)
+            with pytest.raises(OSError, match="replacement failed"):
+                with doc_cache.documentation_cache(rebuild=True):
+                    pass
+        staging = [p for p in root.parent.iterdir() if p.name.startswith(".")]
+        assert [p.name.endswith("-old") for p in staging] == [True]
+        with doc_cache.documentation_cache() as (root, manifest):
+            assert doc_cache.read_document(root, manifest, "example") == "first"
+
+    def test_lost_race(self, cache, monkeypatch):
+        """A builder beaten to publishing uses the corpus the winner published."""
+        build = doc_cache.write_corpus
+
+        def race(staging):
+            result = build(staging)
+            monkeypatch.setattr(doc_cache, "write_corpus", build)
+            with doc_cache.documentation_cache() as (winner, _):
+                race.inode = winner.stat().st_ino
+            return result
+
+        monkeypatch.setattr(doc_cache, "write_corpus", race)
+        with doc_cache.documentation_cache() as (root, manifest):
+            assert root.stat().st_ino == race.inode
+            assert doc_cache.read_document(root, manifest, "example") == "first"
+        assert [p.name for p in root.parent.iterdir()] == [root.name]
 
     def test_source_change_during_build(self, cache, monkeypatch):
         """A source edit during generation cannot publish mixed documentation."""
@@ -376,16 +417,26 @@ class TestCache:
                 pass
         assert doc_cache.read_document(root, original, "example") == "first"
 
-    def test_old_backup(self, cache):
-        """A backup left by an interrupted cleanup does not prevent rebuilding."""
-        with doc_cache.documentation_cache() as (root, _original):
+    def test_sweep(self, cache, tmp_path):
+        """Stale corpora and staging are deleted; fresh ones and other versions stay."""
+        with doc_cache.documentation_cache() as (root, _):
             pass
-        backup = root.with_name(root.name + ".previous")
-        backup.mkdir()
-        (backup / "old.md").write_text("older generation")
-        with doc_cache.documentation_cache(rebuild=True) as (root, current):
-            assert doc_cache.read_document(root, current, "example") == "first"
-        assert not backup.exists()
+        stale = os.path.getmtime(root) - doc_cache._STALE_SECONDS - 1
+        old_corpus, staging = root.parent / ("0" * 16), root.parent / ".abandoned"
+        old_file, fresh = root.parent / "manifest.json", root.parent / ".building"
+        other = root.parent.parent / "other-version"
+        for path in (old_corpus, staging, fresh, other):
+            path.mkdir()
+            (path / "page.md").write_text("page")
+        old_file.write_text("{}")
+        for path in (old_corpus, staging, old_file, other, root):
+            os.utime(path, (stale, stale))
+        with doc_cache.documentation_cache() as (current, manifest):
+            assert doc_cache.read_document(current, manifest, "example") == "first"
+        assert current == root
+        assert os.path.getmtime(root) > stale + doc_cache._STALE_SECONDS
+        assert {p.name for p in root.parent.iterdir()} == {root.name, fresh.name}
+        assert other.exists()
 
     def test_omitted(self, cache, monkeypatch, capsys):
         """The CLI identifies missing optional API modules in its summary."""
@@ -404,23 +455,22 @@ class TestCache:
         )
 
     def test_rebuild(self, cache):
-        """Explicit rebuilding repairs an altered generated page."""
-        with doc_cache.documentation_cache() as (root, index):
-            (root / "example.md").write_text("altered")
-        with doc_cache.documentation_cache(rebuild=True) as (root, index):
-            assert doc_cache.read_document(root, index, "example") == "first"
+        """Explicit rebuilding repairs an altered page, repeatedly."""
+        for _ in range(3):
+            with doc_cache.documentation_cache() as (root, index):
+                (root / "example.md").write_text("altered")
+            with doc_cache.documentation_cache(rebuild=True) as (root, index):
+                assert doc_cache.read_document(root, index, "example") == "first"
 
-    @pytest.mark.parametrize("damage", ["missing", "manifest", "interrupted"])
+    @pytest.mark.parametrize("damage", ["missing", "manifest"])
     def test_recovery(self, cache, damage):
-        """Missing pages, malformed manifests, and interrupted swaps are recoverable."""
+        """Missing pages and malformed manifests are recoverable."""
         with doc_cache.documentation_cache() as (root, index):
             pass
         if damage == "missing":
             (root / "example.md").unlink()
-        elif damage == "manifest":
-            (root / "manifest.json").write_text("{")
         else:
-            root.rename(root.with_name(root.name + ".previous"))
+            (root / "manifest.json").write_text("{")
         with doc_cache.documentation_cache() as (root, index):
             assert doc_cache.read_document(root, index, "example") == "first"
 
@@ -442,20 +492,6 @@ class TestCache:
             runpy.run_module("dascore", run_name="__main__")
         assert result.value.code == 0
         assert capsys.readouterr().out == "first"
-
-    def test_abandoned_staging(self, cache):
-        """A later request removes staging abandoned by a killed builder."""
-        with doc_cache.documentation_cache() as (root, _):
-            pass
-        abandoned = root.parent / f".{root.name}-abandoned"
-        abandoned.mkdir()
-        (abandoned / "partial.md").write_text("unfinished")
-        unrelated = root.parent / ".another-version-staging"
-        unrelated.mkdir()
-        with doc_cache.documentation_cache() as (root, manifest):
-            assert doc_cache.read_document(root, manifest, "example") == "first"
-        assert not abandoned.exists()
-        assert unrelated.exists()
 
     def test_status(self, cache, capsys):
         """CLI provenance belongs to the invoking process."""
@@ -500,9 +536,26 @@ class TestProcesses:
             stdout, stderr = process.communicate(timeout=90)
             assert process.returncode == 0, stderr
             assert "select(" in stdout
-        root = tmp_path / dc.__version__
+        (root,) = (tmp_path / dc.__version__).iterdir()
         assert (root / "manifest.json").is_file()
-        assert not root.with_name(root.name + ".previous").exists()
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows reports a closed pipe differently"
+    )
+    def test_closed_pipe(self, tmp_path):
+        """A reader that stops early, such as `head`, leaves stderr empty."""
+        process = subprocess.Popen(
+            [sys.executable, "-m", "dascore", "skill", "--bootstrap"],
+            cwd=tmp_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        # Close the read end before the command has anything to write.
+        process.stdout.close()
+        stderr = process.stderr.read()
+        assert process.wait(timeout=60) == 1
+        assert stderr == ""
 
     @pytest.mark.parametrize(
         "command",
@@ -526,39 +579,27 @@ class TestProcesses:
         assert dc.__version__ in result.stdout
 
 
-class TestOptionalCLI:
-    """CLI commands require Typer; Python library use does not."""
-
-    def test_missing_typer(self, hide_module, capsys):
-        """A missing Typer reports the standard optional-dependency guidance."""
-        hide_module("typer")
-        assert main(["doc"]) == 1
-        captured = capsys.readouterr()
-        assert not captured.out
-        assert "typer is not installed" in captured.err
-        assert "pip install typer" in captured.err
-        assert "uv pip install typer" in captured.err
-        assert "Traceback" not in captured.err
+class TestUsageErrors:
+    """Invalid invocations fail with a usage message, not a traceback."""
 
     @pytest.mark.parametrize("args", [[], ["unknown"], ["doc", "--unknown"]])
     def test_usage_errors(self, args, capsys):
         """Missing commands and invalid arguments return a nonzero usage error."""
         assert main(args) == 2
         captured = capsys.readouterr()
-        assert "Usage:" in captured.err
-        assert "Error" in captured.err
+        assert "usage:" in captured.err
+        assert "error:" in captured.err
+        assert "Traceback" not in captured.err
 
-    @pytest.mark.concurrency
-    def test_import_is_lazy(self):
-        """Importing the library and entry point does not import Typer."""
-        code = (
-            "import sys; import dascore; import dascore.cli; "
-            "assert 'typer' not in sys.modules"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
-        )
-        assert result.returncode == 0, result.stderr
+    def test_closed_pipe(self, monkeypatch, capfd):
+        """A reader that stops early, such as `head`, ends the command quietly."""
+
+        def closed():
+            raise BrokenPipeError
+
+        monkeypatch.setattr("dascore.cli.read_bootstrap", closed)
+        assert main(["skill", "--bootstrap"]) == 1
+        assert capfd.readouterr().err == ""
 
 
 class TestKeywordMetadata:

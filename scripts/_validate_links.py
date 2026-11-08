@@ -20,6 +20,8 @@ def get_qmd_files(
     """Yield all QMD files."""
     path = _get_docs_path() if path is None else path
     yield from path.rglob("*qmd")
+    # Pages include their skill's text, which is where its links are written.
+    yield from (path.parent / ".agents" / "skills").rglob("SKILL.md")
 
 
 def yield_links(text, pattern=r"(?<=\]\(`).*?(?=`\))"):

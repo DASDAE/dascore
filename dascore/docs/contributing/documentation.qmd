@@ -70,7 +70,9 @@ python scripts/_doc_report.py summary
 
 Run these in order. `scripts/_baselines/api_urls.tsv` protects published API URLs; regenerate it with `python scripts/_api_urls.py freeze` only when intentional URL changes are explained in the PR.
 
-Executable Python blocks in hand-written `.qmd` files are mirrored into pytest files; blocks with `eval: false` are not tested:
+A page that is also an agent skill holds only an include; its text, and its executable blocks, live in `dascore/.agents/skills/<name>/SKILL.md`, so edit that file.
+
+Executable Python blocks in hand-written `.qmd` files, and in the skill files they include, are mirrored into pytest files; blocks with `eval: false` are not tested:
 
 ```bash
 python scripts/generate_doc_code_tests.py
