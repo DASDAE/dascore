@@ -64,8 +64,9 @@ class TestOversizeWindows:
     @pytest.mark.parametrize("name", ["median_filter", "gaussian_filter"])
     def test_accepted(self, patch, name):
         """The dense filters hand an oversize window to scipy, which copes."""
-        out = getattr(patch, name)(time=5000, samples=True)
-        assert out.shape == patch.shape
+        small = patch.select(distance=(0, 5), time=(0, 50), samples=True)
+        out = getattr(small, name)(time=100, samples=True)
+        assert out.shape == small.shape
 
 
 class TestOverlapNone:

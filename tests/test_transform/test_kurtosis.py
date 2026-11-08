@@ -11,6 +11,7 @@ from dascore.transform._kurtosis_kernels import (
     _moving_sum,
     _recursive_kurtosis,
     _windowed_kurtosis,
+    _windowed_kurtosis_numpy,
 )
 from dascore.transform.kurtosis import _get_window_samples
 
@@ -63,6 +64,18 @@ class TestKurtosisHelpers:
 
         assert out.shape == data.shape
         assert np.isfinite(out).any()
+
+    @pytest.mark.parametrize("nwin", [3, 4, 25])
+    def test_numpy_kurtosis_matches_the_loop(self, nwin):
+        """The vectorized kernel places windows as the loop does."""
+        data = np.random.default_rng(42).normal(size=(40, 3))
+        expected = _windowed_kurtosis.func(data, nwin=nwin)
+        assert np.allclose(_windowed_kurtosis_numpy(data, nwin), expected)
+
+    def test_numpy_kurtosis_constant_data_returns_nan(self):
+        """Rounding gives a non-integer constant no variance."""
+        out = _windowed_kurtosis_numpy(np.full((10, 3), 0.3), nwin=7)
+        assert np.isnan(out).all()
 
     def test_recursive_kurtosis_preserves_shape(self):
         """Ensure recursive helper preserves input shape."""

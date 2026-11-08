@@ -235,7 +235,7 @@ class TestChunk:
         fine = dc.get_example_patch(
             time_step=to_timedelta64(0.001),
             time_min=to_timedelta64(1000) + coarse.get_coord("time").min(),
-        )
+        ).select(time=(0, 20), samples=True)
         out = dc.spool([coarse, fine]).chunk(time=0.002)
         assert len(out)
         assert {x.get_coord("time").step for x in out} == {fine.get_coord("time").step}
@@ -4829,6 +4829,7 @@ class TestTrimmedRecipeMerge:
             out[kind] = (_dim_spool(directory, name, kind), name)
         return out
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("kind", ["datetime", "float", "int64", "int32"])
     def test_every_chunking_matches_the_patch_path(
         self,
@@ -5138,6 +5139,7 @@ class TestSelectedRecipeMerge:
             assert not planned._value_residuals_on((plain, residual), "time")
             assert not planned._value_residuals_on((residual, plain), "time")
 
+    @pytest.mark.wasm_skip
     def test_every_selection_matches_the_patch_path(self, spools, monkeypatch, route):
         """Random selections and chunkings read the same samples either way.
 
