@@ -1,0 +1,7 @@
+---
+title: AI Policy
+---
+
+Use of AI tools is welcome, even encouraged, but there must be a human responsible for the submission. Review it, test it, and be ready to discuss it. If you can't discuss the main design decisions, alternatives, real-world need, etc., it is not yet ready for submission.
+
+We discourage drive-by AI-driven contributions from people/bots who don't work in fiber-optic sensing.
