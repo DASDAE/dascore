@@ -710,12 +710,9 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    # Determine if conflicting non-dimensional coords should be dropped.
-    conf = attr_kwargs.get("conflict", None)
-    drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_merged_coord(
-        df, merge_dim, coords, drop_conf_coords, **coord_kwargs
-    )
+    # Conflicting non-dimensional coords follow the attrs conflict policy.
+    conf = attr_kwargs.get("conflict") or "raise"
+    new_coord = _get_merged_coord(df, merge_dim, coords, conf, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.

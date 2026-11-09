@@ -39,6 +39,7 @@ from dascore.utils.patch import (
     stack_patches,
     swap_kwargs_dim_to_axis,
 )
+from dascore.warnings import DASCoreWarning
 
 
 @dc.patch_function(required_dims=("time", "distance"))
@@ -1268,6 +1269,32 @@ class TestForcePatchMergeOverlap:
         out = _force_patch_merge(infos, merge_kwargs={})
         assert len(out) == 1
         assert out[0]["patch"] is random_patch
+
+    @staticmethod
+    def _infos(*patches):
+        """The patch dicts _force_patch_merge takes."""
+        out = []
+        for patch in patches:
+            info = patch.coords._get_dim_summary()
+            info["patch"] = patch
+            info["dims"] = ",".join(patch.dims)
+            out.append(info)
+        return out
+
+    def test_conflict_policy_reaches_coordinates(self, random_patch):
+        """Differing non-dimensional coords follow the conflict policy."""
+        n = random_patch.shape[random_patch.get_axis("distance")]
+        time = random_patch.get_coord("time")
+        first = random_patch.update_coords(channel=("distance", np.arange(n)))
+        second = first.update_coords(
+            channel=("distance", np.arange(n) + 1000), time=time + time.coord_range()
+        )
+        infos = self._infos(first, second)
+        with pytest.raises(CoordMergeError, match="channel"):
+            _force_patch_merge(infos, merge_kwargs={})
+        with pytest.warns(DASCoreWarning, match="kept"):
+            out = _force_patch_merge(infos, merge_kwargs={"conflict": "keep_first"})
+        assert np.array_equal(out[0]["patch"].get_array("channel"), np.arange(n))
 
 
 class TestDottedPatchNames:

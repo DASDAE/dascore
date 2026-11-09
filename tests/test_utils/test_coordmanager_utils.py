@@ -237,6 +237,32 @@ class TestMergeCoordManagers:
             out = merge_coord_managers([cm1, cm2], dim="time", conflict="drop")
         assert "channel" not in out.coord_map
 
+    def test_keep_first_follows_input_order(self, cm_basic):
+        """keep_first keeps the first manager given, not the earliest."""
+        n = cm_basic.shape[cm_basic.get_axis("distance")]
+        time = cm_basic.get_coord("time")
+        early = cm_basic.update_coords(channel=("distance", np.arange(n)))
+        late = early.update_coords(
+            channel=("distance", np.arange(n) + 1000), time=time + time.coord_range()
+        )
+        with pytest.warns(DASCoreWarning, match="kept"):
+            out = merge_coord_managers([late, early], dim="time", conflict="keep_first")
+        assert np.array_equal(out.get_array("channel"), np.arange(n) + 1000)
+        # The merged dimension still runs in time order.
+        assert out.get_coord("time").min() == time.min()
+
+    @pytest.mark.parametrize("conflict", ["raise", "keep_first", "drop"])
+    def test_dimension_coordinates_are_never_loosened(self, cm_basic, conflict):
+        """Differing coordinates on another dimension raise under any policy."""
+        time = cm_basic.get_coord("time")
+        distance = cm_basic.get_coord("distance")
+        other = cm_basic.update_coords(
+            distance=distance.update_limits(min=distance.max()),
+            time=time + time.coord_range(),
+        )
+        with pytest.raises(CoordMergeError, match="distance is a dimension"):
+            merge_coord_managers([cm_basic, other], dim="time", conflict=conflict)
+
 
 class TestRawMergeKeepsUnits:
     """The raw-concatenation merge fallback keeps common units."""

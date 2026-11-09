@@ -124,6 +124,15 @@ def merge_coord_managers(
             dims = managers[0].dim_map[coord_name]
             if all([first == x.coord_map[coord_name] for x in managers]):
                 out[coord_name] = (dims, first)
+            elif coord_name in managers[0].dims:
+                # The policy covers non-dimensional coordinates only; members
+                # whose other dimensions differ cannot be merged at all.
+                msg = (
+                    f"Non merging coordinates {coord_name} are not equal. "
+                    f"{coord_name} is a dimension, so no conflict policy "
+                    "can merge the coordinate managers."
+                )
+                raise CoordMergeError(msg)
             elif _resolve_conflict(coord_name, keepable=True):
                 out[coord_name] = (dims, first)
         return out
@@ -207,15 +216,23 @@ def merge_coord_managers(
                 out[coord_name] = (dims, new_data)
         return out
 
-    def _get_new_coords(managers) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
-        """Merge relevant coordinates together."""
+    def _get_new_coords(
+        managers, ordered
+    ) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
+        """
+        Merge relevant coordinates together.
+
+        Non-merging coordinates are resolved in input order, so
+        "keep_first" keeps the first manager given; merging coordinates
+        concatenate in `ordered` (merge coordinate) order.
+        """
         # build up merged coords.
         coords_to_merge = managers[0].dim_to_coord_map[dim]
         coords_not_to_merge = set(managers[0].coord_map) - set(coords_to_merge)
         # non-merging coordinates should be identical.
         coords_dict = _get_non_merge_coords(managers, coords_not_to_merge)
         # merge coordinates
-        coords_dict.update(_get_merged_coords(managers, coords_to_merge))
+        coords_dict.update(_get_merged_coords(ordered, coords_to_merge))
         return coords_dict
 
     dims = _get_dims(coord_managers)
@@ -225,6 +242,9 @@ def merge_coord_managers(
         key=lambda x: x.coord_map[dim].min(),
         reverse=any(x.coord_map[dim].reverse_sorted for x in coord_managers),
     )
-    merged_coords = {**_get_new_coords(sort_managers), **kept_unshared}
+    merged_coords = {
+        **_get_new_coords(coord_managers, sort_managers),
+        **kept_unshared,
+    }
     _warn_decided()
     return dc.get_coord_manager(merged_coords, dims=dims)
