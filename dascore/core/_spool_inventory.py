@@ -202,9 +202,9 @@ def _combine_state(values, label):
     return present[0]
 
 
-def combine_inventories(first, second) -> tuple:
+def combine_inventories(*members) -> tuple:
     """
-    Return the (inventory, enrich kwargs) a union of two spools carries.
+    Return the (inventory, enrich kwargs) a union of spools carries.
 
     An inventory and its enrichment are spool-wide state, so the union
     carries whichever either operand has and applies it to every patch
@@ -217,10 +217,10 @@ def combine_inventories(first, second) -> tuple:
     from dascore.core.spool import Spool  # noqa: PLC0415
 
     inventory = _combine_state(
-        [getattr(x, "_inventory", None) for x in (first, second)], "inventories"
+        [getattr(x, "_inventory", None) for x in members], "inventories"
     )
     enrichment = _combine_state(
-        [x._enrichment() if isinstance(x, Spool) else None for x in (first, second)],
+        [x._enrichment() if isinstance(x, Spool) else None for x in members],
         "enrich arguments",
     )
     # Enrichment is only reachable through an inventory, so it cannot
