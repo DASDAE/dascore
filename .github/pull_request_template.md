@@ -28,7 +28,7 @@ pound sign, e.g. `#12` without the backticks)
 I have:
 
 - [ ] filled in the Changelog section above (see `dascore/docs/contributing/general_guidelines.qmd`).
-- [ ] read the [AI policy](https://dascore.org/contributing/ai_policy.html).
+- [ ] complied with the [AI policy](https://dascore.org/contributing/ai_policy.html).
 
 I have (if applicable):
 
