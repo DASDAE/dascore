@@ -16,8 +16,7 @@ from collections.abc import (
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
-from functools import partial, reduce, singledispatch
-from operator import add
+from functools import partial, singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
 
@@ -709,15 +708,19 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         if not isinstance(other, Spool):
             return NotImplemented
+        return Spool._union([self, other])
+
+    @staticmethod
+    def _union(spools: Sequence[Spool]) -> Spool:
+        """Combine spools as `+` does, in a single catalog union."""
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        members = [self._as_union_member(), other._as_union_member()]
-        union = PatchCatalog.union(members)
+        union = PatchCatalog.union([x._as_union_member() for x in spools])
         new = Spool()
         new._catalog = union
         # An attached inventory is part of what a spool yields, so it must
         # survive the union; two different ones have no combined answer.
-        new._inventory, enrichment = combine_inventories(self, other)
+        new._inventory, enrichment = combine_inventories(*spools)
         if enrichment is not None:
             new._enrich_kwargs, new._on_unresolved = enrichment
         return new
@@ -3411,7 +3414,12 @@ BaseSpool = Spool
 
 
 def spool(
-    obj: path_types | Spool | PatchType | Sequence[PatchType] | None = None,
+    obj: path_types
+    | Spool
+    | PatchType
+    | Sequence[PatchType]
+    | Sequence[path_types]
+    | None = None,
     *,
     index: path_types | None = None,
     **kwargs,
@@ -3563,7 +3571,9 @@ def _spool_from_sequence(items, **kwargs):
     """
     if items and all(isinstance(x, path_types) for x in items):
         spools = [_spool_from_str(x, **kwargs) for x in items]
-        return reduce(add, spools)
+        # One union of every catalog, not N-1 pairwise ones, each of which
+        # would copy all the records gathered so far.
+        return Spool._union(spools)
     return Spool(items)
 
 

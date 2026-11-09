@@ -34,6 +34,7 @@ from dascore.exceptions import (
     UnknownExampleError,
     UnknownFiberFormatError,
 )
+from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
 from dascore.lazy.recipe import Recipe
@@ -2401,6 +2402,15 @@ class TestSpoolFromPaths:
         sources = set(spool.get_contents()["source_path"])
         assert {Path(x) for x in sources} == set(file_paths)
         assert isinstance(spool[0], dc.Patch)
+
+    def test_one_catalog_union(self, file_paths):
+        """The paths' catalogs combine in one union, not one per path."""
+        with mock.patch.object(
+            PatchCatalog, "union", wraps=PatchCatalog.union
+        ) as union:
+            spool = dc.spool(file_paths)
+        assert union.call_count == 1
+        assert len(spool) == len(file_paths)
 
     def test_strings_and_tuple(self, file_paths):
         """Paths may be strings, and the sequence a tuple."""
