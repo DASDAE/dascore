@@ -1,6 +1,7 @@
 """Tests for RSF format."""
 
 import warnings
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +11,7 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.rsf import RSFV1
-from dascore.io.rsf.utils import KINDS
+from dascore.io.rsf.utils import KINDS, read_header
 from dascore.io.utils import step_from_interval
 from dascore.warnings import DASCoreWarning
 
@@ -295,15 +296,19 @@ class TestRsfRead:
     def test_relative_in(self, tmp_path, monkeypatch):
         """A relative in= resolves against the header's directory, then cwd."""
         data = np.arange(6, dtype=np.float32).reshape(2, 3)
-        # backslashes in in= are kept, as Madagascar keeps them
-        lines = ["n1=2", "n2=3", r'in="d\\x.rsf@"']
+        lines = ["n1=2", "n2=3", 'in="data.rsf@"']
         sub = tmp_path / "sub"
         sub.mkdir()
-        _write_rsf(sub / "a.rsf", lines, data, data_path=sub / r"d\\x.rsf@")
+        _write_rsf(sub / "a.rsf", lines, data, data_path=sub / "data.rsf@")
         assert np.array_equal(dc.spool(sub / "a.rsf")[0].data, data)
         monkeypatch.chdir(sub)
         _write_rsf(tmp_path / "b.rsf", lines)
         assert np.array_equal(dc.spool(tmp_path / "b.rsf")[0].data, data)
+
+    def test_in_keeps_backslashes(self):
+        """in= keeps its backslashes, as Madagascar does, for a UNC path."""
+        hdr, _, _ = read_header(BytesIO(b'n1=1\nin="\\\\srv\\d.rsf@"\n'))
+        assert hdr["in"] == r"\\srv\d.rsf@"
 
     @pytest.mark.parametrize("order", ["native", "xdr"])
     @pytest.mark.parametrize("kind", list(KINDS))
