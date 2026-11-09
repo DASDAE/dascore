@@ -2447,8 +2447,10 @@ class TestAllBlankConcatenate:
 
     def test_all_blank_members_warn_at_plan_time(self, reduced_spool):
         """The plan warns, naming dim_reduce, and the join still happens."""
-        with pytest.warns(DASCoreWarning, match="dim_reduce"):
+        with pytest.warns(DASCoreWarning, match="dim_reduce") as record:
             out = reduced_spool.concatenate(time=None)
+        # The warning points at the user's call, not at dascore internals.
+        assert record[0].filename == __file__
         time = out[0].get_array("time")
         assert len(time) == len(reduced_spool)
         assert np.all(pd.isnull(time))

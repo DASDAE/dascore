@@ -2376,7 +2376,7 @@ def build_concat_plan(
             "the dimension with the default dim_reduce='empty'; reduce with "
             "dim_reduce='min' (or another reducer) to keep a label per patch."
         )
-        warnings.warn(msg, DASCoreWarning, stacklevel=2)
+        warnings.warn(msg, DASCoreWarning, stacklevel=_user_stacklevel())
     if has_envelope:
         # one spelling per dimensionality, as a chunk plan: metres and
         # centimetres plan together and members convert on loading; only
