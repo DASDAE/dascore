@@ -254,6 +254,61 @@ class TestVersion2Files:
             np.testing.assert_array_equal(back.data, data)
 
 
+class TestSnapIds:
+    """A read derives a new data_id only where snapping moved labels."""
+
+    @pytest.fixture(scope="class")
+    def jittered_patch(self):
+        """A patch whose time labels sit off the step they declare."""
+        coord = get_coord(data=np.array([0.0, 1.1, 1.95, 3.02]), step=1.0)
+        return dc.Patch(data=np.arange(4.0), coords={"time": coord}, dims=("time",))
+
+    @pytest.fixture(scope="class")
+    def jittered_path(self, jittered_patch, tmp_path_factory):
+        """The jittered patch written to DASDAE."""
+        path = tmp_path_factory.mktemp("snap_ids") / "jittered.h5"
+        dc.write(jittered_patch, path, "DASDAE")
+        return path
+
+    def test_default_snap_moves_labels_and_derives_id(
+        self, jittered_path, jittered_patch
+    ):
+        """The default read snaps the labels, so its id is a new one."""
+        out = dc.read(jittered_path)[0]
+        assert not np.array_equal(
+            out.get_array("time"), jittered_patch.get_array("time")
+        )
+        assert out.attrs.data_id != jittered_patch.attrs.data_id
+        assert out.attrs.origin_id == jittered_patch.attrs.origin_id
+        # the explicit spellings of the same decode give the same id
+        assert dc.read(jittered_path, snap=True)[0].attrs.data_id == out.attrs.data_id
+        assert dc.read(jittered_path, snap="time")[0].attrs.data_id == out.attrs.data_id
+
+    def test_exact_read_keeps_id(self, jittered_path, jittered_patch):
+        """snap=False returns the stored patch, labels and id alike."""
+        out = dc.read(jittered_path, snap=False)[0]
+        assert np.array_equal(out.get_array("time"), jittered_patch.get_array("time"))
+        assert out.attrs.data_id == jittered_patch.attrs.data_id
+
+    def test_scan_and_spool_agree_with_read(self, jittered_path):
+        """The index holds the ids the loaded patches carry."""
+        for snap in (None, False):
+            read_id = dc.read(jittered_path, snap=snap)[0].attrs.data_id
+            assert dc.scan(jittered_path, snap=snap)[0].attrs.data_id == read_id
+        spool = dc.spool(jittered_path)
+        assert spool.get_contents()["data_id"].iloc[0] == spool[0].attrs.data_id
+
+    def test_even_labels_keep_id_however_snap_is_spelled(self, tmp_path):
+        """Nothing moves on an evenly sampled patch, so no read derives."""
+        patch = dc.get_example_patch()
+        path = tmp_path / "even.h5"
+        dc.write(patch, path, "DASDAE")
+        for snap in (None, True, False, "time"):
+            out = dc.read(path, snap=snap)[0]
+            assert out.attrs.data_id == patch.attrs.data_id
+            assert "_snapped_dims" not in dict(out.attrs)
+
+
 class TestMultiRunRoundTrip:
     """A coordinate of several exact runs is written whole, as its runs."""
 
