@@ -163,12 +163,9 @@ class PatchAttrs(DascoreBaseModel):
     def __getattr__(self, item: str):
         # pydantic's __getattr__ serves extras; a miss on a name 0.1.x
         # derived from the coordinates gets a pointer to where it went.
-        # Looked up dynamically: pydantic defines it outside type checking.
-        parent = getattr(super(), "__getattr__", None)
-        if parent is None:
-            raise AttributeError(item)
         try:
-            return parent(item)
+            # Looked up dynamically: pydantic defines it outside type checking.
+            return getattr(super(), "__getattr__")(item)
         except AttributeError as exc:
             if hint := _coordinate_field_hint(item):
                 raise AttributeError(f"{exc} {hint}") from None
