@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
-from dascore.exceptions import CoordError, InvalidFiberFileError
+from dascore.exceptions import CoordError
 from dascore.io.core import FiberIO
 from dascore.io.utils import _DASCORE_DIR, require_grid, slice_dataset
 from dascore.units import get_quantity_str
@@ -24,12 +24,11 @@ from .utils import (
     HISTORY,
     PREFIX,
     RESERVED,
-    _get_attrs,
-    _get_coords,
-    _get_dtype,
-    _get_header,
-    _get_layout,
-    _read_header,
+    get_attrs,
+    get_coords,
+    get_dtype,
+    get_layout,
+    read_header,
 )
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
@@ -66,9 +65,7 @@ def _get_history_lines(patch) -> list[str]:
 
 def _get_attr_text(value) -> str:
     """Return an attr value as header text, quoted unless a number, bool or null."""
-    if isinstance(value, np.datetime64):
-        value = f"{np.datetime_as_string(value.astype('datetime64[ns]'))}Z"
-    elif isinstance(value, np.number | np.bool_):
+    if isinstance(value, np.number | np.bool_):
         value = value.item()
     if value is None or isinstance(value, bool | int | float):
         return json.dumps(value)
@@ -80,9 +77,8 @@ def _get_attr_text(value) -> str:
 def _is_one_binding(line: str) -> bool:
     """Return True when Madagascar reads a header line as a single binding."""
     # simtab.c opens or closes a string at every '"', with no escape, and
-    # ends a word at whitespace outside one and a string at a newline. A
-    # control character (NUL, the separator bytes) would also end the
-    # header early, and a name that is not an identifier would not bind.
+    # ends a word at whitespace outside one. A control character could end
+    # the header early, and a name that is not an identifier cannot bind.
     name, _, _ = line.partition("=")
     parts = line.split('"')
     outside = "".join(parts[::2])
@@ -132,36 +128,23 @@ class RSFV1(FiberIO):
 
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
         """Return the version when the resource starts with an RSF header."""
-        return self.version if _read_header(resource) is not None else None
+        return self.version if read_header(resource) is not None else None
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
-        """
-        Describe the patch from the header alone.
-
-        Each key that does not describe the file becomes an attr, including
-        keys another program wrote; see `_get_attrs` for how values are
-        typed. Only the history lines DASCore wrote are read, with ':' in
-        place of each '='; another program's are prose.
-        """
-        path = getattr(resource, "name", resource)
-        hdr, _, text = _get_header(resource, path)
-        try:
-            coords = _get_coords(hdr)
-        except ValueError as exc:
-            msg = f"RSF header {path} has an invalid axis: {exc}"
-            raise InvalidFiberFileError(msg) from exc
-        dtype = _get_dtype(hdr).newbyteorder("=")
+        """Describe the patch from the header alone; see `get_attrs`."""
+        hdr, _, text = read_header(resource, raise_on_fail=True)
+        coords = get_coords(hdr)
+        dtype = get_dtype(hdr).newbyteorder("=")
         cm = dc.core.get_coord_manager(coords=coords, dims=tuple(coords))
-        attrs = _get_attrs(text)
-        return [dc.PatchMeta(coords=cm, dtype=str(dtype), attrs=attrs)]
+        return [dc.PatchMeta(coords=cm, dtype=str(dtype), attrs=get_attrs(text))]
 
     def read_array(
         self, resource: LocalPath, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """Memory-map the samples, n1 fastest, and select the windows."""
-        binary, offset, dtype, shape = _get_layout(resource)
+        binary, offset, dtype, shape = get_layout(resource)
         data = np.memmap(binary, dtype, "r", offset, shape, order="F")
         out = slice_dataset(data, windows)
         # copy the window, so a later write to the file cannot change it
@@ -204,21 +187,14 @@ class RSFV1(FiberIO):
         - With data_path, the header's in= holds the binary's absolute path
         - Without data_path, the header ends with a blank line and the
         separator bytes 0x0c 0x0c 0x04 before the binary
-        - Each attr that is set is written as one key=value line, a dict as
-        one quoted JSON string, and with the prefix 'dascore_' when its
-        name is an RSF key such as n1 or in. The ids, and attrs named for a
-        coordinate field such as time_min, are not written; a read derives
-        them from the file. An attr whose name is not an ASCII
-        identifier, or that Madagascar would misread, such as text with one
-        quote, a newline or another control character, is skipped with a
-        DASCoreWarning, since Madagascar honors no escape inside a quoted
-        value.
-        - Each history entry opens the header as a line
-        '# dascore <version> <entry>', with every '=' written as ':' and
-        every control character, such as a newline, as a space, so no RSF
-        reader binds it. The entry reads back with those substitutions.
-        Nothing in the header comes from a clock, so writing a patch twice
-        gives the same bytes.
+        - Each attr that is set, except the ids and coordinate fields such
+        as time_min, is one key=value line (a dict as quoted JSON), prefixed
+        'dascore_' when its name is an RSF key such as n1. An attr Madagascar
+        would misread (an odd quote, a control character, a non-identifier
+        name) is skipped with a DASCoreWarning.
+        - Each history entry is a line '# dascore <version> <entry>', with
+        '=' written as ':' and control characters as spaces, so it never
+        binds; it reads back with those substitutions.
         """
         patches = [spool] if isinstance(spool, dc.Patch) else spool
         assert len(patches) == 1
