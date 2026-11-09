@@ -128,8 +128,12 @@ def combine_patch_attrs(
                 "unequal attributes."
             )
             raise AttributeMergeError(msg)
+        # Kept for the subclass fallback, which must not restore them.
+        removed.update(conflicts)
         return [out]
 
+    # Fields the merge leaves out on purpose: dropped or conflicting.
+    removed: set[str] = set(iterate(drop_attrs))
     mod_dict_list = _get_model_dict_list(model_list)
     members = [_to_patch_attrs(x) for x in model_list]
     ids: dict[str, Any] = {}
@@ -157,9 +161,12 @@ def combine_patch_attrs(
     out = {**mod_dict_list[0], **history, **ids}
     # A field the subclass requires can be dropped as a conflict, and the
     # subclass cannot then hold the result; the base class carries the rest
-    # of its fields as extras, including the defaults the dump left out.
+    # of its fields as extras, including the defaults the dump left out
+    # (but not those of fields the merge removed).
     if _lacks_required(cls, out):
-        out = {**_subclass_defaults(cls), **out}
+        defaults = _subclass_defaults(cls)
+        kept = {i: v for i, v in defaults.items() if i not in removed}
+        out = {**kept, **out}
         cls = dc.PatchAttrs
     return cls(**out)
 
@@ -174,12 +181,24 @@ def _lacks_required(cls: type[dc.PatchAttrs], values: Mapping[str, Any]) -> bool
 
 
 def _subclass_defaults(cls: type[dc.PatchAttrs]) -> dict[str, Any]:
-    """The defaults of the fields an attrs subclass adds to PatchAttrs."""
-    return {
-        name: field.get_default(call_default_factory=True)
-        for name, field in cls.model_fields.items()
-        if name not in dc.PatchAttrs.model_fields and not field.is_required()
-    }
+    """
+    The defaults an attrs subclass holds which PatchAttrs would not.
+
+    These are the defaults of the fields it adds, and of the base fields
+    whose default it overrides, such as a fixed data_type.
+    """
+    base = dc.PatchAttrs.model_fields
+    out = {}
+    for name, field in cls.model_fields.items():
+        if field.is_required():
+            continue
+        default = field.get_default(call_default_factory=True)
+        if name in base and _values_equal(
+            default, base[name].get_default(call_default_factory=True)
+        ):
+            continue
+        out[name] = default
+    return out
 
 
 def _is_missing(value) -> bool:

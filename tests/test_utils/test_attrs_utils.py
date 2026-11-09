@@ -107,14 +107,24 @@ class TestMergeAttrs:
         class _Attrs(PatchAttrs):
             start_channel: int
             vendor: str = "acme"
+            data_type: str = "velocity"
 
-        base = dict(random_patch.attrs)
+        base = {i: v for i, v in dict(random_patch.attrs).items() if i != "data_type"}
         pa1 = _Attrs(**base, start_channel=0)
         pa2 = _Attrs(**base, start_channel=1000)
         out = combine_patch_attrs([pa1, pa2], conflict="drop")
         assert type(out) is PatchAttrs
         assert "start_channel" not in dict(out)
         assert out["vendor"] == "acme"
+        # A base field's default the subclass overrides is kept too.
+        assert out.data_type == "velocity"
+        # A field the merge was asked to drop is not restored as a default.
+        dropped = combine_patch_attrs([pa1, pa2], conflict="drop", drop_attrs="vendor")
+        assert "vendor" not in dict(dropped)
+        # Nor is one dropped for conflicting.
+        pa3 = _Attrs(**base, start_channel=5, vendor="other")
+        conflicted = combine_patch_attrs([pa1, pa3], conflict="drop")
+        assert "vendor" not in dict(conflicted)
         # Agreeing required fields keep the subclass.
         agree = combine_patch_attrs([pa1, pa1], conflict="drop")
         assert isinstance(agree, _Attrs)
