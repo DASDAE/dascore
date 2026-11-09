@@ -37,10 +37,12 @@ PREFIX = "dascore_"
 HISTORY = "# dascore "
 
 
-def _unquote(value: str) -> str:
+def _unquote(value: str, escapes: bool = True) -> str:
     """Return a value's text, without its quotes and with escapes resolved."""
     if value[:1] not in {'"', "'"}:
         return value
+    if not escapes:
+        return value[1:-1]
     return re.sub(rf"\\([\\{value[0]}])", r"\1", value[1:-1])
 
 
@@ -70,7 +72,9 @@ def _read_header(handle) -> tuple[dict[str, str], int | None, str] | None:
         text = head.decode()
     except UnicodeDecodeError:
         text = head.decode("latin-1")
-    hdr = {key: _unquote(value) for key, value in _get_bindings(text)}
+    # in= is a path, whose backslashes (a UNC share) Madagascar keeps as is
+    bindings = _get_bindings(text)
+    hdr = {key: _unquote(value, escapes=key != "in") for key, value in bindings}
     if "in" not in hdr or "n1" not in hdr:
         return None
     return hdr, (len(head) + len(sep) if sep else None), text
@@ -135,7 +139,9 @@ def _get_coords(hdr) -> dict:
         else:
             start = epoch + np.timedelta64(round(Fraction(origin) * 10**9), "ns")
             # the writer stores the double nearest an exact step such as 1/3000
-            step = step_from_interval(float(step))
+            interval = float(step)
+            step = step_from_interval(abs(interval))
+            step = -step if interval < 0 else step
             coord = dc.get_coord(start=start, step=step, shape=(n,))
         coords[name] = coord
     return coords

@@ -280,11 +280,11 @@ class TestRsfRead:
         assert patch.get_coord("distance").units is None
         assert np.array_equal(patch.data, fractional_patch.data)
 
-    @pytest.mark.parametrize("rate", [3000, 7])
+    @pytest.mark.parametrize("rate", [3000, 7, -1024])
     def test_exact_rate(self, rate, fractional_patch, tmp_path):
-        """A rate whose step is no finite decimal reads back exactly."""
+        """A rate whose step is no finite decimal, or is negative, reads back."""
         start = np.datetime64("2024-01-01T00:00:00.000001", "ns")
-        step = step_from_interval(1 / rate)
+        step = step_from_interval(1 / abs(rate)) * np.sign(rate)
         time = dc.get_coord(start=start, step=step, shape=(8,))
         RSFV1().write(fractional_patch.update_coords(time=time), tmp_path / "e.rsf")
         assert dc.spool(tmp_path / "e.rsf")[0].get_coord("time") == time
@@ -342,6 +342,13 @@ class TestRsfRead:
         monkeypatch.chdir(sub)
         _write_rsf(tmp_path / "b.rsf", lines)
         assert np.array_equal(dc.spool(tmp_path / "b.rsf")[0].data, data)
+
+    def test_backslash_in(self, tmp_path):
+        """Backslashes in in= are kept, as Madagascar keeps them."""
+        data = np.arange(6, dtype=np.float32).reshape(2, 3)
+        lines = ["n1=2", "n2=3", 'in="d\\\\x.rsf@"']
+        path = _write_rsf(tmp_path / "a.rsf", lines, data, tmp_path / "d\\\\x.rsf@")
+        assert np.array_equal(dc.spool(path)[0].data, data)
 
     @pytest.mark.parametrize("order", ["native", "xdr"])
     @pytest.mark.parametrize("kind", ["float", "double", "int", "short", "complex"])
