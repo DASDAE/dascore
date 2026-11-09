@@ -7,6 +7,7 @@ import functools
 import shutil
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -2398,7 +2399,7 @@ class TestSpoolFromPaths:
         spool = dc.spool(file_paths)
         assert len(spool) == len(file_paths)
         sources = set(spool.get_contents()["source_path"])
-        assert sources == {str(x) for x in file_paths}
+        assert {Path(x) for x in sources} == set(file_paths)
         assert isinstance(spool[0], dc.Patch)
 
     def test_strings_and_tuple(self, file_paths):
