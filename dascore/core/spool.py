@@ -16,7 +16,8 @@ from collections.abc import (
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
-from functools import partial, singledispatch
+from functools import partial, reduce, singledispatch
+from operator import add
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
 
@@ -338,8 +339,15 @@ def _spool_input_message(data) -> str:
             "A spool holds patches, and a PatchMeta holds no data for one to "
             "read; give each one its data with to_patch(data) first."
         )
+    if any(isinstance(x, path_types) for x in members):
+        return (
+            "A sequence given to a spool must hold only patches, or only "
+            "paths to files or directories (dc.spool([path1, path2]) opens "
+            f"and combines them); got {[type(x).__name__ for x in members]}."
+        )
     return (
-        f"Spool accepts a Patch, a sequence of patches, or a spool; got {type(data)}."
+        "Spool accepts a Patch, a sequence of patches, a sequence of paths, "
+        f"or a spool; got {type(data)}."
     )
 
 
@@ -3416,7 +3424,8 @@ def spool(
     Parameters
     ----------
     obj
-        An object from which a spool can be derived: a path, a patch, a
+        An object from which a spool can be derived: a path, a sequence of
+        paths (each opened as a path is, then combined), a patch, a
         sequence of patches, or a spool. With `index`, the data root of
         the index's relative paths (default: the index's parent).
     index
@@ -3454,6 +3463,11 @@ def spool(
     >>> # get a spool from a single patch
     >>> patch = dc.get_example_patch()
     >>> spool = dc.spool(patch)
+    >>>
+    >>> # get a spool spanning several files
+    >>> paths = sorted(directory_path.glob("*.hdf5"))
+    >>> several = dc.spool(paths)
+    >>> assert len(several) == len(directory_spool)
     """
     if "index_path" in kwargs:
         # index_path still passes through to the directory spool.
@@ -3539,9 +3553,18 @@ def _spool_from_spool(spool, **kwargs):
 
 @_spool_from_obj.register(list)
 @_spool_from_obj.register(tuple)
-def _spool_from_patch_list(patch_list, **kwargs):
-    """Return a spool from a sequence of patches."""
-    return Spool(patch_list)
+def _spool_from_sequence(items, **kwargs):
+    """
+    Return a spool from a sequence of patches, or of paths.
+
+    Paths are opened one by one as `dc.spool(path)` opens them (a file
+    reads lazily, a local directory is indexed) and the spools are
+    combined, so the result spans every path.
+    """
+    if items and all(isinstance(x, path_types) for x in items):
+        spools = [_spool_from_str(x, **kwargs) for x in items]
+        return reduce(add, spools)
+    return Spool(items)
 
 
 @_spool_from_obj.register(dc.Patch)

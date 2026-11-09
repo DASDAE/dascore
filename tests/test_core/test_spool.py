@@ -2379,6 +2379,51 @@ class TestEmptyConcatenate:
         assert list(out) == []
 
 
+class TestSpoolFromPaths:
+    """dc.spool accepts a sequence of paths and spans them all."""
+
+    @pytest.fixture(scope="class")
+    def file_paths(self, tmp_path_factory):
+        """Three single-patch DASDAE files."""
+        path = tmp_path_factory.mktemp("spool_from_paths")
+        out = []
+        for index, patch in enumerate(dc.get_example_spool("random_das")):
+            file_path = path / f"patch_{index}.h5"
+            patch.io.write(file_path, "dasdae")
+            out.append(file_path)
+        return out
+
+    def test_list_of_files(self, file_paths):
+        """Each file's patches are in the spool, with their source paths."""
+        spool = dc.spool(file_paths)
+        assert len(spool) == len(file_paths)
+        sources = set(spool.get_contents()["source_path"])
+        assert sources == {str(x) for x in file_paths}
+        assert isinstance(spool[0], dc.Patch)
+
+    def test_strings_and_tuple(self, file_paths):
+        """Paths may be strings, and the sequence a tuple."""
+        spool = dc.spool(tuple(str(x) for x in file_paths[:2]))
+        assert len(spool) == 2
+
+    def test_directory_and_file(self, file_paths, tmp_path):
+        """A directory in the sequence is indexed and combined with files."""
+        extra = tmp_path / "extra.h5"
+        dc.get_example_patch().io.write(extra, "dasdae")
+        spool = dc.spool([file_paths[0].parent, extra])
+        assert len(spool) == len(file_paths) + 1
+
+    def test_mixed_sequence_names_paths(self, file_paths):
+        """A sequence mixing paths and patches says what it accepts."""
+        with pytest.raises(InvalidSpoolError, match="only paths"):
+            dc.spool([file_paths[0], dc.get_example_patch()])
+
+    def test_missing_file_raises(self, tmp_path):
+        """A path which does not exist is reported as such."""
+        with pytest.raises(InvalidSpoolError, match="may not exist"):
+            dc.spool([tmp_path / "nope.h5"])
+
+
 class TestSpoolRepr:
     """What a spool says of itself when it is printed."""
 
