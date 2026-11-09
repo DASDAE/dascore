@@ -350,7 +350,10 @@ def _markdown(text, path, aliases, authored):
             relative = os.path.relpath(dest, Path(path).parent).replace(os.sep, "/")
             destination = urlunsplit(("", "", relative, url.query, url.fragment))
             return f"{label}({destination})"
-        if unquote(url.path).startswith("`"):
+        if reference.startswith("dascore/docs/"):
+            # A cross-reference to a page names it from the repository root.
+            url = url._replace(path=f"/{reference.removeprefix('dascore/docs/')}.qmd")
+        elif unquote(url.path).startswith("`"):
             # Unsupported optional APIs have an explicit route to the site index.
             return f"{label}(https://dascore.org/api/dascore.html)"
         if url.scheme or url.netloc or not url.path:
