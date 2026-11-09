@@ -55,6 +55,7 @@ from dascore.utils.patch_assembly import (
     _match_merge_units,
 )
 from dascore.utils.time import to_int, to_timedelta64
+from dascore.warnings import DASCoreWarning
 from tests.conftest import join_patches
 
 
@@ -603,6 +604,29 @@ class TestChunkMerge:
         out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
         assert len(out) == 1
         assert out[0].attrs.data_type == ""
+
+    def test_conflicting_coordinate_follows_conflict(self):
+        """
+        A non-dimensional coordinate on another dimension which differs
+        between members follows `conflict`: raise, keep the first patch's,
+        or drop it, the loosened policies warning by name.
+        """
+        patch = dc.get_example_patch()
+        n = len(patch.get_coord("distance"))
+        time = patch.get_coord("time")
+        first = patch.update_coords(channel=("distance", np.arange(n)))
+        second = first.update_coords(time_min=time.max() + time.step)
+        second = second.update_coords(channel=("distance", np.arange(n) + 1000))
+        spool = dc.spool([first, second])
+        with pytest.raises(CoordMergeError, match="channel"):
+            spool.chunk(time=None)
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept"):
+            kept = spool.chunk(time=None, conflict="keep_first")[0]
+        assert np.array_equal(kept.get_array("channel"), np.arange(n))
+        assert kept.shape[1] == 2 * patch.shape[1]
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] dropped"):
+            dropped = spool.chunk(time=None, conflict="drop")[0]
+        assert "channel" not in dropped.coords.coord_map
 
     def test_surviving_member_takes_the_rows_attrs(self):
         """Whichever duplicate survives overlap removal, patch and row agree."""

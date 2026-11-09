@@ -649,7 +649,7 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
 
 
 def _get_merged_coord(
-    df, merge_dim, coords, drop_conflicting=False, snap_coords=True, tolerance=1.5
+    df, merge_dim, coords, conflict="raise", snap_coords=True, tolerance=1.5
 ):
     """
     Get merged coordinates for patches combined along merge_dim.
@@ -671,9 +671,7 @@ def _get_merged_coord(
     except CoordError:
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
         # fall back to raw value concatenation of the dim coord.
-        return merge_coord_managers(
-            coords, dim=merge_dim, drop_conflicting=drop_conflicting
-        )
+        return merge_coord_managers(coords, dim=merge_dim, conflict=conflict)
     if snap_coords:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
@@ -681,7 +679,7 @@ def _get_merged_coord(
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(
-        coords, dim=merge_dim, drop_conflicting=drop_conflicting, dim_coord=merged
+        coords, dim=merge_dim, conflict=conflict, dim_coord=merged
     )
 
 

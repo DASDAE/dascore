@@ -1006,10 +1006,9 @@ class PatchAssembler:
             )
             raise CoordMergeError(msg)
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
-        conf = attr_kwargs.get("conflict", None)
-        drop_conflicting = conf in {"drop", "keep_first"}
+        conflict = attr_kwargs.get("conflict", "raise")
         new_coord = _get_merged_coord(
-            summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
+            summary_df, merge_dim, coords, conflict, **coord_kwargs
         )
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(

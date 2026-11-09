@@ -241,7 +241,11 @@ attribute conflicts with one which did. History and the ids are never
 compared. If "raise" (default) raise an
 [AttributeMergeError](`dascore.exceptions.AttributeMergeError`) for
 conflicting values. If "drop", omit the conflicting attributes from the
-output. If "keep_first", keep the first patch's value of each.
+output. If "keep_first", keep the first patch's value of each. The same
+policy decides a non-dimensional coordinate on a dimension other than the
+combined one which the patches hold differently, or which some patch
+lacks: "keep_first" keeps the first patch's coordinate and "drop" leaves it
+out, each with a warning naming it.
 """
 
 
