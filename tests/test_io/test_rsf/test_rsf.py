@@ -360,6 +360,20 @@ class TestRsfRead:
         path = _write_rsf(tmp_path / "m.rsf", lines, np.zeros(6, np.float32))
         assert dc.spool(path)[0].shape == (2, 1, 3)
 
+    @pytest.mark.parametrize(
+        "labels, dims",
+        [
+            (['label1="x"', 'label2="x"'], ("x", "axis2")),
+            (['label1="axis2"'], ("axis2", "_axis2")),
+        ],
+    )
+    def test_repeated_names(self, labels, dims, tmp_path):
+        """A label already taken gives each axis its own name."""
+        lines = ["n1=2", "n2=3", *labels, 'in="stdin"']
+        path = _write_rsf(tmp_path / "x.rsf", lines, np.zeros(6, np.float32))
+        patch = dc.spool(path)[0]
+        assert (patch.dims, patch.shape) == (dims, (2, 3))
+
     def test_latin1_header(self, tmp_path):
         """A header that is not UTF-8 is read as latin-1."""
         path = tmp_path / "l.rsf"
@@ -373,8 +387,9 @@ class TestRsfRead:
             b"",
             b"just text\n",
             b"n1=3\nn2=4\n",
-            b"\x89HDF\r\n\x1a\n\x00\x00",
-            b"a" * 2**21,
+            b'in="stdin"\n',
+            b"\x89HDF\r\n\x1a\n\x00\x00n1=3\nin=x\n",
+            b"a" * 2**21 + b'\nn1=3\nin="stdin"\n',
         ],
     )
     def test_not_rsf(self, content, tmp_path):
@@ -391,6 +406,7 @@ class TestRsfRead:
             (["n1=4", 'in="stdin"'], None, "no binary separator"),
             (["n1=4", 'in="missing.rsf@"'], None, "does not exist"),
             (["n1=5", 'in="stdin"'], np.zeros(4, "f4"), "exactly 20 bytes"),
+            (["n1=3", 'in="stdin"'], np.zeros(4, "f4"), "exactly 12 bytes"),
             (["n1=4", 'data_format="ascii_float"', 'in="stdin"'], None, "ascii"),
         ],
     )
@@ -503,16 +519,42 @@ class TestRsfAttrs:
             "decimate(time:2)",
         )
 
-    @pytest.mark.parametrize("value", ['say "hi', "line 1\nline 2", {"a": "x y"}])
-    def test_misread_skipped(self, value, fractional_patch, tmp_path):
-        """An attr Madagascar would misread is skipped with a warning."""
-        patch = fractional_patch.update_attrs(note=value, tag="kept")
-        with pytest.warns(DASCoreWarning, match="note attr") as record:
+    @pytest.mark.parametrize(
+        "name, value",
+        [
+            ("note", 'say "hi'),
+            ("note", "line 1\nline 2"),
+            ("note", {"a": "x y"}),
+            ("note", "a\x00b"),
+            ("note", "a\x0c\x0c\x04b"),
+            ("my-note", 5),
+            ("é", 5),
+        ],
+    )
+    def test_misread_skipped(self, name, value, fractional_patch, tmp_path):
+        """An attr Madagascar would misread, or DASCore not read, is skipped."""
+        patch = fractional_patch.update_attrs(**{name: value, "tag": "kept"})
+        with pytest.warns(DASCoreWarning, match=f"{name} attr") as record:
             dc.write(patch, tmp_path / "q.rsf", "rsf")
         assert record[0].filename == __file__
         out = dict(dc.spool(tmp_path / "q.rsf")[0].attrs)
-        assert "note" not in out
+        assert name not in out
         assert out["tag"] == "kept"
+
+    def test_newline_in_history(self, fractional_patch, tmp_path):
+        """A newline in a history entry cannot start a binding line."""
+        patch = fractional_patch.update_attrs(history=("a\nn1=99 b",))
+        RSFV1().write(patch, tmp_path / "h.rsf")
+        out = dc.spool(tmp_path / "h.rsf")[0]
+        assert out.attrs.history == ("a n1:99 b",)
+        assert out.shape == patch.shape
+
+    def test_quoted_text_stays_text(self, fractional_patch, tmp_path):
+        """A quoted extra that spells a number or bool reads back as text."""
+        patch = fractional_patch.update_attrs(code="3", flag="true")
+        RSFV1().write(patch, tmp_path / "s.rsf")
+        out = dc.spool(tmp_path / "s.rsf")[0].attrs
+        assert (out["code"], out["flag"]) == ("3", "true")
 
     def test_datetime(self, fractional_patch, tmp_path):
         """A datetime attr is written as ISO 8601 UTC and reads back as text."""
@@ -540,6 +582,7 @@ class TestRsfAttrs:
             "",
             "4.2-git\tsfmath\t/home/user:\tuser@host\tThu Nov  5 22:06:23 2026",
             "# spike 0.4.0 n1:4",
+            "made with o1=99 by hand",
             "",
             "\tinput=0",
             "\ttitle=Spike",
@@ -551,3 +594,4 @@ class TestRsfAttrs:
         assert patch.attrs.history == ()
         assert (patch.attrs["input"], patch.attrs["title"]) == (0, "Spike")
         assert "sfspike" not in str(dict(patch.attrs))
+        assert patch.get_coord("Time").min() == 0.0

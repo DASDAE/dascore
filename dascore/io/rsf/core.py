@@ -79,12 +79,17 @@ def _get_attr_text(value) -> str:
 def _is_one_binding(line: str) -> bool:
     """Return True when Madagascar reads a header line as a single binding."""
     # simtab.c opens or closes a string at every '"', with no escape, and
-    # ends a word at whitespace outside one and a string at a newline.
+    # ends a word at whitespace outside one and a string at a newline. A
+    # control character (NUL, the separator bytes) would also end the
+    # header early, and a name that is not an identifier would not bind.
+    name, _, _ = line.partition("=")
     parts = line.split('"')
     outside = "".join(parts[::2])
     return (
-        len(parts) % 2 == 1
-        and "\n" not in line
+        name.isascii()
+        and name.isidentifier()
+        and len(parts) % 2 == 1
+        and line.isprintable()
         and not any(x.isspace() for x in outside)
     )
 
@@ -105,8 +110,9 @@ def _get_attr_lines(patch) -> list[str]:
         line = f"{name}={_get_attr_text(value)}"
         if not _is_one_binding(line):
             msg = (
-                f"The {name} attr is not written to RSF: Madagascar would "
-                "misread its quotes, newline, or spacing."
+                f"The {name} attr is not written to RSF: its name is not an "
+                "identifier, or Madagascar would misread its quotes, control "
+                "characters, or spacing."
             )
             warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
             continue
@@ -200,8 +206,9 @@ class RSFV1(FiberIO):
         - Each attr that is set is written as one key=value line, a dict as
         one quoted JSON string, and with the prefix 'dascore_' when its
         name is an RSF key such as n1 or in. The ids are not written; a
-        read derives them from the file. An attr Madagascar would misread,
-        such as text with one quote or a newline, is skipped with a
+        read derives them from the file. An attr whose name is not an ASCII
+        identifier, or that Madagascar would misread, such as text with one
+        quote, a newline or another control character, is skipped with a
         DASCoreWarning, since RSF has no escape inside a quoted value.
         - Each history entry opens the header as a line
         '# dascore <version> <entry>' with every '=' written as ':', so no

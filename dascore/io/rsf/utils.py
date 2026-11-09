@@ -119,6 +119,8 @@ def _get_coords(hdr) -> dict:
     for i, n in enumerate(_get_shape(hdr), start=1):
         label = hdr.get(f"label{i}")
         name = label if label and label not in coords else f"axis{i}"
+        while name in coords:  # a label may already have taken axis<i>
+            name = f"_{name}"
         units = hdr.get(f"unit{i}") or None
         origin, step = hdr.get(f"o{i}", "0"), hdr.get(f"d{i}", "1")
         epoch = _get_epoch(hdr, i, name, units)
