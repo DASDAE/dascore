@@ -13,6 +13,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
+from dascore.io.utils import step_from_interval
 from dascore.warnings import DASCoreWarning
 
 # The bytes between a packed header and its binary.
@@ -100,7 +101,7 @@ def _get_shape(hdr) -> tuple[int, ...]:
 
 
 def _get_epoch(hdr, i, name, units) -> np.datetime64 | None:
-    """Return the absolute time of axis i's zero, or None for no time axis."""
+    """Return the absolute time of axis i's zero, or None if there is none."""
     epoch = hdr.get(f"epoch{i}")
     if epoch is not None and units != "s":
         msg = f"RSF epoch{i} is ignored because unit{i} is {units!r}, not 's'."
@@ -133,7 +134,9 @@ def _get_coords(hdr) -> dict:
             )
         else:
             start = epoch + np.timedelta64(round(Fraction(origin) * 10**9), "ns")
-            coord = dc.get_coord(start=start, step=Fraction(step), shape=(n,))
+            # the writer stores the double nearest an exact step such as 1/3000
+            step = step_from_interval(float(step))
+            coord = dc.get_coord(start=start, step=step, shape=(n,))
         coords[name] = coord
     return coords
 

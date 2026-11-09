@@ -208,8 +208,8 @@ SKIP_DATA_FILES = {
 # of the inventory's facts under a vendor spelling, in which case it belongs
 # under the canonical name, and whether it states units the reader should
 # have converted away at the parse boundary.
-# Formats which hand back the attrs stored in the file rather than building
-# them from a header, so the file, not the reader, chooses the names.
+# Formats which hand back the attrs stored in the file rather than mapping
+# vendor fields to attrs, so the file, not the reader, chooses the names.
 _PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR", "rsf"})
 
 VENDOR_ATTRS = frozenset(

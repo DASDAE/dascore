@@ -33,8 +33,9 @@ from .utils import (
 )
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
-# A history entry is prose: no token in it may bind.
-_HISTORY_TEXT = str.maketrans({"=": ":", "\n": " ", "\t": " "})
+# A history entry is prose: no token in it may bind, and no control
+# character (a newline, NUL, or the separator bytes) may end its line.
+_HISTORY_TEXT = str.maketrans({"=": ":"} | {chr(x): " " for x in range(32)})
 
 
 def _coerce_output_path(path):
@@ -64,7 +65,7 @@ def _get_history_lines(patch) -> list[str]:
 
 
 def _get_attr_text(value) -> str:
-    """Return an attr value as header text, quoted unless a number or bool."""
+    """Return an attr value as header text, quoted unless a number, bool or null."""
     if isinstance(value, np.datetime64):
         value = f"{np.datetime_as_string(value.astype('datetime64[ns]'))}Z"
     elif isinstance(value, np.number | np.bool_):
@@ -139,11 +140,10 @@ class RSFV1(FiberIO):
         """
         Describe the patch from the header alone.
 
-        A key that does not describe the file is an attr, read back as the
-        type it was written with; a key another program wrote reads as an
-        extra attr. The history is read from the lines DASCore wrote, each
-        '=' of an entry having become ':'; another program's history lines
-        are prose and are not read.
+        Each key that does not describe the file becomes an attr, including
+        keys another program wrote; see `_get_attrs` for how values are
+        typed. Only the history lines DASCore wrote are read, with ':' in
+        place of each '='; another program's are prose.
         """
         path = getattr(resource, "name", resource)
         hdr, _, text = _get_header(resource, path)
@@ -164,7 +164,8 @@ class RSFV1(FiberIO):
         binary, offset, dtype, shape = _get_layout(resource)
         data = np.memmap(binary, dtype, "r", offset, shape, order="F")
         out = slice_dataset(data, windows)
-        return out if dtype.isnative else out.astype(dtype.newbyteorder("="))
+        # copy the window, so a later write to the file cannot change it
+        return np.array(out, dtype=dtype.newbyteorder("="))
 
     def write(self, spool, resource, data_path=None, **kwargs):
         """
@@ -205,16 +206,19 @@ class RSFV1(FiberIO):
         separator bytes 0x0c 0x0c 0x04 before the binary
         - Each attr that is set is written as one key=value line, a dict as
         one quoted JSON string, and with the prefix 'dascore_' when its
-        name is an RSF key such as n1 or in. The ids are not written; a
-        read derives them from the file. An attr whose name is not an ASCII
+        name is an RSF key such as n1 or in. The ids, and attrs named for a
+        coordinate field such as time_min, are not written; a read derives
+        them from the file. An attr whose name is not an ASCII
         identifier, or that Madagascar would misread, such as text with one
         quote, a newline or another control character, is skipped with a
-        DASCoreWarning, since RSF has no escape inside a quoted value.
+        DASCoreWarning, since Madagascar honors no escape inside a quoted
+        value.
         - Each history entry opens the header as a line
-        '# dascore <version> <entry>' with every '=' written as ':', so no
-        RSF reader binds it. The entry reads back with ':' in place of
-        '='. Nothing in the header comes from a clock, so writing a patch
-        twice gives the same bytes.
+        '# dascore <version> <entry>', with every '=' written as ':' and
+        every control character, such as a newline, as a space, so no RSF
+        reader binds it. The entry reads back with those substitutions.
+        Nothing in the header comes from a clock, so writing a patch twice
+        gives the same bytes.
         """
         patches = [spool] if isinstance(spool, dc.Patch) else spool
         assert len(patches) == 1
@@ -278,10 +282,10 @@ class RSFV1(FiberIO):
             hdr_info.append(f'in="{in_path}"')
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)
-            out = "\n".join(hdr_info) + "\n"
+            out = ("\n".join(hdr_info) + "\n").encode()
             outpath = _coerce_output_path(resource)
             outpath.parent.mkdir(exist_ok=True, parents=True)
-            with outpath.open("w") as fi:
+            with outpath.open("wb") as fi:
                 fi.write(out)
         else:
             # outputs header and binary combined (.rsf with both hdr and bin)

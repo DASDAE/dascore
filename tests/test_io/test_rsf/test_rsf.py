@@ -10,6 +10,7 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.rsf import RSFV1
+from dascore.io.utils import step_from_interval
 from dascore.warnings import DASCoreWarning
 
 SEPARATOR = b"\x0c\x0c\x04"
@@ -279,6 +280,15 @@ class TestRsfRead:
         assert patch.get_coord("distance").units is None
         assert np.array_equal(patch.data, fractional_patch.data)
 
+    @pytest.mark.parametrize("rate", [3000, 7])
+    def test_exact_rate(self, rate, fractional_patch, tmp_path):
+        """A rate whose step is no finite decimal reads back exactly."""
+        start = np.datetime64("2024-01-01T00:00:00.000001", "ns")
+        step = step_from_interval(1 / rate)
+        time = dc.get_coord(start=start, step=step, shape=(8,))
+        RSFV1().write(fractional_patch.update_coords(time=time), tmp_path / "e.rsf")
+        assert dc.spool(tmp_path / "e.rsf")[0].get_coord("time") == time
+
     def test_relative_time(self, fractional_patch, tmp_path):
         """A time axis of offsets reads back as offsets, not as seconds or dates."""
         start, step = dc.to_timedelta64(5.0), dc.to_timedelta64(0.004)
@@ -294,6 +304,23 @@ class TestRsfRead:
         expected = f4_patch.select(time=span, distance=(5, 9))
         assert np.array_equal(patch.data, expected.data)
         assert patch.coords == expected.coords
+
+    def test_overwrite_after_read(self, f4_patch, tmp_path):
+        """A patch read from a file keeps its data when the file is rewritten."""
+        path = tmp_path / "w.rsf"
+        RSFV1().write(f4_patch, path)
+        patch = dc.spool(path)[0]
+        RSFV1().write(f4_patch.update_attrs(tag="x" * 100), path)
+        assert np.array_equal(patch.data, f4_patch.data)
+
+    def test_utf8_split_header(self, f4_patch, tmp_path):
+        """A split header is UTF-8 with bare newlines whatever the locale."""
+        path = tmp_path / "u.rsf"
+        patch = f4_patch.update_attrs(tag="µε")
+        RSFV1().write(patch, path, data_path=tmp_path / "u.bin")
+        raw = path.read_bytes()
+        assert 'tag="µε"'.encode() in raw
+        assert b"\r" not in raw
 
     def test_scan_header_only(self, f4_patch, tmp_path):
         """A scan reads the header, so it works with the binary missing."""
@@ -537,24 +564,27 @@ class TestRsfAttrs:
         with pytest.warns(DASCoreWarning, match=f"{name} attr") as record:
             dc.write(patch, tmp_path / "q.rsf", "rsf")
         assert record[0].filename == __file__
+        _, head, _ = _split_combined((tmp_path / "q.rsf").read_bytes())
+        assert f"{name}=".encode() not in head
         out = dict(dc.spool(tmp_path / "q.rsf")[0].attrs)
         assert name not in out
         assert out["tag"] == "kept"
 
     def test_newline_in_history(self, fractional_patch, tmp_path):
-        """A newline in a history entry cannot start a binding line."""
-        patch = fractional_patch.update_attrs(history=("a\nn1=99 b",))
+        """A control character in a history entry cannot end its line."""
+        history = ("a\nn1=99 b", "c\x00d\x0c\x0c\x04e")
+        patch = fractional_patch.update_attrs(history=history)
         RSFV1().write(patch, tmp_path / "h.rsf")
         out = dc.spool(tmp_path / "h.rsf")[0]
-        assert out.attrs.history == ("a n1:99 b",)
+        assert out.attrs.history == ("a n1:99 b", "c d   e")
         assert out.shape == patch.shape
 
     def test_quoted_text_stays_text(self, fractional_patch, tmp_path):
-        """A quoted extra that spells a number or bool reads back as text."""
-        patch = fractional_patch.update_attrs(code="3", flag="true")
-        RSFV1().write(patch, tmp_path / "s.rsf")
+        """A quoted value spelling a number, bool or object reads back as text."""
+        attrs = {"code": "3", "flag": "true", "tag": '{"a": 1}'}
+        RSFV1().write(fractional_patch.update_attrs(**attrs), tmp_path / "s.rsf")
         out = dc.spool(tmp_path / "s.rsf")[0].attrs
-        assert (out["code"], out["flag"]) == ("3", "true")
+        assert {x: out[x] for x in attrs} == attrs
 
     def test_datetime(self, fractional_patch, tmp_path):
         """A datetime attr is written as ISO 8601 UTC and reads back as text."""
