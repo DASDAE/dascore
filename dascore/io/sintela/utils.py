@@ -3,9 +3,10 @@ Utilities for reading binary sintela data.
 
 Notes
 -----
-- Each file must hold one contiguous run of packets. Each packet header's
-  sample count and start time are checked against the grid set by the
-  first packet; a dropped, repeated, or concatenated packet raises.
+- A file holds one or more contiguous runs of packets; a dropped,
+  repeated, or concatenated packet starts a new run, and each run is one
+  patch. Within a run, each packet header's start time must stay on the
+  grid the run's first packet sets.
 
 - We only support v3 for now, though some commented out code here has the
   start for version 4 support.
@@ -13,16 +14,20 @@ Notes
 
 from __future__ import annotations
 
+import re
+from itertools import pairwise
+
 import numpy as np
 
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidFiberFileError
+from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
 from dascore.io.utils import step_from_rate
 from dascore.utils.misc import get_buffer_size, maybe_mem_map
 
 SYNC_WORD = 0x11223344
+_RUN_KEY = re.compile(r"packets_(\d+)_(\d+)")
 MAX_TRIGGERS = 8
 DIMS = ("time", "distance")
 
@@ -161,35 +166,74 @@ def _read_stamps(fid, header, indices):
     return stamps
 
 
-def _check_packet_continuity(indices, stamps, header):
+def _off_grid(stamps, base, offsets, header):
     """
-    Raise unless the packets sit on the grid the first one starts.
+    Return whether each packet's sample count and start time are off grid.
 
-    The time coordinate assumes packet ``i`` holds the samples
-    ``i * num_samples`` onward from the first packet, so its header's
-    sample count must match that exactly and its start time to within
-    half a packet; the tolerance absorbs clock jitter while catching a
-    dropped, repeated, or concatenated packet.
+    A packet ``offsets`` packets after ``base`` must hold the samples
+    ``offsets * num_samples`` onward from it, so its header's sample count
+    must match that exactly and its start time to within half a packet;
+    the tolerance absorbs clock jitter while catching a dropped, repeated,
+    or concatenated packet.
     """
     num_samples = int(header["num_samples"])
     # Unrounded, so the expected offsets do not drift over a long file.
     packet_ns = num_samples / float(header["sample_rate"]) * 1e9
-    offsets = np.asarray(indices, dtype=np.int64) - indices[0]
     # uint64 differences wrap, so a backwards count reads as a huge jump;
     # the int64 view gives signed time offsets.
-    count_off = (stamps[:, 0] - stamps[0, 0]).astype(np.int64)
-    time_off = (stamps[:, 1] - stamps[0, 1]).view(np.int64)
-    bad_count = count_off != offsets * num_samples
+    count_off = (stamps[:, 0] - base[0]).astype(np.int64)
+    time_off = (stamps[:, 1] - base[1]).view(np.int64)
     bad_time = np.abs(time_off - offsets * packet_ns) > packet_ns / 2
+    return count_off != offsets * num_samples, bad_time
+
+
+def _check_run(stamps, header, first=0, offsets=None):
+    """
+    Raise unless packets sit on the grid packet ``first`` starts.
+
+    ``stamps`` belong to the packets ``offsets`` after ``first``, by
+    default every packet of the run in order.
+    """
+    offsets = np.arange(len(stamps)) if offsets is None else np.asarray(offsets)
+    bad_count, bad_time = _off_grid(stamps, stamps[0], offsets, header)
     if np.any(bad := bad_count | bad_time):
         row = int(np.flatnonzero(bad)[0])
         field = "sample count" if bad_count[row] else "start time"
         msg = (
-            f"Sintela binary packet {indices[row]} (0-based) has a {field} "
-            "off the grid set by packet 0, so the file is not one "
-            "contiguous recording."
+            f"Sintela binary packet {first + int(offsets[row])} (0-based) has "
+            f"a {field} off the grid set by packet {first}, so the packets "
+            "between are not one contiguous recording."
         )
         raise InvalidFiberFileError(msg)
+
+
+def _find_run_starts(rid, header, count) -> tuple[list[int], dict]:
+    """
+    Return the packets that start a run, and the stamps read, by packet.
+
+    A dropped or repeated packet breaks the sample count. Packets whose
+    counts are ``num_samples`` per packet apart are taken as one run
+    without reading those between, so a span is bisected only while its
+    ends disagree: a few reads per break rather than one per packet,
+    which matters for large files on network shares. A drop and a repeat
+    that cancel within a span go unseen until read_array checks it.
+    """
+    num_samples = int(header["num_samples"])
+    stamps = dict(zip([0, count - 1], _read_stamps(rid, header, [0, count - 1])))
+    starts, spans = [0], [(0, count - 1)]
+    while spans:
+        lo, hi = spans.pop()
+        for index in {lo, hi} - stamps.keys():
+            stamps[index] = _read_stamps(rid, header, [index])[0]
+        # Python ints: a scan is mostly this check, once, on a whole file.
+        if int(stamps[hi][0]) - int(stamps[lo][0]) == (hi - lo) * num_samples:
+            continue
+        if hi - lo == 1:
+            starts.append(hi)
+            continue
+        mid = (lo + hi) // 2
+        spans += [(lo, mid), (mid, hi)]
+    return sorted(starts), stamps
 
 
 def _get_complete_header(rid):
@@ -199,11 +243,11 @@ def _get_complete_header(rid):
     return header
 
 
-def _get_time_coord(header):
-    """Get the time coordinate."""
-    starttime = np.asarray(header["start_time_ns"]).astype("datetime64[ns]")[()]
+def _get_time_coord(header, start_ns, packets):
+    """Get the time coordinate of a run of packets starting at start_ns."""
+    starttime = np.asarray(start_ns).astype("datetime64[ns]")[()]
     timestep = step_from_rate(header["sample_rate"])
-    total_len = header["num_packets"] * int(header["num_samples"])
+    total_len = packets * int(header["num_samples"])
     return get_coord(start=starttime, step=timestep, shape=(total_len,))
 
 
@@ -238,56 +282,76 @@ def _get_attr_dict(header):
     return out
 
 
-def _get_data_shape(header) -> tuple[int, int]:
-    """The (time, channel) shape the file's packets hold."""
-    return header["num_packets"] * int(header["num_samples"]), header["num_channels"]
+def _run_key(start, stop) -> str:
+    """The key naming a run of packets; a digit-only key reads as positional."""
+    return f"packets_{start}_{stop}"
 
 
-def _read_sample_range(fid, header, start=0, stop=None):
+def _run_blocks(fid, header, key=""):
     """
-    Read time samples ``start`` to ``stop`` (half-open) as (samples, channels).
+    Return the packets of the run ``key`` names as (packets, bytes) rows.
+
+    No key names the whole file, which must then be one run. The memory
+    map makes the run's stamps one strided gather, so every packet in it
+    is checked here; a scan whose end packets agreed looked at no others.
+    """
+    fid.seek(0)
+    raw = maybe_mem_map(fid)
+    blocks = raw.reshape(-1, _packet_size(header))
+    start, stop = 0, len(blocks)
+    if key:
+        match = _RUN_KEY.fullmatch(key)
+        start, stop = map(int, match.groups()) if match else (0, 0)
+        if not start < stop <= len(blocks):
+            msg = f"No patch named '{key}' in the Sintela binary file."
+            raise PatchAttributeError(msg)
+    run = blocks[start:stop]
+    _check_run(
+        run[:, _STAMP_OFFSET : _STAMP_OFFSET + 16].copy().view("<u8"), header, start
+    )
+    return run
+
+
+def _read_sample_range(blocks, header, start=0, stop=None):
+    """
+    Read time samples ``start`` to ``stop`` (half-open) of a run's packets.
 
     Each packet carries a header the samples must skip, so stripping them
     leaves a view numpy cannot stride over and any read copies. A packet
     is therefore the smallest unit read: only those the range touches
     are.
     """
-    header_size = header["header_size"]
     num_channels = header["num_channels"]
-    num_samples = header["num_samples"]
+    num_samples = int(header["num_samples"])
     dtype = np.dtype(header["dtype"])
-    packet_size = _packet_size(header)
-    # Memory map entire file as raw bytes. We do this to later skip the headers
-    fid.seek(0)
-    raw = maybe_mem_map(fid)
-    # Compute how many blocks
-    block_count = raw.size // packet_size
-    blocks = raw.reshape(block_count, packet_size)
-    # The map makes every packet's stamps one strided gather, so check them
-    # all here; the scan only afforded the endpoints.
-    stamps = blocks[:, _STAMP_OFFSET : _STAMP_OFFSET + 16].copy().view("<u8")
-    _check_packet_continuity(np.arange(block_count), stamps, header)
-    total, _ = _get_data_shape(header)
+    total = len(blocks) * num_samples
     start = max(start, 0)
     stop = total if stop is None else min(stop, total)
     if stop <= start:
         return np.empty((0, num_channels), dtype=dtype)
     first, last = start // num_samples, (stop - 1) // num_samples
     # Create a view that skips headers
-    packets = blocks[first : last + 1, header_size:]
+    packets = blocks[first : last + 1, header["header_size"] :]
     data = packets.view(dtype).reshape(-1, num_channels)
     offset = start - first * num_samples
     return data[offset : offset + (stop - start)]
 
 
-def _get_attrs_coords_header(rid, attr_class=PatchAttrs):
-    """Get Patch attributes and coordinates."""
+def _scan_runs(rid, attr_class=PatchAttrs):
+    """Return the header and (key, attrs, coords) of each run of packets."""
     header = _get_complete_header(rid)
-    # Two seeks catch any net dropped or added packet without walking the
-    # file, which matters for remote scans; read_array checks every packet.
-    ends = [0, int(header["num_packets"]) - 1]
-    _check_packet_continuity(ends, _read_stamps(rid, header, ends), header)
-    coords = {"time": _get_time_coord(header), "distance": _get_dist_coord(header)}
-    cm = get_coord_manager(coords=coords, dims=DIMS)
-    attrs = _get_attr_dict(header)
-    return attr_class(**attrs), cm, header
+    count = int(header["num_packets"])
+    starts, stamps = _find_run_starts(rid, header, count)
+    runs = list(pairwise([*starts, count]))
+    attrs = attr_class(**_get_attr_dict(header))
+    out = []
+    for start, stop in runs:
+        # Only the run's ends are checked here; read_array checks every packet.
+        # Bisection read both packets either side of each break.
+        ends = np.stack([stamps[start], stamps[stop - 1]])
+        _check_run(ends, header, start, [0, stop - 1 - start])
+        key = _run_key(start, stop) if len(runs) > 1 else ""
+        time = _get_time_coord(header, stamps[start][1], stop - start)
+        coords = {"time": time, "distance": _get_dist_coord(header)}
+        out.append((key, attrs, get_coord_manager(coords=coords, dims=DIMS)))
+    return header, out
