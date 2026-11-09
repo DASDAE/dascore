@@ -154,7 +154,32 @@ def combine_patch_attrs(
         _to_patch_attrs(first).__class__ if not isinstance(first, dict) else dict
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
-    return cls(**{**mod_dict_list[0], **history, **ids})
+    out = {**mod_dict_list[0], **history, **ids}
+    # A field the subclass requires can be dropped as a conflict, and the
+    # subclass cannot then hold the result; the base class carries the rest
+    # of its fields as extras, including the defaults the dump left out.
+    if _lacks_required(cls, out):
+        out = {**_subclass_defaults(cls), **out}
+        cls = dc.PatchAttrs
+    return cls(**out)
+
+
+def _lacks_required(cls: type[dc.PatchAttrs], values: Mapping[str, Any]) -> bool:
+    """True if a required field of the attrs class is missing from values."""
+    return any(
+        name not in values
+        for name, field in cls.model_fields.items()
+        if field.is_required()
+    )
+
+
+def _subclass_defaults(cls: type[dc.PatchAttrs]) -> dict[str, Any]:
+    """The defaults of the fields an attrs subclass adds to PatchAttrs."""
+    return {
+        name: field.get_default(call_default_factory=True)
+        for name, field in cls.model_fields.items()
+        if name not in dc.PatchAttrs.model_fields and not field.is_required()
+    }
 
 
 def _is_missing(value) -> bool:

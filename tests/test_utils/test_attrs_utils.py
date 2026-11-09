@@ -98,6 +98,28 @@ class TestMergeAttrs:
         assert out.tag == defaults.tag
         assert out.acquisition_key == defaults.acquisition_key
 
+    def test_drop_required_subclass_field(self, random_patch):
+        """
+        Dropping a conflicting field a subclass requires falls back to the
+        base class rather than failing validation.
+        """
+
+        class _Attrs(PatchAttrs):
+            start_channel: int
+            vendor: str = "acme"
+
+        base = dict(random_patch.attrs)
+        pa1 = _Attrs(**base, start_channel=0)
+        pa2 = _Attrs(**base, start_channel=1000)
+        out = combine_patch_attrs([pa1, pa2], conflict="drop")
+        assert type(out) is PatchAttrs
+        assert "start_channel" not in dict(out)
+        assert out["vendor"] == "acme"
+        # Agreeing required fields keep the subclass.
+        agree = combine_patch_attrs([pa1, pa1], conflict="drop")
+        assert isinstance(agree, _Attrs)
+        assert agree.start_channel == 0
+
     def test_keep_disjoint_values(self, random_patch):
         """Ensure disjoint values can be kept."""
         random_attrs = PatchAttrs.from_dict(random_patch.attrs)
