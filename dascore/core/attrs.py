@@ -31,6 +31,29 @@ str_validator = PlainValidator(to_str)
 _ARRAYS = frozenset({np.ndarray, list, tuple})
 
 
+_COORD_FIELD_SUFFIXES = ("_min", "_max", "_step", "_units")
+
+
+def _coordinate_field_hint(name: str) -> str:
+    """
+    A hint for an attr name which 0.1.x derived from the coordinates.
+
+    `time_min`, `distance_step` and the like, and `coords` and `dims`, were
+    attrs before 1.0 and now live on the patch; an empty string otherwise.
+    """
+    if name in ("coords", "dims"):
+        return f"Coordinate metadata moved off the attrs: use `patch.{name}`."
+    for suffix in _COORD_FIELD_SUFFIXES:
+        if name.endswith(suffix) and (dim := name[: -len(suffix)]):
+            method = suffix.removeprefix("_")
+            call = f"{method}()" if method in ("min", "max") else method
+            return (
+                f"Coordinate metadata moved off the attrs: use "
+                f"`patch.get_coord({dim!r}).{call}`."
+            )
+    return ""
+
+
 class PatchAttrs(DascoreBaseModel):
     """
     The expected attributes for a Patch.
@@ -136,6 +159,20 @@ class PatchAttrs(DascoreBaseModel):
 
     def __getitem__(self, item):
         return getattr(self, item)
+
+    def __getattr__(self, item: str):
+        # pydantic's __getattr__ serves extras; a miss on a name 0.1.x
+        # derived from the coordinates gets a pointer to where it went.
+        # Looked up dynamically: pydantic defines it outside type checking.
+        parent = getattr(super(), "__getattr__", None)
+        if parent is None:
+            raise AttributeError(item)
+        try:
+            return parent(item)
+        except AttributeError as exc:
+            if hint := _coordinate_field_hint(item):
+                raise AttributeError(f"{exc} {hint}") from None
+            raise
 
     def __len__(self):
         return len(self.model_dump())
