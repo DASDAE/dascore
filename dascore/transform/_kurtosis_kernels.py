@@ -9,6 +9,7 @@ when it is called so `import dascore` stays fast.
 from __future__ import annotations
 
 import numpy as np
+from scipy.ndimage import correlate1d
 
 from dascore.utils.jit import maybe_numba_jit
 
@@ -100,3 +101,22 @@ def _recursive_kurtosis(
             out[i, j] = kurt_value[j]
 
     return out
+
+
+def _windowed_kurtosis_numpy(data: np.ndarray, nwin: int) -> np.ndarray:
+    """Vectorized `_windowed_kurtosis`, used when numba is missing."""
+    # Kurtosis ignores a shift; removing the median makes a constant channel
+    # exactly zero, so rounding cannot give it a spurious variance.
+    median = np.median(data, axis=0)
+    data = data - np.where(np.isfinite(median), median, 0)
+    # A window of twice the trace already spans all of it from every sample.
+    weights = np.ones(min(nwin, 2 * len(data)))
+    counts = correlate1d(np.ones(len(data)), weights, mode="constant")[:, None]
+    m1, m2, m3, m4 = (
+        correlate1d(data**power, weights, axis=0, mode="constant") / counts
+        for power in (1, 2, 3, 4)
+    )
+    mu2 = m2 - m1**2
+    mu4 = m4 - 4 * m1 * m3 + 6 * m1**2 * m2 - 3 * m1**4
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(mu2 > 0, mu4 / mu2**2, np.nan)

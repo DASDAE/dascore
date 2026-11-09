@@ -46,11 +46,19 @@ To place the index outside the data directory:
 import tempfile
 from pathlib import Path
 
-index_path = Path(tempfile.mkdtemp()) / "index.h5"
-external_index = dc.spool(directory, index_path=index_path).update()
+index_path = Path(tempfile.mkdtemp()) / "index.sqlite3"
+external_index = dc.spool(directory, index=index_path).update()
 ```
 
-Pass `index_path=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. A directory that is itself one store, such as a zarr store, keeps its index in the DASCore cache instead, so rewriting the store does not take the index with it. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
+Pass `index=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. A directory that is itself one store, such as a zarr store, keeps its index in the DASCore cache instead, so rewriting the store does not take the index with it. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
+
+An index alone opens a read-only spool whose data root is the index's directory, so an index copied along with its files still works. The index, the data root, or both may be remote, such as a server publishing its files and their index over HTTP. A read-only spool never scans its files and cannot `update()`.
+
+```{python}
+read_only = dc.spool(index=directory / ".dascore_index.sqlite3")
+# The same for a remote index, its root being the URL's parent:
+# dc.spool(index="https://example.com/data/.dascore_index.sqlite3")
+```
 
 ## Path attributes
 

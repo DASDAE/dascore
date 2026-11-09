@@ -1899,8 +1899,63 @@ class TestArrayCoord:
         assert out1.size == out2.size == out3.size == 0
 
 
+def _blank_after_end():
+    """The time coordinate of a selection past a patch's end."""
+    patch = dc.get_example_patch()
+    after = patch.get_coord("time").max() + np.timedelta64(1, "s")
+    return patch.select(time=(after, None)).get_coord("time")
+
+
+_DAY = np.datetime64("2020-01-01")
+_SECOND = np.timedelta64(1, "s")
+
+# Blank coordinates and how they are made.
+_BLANKS = {
+    "dim_without_coord": lambda: dc.Patch(
+        data=np.zeros((3, 4)), dims=("a", "b"), coords={}
+    ).get_coord("a"),
+    "select_past_end": _blank_after_end,
+    "empty_slice": lambda: get_coord(start=0.0, stop=1.0, step=0.1)[0:0],
+    "shape": lambda: get_coord(shape=(10,)),
+    "shape_step": lambda: get_coord(shape=(10,), step=0.1),
+    "shape_start": lambda: get_coord(shape=(10,), start=_DAY),
+    "shape_time_step": lambda: get_coord(shape=(10,), step=_SECOND),
+    "shape_dtype_units": lambda: get_coord(shape=(10,), dtype="float32", units="m"),
+    "shape_time_dtype": lambda: get_coord(shape=(10,), dtype="<M8[ns]"),
+    "shape_reversed_range": lambda: get_coord(
+        shape=(10,), start=1.0, stop=0.0, step=0.1
+    ),
+    "time_ends_and_step": lambda: NumericCoord(
+        runs=(Blank((10,), _DAY, _DAY + np.timedelta64(1, "D")),), step=_SECOND
+    ),
+    "time_ends": lambda: NumericCoord(
+        runs=(Blank((10,), _DAY, _DAY + np.timedelta64(1, "D")),)
+    ),
+    "float_ends": lambda: NumericCoord(runs=(Blank((10,), 0.0, 1.0),), units="m"),
+    "int_ends_and_step": lambda: NumericCoord(runs=(Blank((10,), 0, 100),), step=1),
+    "ns_ends_and_step": lambda: NumericCoord(
+        runs=(Blank((10,), _DAY, _DAY + np.timedelta64(1, "D")),),
+        step=_SECOND,
+        dtype="<M8[ns]",
+    ),
+}
+
+
 class TestPartialCoord:
     """Tests for the Partial coordinate."""
+
+    @pytest.mark.parametrize("make", _BLANKS.values(), ids=_BLANKS)
+    def test_dump_round_trips(self, make):
+        """A blank rebuilds from its dump as the same blank."""
+        coord = make()
+        assert coord._partial
+        out = get_coord(**coord.model_dump())
+        assert out == coord
+        assert out._partial
+        assert out.shape == coord.shape and out.dtype == coord.dtype
+        assert out.units == coord.units
+        assert out.step == coord.step
+        assert out._blank == coord._blank
 
     def test_blank_beside_other_runs_raises(self):
         """Unknown labels cannot sit inside a coordinate of known ones."""

@@ -45,6 +45,19 @@ website:
   repo-actions: [edit]
   page-navigation: true
 
+  # Site-wide banner above the navbar. Links start with "/" so quarto
+  # resolves them from the project root; relative links break on nested pages.
+  announcement:
+    icon: megaphone-fill
+    dismissable: true
+    position: above-navbar
+    type: primary
+    content: >-
+      **DASCore 1.0 beta is out!**
+      Read the [announcement](/migrations/dascore_1.0_announcement.qmd),
+      check the [migration guide](/migrations/dascore_1.0_migration.qmd),
+      and [help us test it](/migrations/test_latest_beta.qmd).
+
   navbar:
     logo: _static/logo.png
     logo-alt: "DASCore logo."
@@ -199,17 +212,6 @@ website:
 
             - recipes/docker_basic.qmd
 
-    - id: skills
-      title: "Skills"
-      style: "floating"
-      contents:
-        - text: Agent onboarding
-          href: tutorial/agents.qmd
-{% for name, target in skills.items() %}
-        - text: {{ name }}
-          href: {{ target }}.qmd
-{% endfor %}
-
     - id: contributing
       title: "Contributing"
       contents:
@@ -236,6 +238,9 @@ website:
         - text: General Guidelines
           href: contributing/general_guidelines.qmd
 
+        - text: AI Policy
+          href: contributing/ai_policy.qmd
+
         - text: "Adding a new format"
           href: contributing/new_format.qmd
 
@@ -247,6 +252,19 @@ website:
 
         - text: "Code of Conduct"
           href: contributing/code_of_conduct.qmd
+
+    # Listed after the sidebars above so a page that is also a tutorial, recipe,
+    # or contributing guide keeps that sidebar; Quarto uses the first match.
+    - id: skills
+      title: "Skills"
+      style: "floating"
+      contents:
+        - text: Agent onboarding
+          href: tutorial/agents.qmd
+{% for name, target in skills.items() %}
+        - text: {{ name }}
+          href: {{ target }}.qmd
+{% endfor %}
 
     - id: Notes
       title: 'Notes'

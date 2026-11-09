@@ -63,8 +63,9 @@ jobs:
             echo "Already running from latest release tag $tag; leaving dascore/ unchanged."
           else
             # Authored docs now live inside the package; preserve the checkout's
-            # docs just as the previous top-level docs/ layout did.
-            git restore --source "$tag" -- dascore ':(exclude)dascore/docs'
+            # docs just as the previous top-level docs/ layout did. The skill
+            # files are the text of pages that include them, so keep them too.
+            git restore --source "$tag" -- dascore ':(exclude)dascore/docs' ':(exclude)dascore/.agents'
           fi
 
 

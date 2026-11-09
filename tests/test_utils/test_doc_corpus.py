@@ -35,6 +35,7 @@ class TestAuthoredDocuments:
             "[directory](./)\n"
             "[unavailable](missing.qmd)\n"
             "[API](`dascore.missing.Plugin`)\n"
+            "[page](`dascore/docs/fragment`#details)\n"
             "```{python}\nraise AssertionError('must not run')\n```\n"
         )
         for directory in ("api", "_site", ".quarto", "page_files"):
@@ -49,6 +50,7 @@ class TestAuthoredDocuments:
         assert "Included instructions." in text
         assert "(fragment.md?mode=one#details)" in text
         assert "(fragment.md)" in text
+        assert "[page](fragment.md#details)" in text
         assert "[directory](./)" in text
         assert "https://dascore.org/missing.html" in text
         assert "https://dascore.org/api/dascore.html" in text
@@ -59,6 +61,7 @@ class TestAuthoredDocuments:
         [
             ("---\ntitle: no closing delimiter", "Unterminated"),
             ("{{< include ../outside.md >}}", "escapes"),
+            ("---\njust text\n---\nBody", "mapping"),
             ("{{< include page.qmd >}}", "Circular"),
         ],
     )
@@ -68,6 +71,40 @@ class TestAuthoredDocuments:
         (source / "page.qmd").write_text(body)
         with pytest.raises(doc_corpus.DocumentationError, match=message):
             doc_corpus.write_corpus(output)
+
+    def test_include_beside_skills(self, sources, monkeypatch):
+        """Only the skill directory may be included, not what sits beside it."""
+        source, output = sources
+        agents = source.parent / "agents"
+        (agents / "skills").mkdir(parents=True)
+        (agents / "notes.md").write_text("Private notes.")
+        monkeypatch.setattr(doc_corpus, "SKILL_PATH", agents / "skills")
+        (source / "page.qmd").write_text("{{< include ../agents/notes.md >}}")
+        with pytest.raises(doc_corpus.DocumentationError, match="escapes"):
+            doc_corpus.write_corpus(output)
+
+    def test_included_skill(self, sources, monkeypatch):
+        """A page takes its body and any metadata it lacks from an included skill."""
+        source, _ = sources
+        skill = source.parent / "skills" / "example" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            "---\nname: example\ndescription: From the skill\ntitle: Skill title\n"
+            "---\n\nSkill procedure.\n"
+        )
+        monkeypatch.setattr(doc_corpus, "SKILL_PATH", skill.parent.parent)
+        page = source / "page.qmd"
+        page.write_text(
+            "---\ntitle: Page title\n---\n\n"
+            "{{< include ../skills/example/SKILL.md >}}\n"
+        )
+        front, body = doc_corpus._read_source(page)
+        assert front == {
+            "name": "example",
+            "description": "From the skill",
+            "title": "Page title",
+        }
+        assert body.strip() == "Skill procedure."
 
     @pytest.mark.parametrize(
         "version, ref",

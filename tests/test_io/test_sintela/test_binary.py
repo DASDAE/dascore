@@ -3,15 +3,16 @@ Tests for sintela binary format.
 """
 
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidFiberFileError
+from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
 from dascore.io.sintela import SintelaBinaryV3
-from dascore.io.sintela.utils import _check_packet_continuity, _get_complete_header
+from dascore.io.sintela.utils import _get_complete_header, _off_grid
 from dascore.utils.downloader import fetch
 
 
@@ -117,14 +118,18 @@ class TestPacketContinuity:
         value = int(np.frombuffer(packet[start : start + 8], dtype="<u8")[0])
         return packet[:start] + np.uint64(value + delta).tobytes() + packet[start + 8 :]
 
-    def test_dropped_packet_raises(self, packets, tmp_path):
-        """A missing middle packet raises rather than shifting later samples."""
-        path = tmp_path / "dropped.raw"
+    def test_dropped_packet_splits(self, packets, tmp_path):
+        """A missing middle packet splits the file into a patch per run."""
+        whole = dc.spool(fetch("sintela_binary_v3_test_1.raw"))[0]
+        (tmp_path / "dir").mkdir()
+        path = tmp_path / "dir" / "dropped.raw"
         path.write_bytes(b"".join(packets[:2] + packets[3:]))
-        with pytest.raises(InvalidFiberFileError, match=r"packet 3 .* sample count"):
-            SintelaBinaryV3().scan(path)
-        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* sample count"):
-            SintelaBinaryV3().read_array(path)
+        summaries = SintelaBinaryV3().scan(path)
+        assert [x.shape[0] for x in summaries] == [1000, 1000]
+        for spool in (dc.read(path), dc.spool(path.parent).update()):
+            first, second = spool.sort("time")
+            assert first.equals(whole.select(time=(0, 1000), samples=True))
+            assert second.equals(whole.select(time=(1500, None), samples=True))
 
     def test_time_jump_raises(self, packets, tmp_path):
         """Packets whose start time jumps raise despite contiguous counts."""
@@ -133,6 +138,14 @@ class TestPacketContinuity:
         path.write_bytes(b"".join(packets[:3] + tail))
         with pytest.raises(InvalidFiberFileError, match=r"packet 4 .* start time"):
             SintelaBinaryV3().scan(path)
+
+    def test_unknown_run_key_raises(self, packets, tmp_path):
+        """A key naming no run of the file raises."""
+        path = tmp_path / "dropped.raw"
+        path.write_bytes(b"".join(packets[:2] + packets[3:]))
+        for key in ("packets_0_9", "0"):
+            with pytest.raises(PatchAttributeError, match="No patch named"):
+                SintelaBinaryV3().read_array(path, key=key)
 
     def test_inner_count_checked_on_read(self, packets, tmp_path):
         """A bad count between good endpoints passes scan but fails read."""
@@ -161,4 +174,22 @@ class TestPacketContinuity:
         # 500001 samples at 3 kHz end 166.667 s in, exactly; rounding the
         # packet duration first would put it a whole tolerance away.
         stamps = np.array([[0, 0], [500_001, 166_667_000_000]], dtype="<u8")
-        _check_packet_continuity(np.array([0, 500_001]), stamps, header)
+        assert not np.any(_off_grid(stamps, stamps[0], np.array([0, 500_001]), header))
+
+    @pytest.mark.skipif(
+        sys.platform in {"win32", "emscripten"}, reason="needs sparse files"
+    )
+    def test_file_over_4_gib(self, packets, tmp_path):
+        """A file past 4 GiB scans; its size overflowed uint32 arithmetic."""
+        size, count = len(packets[0]), 2**32 // len(packets[0]) + 2
+        last = self._shift(packets[0], "count", (count - 1) * 500)
+        last = self._shift(last, "time", (count - 1) * 2 * self.half_packet_ns)
+        path = tmp_path / "big.raw"
+        with open(path, "wb") as fi:
+            fi.write(packets[0])
+            fi.seek((count - 1) * size)
+            fi.write(last)
+        assert path.stat().st_size > 2**32
+        (summary,) = dc.scan(path)
+        assert summary.shape == (count * 500, 662)
+        assert summary.get_coord_summary("distance").dtype == "float64"

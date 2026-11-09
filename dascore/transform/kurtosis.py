@@ -95,6 +95,7 @@ class Kurtosis(PatchProcessor):
         from dascore.transform._kurtosis_kernels import (  # noqa: PLC0415
             _recursive_kurtosis,
             _windowed_kurtosis,
+            _windowed_kurtosis_numpy,
         )
 
         moved = np.moveaxis(np.asarray(data, dtype=float), axis, 0)
@@ -103,5 +104,7 @@ class Kurtosis(PatchProcessor):
             varx = np.var(data_2d, axis=0)
             out = _recursive_kurtosis(data_2d, step=step, winlen=nwin * step, varx=varx)
         else:
-            out = _windowed_kurtosis(data_2d, nwin=nwin)
+            jit = _windowed_kurtosis.jit_available
+            windowed = _windowed_kurtosis if jit else _windowed_kurtosis_numpy
+            out = windowed(data_2d, nwin=nwin)
         return np.moveaxis(out.reshape(moved.shape), 0, axis)

@@ -391,3 +391,52 @@ class TestProducerVariants:
         out = dc.read(path)[0]
         assert out.shape == (count, 2)
         assert out.get_coord("time").max() == time[-1]
+
+    @pytest.mark.parametrize(
+        ("owner", "unit", "expected"),
+        [
+            ("Fbe[0]", b"rad2/Hz", "rad**2/Hz"),
+            ("Processed", b"radians^2/Hz", "rad**2/Hz"),
+            ("FbeData[0]", b"not a unit", None),
+            ("Fbe[0]", b"1e05 rad2/Hz", "1e5 rad**2/Hz"),
+        ],
+    )
+    def test_fbe_data_units(self, tmp_path, owner, unit, expected):
+        """FbeDataUnit is read from FbeData[i], Fbe[i] or Processed."""
+        path = shutil.copy(fetch("prodml_fbe_1.h5"), tmp_path / "fbe.h5")
+        with h5py.File(path, "r+") as h5:
+            fbe = h5["Acquisition/Processed/Fbe[0]"]
+            del fbe.attrs["FbeDataUnit"]
+            nodes = {"Fbe[0]": fbe, "Processed": fbe.parent}
+            nodes["FbeData[0]"] = fbe["FbeData[0]"]
+            nodes[owner].attrs["FbeDataUnit"] = unit
+        units = dc.spool(path)[0].attrs.data_units
+        assert units == (expected and dc.get_quantity(expected))
+
+    def test_fbe_nearest_unit_wins(self, tmp_path):
+        """A unitless FbeData[i] is not given the unit Processed states."""
+        path = shutil.copy(fetch("prodml_fbe_1.h5"), tmp_path / "fbe.h5")
+        with h5py.File(path, "r+") as h5:
+            fbe = h5["Acquisition/Processed/Fbe[0]"]
+            fbe.parent.attrs["FbeDataUnit"] = fbe.attrs.pop("FbeDataUnit")
+            fbe["FbeData[0]"].attrs["FbeDataUnit"] = b"unitless"
+        spool = dc.spool(path)
+        assert spool[0].attrs.data_units is None
+        assert spool[1].attrs.data_units == dc.get_quantity("rad**2/Hz")
+
+    def test_fbe_loci_on_processed_group(self, tmp_path):
+        """
+        FBE loci attributes stored on Processed rather than Fbe[0] (Sintela
+        ONYX) still give the band its slice of the acquisition distance.
+        """
+        path = shutil.copy(fetch("prodml_fbe_1.h5"), tmp_path / "fbe.h5")
+        with h5py.File(path, "r+") as h5:
+            fbe = h5["Acquisition/Processed/Fbe[0]"]
+            total = int(fbe.attrs.pop("NumberOfLoci"))
+            del fbe.attrs["StartLocusIndex"]
+            fbe.parent.attrs["NumberOfLoci"] = total
+            fbe.parent.attrs["StartLocusIndex"] = 2
+        before = dc.read(fetch("prodml_fbe_1.h5"))[0].get_coord("distance")
+        after = dc.read(path)[0].get_coord("distance")
+        assert len(after) == total
+        assert np.allclose(after.values, before.values + 2 * before.step)

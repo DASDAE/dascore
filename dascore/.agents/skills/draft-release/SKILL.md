@@ -1,9 +1,7 @@
 ---
 name: draft-release
-description: Draft the next release version and changelog by fetching tags, computing the next semantic v* tag, collecting merged PRs into the release branch (usually dev) since last release via gh, and printing the proposed version and categorized changelog.
+description: DASCore development. Draft the next release by proposing the next v* tag and a categorized changelog from the PRs merged into the release branch (usually dev) since the last release.
 ---
-
-# draft-release
 
 Draft the next release version and changelog from merged PRs.
 
@@ -11,7 +9,7 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
 
 ## Workflow
 
-1. Ask for network permission (`git fetch`, `gh`), then `git fetch --tags origin`.
+1. Run `git fetch --tags origin` using the available network tools and permissions.
    Not `--all`: unrelated remotes can fail or clobber tags, aborting the fetch.
    To read tags without touching local state, `git ls-remote --tags origin`.
 
@@ -55,7 +53,7 @@ Input: `release_type`, one of `major`, `minor`, `patch`/`bugfix` (equivalent). D
    else observable including performance. Check the tag before marking anything
    breaking — an API introduced after it cannot break anyone.
 
-   See "Draft the release notes" in `dascore/docs/contributing/publish_a_new_release.qmd`
+   See "Prepare and publish" in `dascore/docs/contributing/publish_a_new_release.qmd`
    for the sections to use, and their order.
 
 6. Print the new tag and the changelog. Split a PR's unrelated changes into

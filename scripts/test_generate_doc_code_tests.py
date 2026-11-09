@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from generate_doc_code_tests import (
     DOCS_PATH,
     REPO_ROOT,
@@ -46,7 +47,13 @@ print("not executed")
 """,
         )
         out = extract_qmd_file(path)
-        assert out.chunks == (Chunk(start_line=5, source="import dascore as dc\n"),)
+        assert out.chunks == (Chunk(start_line=6, source="import dascore as dc\n"),)
+
+    def test_line_numbers_after_empty_front_matter(self, tmp_path):
+        """Empty front matter still counts toward source line numbers."""
+        path = _write(tmp_path / "example.qmd", "---\n---\n```{python}\nx = 1\n```\n")
+        out = extract_qmd_file(path)
+        assert out.chunks == (Chunk(start_line=4, source="x = 1\n"),)
 
     def test_skips_doc_with_eval_false(self, tmp_path):
         """Document-level eval false should skip all chunks."""
@@ -184,6 +191,39 @@ print("run")
         )
         out = extract_qmd_file(path)
         assert out.chunks == (Chunk(start_line=12, source='print("run")\n'),)
+
+
+class TestIncludes:
+    """Cells in a file a page includes belong to that page."""
+
+    def test_follows_includes(self, tmp_path):
+        """An included file's cells are extracted, pointing at that file."""
+        skill = _write(
+            tmp_path / "skills" / "SKILL.md",
+            '---\nname: example\n---\n\n```{python}\nprint("included")\n```\n',
+        )
+        path = _write(
+            tmp_path / "docs" / "page.qmd",
+            "---\ntitle: Example\n---\n{{< include ../skills/SKILL.md >}}\n",
+        )
+        out = extract_qmd_file(path)
+        assert out.chunks == (
+            Chunk(start_line=6, source='print("included")\n', path=skill.resolve()),
+        )
+
+    def test_circular_include(self, tmp_path):
+        """A file that includes itself is reported, not recursed into."""
+        path = _write(tmp_path / "page.qmd", "{{< include page.qmd >}}\n")
+        with pytest.raises(ValueError, match="Circular"):
+            extract_qmd_file(path.resolve())
+
+    def test_skill_pages_keep_their_cells(self):
+        """A real page whose body is an included skill still yields its cells."""
+        page = DOCS_PATH / "recipes" / "tunnel_inventory.qmd"
+        chunks = extract_qmd_file(page).chunks
+        assert chunks and all(x.path is not None for x in chunks)
+        module = render_test_module(page, chunks)
+        assert "### dascore/.agents/skills/make-inventory/SKILL.md:" in module
 
 
 class TestOutputPaths:

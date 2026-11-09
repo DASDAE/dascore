@@ -235,7 +235,7 @@ class TestChunk:
         fine = dc.get_example_patch(
             time_step=to_timedelta64(0.001),
             time_min=to_timedelta64(1000) + coarse.get_coord("time").min(),
-        )
+        ).select(time=(0, 20), samples=True)
         out = dc.spool([coarse, fine]).chunk(time=0.002)
         assert len(out)
         assert {x.get_coord("time").step for x in out} == {fine.get_coord("time").step}
@@ -4071,13 +4071,13 @@ class TestUnionRevision:
             _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num) for num in range(2)
         ]
         dc.write(dc.spool(patches), path, "dasdae")
-        old = dc.spool(data, index_path=tmp_path / "old.sqlite").update()
+        old = dc.spool(data, index=tmp_path / "old.sqlite").update()
         key = str(old._df.iloc[0]["source_patch_key"]).split("/")[-1]
         # the grown patch runs into the one beside it, which the planner
         # windows away once the rows say so
         grown = _grid_patch(ORIGIN, 12, seed=7)
         _rewrite_dasdae(path, grown, group=key)
-        new = dc.spool(data, index_path=tmp_path / "new.sqlite").update()
+        new = dc.spool(data, index=tmp_path / "new.sqlite").update()
         return old, new, grown
 
     def test_a_stale_row_never_meets_the_new_stats(self, two_indexes):
@@ -4115,10 +4115,10 @@ class TestUnionRevision:
             _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num) for num in range(2)
         ]
         dc.write(dc.spool(patches), path, "dasdae")
-        old = dc.spool(data, index_path=tmp_path / "old.sqlite").update()
+        old = dc.spool(data, index=tmp_path / "old.sqlite").update()
         path.unlink()
         dc.write(dc.spool(patches[:1]), path, "dasdae")
-        new = dc.spool(data, index_path=tmp_path / "new.sqlite").update()
+        new = dc.spool(data, index=tmp_path / "new.sqlite").update()
         assert len(old) == 2 and len(new) == 1
         assert len(old + new) == 1
 
@@ -4347,7 +4347,7 @@ class TestStaleSourceCheck:
         cache.mkdir()
         paths = _archive(data, indexed=False)[1]
         index = cache / "index.sqlite"
-        spool = dc.spool(data, index_path=index).update()
+        spool = dc.spool(data, index=index).update()
         return spool.chunk(time=None), paths, index
 
     def test_a_plan_outlives_the_index_it_was_made_from(self, plan_and_index, route):
@@ -4829,6 +4829,7 @@ class TestTrimmedRecipeMerge:
             out[kind] = (_dim_spool(directory, name, kind), name)
         return out
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("kind", ["datetime", "float", "int64", "int32"])
     def test_every_chunking_matches_the_patch_path(
         self,
@@ -5138,6 +5139,7 @@ class TestSelectedRecipeMerge:
             assert not planned._value_residuals_on((plain, residual), "time")
             assert not planned._value_residuals_on((residual, plain), "time")
 
+    @pytest.mark.wasm_skip
     def test_every_selection_matches_the_patch_path(self, spools, monkeypatch, route):
         """Random selections and chunkings read the same samples either way.
 

@@ -4,7 +4,7 @@ aliases:
   - /recipes/how_to_contribute.html
 ---
 
-Contributions are welcome. Follow the [code of conduct](code_of_conduct.qmd), then [install DASCore for development](dev_install.qmd).
+Contributions are welcome. Follow the [code of conduct](code_of_conduct.qmd) and the [AI policy](ai_policy.qmd), then [install DASCore for development](dev_install.qmd).
 
 - [General workflow and changelog](general_guidelines.qmd)
 - [Testing](testing.qmd)

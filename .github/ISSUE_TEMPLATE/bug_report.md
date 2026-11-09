@@ -9,6 +9,9 @@ assignees: ''
 ## Description
 <!--
 Provide a clear description of the issue.
+
+If you used an AI tool to find or write up this issue, comply with the AI policy:
+https://dascore.org/contributing/ai_policy.html
 -->
 
 ## Example

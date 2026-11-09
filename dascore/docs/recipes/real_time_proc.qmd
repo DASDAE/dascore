@@ -6,6 +6,8 @@ execute:
 
 Poll a directory spool, process newly indexed patches, and stop after two empty polls. Choose the polling interval for the data cadence and storage latency.
 
+In a large archive where new files land in one folder, `root.update(paths="incoming")` walks only that folder; run a plain `update()` now and then to catch removals and moves elsewhere.
+
 ```{python}
 import time
 from pathlib import Path

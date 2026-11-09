@@ -1,6 +1,8 @@
 """
 Generate pytest modules from executable Python fences in dascore/docs/*.qmd.
 
+A page's fences include those of the files it pulls in with a Quarto include.
+
 Exclude generated API pages and honor document- and chunk-level evaluation switches.
 Each page becomes one test, preserving block order, hoisting future imports, and adding
 source-line comments. A shared conftest runs tests from each page's directory and
@@ -13,10 +15,11 @@ generated tests are not committed.
 from __future__ import annotations
 
 import argparse
+import re
 import shlex
 import shutil
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from textwrap import indent
 
@@ -179,6 +182,8 @@ class Chunk:
     start_line: int
     # The literal Python source that will be compiled and executed.
     source: str
+    # The included file the chunk was written in, when not the page itself.
+    path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -303,11 +308,41 @@ def _chunk_is_executable(chunk_lines: list[str]) -> bool:
     return True
 
 
-def extract_qmd_file(path: Path) -> QmdFile:
-    """Extract executable python chunks from a qmd file."""
+# The same spelling the corpus builder accepts, quoted paths included.
+_INCLUDE = re.compile(r"\{\{<\s*include\s+([^>]+?)\s*>\}\}")
+
+
+def _read_body(
+    path: Path, stack: tuple[Path, ...] = ()
+) -> tuple[list[str], list[tuple[Path, int, str]]]:
+    """
+    Return a file's front matter and its body lines, following includes.
+
+    Each body line carries the file it was written in and its offset there, so
+    source comments point at the file that holds the code.
+    """
+    if path in stack:
+        raise ValueError(f"Circular documentation include: {path}")
     # Read with explicit UTF-8 so Windows does not fall back to cp1252.
     lines = path.read_text(encoding=TEXT_ENCODING).splitlines()
     front_matter, body = _split_front_matter(lines)
+    # Source comments use line numbers in the original file, front matter included.
+    out: list[tuple[Path, int, str]] = []
+    for offset, line in enumerate(body, start=len(lines) - len(body) + 1):
+        include = _INCLUDE.fullmatch(line.strip())
+        if include is None:
+            out.append((path, offset, line))
+        else:
+            # Quarto pastes the included file here, so its cells run as well.
+            target = include[1].strip().strip("\"'")
+            included = (path.parent / target).resolve()
+            out.extend(_read_body(included, (*stack, path))[1])
+    return front_matter, out
+
+
+def extract_qmd_file(path: Path) -> QmdFile:
+    """Extract executable python chunks from a qmd file and what it includes."""
+    front_matter, body = _read_body(path)
     # Skip the whole document if execution is disabled in front matter.
     if not _parse_doc_eval(front_matter):
         return QmdFile(path=path, chunks=())
@@ -316,12 +351,10 @@ def extract_qmd_file(path: Path) -> QmdFile:
     in_chunk = False
     chunk_lines: list[str] = []
     chunk_start = 0
+    chunk_path = path
     should_capture = False
 
-    # `body` excludes front matter, but we still want source comments to point
-    # back to original qmd line numbers.
-    body_start_line = len(front_matter) + 1 if front_matter else 0
-    for offset, line in enumerate(body, start=body_start_line + 1):
+    for source_path, offset, line in body:
         stripped = line.strip()
         # Opening fence: decide whether this cell is executable python.
         if not in_chunk and stripped.startswith("```{"):
@@ -331,6 +364,7 @@ def extract_qmd_file(path: Path) -> QmdFile:
             # Record the first executable line inside the fence, not the fence
             # header itself, so the generated source comment points at code.
             chunk_start = offset + 1
+            chunk_path = source_path
             continue
         # Closing fence: finalize the captured chunk if it should execute.
         if in_chunk and stripped == "```":
@@ -339,7 +373,13 @@ def extract_qmd_file(path: Path) -> QmdFile:
                 # defined earlier in the block remain available later.
                 source = textwrap.dedent("\n".join(chunk_lines)).strip()
                 if source:
-                    chunks.append(Chunk(start_line=chunk_start, source=source + "\n"))
+                    chunks.append(
+                        Chunk(
+                            start_line=chunk_start,
+                            source=source + "\n",
+                            path=None if chunk_path == path else chunk_path,
+                        )
+                    )
             in_chunk = False
             should_capture = False
             chunk_lines = []
@@ -408,15 +448,15 @@ def _collect_future_imports(
                 future_imports.append(future_import)
         body_source = "\n".join(body_lines).strip()
         if body_source:
-            cleaned_chunks.append(
-                Chunk(start_line=chunk.start_line, source=body_source + "\n")
-            )
+            cleaned_chunks.append(replace(chunk, source=body_source + "\n"))
     return tuple(future_imports), tuple(cleaned_chunks)
 
 
 def _render_chunk_source(source_path: str, chunk: Chunk) -> str:
     """Render one chunk as plain inline test code."""
     # Keep the qmd source location visible right above the pasted code block.
+    if chunk.path is not None:
+        source_path = chunk.path.relative_to(REPO_ROOT).as_posix()
     chunk_block = (
         f"{_render_chunk_comment(source_path, chunk.start_line)}\n"
         f"{chunk.source.rstrip()}\n\n"

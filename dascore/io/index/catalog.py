@@ -38,10 +38,10 @@ from dascore.compat import UPath
 from dascore.config import config_context, get_config
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.exceptions import InvalidIndexError, MissingPatchError, ParameterError
 from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
 from dascore.io.index.backend import get_backend
-from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
+from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats, snap_text
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
     CoordExists,
@@ -199,7 +199,9 @@ class LiveResolver(PatchResolver):
             raise MissingPatchError(msg) from None
 
 
-def resolve_against_root(path: str | Path, root: Path | None) -> str | Path:
+def resolve_against_root(
+    path: str | Path, root: Path | UPath | None
+) -> str | Path | UPath:
     """
     Resolve a stored source path against a catalog root.
 
@@ -235,13 +237,15 @@ class FileResolver(PatchResolver):
 
     def __init__(
         self,
-        root: Path | str | None = None,
+        root: Path | UPath | str | None = None,
         upaths: Mapping | None = None,
         snaps: Mapping | None = None,
         snap=None,
         max_shift: float | None = None,
     ):
-        self._root = Path(root) if root is not None else None
+        # A UPath root is kept as given: relative rows then resolve against
+        # a remote root, with its storage options (e.g. auth headers).
+        self._root = root if root is None or isinstance(root, UPath) else Path(root)
         # Rows hold path strings; a remote path's storage options live only
         # on the UPath it was given as, so that is kept to reopen it.
         self._upaths = dict(upaths or {})
@@ -300,7 +304,7 @@ class FileResolver(PatchResolver):
         with config_context(max_shift=shift):
             return dc.read(**kwargs, **id_kwargs, **trim)
 
-    def resolve_path(self, path: str | Path) -> str | Path:
+    def resolve_path(self, path: str | Path) -> str | Path | UPath:
         """Resolve a row's source path against the catalog root."""
         if upath := self._upaths.get(str(path)):
             return upath
@@ -422,11 +426,20 @@ def directory_decodes(resolver, sources) -> dict:
     return out
 
 
-def _absolutize_record(record, root):
-    """Return a source record whose relative path is resolved against root."""
+def _absolutize_record(record, root, upaths: dict):
+    """
+    Return a source record whose relative path is resolved against root.
+
+    A path under a remote root becomes a URL; `upaths` records the UPath
+    which reopens it with the root's storage options.
+    """
     path = record.source_path
     if "://" in path or Path(path).is_absolute():
         return record
+    if isinstance(root, UPath) and not is_local_path(root):
+        upath = root / path
+        upaths[str(upath)] = upath
+        return replace(record, source_path=str(upath), base_uri=None)
     # POSIX, as the index stores paths, so one file's rows and decodes match
     resolved = (Path(root) / (path if path != "." else "")).as_posix()
     return replace(record, source_path=resolved, base_uri=None)
@@ -836,7 +849,8 @@ class PatchCatalog:
             records = catalog.backend.export_records(patch_rows=patch_rows)
             root = getattr(catalog.resolver, "_root", None)
             if root is not None:
-                records = [_absolutize_record(x, root) for x in records]
+                upaths = resolver.file._upaths
+                records = [_absolutize_record(x, root, upaths) for x in records]
             for record in records:
                 identity = (record.base_uri or "", record.source_path)
                 merged[identity] = _merge_source_records(merged.get(identity), record)
@@ -930,7 +944,42 @@ class PatchCatalog:
             default_order=_DIRECTORY_ORDER,
         )
 
+    @classmethod
+    def from_index(cls, index: Path, root: Path | UPath, snap=None) -> PatchCatalog:
+        """
+        Catalog over an existing index, opened read-only.
+
+        Rows resolve against `root`, which may be remote. Nothing scans:
+        an index scanned under another snap or max_shift raises rather
+        than rescanning.
+        """
+        if not Path(index).is_file():
+            raise FileNotFoundError(f"Spool index {index} does not exist")
+        backend = get_backend(index, read_only=True)
+        metadata = backend.get_metadata()
+        if metadata["last_indexed_ns"] <= 0:
+            backend.close()
+            msg = f"The read-only index {index} has not completed its first update."
+            raise InvalidIndexError(msg)
+        stored = (metadata["snap"], metadata["max_shift"])
+        decode = (snap_text(snap), get_config().max_shift)
+        if stored != decode:
+            backend.close()
+            msg = (
+                f"The read-only index {index} was scanned with snap={stored[0]} "
+                f"and max_shift={stored[1]}, but was opened with snap={decode[0]} "
+                f"and max_shift={decode[1]}; open it with the values it records."
+            )
+            raise ParameterError(msg)
+        resolver = FileResolver(root=root, snap=snap, max_shift=decode[1])
+        return cls(backend=backend, resolver=resolver, default_order=_DIRECTORY_ORDER)
+
     # --- internals ------------------------------------------------------
+
+    @property
+    def read_only(self) -> bool:
+        """True for a catalog over an index opened read-only."""
+        return getattr(self._backend, "read_only", False)
 
     @property
     def backend(self):
@@ -972,17 +1021,19 @@ class PatchCatalog:
         In-memory backends (live and union catalogs) ride along as
         source records and are re-ingested on next use; the resolver
         registry (the store for live patches) pickles with its patches.
-        Directory catalogs rebuild from their index file instead.
+        Directory catalogs rebuild from their index file instead, and a
+        read-only catalog's backend reopens its file.
         """
         state = dict(self.__dict__)
-        state["_backend"] = None
+        reopens = self._syncer is not None or self.read_only
+        state["_backend"] = self._backend if self.read_only else None
         # In-memory backends are rebuilt on the other side with FRESH
         # patch ids, so a stored id membership would bind to the wrong
         # rows. Restrict the rebuilt content to the current membership
         # instead (records/registry in presentation order, so re-ingest
-        # ordinals preserve it) and drop the id spec; the syncer case
-        # reopens the same database file, where ids stay valid.
-        rebuilt_membership = self._syncer is None and self._ids is not None
+        # ordinals preserve it) and drop the id spec; a catalog which
+        # reopens the same database file keeps valid ids.
+        rebuilt_membership = not reopens and self._ids is not None
         if rebuilt_membership:
             state["_ids"] = None
         # Live catalogs rebuild from their registry without touching the
@@ -990,7 +1041,7 @@ class PatchCatalog:
         # other in-memory catalogs (e.g. unions) capture their rows.
         needs_records = (
             self._backend is not None
-            and self._syncer is None
+            and not reopens
             and not isinstance(self.resolver, LiveResolver)
         )
         if needs_records:
@@ -1599,12 +1650,19 @@ class PatchCatalog:
         progress: PROGRESS_LEVELS = "standard",
         *,
         client: ExecutorType | None = None,
+        paths=None,
+        retry_unreadable: bool = False,
     ) -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
         # The scan itself is long-running file IO; it manages its own
         # state, so only the cache invalidation needs the revision lock.
         if self._syncer is not None:
-            self._syncer.update(progress=progress, client=client)
+            self._syncer.update(
+                paths,
+                progress=progress,
+                client=client,
+                retry_unreadable=retry_unreadable,
+            )
         self._invalidate()
         return self
 

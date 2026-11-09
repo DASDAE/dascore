@@ -19,7 +19,7 @@ import tempfile
 import warnings
 from contextlib import suppress
 from functools import partial
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Self
 
 import pandas as pd
@@ -227,6 +227,7 @@ class DBDirectoryIndexer:
             # schema version; rebuild it rather than asking the user to.
             self.index_path.unlink()
             self._backend = get_backend(self.index_path)
+            self._backend.clear()  # marks it rebuilt, not new
         # Schema creation alone is not a successful directory scan. Read the
         # transactional marker so a new process retries an interrupted first
         # update instead of trusting a merely nonempty SQLite file.
@@ -240,9 +241,12 @@ class DBDirectoryIndexer:
         spool of the directory may have changed it in between.
         """
         metadata = self._backend.get_metadata()
+        # The marker is 0 for a new index, -1 for a cleared or rebuilt one,
+        # and the time of the first complete update after that.
+        marker = metadata["last_indexed_ns"]
         decode = (snap_text(self.snap), self.max_shift)
         stored = (metadata["snap"], metadata["max_shift"])
-        if stored != decode and metadata["last_indexed_ns"]:
+        if stored != decode and marker > 0:
             msg = (
                 f"The index of {self.path} was scanned with snap={stored[0]} "
                 f"and max_shift={stored[1]}; rescanning its files with "
@@ -250,11 +254,11 @@ class DBDirectoryIndexer:
             )
             warnings.warn(msg, UserWarning, stacklevel=5)
             self._backend.clear()
+            marker = -1
         if stored != decode:
             self._backend.set_decode(*decode)
-        self._initial_update_done = bool(
-            metadata["last_indexed_ns"] and stored == decode
-        )
+        self._initial_update_done = marker > 0 and stored == decode
+        self._reset = marker < 0
 
     @property
     def _index_name(self) -> str:
@@ -318,6 +322,8 @@ class DBDirectoryIndexer:
 
     def ensure_updated(self) -> bool:
         """Run the initial update if the index was never populated."""
+        if not self._initial_update_done:
+            self._check_decode()  # another spool may have built it since
         if self._initial_update_done:
             return False
         self.update(progress=None)
@@ -345,9 +351,9 @@ class DBDirectoryIndexer:
         """Return True when a directory is itself one FiberIO scan unit."""
         return is_directory_format(path)
 
-    def _walk(self) -> dict[str, tuple[int, int, Path]]:
+    def _walk(self, scopes=None) -> dict[str, tuple[int, int, Path]]:
         """
-        Walk the spool directory, honoring directory-format scan units.
+        Walk the spool directory (or only scopes), honoring scan units.
 
         Maps relative path -> (mtime_ns, size, abs path) for every scan
         unit. A directory-format unit (e.g. XMLBinary) appears as one
@@ -359,7 +365,19 @@ class DBDirectoryIndexer:
         uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}
-        gen = _iter_filesystem(self.path, ext=self.ext, include_directories=True)
+        if scopes is None or not self.path.is_dir():
+            # A vanished root raises here rather than reading as deletions.
+            self._walk_root(self.path, files)
+        for scope in scopes or ():
+            # A scope that no longer exists contributes nothing, so its rows
+            # are pruned as stale.
+            if (root := self.path / scope).exists():
+                self._walk_root(root, files)
+        return files
+
+    def _walk_root(self, root: Path, files: dict) -> None:
+        """Add the scan units under one root to files."""
+        gen = _iter_filesystem(root, ext=self.ext, include_directories=True)
         signal = None
         while True:
             try:
@@ -385,7 +403,27 @@ class DBDirectoryIndexer:
                 # crashing the whole index update.
                 continue
             files[self._rel(path)] = (mtime, size, path)
-        return files
+
+    def _scopes(self, paths, stored) -> list[str]:
+        """Relative posix scopes for update(paths=...), refusing bad ones."""
+        if isinstance(paths, str | os.PathLike):
+            paths = [paths]
+        base = Path(os.path.abspath(self.path))
+        scopes = []
+        for one in paths:
+            full = Path(os.path.abspath(base / one))
+            if not full.is_relative_to(base):
+                msg = f"{one} is not inside the spool directory {self.path}"
+                raise ValueError(msg)
+            rel = PurePosixPath(full.relative_to(base).as_posix())
+            if any(x.startswith(".") for x in rel.parts):
+                msg = f"{one} is hidden, and the index skips hidden paths"
+                raise ValueError(msg)
+            if source := next((x for x in rel.parents if str(x) in stored), None):
+                msg = f"{one} is inside the indexed source {source}; name that"
+                raise ValueError(msg)
+            scopes.append(str(rel))
+        return scopes
 
     def _detect_moves(
         self,
@@ -429,12 +467,40 @@ class DBDirectoryIndexer:
             moves[old] = new
         return moves
 
+    def _scoped_stale(self, scopes, stored, files) -> list[str]:
+        """
+        Stale sources for a scoped update.
+
+        Stored sources inside the scopes and missing from the walk, plus
+        sources outside them that moved in: gone from disk, with the stats
+        of a new file in scope. Without the latter, a move into a scope
+        would leave the old row behind until a full update.
+        """
+        inside = [
+            path
+            for path in stored
+            if any(x == "." or path == x or path.startswith(f"{x}/") for x in scopes)
+        ]
+        stale = [path for path in inside if path not in files]
+        new = {(m, s) for rel, (m, s, _) in files.items() if rel not in stored}
+        if new:
+            inside = set(inside)
+            stale += [
+                path
+                for path, stat in stored.items()
+                if stat in new
+                and path not in inside
+                and not (self.path / path).exists()
+            ]
+        return stale
+
     def update(
         self,
         paths=None,
         progress: PROGRESS_LEVELS = "standard",
         *,
         client: ExecutorType | None = None,
+        retry_unreadable: bool = False,
     ) -> Self:
         """
         Update the index: scan new/changed sources, drop removed ones.
@@ -448,6 +514,11 @@ class DBDirectoryIndexer:
         stats and rewritten in place, never rescanned (see _detect_moves).
         An optional client scans batches of changed sources; all database
         changes stay in the calling thread. The caller owns the client.
+        Paths (files or directories under the root) limit the walk, rescans
+        and pruning to those scopes, except that a source moved into a scope
+        drops its old row. None, or an index that was rebuilt or never
+        finished its first update, walks everything.
+        retry_unreadable also rescans walked sources that gave no patches.
         """
         progress = validate_progress_level(progress)
         self._check_decode()
@@ -460,7 +531,6 @@ class DBDirectoryIndexer:
             )
             skip = (str(Path(dc.__file__).parent),)
             warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
-        files = self._walk()
         stats = self._backend.source_stats()
         stored = {
             path: (None if pd.isnull(mtime) else (int(mtime), int(size)))
@@ -471,34 +541,39 @@ class DBDirectoryIndexer:
                 strict=True,
             )
         }
-        stale = [path for path in stored if path not in files]
+        # Only a new, empty index may be built one scope at a time; one that
+        # was rebuilt, cleared, or partly built must first be walked whole,
+        # or it would be marked complete while holding only the scopes.
+        unfinished = not self._initial_update_done and (stored or self._reset)
+        if paths is not None and unfinished:
+            msg = (
+                f"The index of {self.path} was rebuilt or never finished its "
+                f"first update; ignoring paths and walking the whole directory."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        scoped = paths is not None and not unfinished
+        scopes = self._scopes(paths, stored) if scoped else None
+        files = self._walk(scopes)
+        if scopes is None:
+            stale = [path for path in stored if path not in files]
+        else:
+            stale = self._scoped_stale(scopes, stored, files)
+        retry = self._backend.unread_sources() if retry_unreadable else set()
         changed = [
             rel
             for rel, (mtime, size, _) in files.items()
-            if stored.get(rel) != (mtime, size)
+            if stored.get(rel) != (mtime, size) or rel in retry
         ]
-        # Moves apply to the unrestricted sets, like stale removal below:
-        # the rows must track the filesystem even when a `paths` argument
-        # narrows which sources get rescanned.
         moves = self._detect_moves(stale, stored, files)
+        # A retried source that moved drops its old row and rescans at its
+        # new path, instead of carrying the empty row across.
+        moves = {old: new for old, new in moves.items() if old not in retry}
         if moves:
             new_attrs = {old: hive_path_attrs(new) for old, new in moves.items()}
             self._backend.move_sources(moves, new_attrs)
             moved_targets = set(moves.values())
             stale = [rel for rel in stale if rel not in moves]
             changed = [rel for rel in changed if rel not in moved_targets]
-        if paths is not None:
-            # restrict the rescan (not stale removal) to the given paths
-            keep = set()
-            for one in paths:
-                one = Path(one)
-                rel = (
-                    one.relative_to(self.path).as_posix()
-                    if one.is_absolute()
-                    else one.as_posix()
-                )
-                keep.add(rel)
-            changed = [rel for rel in changed if rel in keep]
         if stale:
             self._backend.delete_sources(stale)
         if changed:
