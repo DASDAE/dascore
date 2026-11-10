@@ -1151,13 +1151,13 @@ class TestSelectLongFloatGrid:
 
     def test_between_labels_exclusive(self, grid_coord):
         """Bounds halfway between labels select only the sample inside."""
-        coord = grid_coord
-        bad = []
-        for k in range(1, len(coord) - 1, 9973):
-            before = (coord[k - 1] + coord[k]) / 2
-            after = (coord[k] + coord[k + 1]) / 2
-            if not self._selected(coord, k, k, before, after):
-                bad.append(k)
+        coord, values = grid_coord, grid_coord.values
+        mid = (values[:-1] + values[1:]) / 2  # mid[k] lies between k and k + 1
+        bad = [
+            k
+            for k in range(1, len(coord) - 1, 9973)
+            if not self._selected(coord, k, k, mid[k - 1], mid[k])
+        ]
         assert not bad
 
     @pytest.mark.parametrize("name", ["odd_step", "far_origin"])

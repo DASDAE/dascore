@@ -3333,18 +3333,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _include_reached(self, grid: Grid, value, out, forward):
         """
-        Step an index estimate one sample toward the bound if that label meets it.
+        Step an index one sample toward the bound if that label meets it.
 
-        The (value - start) / step estimate drifts from the linspace labels on
-        long, far-from-zero or float32 grids, so an inclusive bound equal to a
-        label can land one sample past it.
+        Corrects index-arithmetic drift on long or float32 grids.
         """
         neighbor = out - 1 if forward else out + 1
         labels = grid.labels(neighbor, self.dtype)
-        if forward != self.reverse_sorted:
-            reached = labels >= value
-        else:
-            reached = labels <= value
+        reached = labels >= value if forward != self.reverse_sorted else labels <= value
         # labels past either end are extrapolated and may round onto an end
         inside = (neighbor >= 0) & (neighbor < len(self))
         return np.where(reached & inside, neighbor, out)
