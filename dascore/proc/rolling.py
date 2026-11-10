@@ -85,6 +85,19 @@ class _PatchRollerInfo:
             hist_str = f"{self.roll_hist}.{func_or_str}()"
         return _maybe_add_history_str(self.patch.attrs, hist_str)
 
+    def _pandas_data(self, name, args=(), kwargs=None):
+        """Return pandas' rolling `name` (a name or a callable) of the data."""
+        return _rolling_pandas(
+            self.patch.data,
+            name,
+            window=self.window,
+            step=self.step,
+            axis=self.axis,
+            center=self.center,
+            args=args,
+            kwargs=kwargs or {},
+        )
+
     def _new_patch(self, data, func_or_str, args=(), kwargs=None):
         """Create the output patch from rolled data."""
         coords = self.get_coords()
@@ -190,7 +203,9 @@ class _AutoPatchRoller(_NumpyPatchRoller):
             # pandas centres stepped windows a sample off NumPy
             and not (self.center and self.step > 1)
             # pandas works in float64: wider types lose precision, int64 and
-            # float16 sums stop overflowing as NumPy's do
+            # float16 sums stop overflowing as NumPy's do. float32 stays, as
+            # the common DAS dtype; only values near its limit (where NumPy
+            # overflows) differ.
             and ((kind == "f" and size in (4, 8)) or (kind in "iu" and size <= 4))
             # and treats infinities as missing
             and not (kind == "f" and np.isinf(data).any())
@@ -202,16 +217,7 @@ class _AutoPatchRoller(_NumpyPatchRoller):
             return self.apply(function)
         # pandas' std defaults to ddof=1, NumPy's to 0
         kwargs = {"ddof": 0} if function is np.std else {}
-        data = _rolling_pandas(
-            self.patch.data,
-            function.__name__,
-            window=self.window,
-            step=self.step,
-            axis=self.axis,
-            center=self.center,
-            args=(),
-            kwargs=kwargs,
-        )
+        data = self._pandas_data(function.__name__, kwargs=kwargs)
         return self._new_patch(data, function)
 
 
@@ -220,16 +226,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
 
     def _call_rolling_func(self, name, /, *args, **kwargs):
         """Call a rolling function; positional-only `name` frees it for kwargs."""
-        data = _rolling_pandas(
-            self.patch.data,
-            name,
-            window=self.window,
-            step=self.step,
-            axis=self.axis,
-            center=self.center,
-            args=args,
-            kwargs=kwargs,
-        )
+        data = self._pandas_data(name, args, kwargs)
         return self._new_patch(data, name, args, kwargs)
 
     @compose_docstring(apply_description=rolling_apply_description)

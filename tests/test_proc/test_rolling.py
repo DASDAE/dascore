@@ -201,11 +201,7 @@ class TestRolling:
         """A 2D patch's long windows reduce via pandas, giving NumPy's output."""
         kwargs = dict(time=300, step=step, samples=True)
         expected = getattr(random_patch.rolling(**kwargs, engine="numpy"), name)()
-
-        def _fail(*args, **kwargs):
-            raise AssertionError("sliding windows used for a long window")
-
-        monkeypatch.setattr(rolling_module, "_rolling_numpy", _fail)
+        monkeypatch.setattr(rolling_module, "_rolling_numpy", None)
         out = getattr(random_patch.rolling(**kwargs), name)()
         assert out.coords == expected.coords
         assert np.allclose(out.data, expected.data, equal_nan=True)
