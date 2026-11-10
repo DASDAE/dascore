@@ -26,6 +26,8 @@ from importlib import import_module
 from pathlib import Path, PurePath
 from types import ModuleType
 
+from _api_urls import _echo, load_baseline, write_baseline
+
 BASELINE_PATH = Path(__file__).absolute().parent / "_baselines" / "public_api.tsv"
 
 # Modules whose public names, beyond `dascore.__all__`, are pinned.
@@ -54,11 +56,6 @@ _FIX = (
 )
 _PRIMITIVES = (bool, int, float, complex, str, bytes, type(None), type(...))
 _KINDS = ("added", "removed", "changed")
-
-
-def _echo(message):
-    """Print a message; this script talks to a terminal or build log."""
-    print(message)  # noqa: T201
 
 
 def _default_text(value) -> str:
@@ -210,28 +207,13 @@ def current_api() -> dict[str, str]:
     return out
 
 
-def load_baseline(path: Path = BASELINE_PATH) -> dict[str, str]:
-    """Load the frozen surface, or an empty one if nothing is frozen yet."""
-    if not path.exists():
-        return {}
-    lines = (x for x in path.read_text().splitlines() if x and not x.startswith("#"))
-    return dict(x.split("\t", 1) for x in lines)
-
-
-def write_baseline(api: dict[str, str], path: Path = BASELINE_PATH) -> None:
-    """Write the surface as one sorted name and description per line."""
-    path.parent.mkdir(exist_ok=True, parents=True)
-    rows = "".join(f"{key}\t{api[key]}\n" for key in sorted(api))
-    path.write_text(_HEADER + rows)
-
-
 def compare(current: dict[str, str], baseline: dict[str, str]) -> dict:
     """Return the names added, removed and changed relative to the baseline."""
     changed = {
         k: (v, current[k]) for k, v in baseline.items() if current.get(k, v) != v
     }
     return {
-        "added": sorted(set(current) - set(baseline)),
+        "added": {k: current[k] for k in sorted(set(current) - set(baseline))},
         "removed": sorted(set(baseline) - set(current)),
         "changed": dict(sorted(changed.items())),
     }
@@ -243,7 +225,7 @@ def format_difference(difference: dict) -> str:
         "The public API differs from scripts/_baselines/public_api.tsv: "
         + ", ".join(f"{len(difference[x])} {x}" for x in _KINDS)
     ]
-    lines += [f"  added: {x}\t{difference['current'][x]}" for x in difference["added"]]
+    lines += [f"  added: {k}\t{v}" for k, v in difference["added"].items()]
     lines += [f"  removed: {x}" for x in difference["removed"]]
     lines += [
         f"  changed: {k}\n      was {old}\n      now {new}"
@@ -254,11 +236,10 @@ def format_difference(difference: dict) -> str:
 
 def check(path: Path = BASELINE_PATH) -> str | None:
     """Return a description of how the API moved off the baseline, if it did."""
-    current = current_api()
-    difference = compare(current, load_baseline(path))
+    difference = compare(current_api(), load_baseline(path))
     if not any(difference.values()):
         return None
-    return format_difference({**difference, "current": current})
+    return format_difference(difference)
 
 
 def _get_parser() -> argparse.ArgumentParser:
@@ -275,7 +256,7 @@ def main(args=None, path: Path = BASELINE_PATH) -> int:
     parsed = _get_parser().parse_args(args)
     if parsed.command == "freeze":
         api = current_api()
-        write_baseline(api, path)
+        write_baseline(api, path, header=_HEADER)
         _echo(f"Froze {len(api)} public names to {path}")
         return 0
     problem = check(path)
