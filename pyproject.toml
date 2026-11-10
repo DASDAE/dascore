@@ -44,6 +44,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 dependencies = [
      # Provides array_namespace and friends for array-API backed code.
      "array-api-compat>=1.9",
+     "filelock>=3.12",  # serialize remote-cache copies across processes
      "h5py",
      "matplotlib>=3.10",
      # 2.0 is the first numpy with native array API support, which is what
