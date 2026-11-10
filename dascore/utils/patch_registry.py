@@ -352,13 +352,7 @@ def _as_key(value, budget: int = _KEY_LIMIT):
 
 
 def _identifying_tag(func) -> str | None:
-    """
-    Return the tag a call to a patch function is identified by, if any.
-
-    None for a function with no tag, and for one defined in a script or a
-    notebook: its tag is only its name, which two scripts -- or one cell
-    before and after an edit -- share while running different code.
-    """
+    """Return the function's tag, or None if it has none or is a script's."""
     tag = patch_function_tag(func)
     if tag is None or tag.partition(_SEPARATOR)[0] in SCRIPT_MODULES:
         return None
@@ -391,8 +385,7 @@ def _call_name(func) -> str:
 
 def _label(func) -> str:
     """Name a patch function in a message; unlike `_call_name`, never raises."""
-    inner = getattr(func, "raw_function", func)
-    return patch_function_tag(func) or _spell(inner)
+    return patch_function_tag(func) or _spell(getattr(func, "raw_function", func))
 
 
 # Bounded, and it holds function references: a process which builds patch

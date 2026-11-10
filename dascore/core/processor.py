@@ -858,17 +858,10 @@ def _check_returns_self(cls: type[PatchProcessor], func) -> None:
     raise ParameterError(msg)
 
 
-# Bounded, and holding the classes it names, so an address it used is never
-# reused underneath it. Read once per class, since `inspect.getsource` of a
-# class is slow; a class's name takes no defaults which could change.
+# Cached: `inspect.getsource` of a class is slow. Holding it keeps its id unique.
 @functools.lru_cache(maxsize=2048)
 def _class_name(cls: type[PatchProcessor]) -> str:
-    """
-    Name a processor class which has no tag naming it outside this process.
-
-    Unregistered, or defined inside a call, a script or a notebook: named by
-    its source or -- with no source to read -- by which class object it is.
-    """
+    """Name an untagged or script class by its source, else by its id."""
     try:
         return callable_name(cls)
     except ParameterError:

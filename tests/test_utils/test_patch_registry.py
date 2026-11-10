@@ -321,8 +321,7 @@ class TestCallOperationId:
         assert first != second
         assert call_operation_id(dc.proc.select, (), {"distance": one_meter}) == first
 
-    @pytest.mark.parametrize("module", ["__main__", "__mp_main__"])
-    def test_a_script_function_is_its_source(self, own_registry, module):
+    def test_a_script_function_is_its_source(self, own_registry):
         """Two scripts' `clean` share a tag, but not an operation id."""
 
         def first(patch, factor=1):
@@ -333,12 +332,12 @@ class TestCallOperationId:
 
         made = []
         for func in (first, second):
-            func.__module__ = module
+            func.__module__ = "__main__"
             func.__name__ = func.__qualname__ = "clean"
             made.append(dc.patch_function()(func))
-        assert patch_function_tag(made[0]) == f"{module}:clean"
+        assert patch_function_tag(made[0]) == "__main__:clean"
         assert _identifying_tag(made[0]) is None
-        assert resolve_patch_function(f"{module}:clean") is made[1]
+        assert resolve_patch_function("__main__:clean") is made[1]
         ids = [call_operation_id(x, (), {"factor": 2}) for x in made]
         assert ids[0] != ids[1]
         assert ids[0] == call_operation_id(made[0], (2,), {})

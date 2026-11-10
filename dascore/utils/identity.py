@@ -925,21 +925,17 @@ def callable_name(func: Any) -> str:
     """
     Return a name which says which function or class this is.
 
-    Its import path, when the path leads back to it from a module other
-    than a script's (`SCRIPT_MODULES`). Otherwise -- defined
-    inside a call, or in a script or notebook -- the path, a digest of its
-    source and its encoded defaults. Anything holding state that leaves out
-    is refused: closure cells, a bound instance, a callable object, or a
+    Its import path, when the path leads back to it. Otherwise -- defined
+    inside a call, or in a script (`SCRIPT_MODULES`) -- the path, a digest of
+    its source and its encoded defaults. Anything holding state that leaves
+    out is refused: closure cells, a bound instance, a callable object, or a
     lambda, which shares its source line with its neighbours.
     """
     module = getattr(func, "__module__", None) or "<unknown>"
     qualname = getattr(func, "__qualname__", None)
     if not isinstance(qualname, str):
         _refuse(func, "is a callable object, whose state is not its name")
-    # A path into `__main__` leads back to the object only in this process:
-    # every script and notebook runs as `__main__`, and an edited cell keeps
-    # its path but not its code. A spawned worker re-runs the script as
-    # `__mp_main__`, and must name its functions as the parent does.
+    # Script paths name nothing outside the process; workers spell them `__main__`.
     script = module in SCRIPT_MODULES
     path = f"{SCRIPT_MODULES[0] if script else module}:{qualname}"
     if not script and _resolves(func, module, qualname):

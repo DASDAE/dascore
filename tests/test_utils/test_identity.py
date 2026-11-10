@@ -432,21 +432,15 @@ class TestCallables:
         script = ModuleType(module)
         monkeypatch.setitem(sys.modules, module, script)
 
-        def doubled():
-            def clean(x):
-                return x * 2
+        def first(x):
+            return x * 2
 
-            return clean
-
-        def tripled():
-            def clean(x):
-                return x * 3
-
-            return clean
+        def second(x):
+            return x * 3
 
         names = []
-        for func in (doubled(), tripled()):
-            # Only the bodies differ: one name, one signature.
+        for func in (first, second):
+            # Renamed to share one name and one signature.
             func.__module__ = module
             func.__qualname__ = "clean"
             script.clean = func
