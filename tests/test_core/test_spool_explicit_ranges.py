@@ -1164,7 +1164,7 @@ class TestReviewRegressions:
         assert empty.get_contents().empty
         selected = source.select(distance=np.array([[0, 3]]), depth=(4, 8))
         assert _listed(selected.get_contents()) == [[2, 3]]
-        with pytest.raises(ChunkError, match="sampled"):
+        with pytest.raises(ChunkError, match="outside source coverage"):
             source.select(depth=(4, 8)).chunk_plan(distance=np.array([[0, 1]]))
         if file_backed:
             monkeypatch.setattr(DASDAEV1, "read_array", read_array)

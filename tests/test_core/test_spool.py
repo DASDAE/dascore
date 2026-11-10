@@ -838,6 +838,112 @@ class TestSelect:
         assert list(out) == [expected]
 
 
+def _assert_contents_match_patches(spool, names):
+    """Each row advertises the extent of each named coordinate it loads."""
+    contents = spool.get_contents()
+    assert len(contents) == len(spool)
+    for (_, row), patch in zip(contents.iterrows(), spool, strict=True):
+        for name in names:
+            coord = patch.get_coord(name)
+            assert (row[f"{name}_min"], row[f"{name}_max"]) == (
+                coord.min(),
+                coord.max(),
+            )
+
+
+class TestSelectSharedDimension:
+    """Selecting one coordinate trims every coordinate on its dimension."""
+
+    @pytest.fixture(scope="class")
+    def sensor_patch(self):
+        """The example patch with a sensor coordinate riding distance."""
+        patch = dc.get_example_patch()
+        sensor = 1000.0 + 2 * np.arange(patch.shape[patch.get_axis("distance")])
+        return patch.update_coords(sensor=("distance", sensor))
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def sensor_spool(self, request, sensor_patch, tmp_path_factory):
+        """The sensor patch in an in-memory and in a directory spool."""
+        if request.param == "memory":
+            return dc.spool([sensor_patch])
+        path = tmp_path_factory.mktemp("shared_dim")
+        dc.write(sensor_patch, path / "sensor.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"sensor": (1020, 1040)},
+            {"sensor": (10, -10), "relative": True},
+            {"sensor": (10, 21), "samples": True},
+            {"distance": (10, 20)},
+            {"distance": (10, 20), "relative": True},
+            {"distance": (10, 21), "samples": True},
+        ],
+    )
+    def test_contents_match_patches(self, sensor_spool, kwargs):
+        """The trimmed rows describe what each patch loads."""
+        out = sensor_spool.select(**kwargs)
+        _assert_contents_match_patches(out, ["distance", "sensor"])
+
+    def test_coverage_and_chunk(self, sensor_spool):
+        """Coverage and chunk outputs use the trimmed dimension."""
+        out = sensor_spool.select(sensor=(1020, 1040))
+        coverage = out.get_coverage("distance")
+        assert (coverage["distance_min"].min(), coverage["distance_max"].max()) == (
+            10,
+            20,
+        )
+        chunked = out.chunk(distance=None)
+        _assert_contents_match_patches(chunked, ["distance", "sensor"])
+
+    def test_descending_rider(self, sensor_patch):
+        """A coordinate descending along the dimension is trimmed too."""
+        depth = sensor_patch.get_array("sensor")[::-1]
+        spool = dc.spool([sensor_patch.update_coords(depth=("distance", depth))])
+        for kwargs in ({"depth": (1100, 1200)}, {"distance": (10, 20)}):
+            out = spool.select(**kwargs)
+            _assert_contents_match_patches(out, ["distance", "sensor", "depth"])
+
+    def test_exact_grid_rider(self):
+        """A rider on an exact fractional grid keeps a matching grid."""
+        start = np.datetime64("2020-01-01")
+        patch = dc.get_example_patch()
+        shape = (patch.shape[patch.get_axis("time")],)
+        time = get_coord(start=start, step=(1, 1024), shape=shape)
+        utc = get_coord(
+            start=start + np.timedelta64(5, "s"), step=(1, 1024), shape=shape
+        )
+        patch = patch.update_coords(time=time).update_coords(utc=("time", utc))
+        out = dc.spool([patch]).select(time=(10, 300), samples=True)
+        _assert_contents_match_patches(out, ["time", "utc"])
+        # the rider's grid states its new length, so selecting on it trims
+        # time exactly in turn
+        again = out.select(utc=(start + np.timedelta64(5100, "ms"), None))
+        _assert_contents_match_patches(again, ["time"])
+
+    def test_irregular_rider_keeps_envelope(self, sensor_patch):
+        """A rider the row cannot rebuild keeps its whole envelope."""
+        rng = np.random.default_rng(0)
+        arc = np.cumsum(rng.uniform(1, 3, len(sensor_patch.get_coord("distance"))))
+        spool = dc.spool([sensor_patch.update_coords(arc=("distance", arc))])
+        out = spool.select(distance=(10, 20))
+        _assert_contents_match_patches(out, ["distance", "sensor"])
+        contents = out.get_contents()
+        assert (contents["arc_min"].iloc[0], contents["arc_max"].iloc[0]) == (
+            arc.min(),
+            arc.max(),
+        )
+
+    def test_range_between_samples(self, sensor_spool):
+        """A range holding no sample leaves the other envelopes whole."""
+        contents = sensor_spool.select(sensor=(1020.5, 1021.5)).get_contents()
+        assert (contents["distance_min"].iloc[0], contents["distance_max"].iloc[0]) == (
+            0,
+            299,
+        )
+
+
 class TestUnselect:
     """Tests for removing the patches a selection would keep."""
 

@@ -507,6 +507,102 @@ def _adjust_relative_envelopes(df, coords, uncertain):
     return df
 
 
+def _trim_shared_dims(before, after, names) -> pd.DataFrame:
+    """
+    Trim the coordinates sharing a dimension with each selected one.
+
+    `Patch.select` on a coordinate cuts every coordinate on its dimension
+    by the same samples, the dimension's own included. Where the selected
+    coordinate and another on its dimension both rebuild from the row
+    before the selection, the samples its new envelope keeps trim the
+    other's envelope too; elsewhere the other stays a candidacy superset.
+    """
+    held = {
+        str(c)[1 : -len("_dims")]
+        for c in after.columns
+        if str(c).startswith("_") and str(c).endswith("_dims")
+    }
+    held = {x for x in held if {f"{x}_min", f"{x}_max"}.issubset(after.columns)}
+    suffixes = ("min", "max", "step")
+    private = ("grid", "coord_dtype", "units", "units_source", "dims")
+    columns = {
+        x: [
+            c
+            for c in (*(f"{x}_{s}" for s in suffixes), *(f"_{x}_{s}" for s in private))
+            if c in before.columns
+        ]
+        for x in sorted(held)
+    }
+    shared = after.index.intersection(before.index)
+    cache: dict = {}
+    for name in [x for x in names if x in held and len(held) > 1]:
+        cols = [f"{name}_min", f"{name}_max"]
+        old, new = before.loc[shared, cols], after.loc[shared, cols]
+        cut = shared[((old != new).any(axis=1) & new.notna().all(axis=1)).to_numpy()]
+        if not len(cut):
+            continue
+        flat = [c for x in columns.values() for c in x]
+        rows = before.loc[cut, flat].to_dict("records")
+        bounds = new.loc[cut].itertuples(index=False, name=None)
+        changed: dict[str, dict] = {}
+        for index, row, (low, high) in zip(cut, rows, bounds, strict=True):
+            # only the coordinates on this one's dimension decide the trim
+            dim = row[f"_{name}_dims"]
+            on_dim = [x for x in columns if row[f"_{x}_dims"] == dim]
+            key = (name, low, high, *on_dim)
+            key += tuple(_hashable(row[c]) for x in on_dim for c in columns[x])
+            if key not in cache:
+                cache[key] = _shared_dim_trims(row, name, (low, high), on_dim)
+            for other, *values in cache[key]:
+                ends = (f"{other}_min", f"{other}_max", f"_{other}_grid")
+                for column, value in zip(ends, values, strict=True):
+                    if value is not None:
+                        changed.setdefault(column, {})[index] = value
+        for column, values in changed.items():
+            if column.endswith("_grid"):
+                old_grids = zip(after.index, after[column], strict=True)
+                after[column] = [values.get(i, g) for i, g in old_grids]
+            else:
+                after.loc[list(values), column] = pd.Series(values)
+    return after
+
+
+def _hashable(value):
+    """A cache key part for one relation cell; nulls compare equal."""
+    if isinstance(value, tuple):
+        return value
+    return None if pd.isnull(value) else value
+
+
+def _shared_dim_trims(row, name, bounds, on_dim) -> list[tuple]:
+    """
+    The new envelope of each other coordinate in ``on_dim``.
+
+    Returns ``(name, min, max, grid)`` per coordinate it can trim, where
+    ``grid`` restates an exact grid the row carries, else None.
+    """
+    # Circular import: patch assembly imports the index and its plan utilities.
+    from dascore.utils.patch_assembly import _as_numpy, _sized_coord  # noqa: PLC0415
+
+    others = [x for x in on_dim if x != name]
+    if not others or (coord := _sized_coord(row, name)) is None:
+        return []
+    _, picked = coord.select(tuple(_as_numpy(x) for x in bounds))
+    out = []
+    for other in others:
+        rider = _sized_coord(row, other)
+        if rider is None or len(rider) != len(coord):
+            continue
+        kept = rider[picked]
+        if not len(kept):
+            continue
+        grid = None
+        if isinstance(row.get(f"_{other}_grid"), tuple):
+            grid = (*kept.runs[0].canonical()[1:], len(kept))
+        out.append((other, kept.min(), kept.max(), grid))
+    return out
+
+
 def patch_local_adjusted_envelopes(
     df: pd.DataFrame, residuals, drop_empty: bool = True
 ) -> pd.DataFrame:
@@ -534,6 +630,7 @@ def patch_local_adjusted_envelopes(
     source = df
     df = df.copy(deep=False)
     for position, (coords, samples, relative) in enumerate(residuals):
+        before = df.copy(deep=False)
         if not samples:
             if relative:
                 df, uncertain = _relative_endpoints(
@@ -542,6 +639,7 @@ def patch_local_adjusted_envelopes(
                 df = _adjust_relative_envelopes(df, coords, uncertain)
             else:
                 df = _adjust_absolute_envelopes(df, coords)
+            df = _trim_shared_dims(before, df, coords)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
@@ -615,6 +713,7 @@ def patch_local_adjusted_envelopes(
                 empty = ~keep & ~unresolved
                 df[cols] = df[cols].mask(empty)
                 df[_PATCH_LOCAL_EMPTY] = df.get(_PATCH_LOCAL_EMPTY, False) | empty
+        df = _trim_shared_dims(before, df, coords)
     return df
 
 
