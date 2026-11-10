@@ -29,7 +29,7 @@ from dascore.exceptions import (
     InvalidFiberFileError,
     PatchAttributeError,
 )
-from dascore.io.core import STORED_ORIGIN_ID
+from dascore.io.core import SNAPPED_DIMS, STORED_ORIGIN_ID
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
     decode_pytables_attr,
@@ -396,16 +396,20 @@ def _node_step(attrs):
 
 def _read_coord(node, name, attrs2, snap):
     """
-    Rebuild one coordinate from its node, on a grid if `snap` and jittered.
+    Rebuild one coordinate from its node, on a grid if `snap` and jittered,
+    and say whether snapping moved its labels.
 
     Only labels written jittered snap: holes and irregular labels are what
     was written, not a grid's noise.
     """
     coord = _read_stored_coord(node, name, attrs2)
     if not (snap and coord.jittered) or coord.gapped:
-        return coord
+        return coord, False
     units = coord.units
-    return stored_coord(coord.values, True, name=name, where=node.file, units=units)
+    out = stored_coord(coord.values, True, name=name, where=node.file, units=units)
+    # The helper keeps the stored labels when its check fails, in which
+    # case nothing moved.
+    return out, not np.array_equal(out.values, coord.values)
 
 
 def _read_stored_coord(node, name, attrs2):
@@ -461,16 +465,24 @@ def _read_stored_coord(node, name, attrs2):
 
 
 def _get_coords(patch_group, dims, attrs2, snap=True):
-    """Get the coordinates from a patch group."""
+    """
+    Get the coordinates from a patch group.
+
+    Returns the coordinate manager and the names of the dimensions whose
+    stored labels snapping moved.
+    """
     coord_dict = {}  # just store coordinates here
     coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
+    snapped = []
     for node in patch_group.values():
         name = node.name.rsplit("/", maxsplit=1)[-1]
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
         named = name in dims and should_snap(snap, name)
-        coord_dict[name] = _read_coord(node, name, attrs2, named)
+        coord_dict[name], moved = _read_coord(node, name, attrs2, named)
+        if moved:
+            snapped.append(name)
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
     c_dims = [x for x in group_attrs if x.startswith("_cdims")]
@@ -483,7 +495,7 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
     data = patch_group.get("data")
     shape = tuple(data.shape) if data is not None else None
     cm = get_coord_manager(coord_dim_dict, dims=dims, shape=shape)
-    return cm
+    return cm, snapped
 
 
 def _get_dims(patch_group):
@@ -528,11 +540,12 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
     if legacy:
         out["dims"] = ",".join(dims)
         out = translate_legacy_attrs(out, _get_group_coord_names(group))
-        coords = _get_coords(group, dims, out, snap=snap)
+        coords, snapped = _get_coords(group, dims, out, snap=snap)
         attr_info = strip_legacy_coord_fields(out, set(coords.coord_map) | set(dims))
     else:
-        coords = _get_coords(group, dims, {}, snap=snap)
+        coords, snapped = _get_coords(group, dims, {}, snap=snap)
         attr_info = out
+    attr_info[SNAPPED_DIMS] = ",".join(snapped)
     # Marked here as it is when the patch is read: an id the file carries
     # is the one which survived the round trip, and `scan` prefers it to
     # the one it would derive only when a format says it stored one.
