@@ -14,7 +14,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidSpoolError
-from dascore.io.index.planned import PlanResolver
+from dascore.io._index.planned import PlanResolver
 
 
 @pytest.fixture(scope="module")

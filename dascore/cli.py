@@ -9,14 +9,14 @@ import sys
 from pathlib import Path
 
 import dascore as dc
-from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
-from dascore.utils.doc_skills import (
+from dascore.utils._doc_corpus import DocumentationError
+from dascore.utils._doc_skills import (
     get_skills,
     install_skills,
     read_bootstrap,
     read_skill,
 )
+from dascore.utils.doc_cache import documentation_cache, read_document
 
 
 def _doc(args: argparse.Namespace) -> None:

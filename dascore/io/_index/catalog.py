@@ -39,17 +39,17 @@ from dascore.config import config_context, get_config
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import InvalidIndexError, MissingPatchError, ParameterError
-from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
-from dascore.io.index.backend import get_backend
-from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats, snap_text
-from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
-from dascore.io.index.query import (
+from dascore.io._index.backend import get_backend
+from dascore.io._index.indexer import DBDirectoryIndexer, scan_unit_stats, snap_text
+from dascore.io._index.ingest import SourceRecord, patch_record, summaries_to_records
+from dascore.io._index.query import (
     CoordExists,
     InvalidSpoolQueryError,
     Query,
     resolve_query,
 )
-from dascore.io.index.schema import SPOOL_LATE_RENAMES
+from dascore.io._index.schema import SPOOL_LATE_RENAMES
+from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
 from dascore.utils.identity import _snap_names
 from dascore.utils.misc import (
     _canonical_range,
@@ -1386,7 +1386,7 @@ class PatchCatalog:
             if sources := _source_envelopes(df, self._residuals):
                 df = df.assign(**sources)
             # Circular import: chunk planning also uses the catalog.
-            from dascore.utils.chunk_plan import (  # noqa: PLC0415
+            from dascore.utils._chunk_plan import (  # noqa: PLC0415
                 patch_local_adjusted_envelopes,
             )
 
@@ -1422,8 +1422,8 @@ class PatchCatalog:
         if df.empty or "_patch_row" not in df.columns or not self._runs_may_trim():
             return df
         # Circular imports: chunk planning and range lookups use the catalog.
-        from dascore.utils.chunk_plan import clip_to_runs  # noqa: PLC0415
-        from dascore.utils.explicit_ranges import _source_manager  # noqa: PLC0415
+        from dascore.utils._chunk_plan import clip_to_runs  # noqa: PLC0415
+        from dascore.utils._explicit_ranges import _source_manager  # noqa: PLC0415
 
         files: dict = {}
         for name in self._trimmed_names():

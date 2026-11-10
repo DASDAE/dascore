@@ -80,7 +80,7 @@ from dascore.models import (
     PositiveFiniteFloat,
     UnitQuantity,
 )
-from dascore.utils.display import (
+from dascore.utils._display import (
     NodeRepr,
     Repr,
     RichRepr,

@@ -13,11 +13,11 @@ import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
+from dascore.io._index.catalog import PatchCatalog
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
-from dascore.io.index.catalog import PatchCatalog
 from dascore.units import get_quantity, m, s
-from dascore.utils.chunk_plan import _ensure_patch_row
-from dascore.utils.explicit_ranges import known_coordinates
+from dascore.utils._chunk_plan import _ensure_patch_row
+from dascore.utils._explicit_ranges import known_coordinates
 from dascore.utils.patch_assembly import coord_from_row
 from tests.test_core.test_patch_chunk import (
     _T0,

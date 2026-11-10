@@ -11,14 +11,14 @@ import dascore as dc
 import dascore.core.spool as spool_module
 from dascore.core.coords import CoordSummary, concat_coords, get_coord
 from dascore.core.summary import PatchSummary
-from dascore.io.dasdae.utils import _save_patch
-from dascore.io.index.backend import get_backend
-from dascore.io.index.ingest import (
+from dascore.io._index.backend import get_backend
+from dascore.io._index.ingest import (
     index_runs,
     patch_record,
     stored_runs,
     summaries_to_records,
 )
+from dascore.io.dasdae.utils import _save_patch
 from tests.conftest import join_patches
 
 MS = np.timedelta64(1, "ms")

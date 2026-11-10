@@ -11,8 +11,12 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.index.catalog import CompositeResolver, PatchCatalog, _absolutize_record
-from dascore.io.index.ingest import SourceRecord
+from dascore.io._index.catalog import (
+    CompositeResolver,
+    PatchCatalog,
+    _absolutize_record,
+)
+from dascore.io._index.ingest import SourceRecord
 
 
 @pytest.fixture(scope="module")

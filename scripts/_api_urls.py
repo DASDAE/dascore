@@ -45,11 +45,13 @@ def load_baseline(path: Path = BASELINE_PATH) -> dict[str, str]:
     return dict(x.split("\t", 1) for x in lines)
 
 
-def write_baseline(urls: dict[str, str], path: Path = BASELINE_PATH) -> None:
-    """Write the mapping as one sorted key and path per line."""
+def write_baseline(
+    urls: dict[str, str], path: Path = BASELINE_PATH, header: str = _HEADER
+) -> None:
+    """Write the mapping as one sorted key and value per line under a header."""
     path.parent.mkdir(exist_ok=True, parents=True)
     rows = "".join(f"{key}\t{urls[key]}\n" for key in sorted(urls))
-    path.write_text(_HEADER + rows)
+    path.write_text(header + rows)
 
 
 def compare(current: dict[str, str], baseline: dict[str, str]) -> dict:

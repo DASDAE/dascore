@@ -1,10 +1,13 @@
 """Utilities for chunking dataframes.
 
 The interval math here is consumed by the chunk planner
-(`dascore.utils.chunk_plan`), which replaced the old ChunkManager.
+(`dascore.utils._chunk_plan`), which replaced the old ChunkManager.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -21,6 +24,46 @@ from dascore.utils.time import (
 _GRID_SNAP_RTOL = 1e-9
 # Steps a read widens a float bound by, as a label is known only to rounding.
 _READ_PAD = 0.1
+
+
+@dataclass(frozen=True)
+class ChunkPlan:
+    """
+    A materialization-free description of a chunk operation.
+
+    Attributes
+    ----------
+    outputs
+        One row per output patch: `{dim}_min/max/step` for the chunked
+        dimension, an `output_id`, and all carried columns (group attrs,
+        dims, structural def keys, conflict-policed attrs).
+    members
+        Instruction rows binding outputs to sources: `output_id`,
+        `_patch_row`, the exact `{dim}_min/max` trim for that member, and
+        `_modified` (False when the member loads whole).
+    dim
+        The chunked dimension.
+    value
+        The requested chunk length (None for merge mode).
+    params
+        Resolved parameters (group attrs, tolerances, overlap,
+        keep_partial, conflict, snap_coords, on_missing_dim) — recorded, not
+        referencing config.
+    trim_dims
+        Dimensions besides `dim` explicit windows trim (in `{dim}_min/max`).
+    """
+
+    outputs: pd.DataFrame
+    members: pd.DataFrame
+    dim: str
+    value: Any
+    params: dict = field(default_factory=dict)
+    trim_dims: tuple[str, ...] = ()
+
+    @property
+    def merge_mode(self) -> bool:
+        """Return True when this plan merges (no segmenting length)."""
+        return self.value is None
 
 
 def get_intervals(

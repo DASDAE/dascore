@@ -11,16 +11,16 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.io.index import PatchCatalog
-from dascore.io.index.catalog import (
+from dascore.io._index import PatchCatalog
+from dascore.io._index.catalog import (
     _coord_from_envelope,
     _extremes_coord,
     _forget_what_a_trim_invalidates,
     _source_envelopes,
 )
-from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
+from dascore.io._index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
-from dascore.utils.chunk_plan import _adjust_unit_segments
+from dascore.utils._chunk_plan import _adjust_unit_segments
 from dascore.utils.misc import _canonical_range, _CanonicalRange
 
 

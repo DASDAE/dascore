@@ -29,8 +29,8 @@ from dascore.core.annotations import (
 )
 from dascore.core.coords import get_coord
 from dascore.core.inventory import Acquisition, Cable, Network
-from dascore.utils import display
-from dascore.utils.display import (
+from dascore.utils import _display as display
+from dascore.utils._display import (
     _NEST_COLORS,
     _STYLE_WORDS,
     Raw,

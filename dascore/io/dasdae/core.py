@@ -11,7 +11,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.index.catalog import LiveResolver
+from dascore.io._index.catalog import LiveResolver
 from dascore.io.utils import slice_dataset
 from dascore.utils.attrs import _is_missing
 from dascore.utils.hdf5 import H5Reader, H5Writer, h5_encoding

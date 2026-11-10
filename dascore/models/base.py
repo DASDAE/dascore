@@ -29,7 +29,7 @@ from dascore.models.registry import (
     register_model,
 )
 from dascore.models.types import DateTime64, FrozenDictType
-from dascore.utils.display import (
+from dascore.utils._display import (
     _MAX_VALUE_CELLS,
     RichRepr,
     Section,

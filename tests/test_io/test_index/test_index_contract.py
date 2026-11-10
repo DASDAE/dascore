@@ -20,10 +20,10 @@ from dascore.config import config_context
 from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
-from dascore.io.index.backend import get_backend
-from dascore.io.index.ingest import summaries_to_records
-from dascore.io.index.query import InvalidSpoolQueryError, Query, resolve_query
-from dascore.io.index.schema import INDEX_VERSION
+from dascore.io._index.backend import get_backend
+from dascore.io._index.ingest import summaries_to_records
+from dascore.io._index.query import InvalidSpoolQueryError, Query, resolve_query
+from dascore.io._index.schema import INDEX_VERSION
 from dascore.units import get_quantity
 
 

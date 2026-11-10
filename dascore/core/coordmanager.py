@@ -75,7 +75,7 @@ from dascore.models import (
     frozen_dict_serializer,
     frozen_dict_validator,
 )
-from dascore.utils.display import (
+from dascore.utils._display import (
     RichRepr,
     Row,
     Section,

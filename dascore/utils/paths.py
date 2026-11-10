@@ -15,7 +15,7 @@ from dascore.exceptions import InvalidSpoolError
 # key is treated as absent rather than set to the sentinel string.
 _HIVE_NULL = "__HIVE_DEFAULT_PARTITION__"
 # Synthetic URI schemes for in-memory patch identities (see
-# dascore.io.index.catalog); such paths dispatch to in-memory registries
+# dascore.io._index.catalog); such paths dispatch to in-memory registries
 # and are never treated as file names.
 _MEMORY_SCHEME = "memorypatch://"
 # Synthetic URI scheme naming a file in the example data registry

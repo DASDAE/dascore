@@ -1,0 +1,400 @@
+# DASCore's public API: one name and how it is called per line.
+# Regenerate with `python scripts/public_api.py freeze`, and justify
+# each added, removed or changed entry in the pull request.
+dascore.AnnotationSet	class
+dascore.BaseSpool	class
+dascore.CoordManager	class
+dascore.DascoreConfig	class
+dascore.Inventory	class
+dascore.Patch	class
+dascore.Patch.T	attribute
+dascore.Patch.abs	(self)
+dascore.Patch.adaptive_spectral_filter	(self, /, *, overlap=None, exponent=0.8, normalize_power=False, samples=False, engine='auto', **kwargs)
+dascore.Patch.add	<PatchUFunc>
+dascore.Patch.add_distance_to	(self, origin, ord=None, prefix='origin')
+dascore.Patch.aggregate	(self, dim=None, method='mean', dim_reduce='empty')
+dascore.Patch.align_to_coord	(self, mode='same', samples=False, reverse=False, fill_value=nan, **kwargs)
+dascore.Patch.all	(self, dim=None, dim_reduce='empty')
+dascore.Patch.angle	(self)
+dascore.Patch.any	(self, dim=None, dim_reduce='empty')
+dascore.Patch.append_dims	(self, /, *empty_dims, **dim_kwargs)
+dascore.Patch.apply_ufunc	(self, ufunc, *args, **kwargs)
+dascore.Patch.attrs	attribute
+dascore.Patch.backend	attribute
+dascore.Patch.channel_count	attribute
+dascore.Patch.check_attrs	(patch, required_attrs)
+dascore.Patch.check_coords	(patch, dims=None, coords=None)
+dascore.Patch.conj	(self)
+dascore.Patch.convert_units	(self, data_units=None, **kwargs)
+dascore.Patch.coord_shapes	attribute
+dascore.Patch.coords	attribute
+dascore.Patch.coords_from_df	(self, dataframe, units=None, extrapolate=False, max_gap=None)
+dascore.Patch.correlate	(self, samples=False, **kwargs)
+dascore.Patch.correlate_shift	(self, dim, undo_weighting=True)
+dascore.Patch.data	attribute
+dascore.Patch.decimate	(self, filter_type='iir', copy=True, **kwargs)
+dascore.Patch.demean	(self, dim='time')
+dascore.Patch.demedian	(self, dim='time')
+dascore.Patch.detrend	(self, dim, type='linear')
+dascore.Patch.dft	(self, dim, *, real=None, pad=True, output='FFT', db=False)
+dascore.Patch.differentiate	(self, dim, order=2, step=1)
+dascore.Patch.dims	attribute
+dascore.Patch.dispersion_phase_shift	(self, phase_velocities, approx_resolution=None, approx_freq=None)
+dascore.Patch.divide	<PatchUFunc>
+dascore.Patch.drop_coords	(self, *coords, to_attrs=False)
+dascore.Patch.drop_data	(self)
+dascore.Patch.drop_private_coords	(self)
+dascore.Patch.dropna	(self, dim, how='any', include_inf=True)
+dascore.Patch.dtype	attribute
+dascore.Patch.enrich	(self, inventory, *, attrs=True, coords=True, acquisition_key=None, time=None, on_missing='raise', conflict='raise')
+dascore.Patch.envelope	(self, dim)
+dascore.Patch.equals	(self, other, only_required_attrs=True, close=False)
+dascore.Patch.exp	<PatchUFunc>
+dascore.Patch.fbe	(self, window, step=None, db=True, **kwargs)
+dascore.Patch.fill_gaps	(self, *args, fill_value=nan, samples=False, **kwargs)
+dascore.Patch.fillna	(self, value, include_inf=True)
+dascore.Patch.first	(self, dim=None, dim_reduce='empty')
+dascore.Patch.flat_dump	(self, exclude=None)
+dascore.Patch.flip	(self, *dims, flip_coords=True)
+dascore.Patch.full	(self, fill_value)
+dascore.Patch.gaussian_filter	(self, samples=False, mode='reflect', cval=0.0, truncate=4.0, **kwargs)
+dascore.Patch.get_array	(self, name=None, require_sorted=False, require_evenly_sampled=False)
+dascore.Patch.get_axis	(self, dim)
+dascore.Patch.get_coord	(self, name, require_sorted=False, require_evenly_sampled=False)
+dascore.Patch.get_patch_name	(self, *args, **kwargs)
+dascore.Patch.get_patch_names	(patch_data, prefix='DAS', attrs=('acquisition_key', 'tag'), coords=('time',), sep='__', strip_extension=True)
+dascore.Patch.get_registered_namespaces	()
+dascore.Patch.hampel_filter	(self, *, threshold=10.0, samples=False, approximate=True, **kwargs)
+dascore.Patch.hilbert	(self, dim)
+dascore.Patch.idft	(self, dim=None)
+dascore.Patch.idxmax	(self, dim, dim_reduce='empty')
+dascore.Patch.idxmin	(self, dim, dim_reduce='empty')
+dascore.Patch.imag	(self)
+dascore.Patch.integrate	(self, dim, definite=False)
+dascore.Patch.interpolate	(self, kind='linear', **kwargs)
+dascore.Patch.io	namespace
+dascore.Patch.io.entry_point_group	constant
+dascore.Patch.io.name	constant
+dascore.Patch.io.to_dataframe	(patch)
+dascore.Patch.io.to_obspy	(patch)
+dascore.Patch.io.to_xarray	(patch, lazy_coords=False)
+dascore.Patch.io.write	(patch_or_spool, path, file_format, file_version=None, **kwargs)
+dascore.Patch.is_finite	<PatchUFunc>
+dascore.Patch.isel	(self, /, indexers=None, drop=False, missing_dims='raise', **indexers_kwargs)
+dascore.Patch.isinf	<PatchUFunc>
+dascore.Patch.isnan	<PatchUFunc>
+dascore.Patch.istft	(self)
+dascore.Patch.kurtosis	(self, samples=False, recursive=True, **kwargs)
+dascore.Patch.last	(self, dim=None, dim_reduce='empty')
+dascore.Patch.line_mute	(self, *, smooth=None, invert=False, relative=True, **kwargs)
+dascore.Patch.log	<PatchUFunc>
+dascore.Patch.log10	<PatchUFunc>
+dascore.Patch.log2	<PatchUFunc>
+dascore.Patch.make_broadcastable_to	(self, shape, drop_coords=False)
+dascore.Patch.max	(self, dim=None, dim_reduce='empty')
+dascore.Patch.maximum	<PatchUFunc>
+dascore.Patch.mean	(self, dim=None, dim_reduce='empty')
+dascore.Patch.median	(self, dim=None, dim_reduce='empty')
+dascore.Patch.median_filter	(self, samples=False, mode='reflect', cval=0.0, **kwargs)
+dascore.Patch.median_frequency	(self, dim=None, fmin=None, fmax=None, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.min	(self, dim=None, dim_reduce='empty')
+dascore.Patch.minimum	<PatchUFunc>
+dascore.Patch.multiply	<PatchUFunc>
+dascore.Patch.ndim	attribute
+dascore.Patch.new	(self, data=None, coords=None, dims=None, attrs=None, dtype=None, source=None)
+dascore.Patch.normalize	(self, dim, norm='l2', window=None, samples=False)
+dascore.Patch.notch_filter	(self, q, **kwargs)
+dascore.Patch.order	(self, /, *, copy=False, relative=False, samples=False, **kwargs)
+dascore.Patch.pad	(self, mode='constant', constant_values=0, expand_coords=True, samples=False, **kwargs)
+dascore.Patch.pass_filter	(self, corners=4, zerophase=True, **kwargs)
+dascore.Patch.phase_weighted_stack	(self, stack_dim, transform_dim=None, power=2.0, dim_reduce='empty')
+dascore.Patch.pin_id	(self)
+dascore.Patch.pipe	(self, func, *args, **kwargs)
+dascore.Patch.pow_coord	(self, relative=True, **kwargs)
+dascore.Patch.radians_to_strain	(self, gauge_length=None, wave_length=1.5500000000000002e-06, stress_constant=0.79, refractive_index=1.445)
+dascore.Patch.real	(self)
+dascore.Patch.reassemble	(self, *, taper=None)
+dascore.Patch.rename_coords	(self, /, **kwargs)
+dascore.Patch.replace	(self, data=None, coords=None, dims=None, attrs=None, dtype=None, source=None)
+dascore.Patch.resample	(self, window=None, interp_kind='linear', samples=False, **kwargs)
+dascore.Patch.roll	(self, samples=False, update_coord=False, **kwargs)
+dascore.Patch.rolling	(patch, step=None, center=False, engine=None, samples=False, overlap=None, **kwargs)
+dascore.Patch.savgol_filter	(self, polyorder, samples=False, mode='interp', cval=0.0, **kwargs)
+dascore.Patch.seconds	attribute
+dascore.Patch.sel	(self, /, indexers=None, method=None, tolerance=None, drop=False, **indexers_kwargs)
+dascore.Patch.select	(self, /, *, copy=False, relative=False, samples=False, **kwargs)
+dascore.Patch.set_dims	(self, **kwargs)
+dascore.Patch.set_units	(self, data_units=None, **kwargs)
+dascore.Patch.shape	attribute
+dascore.Patch.simplify_units	(self)
+dascore.Patch.size	attribute
+dascore.Patch.slope_filter	(self, filt, dims=('distance', 'time'), directional=False, invert=False)
+dascore.Patch.slope_mute	(self, slopes, *, dims=('distance', 'time'), smooth=None, invert=False)
+dascore.Patch.snap_coords	(self, *coords, reverse=False)
+dascore.Patch.sobel_filter	(self, dim, mode='reflect', cval=0.0)
+dascore.Patch.sort_coords	(self, *coords, reverse=False)
+dascore.Patch.spectral_centroid	(self, dim=None, fmin=None, fmax=None, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.spectral_entropy	(self, dim=None, fmin=None, fmax=None, normalize=True, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.spectral_flatness	(self, dim=None, fmin=None, fmax=None, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.spectral_kurtosis	(self, dim=None, fmin=None, fmax=None, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.spectral_peak_amplitude	(self, dim=None, fmin=None, fmax=None, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.spectral_peak_frequency	(self, dim=None, fmin=None, fmax=None, spectral_format='auto', negative_frequencies='auto')
+dascore.Patch.split_gaps	(self)
+dascore.Patch.squeeze	(self, dim=None)
+dascore.Patch.stalta	(self, *, samples=False, **kwargs)
+dascore.Patch.standardize	(self, dim)
+dascore.Patch.std	(self, dim=None, dim_reduce='empty')
+dascore.Patch.stft	(self, taper_window='hann', overlap=<Quantity>, samples=False, detrend=False, nfft=None, **kwargs)
+dascore.Patch.subtract	<PatchUFunc>
+dascore.Patch.sum	(self, dim=None, dim_reduce='empty')
+dascore.Patch.summary	attribute
+dascore.Patch.taper	(self, window_type='hann', **kwargs)
+dascore.Patch.taper_range	(self, window_type='hann', invert=False, relative=False, samples=False, **kwargs)
+dascore.Patch.tau_p	(self, velocities)
+dascore.Patch.tile_apply	(self, /, function, *, mode='overlap_add', overlap=None, taper=None, analysis=None, samples=False, engine='auto', **kwargs)
+dascore.Patch.to_patch	(self, data)
+dascore.Patch.transpose	(self, *dims)
+dascore.Patch.unselect	(self, /, *, copy=False, relative=False, samples=False, **kwargs)
+dascore.Patch.update	(self, data=None, coords=None, dims=None, attrs=None, dtype=None, source=None)
+dascore.Patch.update_attrs	(self, **attrs)
+dascore.Patch.update_coords	(self, /, **kwargs)
+dascore.Patch.velocity_to_strain_rate	(self, step_multiple=2, order=2)
+dascore.Patch.velocity_to_strain_rate_edgeless	(self, step_multiple=1)
+dascore.Patch.viz	namespace
+dascore.Patch.viz.entry_point_group	constant
+dascore.Patch.viz.map_fiber	(patch, x='distance', y='distance', color='distance', ax=None, cmap='cividis_r', scale=None, scale_type='relative', show=False)
+dascore.Patch.viz.name	constant
+dascore.Patch.viz.specplot	(patch, ax=None, cmap=None, scale=(0, 1), scale_type='relative', interpolation='bilinear', log=False, cbar=True, show=False, **kwargs)
+dascore.Patch.viz.spectrogram	(patch, ax=None, dim='time', aggr_domain='frequency', cmap='bwr', scale=None, scale_type='relative', log=False, show=False, *, taper_window='hann', overlap=<Quantity>, nfft=None, samples=False, detrend=False, **kwargs)
+dascore.Patch.viz.waterfall	(patch, ax=None, cmap=None, scale=None, scale_type='relative', interpolation='antialiased', interpolation_stage='auto', gap_color=None, gap_factor=1.5, log=False, cbar=True, show=False, label_coord=None)
+dascore.Patch.viz.wiggle	(patch, dim='time', scale=1, alpha=None, color='black', shade=False, ax=None, show=False)
+dascore.Patch.where	(self, cond, other=nan)
+dascore.Patch.whiten	(self, smooth_size=None, water_level=None, **kwargs)
+dascore.Patch.wiener_filter	(self, *, noise=None, samples=False, **kwargs)
+dascore.PatchAttrs	class
+dascore.PatchMeta	class
+dascore.PatchProcessor	class
+dascore.PatchSummary	class
+dascore.Spool	class
+dascore.Spool.attach_inventory	(self, inventory=None)
+dascore.Spool.chunk	(self, overlap=None, keep_partial=False, snap_coords=True, tolerance=1.5, conflict='raise', group=None, on_missing_dim='raise', fill_value=None, on_incomplete='raise', **kwargs)
+dascore.Spool.chunk_plan	(self, overlap=None, keep_partial=False, snap_coords=True, tolerance=1.5, conflict='raise', group=None, on_missing_dim='raise', fill_value=None, on_incomplete='raise', **kwargs)
+dascore.Spool.concatenate	(self, check_behavior=None, *, conflict='raise', group=None, **kwargs)
+dascore.Spool.conform_to_inventory	(self, *, on_unresolved='raise')
+dascore.Spool.cut	(self, annotations, /, **pads)
+dascore.Spool.enrich	(self, inventory=None, *, attrs=True, coords=True, acquisition_key=None, time=None, on_missing='raise', conflict='raise', on_unresolved='warn')
+dascore.Spool.expand_by	(self, name, *, include=None, exclude=None, stamp=True)
+dascore.Spool.get_contents	(self)
+dascore.Spool.get_coverage	(self, dim='time', *, tolerance=1.5, group=None, on_missing_dim='drop')
+dascore.Spool.get_gaps	(self, dim='time', *, tolerance=1.5, group=None, on_missing_dim='drop')
+dascore.Spool.get_patch_names	(patch_data, prefix='DAS', attrs=('acquisition_key', 'tag'), coords=('time',), sep='__', strip_extension=True)
+dascore.Spool.get_registered_namespaces	()
+dascore.Spool.indexer	attribute
+dascore.Spool.io	namespace
+dascore.Spool.io.entry_point_group	constant
+dascore.Spool.io.name	constant
+dascore.Spool.io.to_xarray	(spool, dim='time', group=None, tolerance=1.5, conflict='raise', block_size=None)
+dascore.Spool.iterate	(self, *, max_in_flight=2)
+dascore.Spool.load	(self)
+dascore.Spool.map	(self, func, *, client=None, size=None, progress='standard', **kwargs)
+dascore.Spool.remove_inventory	(self)
+dascore.Spool.select	(self, *, _attrs=None, _coords=None, samples=False, relative=False, **kwargs)
+dascore.Spool.sort	(self, attribute)
+dascore.Spool.split	(self, size=None, count=None)
+dascore.Spool.spool_path	attribute
+dascore.Spool.stack	(patches, dim_vary=None, check_behavior='warn')
+dascore.Spool.unselect	(self, *, _attrs=None, _coords=None, samples=False, relative=False, **kwargs)
+dascore.Spool.update	(self, progress='standard', *, client=None, paths=None, retry_unreadable=False)
+dascore.Spool.viz	namespace
+dascore.Spool.viz.calendar	(spool, *, method='percent', tolerance=1.5, group=None, ax=None, show=False)
+dascore.Spool.viz.coverage	(spool, dim='time', *, tolerance=1.5, group=None, color=None, ax=None, show=False)
+dascore.Spool.viz.entry_point_group	constant
+dascore.Spool.viz.name	constant
+dascore.__version__	constant
+dascore.annotations	(source=None, dims=None, **kwargs)
+dascore.config	module
+dascore.config.DascoreConfig	class
+dascore.config.config_attr	(attr_name)
+dascore.config.config_context	(new_config=None, **kwargs)
+dascore.config.get_config	()
+dascore.config.reset_config	()
+dascore.config.set_config	(new_config=None, **kwargs)
+dascore.config_context	(new_config=None, **kwargs)
+dascore.constants	module
+dascore.core	module
+dascore.examples	module
+dascore.examples.EXAMPLE_INVENTORIES	constant
+dascore.examples.EXAMPLE_PATCHES	constant
+dascore.examples.EXAMPLE_SPOOLS	constant
+dascore.examples.chirp	(sample_rate=150, time_min='2020-01-01', channel_count=1, duration=10.0, f0=5.0, t1=None, f1=25.0, method='linear', phi=0.0, **kwargs)
+dascore.examples.deformation_rate_event_1	()
+dascore.examples.delta_patch	(dim='time', shape=(10, 200), time_min='2020-01-01', time_step=0.004, distance_min=0, distance_step=1, patch=None)
+dascore.examples.dispersion_event	()
+dascore.examples.diverse_spool	()
+dascore.examples.example_event_1	()
+dascore.examples.example_event_2	()
+dascore.examples.experimental_note	constant
+dascore.examples.febus_dss_mine_1	()
+dascore.examples.febus_dss_mine_2	()
+dascore.examples.forge_dss	()
+dascore.examples.forge_dts	()
+dascore.examples.get_example_inventory	(example_name='random_das', **kwargs)
+dascore.examples.get_example_patch	(example_name='random_das', **kwargs)
+dascore.examples.get_example_spool	(example_name='random_das', **kwargs)
+dascore.examples.inventory_patch_pair	()
+dascore.examples.nd_patch	(dim_count=3, coord_lens=10)
+dascore.examples.patch_with_null	(**kwargs)
+dascore.examples.plane_wave	(frequency=20.0, velocity=500.0, duration=2.048, time_step=0.002, distance_step=4.0, channel_count=128, time_min='2020-01-01')
+dascore.examples.random_das_inventory	()
+dascore.examples.random_directory_spool	(path=None, **kwargs)
+dascore.examples.random_patch	(*, time_min='2017-09-18', time_step=timedelta64(4000000 nanoseconds), time_array=None, distance_min=0, distance_step=1, dist_array=None, acquisition_key='', tag='random', shape=(300, 2000))
+dascore.examples.random_patch_lat_lon	(**kwargs)
+dascore.examples.random_patch_xyz	(**kwargs)
+dascore.examples.random_spool	(time_gap=0, length=3, time_min=datetime64(2020-01-03), var=0, **kwargs)
+dascore.examples.ricker_moveout	(frequency=15, peak_time=0.25, duration=1.5, time_step=0.002, distance_step=10, channel_count=10, source_channel=0, velocity=100)
+dascore.examples.sin_wave_patch	(sample_rate=44100, frequency=100.0, time_min='2020-01-01', channel_count=3, duration=1, amplitude=10.0)
+dascore.examples.sparse_dss_spool	()
+dascore.examples.spool_to_directory	(spool, path=None, file_format='DASDAE', extension='hdf5')
+dascore.examples.tunnel_inventory	()
+dascore.examples.tunnel_inventory_files	(repaired=True)
+dascore.examples.wacky_dim_coord_patch	()
+dascore.examples.write_tunnel_inventory	(path, repaired=True)
+dascore.exceptions	module
+dascore.exceptions.AttributeMergeError	class
+dascore.exceptions.ChunkError	class
+dascore.exceptions.CoordDataError	class
+dascore.exceptions.CoordError	class
+dascore.exceptions.CoordMergeError	class
+dascore.exceptions.CoordSortError	class
+dascore.exceptions.DASCoreError	class
+dascore.exceptions.DASCorePluginError	class
+dascore.exceptions.DASDAEUnpickleError	class
+dascore.exceptions.DASVaderCompatibilityError	class
+dascore.exceptions.DependencyError	class
+dascore.exceptions.FilterValueError	class
+dascore.exceptions.IncompatiblePatchError	class
+dascore.exceptions.InsufficientMemoryError	class
+dascore.exceptions.InvalidAnnotationError	class
+dascore.exceptions.InvalidFiberFileError	class
+dascore.exceptions.InvalidFiberIOError	class
+dascore.exceptions.InvalidFileHandlerError	class
+dascore.exceptions.InvalidIndexError	class
+dascore.exceptions.InvalidIndexVersionError	class
+dascore.exceptions.InvalidInventoryError	class
+dascore.exceptions.InvalidModelTagError	class
+dascore.exceptions.InvalidSpoolError	class
+dascore.exceptions.InvalidSpoolQueryError	class
+dascore.exceptions.InvalidTimeRangeError	class
+dascore.exceptions.MissingOptionalDependencyError	class
+dascore.exceptions.MissingPatchError	class
+dascore.exceptions.ParameterError	class
+dascore.exceptions.PatchAttributeError	class
+dascore.exceptions.PatchBroadcastError	class
+dascore.exceptions.PatchConversionError	class
+dascore.exceptions.PatchCoordinateError	class
+dascore.exceptions.PatchDataError	class
+dascore.exceptions.PatchError	class
+dascore.exceptions.PickleFormatDisabledError	class
+dascore.exceptions.RemoteCacheError	class
+dascore.exceptions.TimeError	class
+dascore.exceptions.TimeOverflowError	class
+dascore.exceptions.UnitError	class
+dascore.exceptions.UnknownCoordinateError	class
+dascore.exceptions.UnknownExampleError	class
+dascore.exceptions.UnknownFiberFormatError	class
+dascore.exceptions.UnresolvedPatchError	class
+dascore.exceptions.UnsupportedKeywordError	class
+dascore.get_config	()
+dascore.get_coord	(*, data=None, values=None, start=None, min=None, stop=None, max=None, step=None, units=None, shape=None, dtype=None, segments=None, runs=None, sources=None, snap=None)
+dascore.get_coord_manager	(coords=None, dims=None, shape=None)
+dascore.get_example_inventory	(example_name='random_das', **kwargs)
+dascore.get_example_patch	(example_name='random_das', **kwargs)
+dascore.get_example_spool	(example_name='random_das', **kwargs)
+dascore.get_format	(path, file_format=None, file_version=None, fiber_io_hint=None, **kwargs)
+dascore.get_quantity	(value)
+dascore.get_unit	(value)
+dascore.inventory	(source=None)
+dascore.io.AnnotationIO	class
+dascore.io.AnnotationNameSpace	class
+dascore.io.ArraySource	class
+dascore.io.BinaryReader	class
+dascore.io.BinaryWriter	class
+dascore.io.FiberIO	class
+dascore.io.H5ArrayMixin	class
+dascore.io.H5Reader	class
+dascore.io.H5Writer	class
+dascore.io.InventoryIO	class
+dascore.io.InventoryNameSpace	class
+dascore.io.PatchIO	class
+dascore.io.PatchNameSpace	class
+dascore.io.SpoolIO	class
+dascore.io.SpoolNameSpace	class
+dascore.io.annotation_set_to_csv	(annotations, path=None)
+dascore.io.annotation_set_to_parquet	(annotations, path)
+dascore.io.dataframe_to_patch	(df, attrs=None)
+dascore.io.inventory_to_yaml	(inventory, path=None)
+dascore.io.obspy_to_patch	(stream, dim='distance')
+dascore.io.patch_to_dataframe	(patch)
+dascore.io.patch_to_obspy	(patch)
+dascore.io.patch_to_xarray	(patch, lazy_coords=False)
+dascore.io.read	(path, file_format=None, file_version=None, time=None, distance=None, snap=None, **kwargs)
+dascore.io.read_array	(path, windows=(), key='', file_format=None, file_version=None)
+dascore.io.save_annotation_set	(annotations, path, format='csv')
+dascore.io.scan	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', snap=None)
+dascore.io.scan_payloads	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', snap=None)
+dascore.io.scan_to_df	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', exclude=('history',))
+dascore.io.spool_to_xarray	(spool, dim='time', group=None, tolerance=1.5, conflict='raise', block_size=None)
+dascore.io.write	(patch_or_spool, path, file_format, file_version=None, **kwargs)
+dascore.io.xarray_to_patch	(data_array)
+dascore.models	module
+dascore.patch_function	(required_dims=None, required_coords=None, required_attrs=None, history='full', validate_call=False, data_type=None, version='1.0')
+dascore.proc	module
+dascore.read	(path, file_format=None, file_version=None, time=None, distance=None, snap=None, **kwargs)
+dascore.read_array	(path, windows=(), key='', file_format=None, file_version=None)
+dascore.reset_config	()
+dascore.scan	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', snap=None)
+dascore.scan_payloads	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', snap=None)
+dascore.scan_to_df	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', exclude=('history',))
+dascore.set_config	(new_config=None, **kwargs)
+dascore.spool	(obj=None, *, index=None, **kwargs)
+dascore.to_datetime64	(obj)
+dascore.to_float	(obj)
+dascore.to_timedelta64	(obj)
+dascore.transform	module
+dascore.units	module
+dascore.units.assert_dtype_compatible_with_units	(dtype, quantity)
+dascore.units.conversion_factors	(from_units, to_units)
+dascore.units.convert_units	(data, to_units, from_units=None)
+dascore.units.get_byte_count	(value)
+dascore.units.get_factor_and_unit	(value, simplify=False)
+dascore.units.get_filter_units	(arg1, arg2, to_unit, dim=None)
+dascore.units.get_inverted_quant	(quant, data_units)
+dascore.units.get_quantity	(value)
+dascore.units.get_quantity_str	(quant_value)
+dascore.units.get_registry	()
+dascore.units.get_unit	(value)
+dascore.units.invert_quantity	(unit)
+dascore.units.is_data_size	(value)
+dascore.units.is_percent	(value)
+dascore.units.maybe_convert_percent_to_fraction	(obj)
+dascore.units.quant_sequence_to_quant_array	(sequence)
+dascore.units.units_match	(units1, units2)
+dascore.utils	module
+dascore.utils.time.NUMPY_TIME_UNIT_MAPPING	constant
+dascore.utils.time.dtype_time_like	(dtype_or_array)
+dascore.utils.time.is_datetime64	(obj)
+dascore.utils.time.is_timedelta64	(obj)
+dascore.utils.time.to_datetime64	(obj)
+dascore.utils.time.to_exact_fraction	(value, *, max_term=100000, rel_tol=0.0)
+dascore.utils.time.to_float	(obj)
+dascore.utils.time.to_int	(obj)
+dascore.utils.time.to_timedelta64	(obj)
+dascore.viz	module
+dascore.warnings.DASCoreWarning	class
+dascore.warnings.NumpyFallbackWarning	class
+dascore.warnings.SnapWarning	class
+dascore.write	(patch_or_spool, path, file_format, file_version=None, **kwargs)
+dascore.xarray	module
+dascore.xarray.patch_to_xarray	(patch, lazy_coords=False)
+dascore.xarray.spool_to_xarray	(spool, dim='time', group=None, tolerance=1.5, conflict='raise', block_size=None)
+dascore.xarray.xarray_to_patch	(data_array)

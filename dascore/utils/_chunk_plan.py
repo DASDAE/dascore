@@ -4,7 +4,7 @@ Chunk planning over the flat patch relation.
 Implements the "Chunking formalities" spec: the planner consumes the
 catalog's flat relation (one row per patch: `{dim}_min/max/step` envelopes,
 `_{dim}_def_key` structural identity, attr columns) and produces a
-[`ChunkPlan`](`dascore.utils.chunk_plan.ChunkPlan`) — an outputs table (one row
+[`ChunkPlan`](`dascore.utils.chunk.ChunkPlan`) — an outputs table (one row
 per output patch) plus a members table binding each output to trimmed
 slices of source patches. No patch data is touched; assembly happens later.
 
@@ -20,7 +20,7 @@ import inspect
 import math
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -45,10 +45,10 @@ from dascore.units import (
     is_data_size,
     is_percent,
 )
+from dascore.utils._explicit_ranges import ExplicitRanges, explicit_windows
 from dascore.utils.attrs import known_only, validate_conflict
-from dascore.utils.chunk import _GRID_SNAP_RTOL, _READ_PAD, get_intervals
+from dascore.utils.chunk import _GRID_SNAP_RTOL, _READ_PAD, ChunkPlan, get_intervals
 from dascore.utils.docs import compose_docstring
-from dascore.utils.explicit_ranges import ExplicitRanges, explicit_windows
 from dascore.utils.gaps import (
     DEFAULT_TOLERANCE,
     GapTolerance,
@@ -94,46 +94,6 @@ _SOURCE_COLUMNS = (
     "processing_id",
 )
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
-
-
-@dataclass(frozen=True)
-class ChunkPlan:
-    """
-    A materialization-free description of a chunk operation.
-
-    Attributes
-    ----------
-    outputs
-        One row per output patch: `{dim}_min/max/step` for the chunked
-        dimension, an `output_id`, and all carried columns (group attrs,
-        dims, structural def keys, conflict-policed attrs).
-    members
-        Instruction rows binding outputs to sources: `output_id`,
-        `_patch_row`, the exact `{dim}_min/max` trim for that member, and
-        `_modified` (False when the member loads whole).
-    dim
-        The chunked dimension.
-    value
-        The requested chunk length (None for merge mode).
-    params
-        Resolved parameters (group attrs, tolerances, overlap,
-        keep_partial, conflict, snap_coords, on_missing_dim) — recorded, not
-        referencing config.
-    trim_dims
-        Dimensions besides `dim` explicit windows trim (in `{dim}_min/max`).
-    """
-
-    outputs: pd.DataFrame
-    members: pd.DataFrame
-    dim: str
-    value: Any
-    params: dict = field(default_factory=dict)
-    trim_dims: tuple[str, ...] = ()
-
-    @property
-    def merge_mode(self) -> bool:
-        """Return True when this plan merges (no segmenting length)."""
-        return self.value is None
 
 
 def _stretches(df: pd.DataFrame, dim: str, indexed, read):
@@ -935,7 +895,7 @@ def _partition(df, name, cell, tolerance, keep_holes) -> pd.Series:
     Return partition labels: rows sharing a label may combine (spec 2).
 
     A partition is a continuity run within a cell (see
-    [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)). With
+    [`_cell_labels`](`dascore.utils._chunk_plan._cell_labels`)). With
     ``keep_holes``, a boundary missing a sample stays a partition break
     however loose the tolerance.
     """
@@ -1625,7 +1585,7 @@ def build_gap_frame(
     Report every discontinuity along ``name`` in a flat patch relation.
 
     One row per gap, over the same cells and the same continuity rule
-    [`build_chunk_plan`](`dascore.utils.chunk_plan.build_chunk_plan`)
+    [`build_chunk_plan`](`dascore.utils._chunk_plan.build_chunk_plan`)
     uses, so a gap here is exactly a boundary chunk refuses to merge.
     `{name}_min` is the last sample before the gap and `{name}_max` the
     first sample after it, so `gap_size` is their difference.
@@ -1665,7 +1625,7 @@ def build_coverage_frame(
     Summarize how much of each cell's span along ``name`` holds data.
 
     One row per cell, over the same cells
-    [`build_gap_frame`](`dascore.utils.chunk_plan.build_gap_frame`)
+    [`build_gap_frame`](`dascore.utils._chunk_plan.build_gap_frame`)
     reports in and sharing its `group_id`: `span` is the cell's full
     extent, `gap_total` the sum of its gaps, `covered` the rest, and
     `coverage` their ratio.

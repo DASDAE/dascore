@@ -153,7 +153,7 @@ This check runs against the real catalog, so the description above can't silentl
 
 ```{python}
 import dascore as dc
-from dascore.io.index.catalog import PatchCatalog
+from dascore.io._index.catalog import PatchCatalog
 
 catalog = PatchCatalog.from_patches(list(dc.get_example_spool("random_das")))
 df = catalog.to_df()
@@ -230,4 +230,4 @@ assert combined == trimmed
 
 The index handles metadata selection, finding candidate patches, and planning chunks, all without reading data. Ranges can't prove which exact values fall inside a selection, so the exact coordinate selection runs again when a patch loads. Saving chunked results back into the index is not supported yet.
 
-Version history lives in `INDEX_VERSION` in `dascore/io/index/schema.py`. Indexes from older versions are rebuilt automatically.
+Version history lives in `INDEX_VERSION` in `dascore/io/_index/schema.py`. Indexes from older versions are rebuilt automatically.

@@ -18,8 +18,8 @@ from dascore.exceptions import (
     InvalidSpoolError,
     ParameterError,
 )
-from dascore.io.index.catalog import FileResolver
-from dascore.io.index.schema import INDEX_VERSION
+from dascore.io._index.catalog import FileResolver
+from dascore.io._index.schema import INDEX_VERSION
 from dascore.utils import remote_io
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache

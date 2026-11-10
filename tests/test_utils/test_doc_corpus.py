@@ -8,7 +8,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 
 import dascore as dc
-from dascore.utils import doc_corpus
+from dascore.utils import _doc_corpus as doc_corpus
 
 
 class TestAuthoredDocuments:

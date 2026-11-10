@@ -11,10 +11,10 @@ import pytest
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
-from dascore.io.index.backend import get_backend
-from dascore.io.index.catalog import _coord_from_envelope
-from dascore.io.index.ingest import _coord_record, summaries_to_records
-from dascore.io.index.planned import _coord_record_from_row
+from dascore.io._index.backend import get_backend
+from dascore.io._index.catalog import _coord_from_envelope
+from dascore.io._index.ingest import _coord_record, summaries_to_records
+from dascore.io._index.planned import _coord_record_from_row
 from dascore.utils.patch_assembly import coord_from_row
 
 T0 = np.datetime64("2020-01-01T00:00:00")

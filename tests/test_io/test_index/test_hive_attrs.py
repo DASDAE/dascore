@@ -21,8 +21,8 @@ import pytest
 import dascore as dc
 from dascore.core.spool import Spool
 from dascore.examples import inventory_patch_pair, spool_to_directory
-from dascore.io.index import ingest
-from dascore.io.index.schema import INDEX_VERSION
+from dascore.io._index import ingest
+from dascore.io._index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
 from tests.test_io.test_xml_binary.test_xml_binary import metadata
 

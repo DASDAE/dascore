@@ -15,10 +15,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from dascore._lazy.block import NEW_AXIS, _Block
+from dascore._lazy.columns import SOURCE_FIELDS, _dtype_of
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
-from dascore.lazy.block import NEW_AXIS, _Block
-from dascore.lazy.columns import SOURCE_FIELDS, _dtype_of
 from dascore.utils.identity import DIGEST_SIZE, H
 
 # The version of the byte layout the data_id digest is taken over. Bump it
@@ -280,7 +280,7 @@ def _signature(block: _Block) -> _Signature:
     from the source on each of them, and how long the whole source is. Two
     members of one group read one sample wherever their boxes meet one
     output sample, so the region alone says what a group holds, and
-    [`_regions`](`dascore.lazy.identity._regions`) says what that is.
+    [`_regions`](`dascore._lazy.identity._regions`) says what that is.
     """
     ndim = block.ndim
     count = len(block)
