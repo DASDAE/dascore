@@ -507,57 +507,65 @@ def _adjust_relative_envelopes(df, coords, uncertain):
     return df
 
 
-def _trim_shared_dims(before, after, names) -> pd.DataFrame:
+def _trim_shared_dims(source, before, after, names) -> pd.DataFrame:
     """
     Trim the coordinates sharing a dimension with each selected one.
 
     `Patch.select` on a coordinate cuts every coordinate on its dimension
     by the same samples, the dimension's own included. Where the selected
-    coordinate and another on its dimension both rebuild from the row
-    before the selection, the samples its new envelope keeps trim the
-    other's envelope too; elsewhere the other stays a candidacy superset.
+    coordinate and another on its dimension both rebuild (see
+    `_held_coord`), the samples its new envelope keeps trim the other's
+    envelope too; elsewhere the other stays a candidacy superset.
     """
+    # Circular import: patch assembly imports the index and its plan utilities.
+    from dascore.utils.patch_assembly import _as_numpy  # noqa: PLC0415
+
     held = {
         str(c)[1 : -len("_dims")]
         for c in after.columns
         if str(c).startswith("_") and str(c).endswith("_dims")
     }
     held = {x for x in held if {f"{x}_min", f"{x}_max"}.issubset(after.columns)}
-    suffixes = ("min", "max", "step")
-    private = ("grid", "coord_dtype", "units", "units_source", "dims")
-    columns = {
-        x: [
-            c
-            for c in (*(f"{x}_{s}" for s in suffixes), *(f"_{x}_{s}" for s in private))
-            if c in before.columns
-        ]
-        for x in sorted(held)
-    }
     shared = after.index.intersection(before.index)
-    cache: dict = {}
     for name in [x for x in names if x in held and len(held) > 1]:
         cols = [f"{name}_min", f"{name}_max"]
         old, new = before.loc[shared, cols], after.loc[shared, cols]
         cut = shared[((old != new).any(axis=1) & new.notna().all(axis=1)).to_numpy()]
         if not len(cut):
             continue
-        flat = [c for x in columns.values() for c in x]
-        rows = before.loc[cut, flat].to_dict("records")
+        # only the coordinates on this one's dimension in a row are trimmed
+        dims = before.loc[cut, f"_{name}_dims"].to_numpy()
+        coords = {
+            x: _held_coords(
+                source,
+                before,
+                x,
+                cut[(before.loc[cut, f"_{x}_dims"] == dims).to_numpy()],
+            )
+            for x in sorted(held)
+        }
+        picks, trims, changed = {}, {}, {}
         bounds = new.loc[cut].itertuples(index=False, name=None)
-        changed: dict[str, dict] = {}
-        for index, row, (low, high) in zip(cut, rows, bounds, strict=True):
-            # only the coordinates on this one's dimension decide the trim
-            dim = row[f"_{name}_dims"]
-            on_dim = [x for x in columns if row[f"_{x}_dims"] == dim]
-            key = (name, low, high, *on_dim)
-            key += tuple(_hashable(row[c]) for x in on_dim for c in columns[x])
-            if key not in cache:
-                cache[key] = _shared_dim_trims(row, name, (low, high), on_dim)
-            for other, *values in cache[key]:
-                ends = (f"{other}_min", f"{other}_max", f"_{other}_grid")
-                for column, value in zip(ends, values, strict=True):
-                    if value is not None:
-                        changed.setdefault(column, {})[index] = value
+        for index, (low, high) in zip(cut, bounds, strict=True):
+            coord, key = coords[name][index]
+            if coord is None or not len(coord):
+                continue
+            key = (key, _hashable(low), _hashable(high))
+            if key not in picks:
+                picks[key] = coord.select((_as_numpy(low), _as_numpy(high)))[1]
+            for other in sorted(held - {name}):
+                rider, rider_key = coords[other].get(index, (None, None))
+                if rider is None or len(rider) != len(coord):
+                    continue
+                if (key, rider_key) not in trims:
+                    trims[key, rider_key] = rider[picks[key]]
+                if not len(kept := trims[key, rider_key]):
+                    continue
+                values = {f"{other}_min": kept.min(), f"{other}_max": kept.max()}
+                if isinstance(before.get(f"_{other}_grid", {}).get(index), tuple):
+                    values[f"_{other}_grid"] = _grid_terms(kept)
+                for column, value in values.items():
+                    changed.setdefault(column, {})[index] = value
         for column, values in changed.items():
             if column.endswith("_grid"):
                 old_grids = zip(after.index, after[column], strict=True)
@@ -574,32 +582,60 @@ def _hashable(value):
     return None if pd.isnull(value) else value
 
 
-def _shared_dim_trims(row, name, bounds, on_dim) -> list[tuple]:
-    """
-    The new envelope of each other coordinate in ``on_dim``.
+def _grid_terms(coord) -> tuple:
+    """The exact grid a relation row states for an evenly sampled coordinate."""
+    return (*coord.runs[0].canonical()[1:], len(coord))
 
-    Returns ``(name, min, max, grid)`` per coordinate it can trim, where
-    ``grid`` restates an exact grid the row carries, else None.
+
+def _held_coord(origin: Mapping, low, high, name: str):
+    """
+    The samples of ``name`` a row holds, or None if they cannot be told.
+
+    A trimmed row keeps its source's grid, which its envelope no longer
+    ends on, so the coordinate is rebuilt from the row before any
+    selection (``origin``), or from the source a plan member states
+    beside it, and selected to the row's bounds ``low`` and ``high``.
     """
     # Circular import: patch assembly imports the index and its plan utilities.
-    from dascore.utils.patch_assembly import _as_numpy, _sized_coord  # noqa: PLC0415
+    from dascore.utils.patch_assembly import (  # noqa: PLC0415
+        _as_numpy,
+        _sized_coord,
+        source_coord_from_row,
+    )
 
-    others = [x for x in on_dim if x != name]
-    if not others or (coord := _sized_coord(row, name)) is None:
-        return []
-    _, picked = coord.select(tuple(_as_numpy(x) for x in bounds))
-    out = []
-    for other in others:
-        rider = _sized_coord(row, other)
-        if rider is None or len(rider) != len(coord):
-            continue
-        kept = rider[picked]
-        if not len(kept):
-            continue
-        grid = None
-        if isinstance(row.get(f"_{other}_grid"), tuple):
-            grid = (*kept.runs[0].canonical()[1:], len(kept))
-        out.append((other, kept.min(), kept.max(), grid))
+    coord = source_coord_from_row(origin, name)
+    if coord is None:
+        start, stop = origin.get(f"{name}_min"), origin.get(f"{name}_max")
+        grid = origin.get(f"_{name}_grid")
+        ticks = _value_family(start) not in ("number", "text")
+        if isinstance(grid, tuple) and ticks and not grid_fits(grid, start, stop):
+            return None  # an origin already trimmed has no grid to go by
+        coord = _sized_coord(origin, name)
+    if coord is None or pd.isnull(low) or pd.isnull(high):
+        return None
+    return coord.select((_as_numpy(low), _as_numpy(high)))[0]
+
+
+def _held_coords(source, frame, name, index) -> dict:
+    """
+    `_held_coord` and a cache key for each row of ``frame`` in ``index``.
+
+    Rows alike in their origin and bounds share one coordinate, so an
+    archive of identical layouts rebuilds it once.
+    """
+    suffixes = ("min", "max", "step")
+    private = ("grid", "coord_dtype", "units", "units_source", "src_low")
+    private += ("src_high", "src_step")
+    columns = [f"{name}_{x}" for x in suffixes] + [f"_{name}_{x}" for x in private]
+    origins = source.loc[index, [c for c in columns if c in source]]
+    bounds = frame.loc[index, [f"{name}_min", f"{name}_max"]]
+    cache, out = {}, {}
+    rows = zip(index, origins.to_dict("records"), bounds.itertuples(index=False))
+    for row_index, origin, (low, high) in rows:
+        key = (*map(_hashable, origin.values()), _hashable(low), _hashable(high))
+        if key not in cache:
+            cache[key] = _held_coord(origin, low, high, name)
+        out[row_index] = (cache[key], key)
     return out
 
 
@@ -624,9 +660,6 @@ def patch_local_adjusted_envelopes(
     def _usable_index(value) -> bool:
         return value is None or isinstance(value, int | np.integer)
 
-    # Circular import: patch assembly imports the index and its plan utilities.
-    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
-
     source = df
     df = df.copy(deep=False)
     for position, (coords, samples, relative) in enumerate(residuals):
@@ -639,7 +672,7 @@ def patch_local_adjusted_envelopes(
                 df = _adjust_relative_envelopes(df, coords, uncertain)
             else:
                 df = _adjust_absolute_envelopes(df, coords)
-            df = _trim_shared_dims(before, df, coords)
+            df = _trim_shared_dims(source, before, df, coords)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
@@ -685,21 +718,27 @@ def patch_local_adjusted_envelopes(
             # unresolvable rows keep their envelope (candidacy superset)
             new_min = new_min.mask(unresolved, mins)
             new_max = new_max.mask(unresolved, maxs)
-            # A whole row (its envelope spans its grid) on an exact fractional
-            # grid, whose samples are not whole steps apart, takes its picks.
+            # A row on an exact fractional grid, whose samples are not whole
+            # steps apart, takes its picks from the samples it holds.
             col = f"_{name}_grid"
-            codes, grids = pd.factorize(df.get(col, pd.Series(dtype=object)))
-            for code in range(len(grids)):
-                rows = (codes == code) & mins.notna().to_numpy()
-                coord = coord_from_row(df[rows].iloc[0], name) if rows.any() else None
-                if coord is None:  # emptied by an earlier selection
-                    continue
-                same = rows & ((maxs - mins) == coord.max() - coord.min()).to_numpy()
-                if same.any() and len(picked := coord.select(value, samples=True)[0]):
-                    new_min[same] = mins[same] + (picked.min() - coord.min())
-                    new_max[same] = maxs[same] - (coord.max() - picked.max())
-                    terms = (*picked.runs[0].canonical()[1:], len(picked))
-                    df[col] = [terms if x else g for x, g in zip(same, df[col])]
+            if col in df:
+                gridded = df[col].map(lambda x: isinstance(x, tuple)).to_numpy()
+                gridded = gridded & mins.notna().to_numpy()
+                held = _held_coords(source, df, name, df.index[gridded])
+                lows, highs, grids, picks = {}, {}, {}, {}
+                for index, (coord, key) in held.items():
+                    if coord is None or not len(coord):
+                        continue
+                    if key not in picks:
+                        picks[key] = coord.select(value, samples=True)[0]
+                    if not len(picked := picks[key]):
+                        continue
+                    lows[index], highs[index] = picked.min(), picked.max()
+                    grids[index] = _grid_terms(picked)
+                if grids:
+                    new_min.loc[list(lows)] = pd.Series(lows)
+                    new_max.loc[list(highs)] = pd.Series(highs)
+                    df[col] = [grids.get(i, g) for i, g in zip(df.index, df[col])]
             # rows whose window is empty or lies entirely outside the
             # patch contribute nothing; test before clipping so such
             # windows are not resurrected as one-sample envelopes
@@ -713,7 +752,7 @@ def patch_local_adjusted_envelopes(
                 empty = ~keep & ~unresolved
                 df[cols] = df[cols].mask(empty)
                 df[_PATCH_LOCAL_EMPTY] = df.get(_PATCH_LOCAL_EMPTY, False) | empty
-        df = _trim_shared_dims(before, df, coords)
+        df = _trim_shared_dims(source, before, df, coords)
     return df
 
 

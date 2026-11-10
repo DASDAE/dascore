@@ -14,6 +14,7 @@ from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import (
     _carry_grids,
+    _held_coord,
     _normalize_chunk_units,
     build_chunk_plan,
     build_coverage_frame,
@@ -892,6 +893,30 @@ class TestCarryGrids:
             picked = coord.select((low, high))[0]
             expected = (*picked.runs[0].canonical()[1:], len(picked))
             assert out["_x_grid"].iloc[0] == expected
+
+
+class TestHeldCoord:
+    """The samples a relation row holds, rebuilt from its origin."""
+
+    @pytest.fixture()
+    def origin(self):
+        """A row stating a 1024 Hz grid and the coordinate it describes."""
+        coord = get_coord(start=STARTTIME, step=(1, 1024), shape=(2000,))
+        row = {"x_min": coord.min(), "x_max": coord.max(), "x_step": coord.step}
+        return {**row, "_x_grid": (*coord.runs[0].canonical()[1:], 2000)}, coord
+
+    def test_selects_origin_to_bounds(self, origin):
+        """The origin's coordinate is selected to the row's bounds."""
+        row, coord = origin
+        low, high = STARTTIME + np.timedelta64(100, "ms"), coord.max()
+        out = _held_coord(row, low, high, "x")
+        assert out == coord.select((low, high))[0]
+
+    def test_trimmed_origin(self, origin):
+        """An origin whose grid no longer ends on its bounds cannot answer."""
+        row, coord = origin
+        row = {**row, "x_min": STARTTIME + np.timedelta64(100, "ms")}
+        assert _held_coord(row, row["x_min"], coord.max(), "x") is None
 
 
 class TestBuildGapFrame:

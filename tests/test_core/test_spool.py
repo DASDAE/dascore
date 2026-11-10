@@ -944,6 +944,60 @@ class TestSelectSharedDimension:
         )
 
 
+class TestSelectAfterTrimOnExactGrid:
+    """Selections after a trim on an exact grid count from its samples."""
+
+    start = np.datetime64("2020-01-01")
+
+    @pytest.fixture(scope="class")
+    def grid_patch(self):
+        """The example patch on a 1024 Hz grid with a utc coordinate on time."""
+        patch = dc.get_example_patch()
+        shape = (patch.shape[patch.get_axis("time")],)
+        time = get_coord(start=self.start, step=(1, 1024), shape=shape)
+        utc = self.start + np.timedelta64(5, "s")
+        utc = get_coord(start=utc, step=(1, 1024), shape=shape)
+        return patch.update_coords(time=time).update_coords(utc=("time", utc))
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def grid_spool(self, request, grid_patch, tmp_path_factory):
+        """The grid patch in an in-memory and in a directory spool."""
+        if request.param == "memory":
+            return dc.spool([grid_patch])
+        path = tmp_path_factory.mktemp("exact_grid_trim")
+        dc.write(grid_patch, path / "grid.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    def _ms(self, value):
+        """A time this many milliseconds after the start."""
+        return self.start + np.timedelta64(value, "ms")
+
+    def test_samples_after_value_select(self, grid_spool):
+        """Sample positions count from the samples a value selection kept."""
+        trimmed = grid_spool.select(time=(self._ms(100), self._ms(300)))
+        for name in ("time", "utc"):
+            out = trimmed.select(**{name: (10, 20)}, samples=True)
+            _assert_contents_match_patches(out, ["time", "utc"])
+
+    def test_rider_after_value_select(self, grid_spool):
+        """A coordinate trimmed earlier still trims with a later selection."""
+        trimmed = grid_spool.select(time=(self._ms(100), self._ms(300)))
+        out = trimmed.select(utc=(self._ms(5150), None))
+        _assert_contents_match_patches(out, ["time"])
+        trimmed = grid_spool.select(utc=(self._ms(5100), None))
+        out = trimmed.select(time=(None, self._ms(250)))
+        _assert_contents_match_patches(out, ["utc"])
+
+    def test_samples_after_range_between_samples(self, grid_spool):
+        """A range holding no sample leaves nothing to count positions from."""
+        inside = self.start + np.timedelta64(100_100, "us")
+        trimmed = grid_spool.select(time=(self._ms(100), inside))
+        for name in ("time", "utc"):
+            out = trimmed.select(**{name: (0, 1)}, samples=True)
+            assert len(out.get_contents()) == len(out) == 1
+            assert not len(out[0].get_coord("time"))
+
+
 class TestUnselect:
     """Tests for removing the patches a selection would keep."""
 
