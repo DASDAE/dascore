@@ -60,6 +60,13 @@ class SegyV1_0(FiberIO):  # noqa
         Used to get metadata about a file without reading the whole file.
 
         Returns lightweight scan metadata without loading the data array.
+
+        Notes
+        -----
+        Trace headers store the start time in whole seconds, so the start is
+        floored to the second unless the textual header states it below the
+        second (Silixa's "UTC Time stamp" or "UTC File Time stamp" line)
+        within that same second.
         """
         segyio = optional_import(self._package_name)
         with _open_segy(resource, segyio) as fi:
