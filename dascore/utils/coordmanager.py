@@ -12,7 +12,6 @@ import numpy as np
 import dascore as dc
 from dascore.constants import CONFLICT
 from dascore.exceptions import CoordMergeError
-from dascore.models import ArrayLike
 from dascore.utils.display import get_nice_text
 from dascore.warnings import DASCoreWarning
 
@@ -63,8 +62,8 @@ def merge_coord_managers(
             raise CoordMergeError(msg)
         return managers[0].dims
 
-    # Public non-dimensional coordinates `conflict` decided, by name.
-    decided: dict[str, str] = {}
+    # Public non-dimensional coordinates `conflict` decided, by outcome.
+    decided: dict[str, list[str]] = {"kept": [], "dropped": []}
 
     def _resolve_conflict(name, keepable: bool) -> bool:
         """
@@ -83,7 +82,7 @@ def merge_coord_managers(
             raise CoordMergeError(msg)
         keep = conflict == "keep_first" and keepable
         if not name.startswith("_"):
-            decided[name] = "kept" if keep else "dropped"
+            decided["kept" if keep else "dropped"].append(name)
         return keep
 
     def _drop_unshared_coordinates(managers):
@@ -105,14 +104,13 @@ def merge_coord_managers(
         # Under "raise" an unshared coordinate is dropped silently, as it
         # always was here; Spool.chunk polices members lacking a coordinate
         # before they reach this function.
-        names = sorted({x[0] for x in drop_coords}) if conflict != "raise" else []
-        for name in names:
-            # A manager which renames a dimension is refused by _get_dims,
-            # so an unshared coordinate is never a dimension here.
-            held = name in first.coord_map
-            keepable = held and dim not in first.dim_map[name]
-            if _resolve_conflict(name, keepable):
-                kept[name] = (first.dim_map[name], first.coord_map[name])
+        if conflict != "raise":
+            for name in sorted({x[0] for x in drop_coords}):
+                # A manager which renames a dimension is refused by _get_dims,
+                # so an unshared coordinate is never a dimension here.
+                keepable = name in first.coord_map and dim not in first.dim_map[name]
+                if _resolve_conflict(name, keepable):
+                    kept[name] = (first.dim_map[name], first.coord_map[name])
         coords_to_drop = [x[0] for x in drop_coords]
         return [x.drop_coords(*coords_to_drop)[0] for x in managers], kept
 
@@ -139,13 +137,9 @@ def merge_coord_managers(
 
     def _warn_decided():
         """Say which public coordinates the loosened policy decided."""
-        if not decided:
+        parts = [f"{sorted(v)} {k}" for k, v in decided.items() if v]
+        if not parts:
             return
-        parts = [
-            f"{sorted(k for k, v in decided.items() if v == what)} {what}"
-            for what in ("kept", "dropped")
-            if what in decided.values()
-        ]
         detail = (
             "the first patch's values are kept"
             if conflict == "keep_first"
@@ -216,25 +210,6 @@ def merge_coord_managers(
                 out[coord_name] = (dims, new_data)
         return out
 
-    def _get_new_coords(
-        managers, ordered
-    ) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:
-        """
-        Merge relevant coordinates together.
-
-        Non-merging coordinates are resolved in input order, so
-        "keep_first" keeps the first manager given; merging coordinates
-        concatenate in `ordered` (merge coordinate) order.
-        """
-        # build up merged coords.
-        coords_to_merge = managers[0].dim_to_coord_map[dim]
-        coords_not_to_merge = set(managers[0].coord_map) - set(coords_to_merge)
-        # non-merging coordinates should be identical.
-        coords_dict = _get_non_merge_coords(managers, coords_not_to_merge)
-        # merge coordinates
-        coords_dict.update(_get_merged_coords(ordered, coords_to_merge))
-        return coords_dict
-
     dims = _get_dims(coord_managers)
     coord_managers, kept_unshared = _drop_unshared_coordinates(coord_managers)
     sort_managers = sorted(
@@ -242,8 +217,12 @@ def merge_coord_managers(
         key=lambda x: x.coord_map[dim].min(),
         reverse=any(x.coord_map[dim].reverse_sorted for x in coord_managers),
     )
+    to_merge = coord_managers[0].dim_to_coord_map[dim]
+    others = set(coord_managers[0].coord_map) - set(to_merge)
+    # non-merge coords resolve in input order; merged ones in `dim` order
     merged_coords = {
-        **_get_new_coords(coord_managers, sort_managers),
+        **_get_non_merge_coords(coord_managers, others),
+        **_get_merged_coords(sort_managers, to_merge),
         **kept_unshared,
     }
     _warn_decided()

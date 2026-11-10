@@ -285,16 +285,14 @@ def _planned_manager(plan, row, files=None, projection=None):
         coords = recovered[0]
     else:
         # Patch utilities import spool/chunk planning; defer until plans are read.
-        from dascore.utils.patch import _get_merged_coord  # noqa: PLC0415
+        from dascore.utils.patch import (  # noqa: PLC0415
+            _get_merged_coord,
+            _split_coord_merge_kwargs,
+        )
 
         merge_dim = recovered[0].dim_map[plan.dim][0]
-        coords = _get_merged_coord(
-            pd.DataFrame(),
-            merge_dim,
-            recovered,
-            snap_coords=plan.merge_kwargs.get("snap_coords", True),
-            tolerance=plan.merge_kwargs.get("tolerance", 1.5),
-        )
+        _, coord_kwargs = _split_coord_merge_kwargs(plan.merge_kwargs)
+        coords = _get_merged_coord(pd.DataFrame(), merge_dim, recovered, **coord_kwargs)
     if coords is None:
         return None
     if projected:

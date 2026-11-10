@@ -641,6 +641,8 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     coord_kwargs = {
         "snap_coords": merge_kwargs.pop("snap_coords", True),
         "tolerance": merge_kwargs.pop("tolerance", 1.5),
+        # attrs and conflicting non-dimensional coords share one policy
+        "conflict": merge_kwargs.get("conflict") or "raise",
     }
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
@@ -710,9 +712,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    # Conflicting non-dimensional coords follow the attrs conflict policy.
-    conf = attr_kwargs.get("conflict") or "raise"
-    new_coord = _get_merged_coord(df, merge_dim, coords, conf, **coord_kwargs)
+    new_coord = _get_merged_coord(df, merge_dim, coords, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.

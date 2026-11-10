@@ -967,6 +967,21 @@ class TestExplicitMetadataSources:
             )
             assert np.array_equal(loaded.data, wanted.data)
 
+    @pytest.mark.filterwarnings("ignore::dascore.warnings.DASCoreWarning")
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_planned_members_follow_conflict(self, conflict):
+        """Rebuilding a merged output's coordinates applies its conflict policy."""
+        patch = dc.get_example_patch()
+        n = len(patch.get_coord("distance"))
+        time = patch.get_coord("time")
+        first = patch.update_coords(channel=("distance", np.arange(n)))
+        second = first.update_coords(time_min=time.max() + time.step)
+        second = second.update_coords(channel=("distance", np.arange(n) + 1000))
+        merged = dc.spool([first, second]).chunk(time=None, conflict=conflict)
+        out = merged.select(distance=np.array([[0, 10]]))[0]
+        assert ("channel" in out.coords.coord_map) == (conflict == "keep_first")
+        assert _ends(out) == (0, 10)
+
     def test_missing_live_coordinate_metadata_is_not_assumed_complete(self):
         """A stale live index cannot advertise unverified uneven samples."""
         source = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
