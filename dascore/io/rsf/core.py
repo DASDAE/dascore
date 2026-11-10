@@ -20,6 +20,7 @@ from dascore.utils.time import to_float
 from dascore.warnings import DASCoreWarning
 
 from .utils import (
+    HEADER_MAX,
     HISTORY,
     PREFIX,
     RESERVED,
@@ -253,17 +254,26 @@ class RSFV1(FiberIO):
                     f"RSF cannot record a data path with a quote or newline: {in_path}"
                 )
                 raise ValueError(msg)
-            outdatapath.parent.mkdir(exist_ok=True, parents=True)
             hdr_info.append(f'in="{in_path}"')
-            with outdatapath.open("wb") as fi:
-                fi.write(data_bytes)
             tail = ()
         else:
             # outputs header and binary combined (.rsf with both hdr and bin)
             hdr_info.append('in="stdin"')
             # chunks, so the samples are not copied into one bytes object
             tail = (b"\n" + SEPARATOR, data_bytes)
+        header = ("\n".join(hdr_info) + "\n").encode()
+        # A reader looks for in= and the separator in the first HEADER_MAX bytes.
+        if len(header) + len(SEPARATOR) + 1 > HEADER_MAX:
+            msg = (
+                f"The RSF header is {len(header)} bytes, over the {HEADER_MAX} a "
+                "reader reads; shorten the patch's history or attrs."
+            )
+            raise ValueError(msg)
+        if data_path is not None:
+            outdatapath.parent.mkdir(exist_ok=True, parents=True)
+            with outdatapath.open("wb") as fi:
+                fi.write(data_bytes)
         outpath = _coerce_output_path(resource)
         outpath.parent.mkdir(exist_ok=True, parents=True)
         with outpath.open("wb") as fi:
-            fi.writelines([("\n".join(hdr_info) + "\n").encode(), *tail])
+            fi.writelines([header, *tail])

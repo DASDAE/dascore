@@ -17,7 +17,7 @@ from dascore.io.utils import parse_units, step_from_interval
 # The bytes between a packed header and its binary.
 SEPARATOR = b"\x0c\x0c\x04"
 # The most header text read; it holds every header DASCore or Madagascar writes.
-_HEADER_MAX = 1 << 16
+HEADER_MAX = 1 << 16
 # A line binds when it opens with a key=value token; other lines are prose.
 _BINDS = re.compile(r"\s*[A-Za-z_]\w*=")
 _TOKEN = re.compile(r'([A-Za-z_]\w*)=("(?:[^"\\]|\\.)*"|\S*)')
@@ -55,7 +55,7 @@ def read_header(handle, raise_on_fail=False):
     The offset is None when no separator follows the header text. Anything
     but an RSF header returns None, or raises when raise_on_fail.
     """
-    head, sep, _ = handle.read(_HEADER_MAX).partition(SEPARATOR)
+    head, sep, _ = handle.read(HEADER_MAX).partition(SEPARATOR)
     text = head.decode(errors="replace")
     # Madagascar keeps the backslashes of an in= path (a UNC share) as is.
     hdr = {k: _unquote(v, escapes=k != "in") for k, v in _get_bindings(text)}

@@ -11,7 +11,7 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.rsf import RSFV1
-from dascore.io.rsf.utils import KINDS, SEPARATOR, read_header
+from dascore.io.rsf.utils import HEADER_MAX, KINDS, SEPARATOR, read_header
 from dascore.io.utils import step_from_interval
 from dascore.warnings import DASCoreWarning
 
@@ -157,6 +157,16 @@ class TestRsfWrite:
             RSFV1().write(fractional_patch, path, data_path=datapath)
         assert not path.exists()
         assert not UPath(f"{datapath}@").exists()
+
+    @pytest.mark.parametrize("split", [False, True])
+    def test_header_too_long(self, split, fractional_patch, tmp_path):
+        """A header the reader could not find in= in is refused before any write."""
+        patch = fractional_patch.update_attrs(note="x" * HEADER_MAX)
+        path, data_path = tmp_path / "long.rsf", tmp_path / "long_data.rsf"
+        with pytest.raises(ValueError, match="RSF header"):
+            RSFV1().write(patch, path, data_path=data_path if split else None)
+        assert not path.exists()
+        assert not Path(f"{data_path}@").exists()
 
 
 class TestRsfEpoch:
