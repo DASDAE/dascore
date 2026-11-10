@@ -19,21 +19,23 @@ An extra attr (one the class does not declare) holds a single value of one of th
 | Kind | Types |
 |---|---|
 | Text | `str` |
-| Number | `bool`, `int`, `float`, numpy bool, integer and float scalars |
+| Number | `bool`, `int` that fits 64 bits, `float`, numpy bool, integer and float scalars; not complex |
 | Missing | `None` |
 | Time | `np.datetime64`, `np.timedelta64`, of any unit |
-| Units | a scalar `Quantity`, a `Unit` |
+| Units | a scalar `Quantity` with a real magnitude, a `Unit` |
 
-`PatchAttrs` enforces this when attrs are built, so every patch's attrs fit it and every format writer only needs to store these types:
+`PatchAttrs` enforces this when attrs are built, so a format writer stores only these types for extra attrs. A field a [subclass](#format-specific-subclasses) declares is checked by its declared type instead, and its writer stores what that type allows.
 
-- Python and pandas times become numpy times (`dc.to_datetime64`, `dc.to_timedelta64`). A time-zone-aware time is refused; convert it to UTC first.
-- Bytes become text, as HDF5 text reads back, and `pd.NA` becomes `None`.
+- Python and pandas times become numpy times at their own precision (pandas' unit, Python's microsecond, a date's day). A time-zone-aware time is refused; convert it to UTC first.
+- A numpy string becomes `str`, bytes that decode as UTF-8 become text (as HDF5 text reads back), and `pd.NA` becomes `None`.
 - A one-value array, list or tuple, which is how HDF5 and netCDF store a scalar, is read as that scalar. One holding several values is skipped with a warning.
-- Anything else, including a dict, set, array quantity or other object, is refused with an error naming the attr.
+- Anything else, including a dict, set, complex number, array quantity, undecodable bytes or other object, is refused with an error naming the attr.
 
-Attrs carry no arrays or mappings, and that is a design decision, not a gap to fill. Attrs are indexed, selected on, hashed into IDs and compared when patches combine, which only works for scalars; and a richer type would need a codec in every format. So no format reader or writer should add support for a dict, array or other value in attrs. An array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension. Structured metadata belongs in fields of a [format-specific subclass](#format-specific-subclasses), or in an [inventory](`dascore.Inventory`).
+A reader which copies every attr a file holds, rather than choosing them, passes them through [`drop_unheld_attrs`](`dascore.core.attrs.drop_unheld_attrs`), which skips those refused with a warning, so one odd attr does not fail the read.
 
-`history`, a declared field rather than an extra attr, is the one sequence: a tuple of strings.
+Attrs carry no arrays or mappings, and that is a design decision, not a gap to fill. Attrs are indexed, selected on, hashed into IDs and compared when patches combine, which is simple and cheap only for scalars; and a richer type would need a codec in every format. So no format reader or writer should add support for a dict, array or other value in attrs. An array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension. Structured metadata belongs in fields of a [format-specific subclass](#format-specific-subclasses), or in an [inventory](`dascore.Inventory`).
+
+`history` is a declared field, not an extra attr: a string or a tuple of strings.
 
 ## `data_type`
 

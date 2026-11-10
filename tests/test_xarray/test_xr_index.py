@@ -818,6 +818,14 @@ class TestPatchRoundTrip:
         assert isinstance(array.xindexes["x"], CoordIndex)
         assert xarray_to_patch(array).get_coord("x") == coord
 
+    def test_attr_no_patch_holds_is_skipped(self):
+        """An xarray attr no patch attr holds, such as a dict, is skipped."""
+        array = patch_to_xarray(dc.get_example_patch())
+        array.attrs["table"] = {"a": 1}
+        with pytest.warns(UserWarning, match="Skipped attr 'table'"):
+            patch = xarray_to_patch(array)
+        assert "table" not in dict(patch.attrs)
+
     def test_attrs_units_win(self):
         """Units stated beside a lazy coordinate are the coordinate's units."""
         coord = get_coord(start=0.0, step=0.5, shape=(20,), units="m")

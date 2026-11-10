@@ -11,7 +11,7 @@ import json
 import numpy as np
 
 import dascore as dc
-from dascore.core.attrs import PatchAttrs
+from dascore.core.attrs import PatchAttrs, _simple_attr_value
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
@@ -571,7 +571,7 @@ def _encode_attr_value(key, value):
     Encode a patch attr into an HDF5-attr-safe representation.
 
     Returns the stored value and the type tag `_decode_attr_value` reads it
-    back with, or None where HDF5 holds the value as it is. A numpy time is
+    back with; the tag is None where HDF5 holds the value as it is. A numpy time is
     its integer count, tagged with its dtype (unit and multiplier
     included); a quantity or unit is its text.
     """
@@ -597,7 +597,7 @@ def _decode_attr_value(attrs, key, value, legacy: bool = True):
     if attr_type.startswith(("datetime64", "timedelta64")):
         return np.asarray([value], dtype="int64").view(attr_type)[0]
     if attr_type == "quantity":
-        return get_quantity(unbyte(value))
+        return get_quantity(value)
     if attr_type == "unit":
         return get_unit(unbyte(value))
     if attr_type == "history_json":
@@ -625,6 +625,20 @@ def _holds_pytables_payload(attrs, key, value) -> bool:
     return get_cset is not None and get_cset() == 0
 
 
+def _attr_can_hold(value) -> bool:
+    """
+    Return True if a decoded legacy value is one a patch attr holds; one
+    which is not, such as a dict, keeps its text rather than failing the read.
+    """
+    if isinstance(value, list | tuple):  # the attrs validator unpacks these
+        return True
+    try:
+        _simple_attr_value("", value)
+    except ValueError:
+        return False
+    return True
+
+
 def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
     """
     Decode one attr value from a file written before attr types were stored.
@@ -638,7 +652,7 @@ def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
         value = np.asarray([value])[0]
     if legacy and _holds_pytables_payload(attrs, key, value):
         decoded = decode_pytables_attr(bytes(value))
-        if decoded is not NOT_DECODED:
+        if decoded is not NOT_DECODED and _attr_can_hold(decoded):
             return decoded
     if isinstance(value, np.bytes_ | bytes):
         try:

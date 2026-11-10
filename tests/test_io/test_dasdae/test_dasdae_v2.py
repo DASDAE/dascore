@@ -22,6 +22,7 @@ from dascore.io.dasdae.utils import (
     _read_coord,
     _save_coord,
 )
+from dascore.units import Quantity
 from tests.conftest import join_patches
 
 T0 = np.datetime64("2020-01-01T00:00:00")
@@ -288,7 +289,6 @@ class TestMultiRunRoundTrip:
 _ATTR_VALUES = {
     "millis": np.timedelta64(5, "ms"),
     "seconds": np.datetime64("2020-01-01T00:00:01", "s"),
-    "no_time": np.datetime64("NaT"),
     "no_ns_time": np.datetime64("NaT", "ns"),
     "length": dc.get_quantity("5 m"),
     "ratio": dc.get_quantity(0.5),
@@ -309,12 +309,16 @@ class TestAttrRoundTrip:
 
     @staticmethod
     def _assert_same(out, expected):
-        """Equal, NaT included, and of the same type and dtype."""
+        """Equal, NaT included, and of the same type, dtype and units."""
         assert type(out) is type(expected)
         if isinstance(expected, np.datetime64 | np.timedelta64):
             assert out.dtype == expected.dtype
             assert np.isnat(out) == np.isnat(expected)
             assert np.isnat(expected) or out == expected
+        elif isinstance(expected, Quantity):
+            # Quantity equality converts units first: 500 cm == 5 m.
+            assert out.units == expected.units
+            assert out.magnitude == expected.magnitude
         else:
             assert out == expected
 

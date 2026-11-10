@@ -12,6 +12,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
+from dascore.core.attrs import drop_unheld_attrs
 from dascore.io.utils import decode_cf_time, parse_units, stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
@@ -35,7 +36,7 @@ def _get_attrs_coords_and_data(h5, snap):
     # only scan used to drop them, so scan and read disagreed.
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
     attr_names = set(attrs) - skip
-    attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
+    attr_dict = drop_unheld_attrs({x: unbyte(attrs[x]) for x in attr_names})
     # Some files describe their units in prose ("same as input DAS data");
     # keep that text, but leave the patch without units rather than fail.
     units = attr_dict.get("data_units")

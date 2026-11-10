@@ -13,6 +13,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core import get_coord
+from dascore.core.attrs import drop_unheld_attrs
 from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import cf_time_values, stored_coord
@@ -260,11 +261,13 @@ def _signal_pieces(group, node, aux, snap):
 def _signal_attrs(node) -> dict:
     """Return a signal's own attrs, without netCDF or layout bookkeeping."""
     skip = {*_MAPPINGS, *_PACKING, *_FILLS, "DIMENSION_LIST", "coordinates"}
-    return {
-        name: _attr(node.attrs, name)
-        for name in node.attrs
-        if name not in skip and not name.startswith("_")
-    }
+    return drop_unheld_attrs(
+        {
+            name: _attr(node.attrs, name)
+            for name in node.attrs
+            if name not in skip and not name.startswith("_")
+        }
+    )
 
 
 def _decoded_dtype(node) -> np.dtype:

@@ -341,6 +341,16 @@ class TestH5Simple:
         # Stripping it in only one of the two is how they came to disagree.
         assert read_names == scan_names
 
+    def test_attr_no_patch_holds_is_skipped(self, h5simple_path, tmp_path):
+        """A root attr of a type no patch attr holds is skipped, not fatal."""
+        path = tmp_path / "compound.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["pair"] = np.array((1, 2.0), dtype=[("a", "i4"), ("b", "f8")])
+        with pytest.warns(UserWarning, match="Skipped attr 'pair'"):
+            attrs = dc.read(path)[0].attrs
+        assert "pair" not in dict(attrs)
+
     @pytest.mark.parametrize("name", ["__format__", "format", "file_format"])
     @pytest.mark.parametrize("value", ["h5simple", np.bytes_(b"h5simple")])
     def test_declared_format_is_recognized(self, h5simple_path, tmp_path, name, value):

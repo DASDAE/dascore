@@ -13,6 +13,7 @@ from pint.errors import PintError
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.core.attrs import drop_unheld_attrs
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import PatchConversionError
 from dascore.units import get_quantity, get_quantity_str, get_registry
@@ -243,8 +244,11 @@ def _cf_unit_str(units) -> str:
 
 
 def _cf_attrs(attrs, name) -> dict:
-    """A CF variable's attrs as patch attrs: an edited ``units`` wins."""
-    out = dict(attrs)
+    """
+    A CF variable's attrs as patch attrs: an edited ``units`` wins, and an
+    attr of a type no patch holds, such as a dict, is skipped with a warning.
+    """
+    out = drop_unheld_attrs(attrs)
     units, data_units = out.get("units"), out.get("data_units")
     if units is not None and data_units and units == _cf_unit_str(data_units):
         del out["units"]
