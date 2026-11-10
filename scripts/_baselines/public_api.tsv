@@ -204,7 +204,7 @@ dascore.Spool.split	(self, size=None, count=None)
 dascore.Spool.spool_path	attribute
 dascore.Spool.stack	(patches, dim_vary=None, check_behavior='warn')
 dascore.Spool.unselect	(self, *, _attrs=None, _coords=None, samples=False, relative=False, **kwargs)
-dascore.Spool.update	(self, progress='standard', *, client=None)
+dascore.Spool.update	(self, progress='standard', *, client=None, paths=None, retry_unreadable=False)
 dascore.Spool.viz	namespace
 dascore.Spool.viz.calendar	(spool, *, method='percent', tolerance=1.5, group=None, ax=None, show=False)
 dascore.Spool.viz.coverage	(spool, dim='time', *, tolerance=1.5, group=None, color=None, ax=None, show=False)
@@ -233,6 +233,7 @@ dascore.examples.dispersion_event	()
 dascore.examples.diverse_spool	()
 dascore.examples.example_event_1	()
 dascore.examples.example_event_2	()
+dascore.examples.experimental_note	constant
 dascore.examples.febus_dss_mine_1	()
 dascore.examples.febus_dss_mine_2	()
 dascore.examples.forge_dss	()
@@ -293,6 +294,7 @@ dascore.exceptions.PatchConversionError	class
 dascore.exceptions.PatchCoordinateError	class
 dascore.exceptions.PatchDataError	class
 dascore.exceptions.PatchError	class
+dascore.exceptions.PickleFormatDisabledError	class
 dascore.exceptions.RemoteCacheError	class
 dascore.exceptions.TimeError	class
 dascore.exceptions.TimeOverflowError	class
@@ -354,7 +356,7 @@ dascore.scan	(path, file_format=None, file_version=None, ext=None, timestamp=Non
 dascore.scan_payloads	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', snap=None)
 dascore.scan_to_df	(path, file_format=None, file_version=None, ext=None, timestamp=None, progress='standard', exclude=('history',))
 dascore.set_config	(new_config=None, **kwargs)
-dascore.spool	(obj, **kwargs)
+dascore.spool	(obj=None, *, index=None, **kwargs)
 dascore.to_datetime64	(obj)
 dascore.to_float	(obj)
 dascore.to_timedelta64	(obj)
