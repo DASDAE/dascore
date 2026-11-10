@@ -11,11 +11,9 @@ from upath import UPath
 import dascore as dc
 from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.rsf import RSFV1
-from dascore.io.rsf.utils import KINDS, read_header
+from dascore.io.rsf.utils import KINDS, SEPARATOR, read_header
 from dascore.io.utils import step_from_interval
 from dascore.warnings import DASCoreWarning
-
-SEPARATOR = b"\x0c\x0c\x04"
 
 
 def _parse_header(text):
@@ -45,63 +43,67 @@ def fractional_patch():
     return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
 
+@pytest.fixture(scope="module")
+def f4_patch(random_patch):
+    """The random patch with float32 data."""
+    return random_patch.new(data=random_patch.data.astype(np.float32))
+
+
 class TestRsfWrite:
     """Tests for the header and binary the RSF writer produces."""
 
-    def test_combined(self, random_patch, tmp_path):
+    @pytest.mark.parametrize(
+        "get_path",
+        [
+            lambda tmp_path: tmp_path / "hdrdata.rsf",
+            lambda _: UPath("memory://dascore/test_hdrdata_remote.rsf"),
+        ],
+        ids=["local", "memory"],
+    )
+    def test_combined(self, get_path, f4_patch, tmp_path):
         """Combined output is header, blank line, separator, then the samples."""
-        path = tmp_path / "test_hdrdata.rsf"
-        with pytest.warns(DASCoreWarning, match="float32"):
-            RSFV1().write(dc.spool(random_patch), path)
+        path = get_path(tmp_path)
+        RSFV1().write(dc.spool(f4_patch), path)
         hdr, head, binary = _split_combined(path.read_bytes())
         assert head.endswith(b'in="stdin"\n\n')
-        assert binary == random_patch.data.astype(np.float32).tobytes("F")
+        assert binary == f4_patch.data.tobytes("F")
         assert hdr["data_format"] == "native_float"
         assert hdr["esize"] == "4"
         assert hdr["in"] == "stdin"
-        for i, dim in enumerate(random_patch.dims, start=1):
-            assert hdr[f"n{i}"] == str(random_patch.shape[i - 1])
+        for i, dim in enumerate(f4_patch.dims, start=1):
+            assert hdr[f"n{i}"] == str(f4_patch.shape[i - 1])
             assert hdr[f"label{i}"] == dim
         assert (hdr["d1"], hdr["unit1"]) == ("1.0", "m")
         assert (hdr["o2"], hdr["d2"], hdr["unit2"]) == ("0.0", "0.004", "s")
 
-    def test_split(self, random_patch, tmp_path):
+    def test_split(self, f4_patch, tmp_path):
         """Split output names its binary by absolute path and ends in a newline."""
         path = tmp_path / "test_hdr.rsf"
         datapath = tmp_path / "binary/test_data.rsf"
-        with pytest.warns(DASCoreWarning, match="float32"):
-            RSFV1().write(dc.spool(random_patch), path, data_path=datapath)
+        RSFV1().write(dc.spool(f4_patch), path, data_path=datapath)
         text = path.read_text()
         assert text.endswith("\n")
         assert SEPARATOR.decode() not in text
         binary_path = Path(_parse_header(text)["in"])
         assert binary_path.is_absolute()
         assert binary_path == Path(f"{datapath}@").resolve()
-        expected = random_patch.data.astype(np.float32).tobytes("F")
-        assert binary_path.read_bytes() == expected
+        assert binary_path.read_bytes() == f4_patch.data.tobytes("F")
 
-    def test_split_relative(self, random_patch, tmp_path, monkeypatch):
+    def test_split_relative(self, f4_patch, tmp_path, monkeypatch):
         """A relative data_path is written as an absolute in= path."""
         monkeypatch.chdir(tmp_path)
-        patch = random_patch.new(data=random_patch.data.astype(np.float32))
-        RSFV1().write(patch, "out/hdr.rsf", data_path="bin/data.rsf")
+        RSFV1().write(f4_patch, "out/hdr.rsf", data_path="bin/data.rsf")
         hdr = _parse_header((tmp_path / "out/hdr.rsf").read_text())
         assert hdr["in"] == str((tmp_path / "bin/data.rsf@").resolve())
 
-    def test_unitless_dim(self, fractional_patch, tmp_path):
-        """A dimension without units is written without a unit key."""
-        path = tmp_path / "unitless.rsf"
+    def test_unitless_exact_step(self, fractional_patch, tmp_path):
+        """A unitless dim has no unit key; a fractional step is written exactly."""
+        path = tmp_path / "fractional.rsf"
         RSFV1().write(fractional_patch, path)
-        hdr, _, _ = _split_combined(path.read_bytes())
+        hdr, _, binary = _split_combined(path.read_bytes())
         assert hdr["label1"] == "distance"
         assert "unit1" not in hdr
         assert hdr["unit2"] == "s"
-
-    def test_exact_step(self, fractional_patch, tmp_path):
-        """A fractional step is written exactly, not rounded to whole ns."""
-        path = tmp_path / "exact.rsf"
-        RSFV1().write(fractional_patch, path)
-        hdr, _, binary = _split_combined(path.read_bytes())
         assert hdr["d2"] == "0.0009765625"
         assert float(hdr["d2"]) == 1 / 1024
         assert binary == fractional_patch.data.tobytes("F")
@@ -138,24 +140,14 @@ class TestRsfWrite:
         """The writer registers the rsf extension, not its letters."""
         assert tuple(RSFV1.preferred_extensions) == ("rsf",)
 
-    def test_write_remote_memory_combined(self, random_patch):
-        """Combined RSF output should support remote UPath destinations."""
-        path = UPath("memory://dascore/test_hdrdata_remote.rsf")
-        with pytest.warns(DASCoreWarning, match="float32"):
-            RSFV1().write(dc.spool(random_patch), path)
-        _, _, binary = _split_combined(path.read_bytes())
-        assert binary == random_patch.data.astype(np.float32).tobytes("F")
-
-    def test_write_remote_memory_split(self, random_patch):
+    def test_write_remote_memory_split(self, f4_patch):
         """Split RSF output should support remote UPath destinations."""
         path = UPath("memory://dascore/test_hdr_remote.rsf")
         datapath = UPath("memory://dascore/binary/test_data_remote.rsf")
-        with pytest.warns(DASCoreWarning, match="float32"):
-            RSFV1().write(dc.spool(random_patch), path, data_path=datapath)
+        RSFV1().write(dc.spool(f4_patch), path, data_path=datapath)
         assert _parse_header(path.read_text())["in"] == f"{datapath}@"
         newdatapath = UPath(f"{datapath}@")
-        expected = random_patch.data.astype(np.float32).tobytes("F")
-        assert newdatapath.read_bytes() == expected
+        assert newdatapath.read_bytes() == f4_patch.data.tobytes("F")
 
     def test_split_quoted_path(self, fractional_patch):
         """A data_path the header cannot quote is refused before any write."""
@@ -170,11 +162,10 @@ class TestRsfWrite:
 class TestRsfEpoch:
     """Tests for the absolute time the writer stores on a datetime time axis."""
 
-    def test_header_text(self, random_patch, tmp_path):
+    def test_header_text(self, f4_patch, tmp_path):
         """The time axis carries epoch, relative o and d, unit s, and starttime."""
         path = tmp_path / "epoch.rsf"
-        patch = random_patch.new(data=random_patch.data.astype(np.float32))
-        RSFV1().write(patch, path)
+        RSFV1().write(f4_patch, path)
         _, head, _ = _split_combined(path.read_bytes())
         lines = head.decode().splitlines()
         start = lines.index("n2=2000")
@@ -199,16 +190,16 @@ class TestRsfEpoch:
         assert np.datetime64(hdr["epoch2"][:-1], "ns") == start
 
     def test_relative_time(self, fractional_patch, tmp_path):
-        """A time axis of offsets keeps its start in o, with no epoch."""
-        time = dc.get_coord(
-            start=np.timedelta64(5, "s"), step=np.timedelta64(4, "ms"), shape=(8,)
-        )
+        """A time axis of offsets keeps its start in o, with no epoch, as offsets."""
+        start, step = dc.to_timedelta64(5.0), dc.to_timedelta64(0.004)
+        time = dc.get_coord(start=start, step=step, shape=(8,))
         path = tmp_path / "relative.rsf"
         RSFV1().write(fractional_patch.update_coords(time=time), path)
         hdr, _, _ = _split_combined(path.read_bytes())
         assert (hdr["o2"], hdr["d2"], hdr["unit2"]) == ("5.0", "0.004", "s")
         assert "epoch2" not in hdr
         assert "starttime" not in hdr
+        assert dc.spool(path)[0].get_coord("time") == time
 
     def test_nat_start(self, fractional_patch, tmp_path):
         """A time axis whose start is NaT is refused, not written as an epoch."""
@@ -232,12 +223,6 @@ def _write_rsf(path, lines, data=None, data_path=None):
     raw = text.encode() + b"\n" + SEPARATOR
     path.write_bytes(raw if data is None else raw + data.tobytes("F"))
     return path
-
-
-@pytest.fixture(scope="module")
-def f4_patch(random_patch):
-    """The random patch with float32 data."""
-    return random_patch.new(data=random_patch.data.astype(np.float32))
 
 
 class TestRsfRead:
@@ -265,13 +250,6 @@ class TestRsfRead:
         time = dc.get_coord(start=start, step=step if rate > 0 else -step, shape=(8,))
         RSFV1().write(fractional_patch.update_coords(time=time), tmp_path / "e.rsf")
         assert dc.spool(tmp_path / "e.rsf")[0].get_coord("time") == time
-
-    def test_relative_time(self, fractional_patch, tmp_path):
-        """A time axis of offsets reads back as offsets, not as seconds or dates."""
-        start, step = dc.to_timedelta64(5.0), dc.to_timedelta64(0.004)
-        time = dc.get_coord(start=start, step=step, shape=(8,))
-        RSFV1().write(fractional_patch.update_coords(time=time), tmp_path / "r.rsf")
-        assert dc.spool(tmp_path / "r.rsf")[0].get_coord("time") == time
 
     def test_window_and_overwrite(self, f4_patch, tmp_path):
         """A window reads alone and survives a later write to the same file."""
@@ -331,6 +309,14 @@ class TestRsfRead:
         time = dc.spool(path)[0].get_coord("time")
         assert time.min() == np.datetime64("1970-01-01T00:00:01.5", "ns")
         assert time.step == np.timedelta64(500, "ms")
+
+    def test_free_text_units(self, tmp_path):
+        """A unit pint cannot parse, such as hz, is dropped; the axis still reads."""
+        lines = ["n1=2", "n2=3", 'unit1="hz"', 'unit2="Hz"', 'in="stdin"']
+        path = _write_rsf(tmp_path / "u.rsf", lines, np.zeros(6, np.float32))
+        patch = dc.spool(path)[0]
+        assert patch.get_coord("axis1").units is None
+        assert patch.get_coord("axis2").units == dc.get_quantity("Hz")
 
     def test_axis_names(self, tmp_path):
         """An unbound n<i> is one sample; a repeated label falls back to axis<i>."""

@@ -12,7 +12,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import step_from_interval
+from dascore.io.utils import parse_units, step_from_interval
 
 # The bytes between a packed header and its binary.
 SEPARATOR = b"\x0c\x0c\x04"
@@ -94,7 +94,8 @@ def get_coords(hdr) -> dict:
     for i, n in enumerate(_get_shape(hdr), start=1):
         label = hdr.get(f"label{i}")
         name = label if label and label not in coords else f"axis{i}"
-        units = hdr.get(f"unit{i}") or None
+        # free text such as unit1="hz" or "Various" is not units; drop it
+        units = parse_units(hdr.get(f"unit{i}") or None)
         origin, step = hdr.get(f"o{i}", "0"), float(hdr.get(f"d{i}", "1"))
         if (epoch := hdr.get(f"epoch{i}")) is not None:
             zero = np.datetime64(epoch.removesuffix("Z"), "ns")
@@ -109,8 +110,7 @@ def get_coords(hdr) -> dict:
             continue
         start = zero + np.timedelta64(round(Fraction(origin) * 10**9), "ns")
         # the writer stores the double nearest an exact step such as 1/3000
-        exact = step_from_interval(abs(step))
-        exact = -exact if step < 0 else exact
+        exact = step_from_interval(abs(step)) * (-1 if step < 0 else 1)
         coords[name] = dc.get_coord(start=start, step=exact, shape=(n,))
     return coords
 

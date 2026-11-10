@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# import segyio
 import json
 import warnings
 
@@ -24,6 +23,7 @@ from .utils import (
     HISTORY,
     PREFIX,
     RESERVED,
+    SEPARATOR,
     get_attrs,
     get_coords,
     get_dtype,
@@ -31,7 +31,6 @@ from .utils import (
     read_header,
 )
 
-RSFKEYS_WRITE = ("in", "esize", "data_format")
 # A history entry is prose: no token in it may bind, and no control
 # character (a newline, NUL, or the separator bytes) may end its line.
 _HISTORY_TEXT = str.maketrans({"=": ":"} | {chr(x): " " for x in range(32)})
@@ -258,18 +257,13 @@ class RSFV1(FiberIO):
             hdr_info.append(f'in="{in_path}"')
             with outdatapath.open("wb") as fi:
                 fi.write(data_bytes)
-            out = ("\n".join(hdr_info) + "\n").encode()
-            outpath = _coerce_output_path(resource)
-            outpath.parent.mkdir(exist_ok=True, parents=True)
-            with outpath.open("wb") as fi:
-                fi.write(out)
+            tail = ()
         else:
             # outputs header and binary combined (.rsf with both hdr and bin)
-            hdr_info.append('in="stdin"\n\n')
-            out = "\n".join(hdr_info).encode()
-            outpath = _coerce_output_path(resource)
-            outpath.parent.mkdir(exist_ok=True, parents=True)
-            with outpath.open("wb") as fi:
-                fi.write(out)
-                fi.write(b"\x0c\x0c\x04")
-                fi.write(data_bytes)
+            hdr_info.append('in="stdin"')
+            # chunks, so the samples are not copied into one bytes object
+            tail = (b"\n" + SEPARATOR, data_bytes)
+        outpath = _coerce_output_path(resource)
+        outpath.parent.mkdir(exist_ok=True, parents=True)
+        with outpath.open("wb") as fi:
+            fi.writelines([("\n".join(hdr_info) + "\n").encode(), *tail])
