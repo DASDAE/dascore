@@ -716,22 +716,21 @@ def map_axis_coords(dist_map, names) -> list[tuple[str, str]]:
     return out
 
 
-# Coordinate names the map once read, each with the name it reads now.
-# Only refused, never read: a patch which still carries one would otherwise
-# be read on plain `distance`, which on an enriched patch is the optical
-# distance, and every channel would move by the map's offset, silently.
-FORMER_AXIS_COORDS = {"instrument_distance": "acquisition_distance"}
-
-
 def former_axis_coord(dist_map, names) -> str | None:
-    """Return why carrying a former name of one of the map's axes is refused."""
-    for old, new in FORMER_AXIS_COORDS.items():
-        if old in names and new in dist_map.axes:
-            return (
-                f"carries {old!r}, the former name of {new!r}; rename it "
-                f"(patch.rename_coords({old}={new!r})) so the distance_map "
-                "can read it"
-            )
+    """
+    Return why carrying `instrument_distance`, the map's former axis, is refused.
+
+    Only refused, never read: a patch which still carries it would otherwise
+    be read on plain `distance`, which on an enriched patch is the optical
+    distance, and every channel would move by the map's offset, silently.
+    """
+    if "instrument_distance" in names and "acquisition_distance" in dist_map.axes:
+        return (
+            "carries 'instrument_distance', the former name of "
+            "'acquisition_distance'; rename it (patch.rename_coords("
+            "instrument_distance='acquisition_distance')) so the distance_map "
+            "can read it"
+        )
     return None
 
 

@@ -1183,13 +1183,8 @@ class TestEnrichContracts:
         Beside an optical distance coordinate, it would otherwise be read
         on that one instead, moving every channel by the map's offset.
         """
-        acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
-        one_point = acq.new(
-            distance_map=DistanceMap(
-                acquisition_distance=(0.0,), optical_distance=(100.0,)
-            ),
-        )
-        inv = inventory.replace(acq, one_point)
+        dist_map = DistanceMap(acquisition_distance=(0.0,), optical_distance=(100.0,))
+        inv = _replace_acquisition(inventory, distance_map=dist_map)
         old = patch.rename_coords(distance="instrument_distance")
         values = old.get_array("instrument_distance") + 100.0
         old = old.update_coords(distance=("instrument_distance", values))
@@ -1198,31 +1193,22 @@ class TestEnrichContracts:
 
     def test_former_coordinate_name_ignored_by_channel_map(self, patch, inventory):
         """A map read on channels never read the former name, so it is no issue."""
-        acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
-        channel_map = acq.new(
+        inv = _replace_acquisition(
+            inventory,
             spatial_interval=1.0,
             distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
         )
-        inv = inventory.replace(acq, channel_map)
         channels = np.arange(len(patch.get_coord("distance")))
         old = patch.rename_coords(distance="instrument_distance")
         old = old.update_coords(channel=("instrument_distance", channels))
         out = old.enrich(inv, attrs=False, coords=("x",))
         assert "x" in out.coords.coord_map
 
-    def test_reserved_acquisition_distance_group_raises(self, inventory):
-        """acquisition_distance is a coordinate a label group cannot shadow."""
-        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        label = OpticalPathLabel(
-            distance_min=100.0, distance_max=200.0, group="acquisition_distance"
-        )
-        with pytest.raises(InvalidInventoryError, match="reserved name"):
-            path.new(labels=(label,)).check()
-
-    def test_reserved_label_group_raises(self, inventory):
+    @pytest.mark.parametrize("group", ["time", "acquisition_distance"])
+    def test_reserved_label_group_raises(self, inventory, group):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        label = OpticalPathLabel(distance_min=100.0, distance_max=200.0, group="time")
+        label = OpticalPathLabel(distance_min=100.0, distance_max=200.0, group=group)
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             path.new(labels=(label,)).check()
 

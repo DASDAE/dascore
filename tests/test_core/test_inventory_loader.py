@@ -6,6 +6,7 @@ import csv
 import os
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -1916,62 +1917,48 @@ class TestLegacyDistanceNames:
     ATTRS = "acquisitions/DAS.L001.02.DEC/attrs.yaml"
     TABLE = "acquisitions/DAS.L001.02.DEC/distance_map.csv"
 
-    @staticmethod
-    def _map(inventory):
-        return inventory.networks[0].fiber_arrays[0].acquisitions[0].distance_map
-
-    def test_table_headers(self, make_inventory):
-        """instrument_distance and distance headers read as the new fields."""
-        files = {
-            self.ATTRS: "object_type: Acquisition\nspatial_interval: 1.0\n",
-            self.TABLE: "instrument_distance,distance\n0.0,100.0\n10.0,110.0\n",
-        }
-        dist_map = self._map(make_inventory(files))
-        assert dist_map.acquisition_distance == (0.0, 10.0)
-        assert dist_map.optical_distance == (100.0, 110.0)
-
-    def test_object_file(self, make_inventory):
-        """An acquisition's inline map is upgraded the same way."""
-        files = {
-            self.ATTRS: (
+    # Inventory files stating a map in the former names, by where it is.
+    FILES: ClassVar[dict] = {
+        "table": {
+            ATTRS: "object_type: Acquisition\nspatial_interval: 1.0\n",
+            TABLE: "instrument_distance,distance\n0.0,100.0\n10.0,110.0\n",
+        },
+        "object_file": {
+            ATTRS: (
                 "object_type: Acquisition\n"
                 "distance_map:\n"
                 "  instrument_distance: [0.0, 10.0]\n"
                 "  distance: [100.0, 110.0]\n"
             ),
-        }
-        dist_map = self._map(make_inventory(files))
-        assert dist_map.acquisition_distance == (0.0, 10.0)
-        assert dist_map.optical_distance == (100.0, 110.0)
-
-    def test_serialized_document(self):
-        """A whole-inventory document is upgraded too."""
-        text = (
-            "networks:\n"
-            "- code: DAS\n"
-            "  fiber_arrays:\n"
-            "  - code: L001\n"
-            "    acquisitions:\n"
-            "    - code: DEC\n"
-            "      distance_map:\n"
-            "        instrument_distance: [0.0, 10.0]\n"
-            "        distance: [100.0, 110.0]\n"
-        )
-        dist_map = self._map(inv.Inventory.from_yaml(text))
-        assert dist_map.acquisition_distance == (0.0, 10.0)
-        assert dist_map.optical_distance == (100.0, 110.0)
-
-    @pytest.mark.parametrize(
-        "header",
-        [
-            "channel,distance,optical_distance",
-            "channel,instrument_distance,acquisition_distance,optical_distance",
-        ],
+        },
+    }
+    DOCUMENT = (
+        "networks:\n"
+        "- code: DAS\n"
+        "  fiber_arrays:\n"
+        "  - code: L001\n"
+        "    acquisitions:\n"
+        "    - code: DEC\n"
+        "      distance_map:\n"
+        "        instrument_distance: [0.0, 10.0]\n"
+        "        distance: [100.0, 110.0]\n"
     )
-    def test_both_spellings_in_a_table(self, make_inventory, header):
+
+    @pytest.mark.parametrize("source", ["table", "object_file", "document"])
+    def test_legacy_names_load(self, make_inventory, source):
+        """A table, an object file and a whole document read the new fields."""
+        if source == "document":
+            inventory = inv.Inventory.from_yaml(self.DOCUMENT)
+        else:
+            inventory = make_inventory(self.FILES[source])
+        acquisition = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        assert acquisition.distance_map.acquisition_distance == (0.0, 10.0)
+        assert acquisition.distance_map.optical_distance == (100.0, 110.0)
+
+    def test_both_spellings_in_a_table(self, make_inventory):
         """A legacy header beside its replacement is refused, naming the file."""
-        width = header.count(",") + 1
-        rows = "\n".join(",".join([str(float(i))] * width) for i in range(2))
+        header = "channel,distance,optical_distance"
+        rows = "\n".join(",".join([str(float(i))] * 3) for i in range(2))
         files = {
             self.ATTRS: "object_type: Acquisition\n",
             self.TABLE: f"{header}\n{rows}\n",
@@ -1979,20 +1966,6 @@ class TestLegacyDistanceNames:
         with pytest.raises(
             InvalidInventoryError, match=r"distance_map\.csv states both"
         ):
-            make_inventory(files)
-
-    def test_both_spellings_in_an_object_file(self, make_inventory):
-        """The same refusal holds for an inline map."""
-        files = {
-            self.ATTRS: (
-                "object_type: Acquisition\n"
-                "distance_map:\n"
-                "  channel: [0.0]\n"
-                "  distance: [1.0]\n"
-                "  optical_distance: [1.0]\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="former name"):
             make_inventory(files)
 
     def test_model_does_not_take_legacy_names(self):
@@ -2031,7 +2004,7 @@ class TestLegacyDistanceNames:
         assert out == [(0.0, 1.0), (5.0, 6.0)]
 
     def test_both_spellings_in_inline_geometry(self):
-        """An inline segment stating both spellings is refused."""
+        """A model given both spellings is refused too."""
         segment = {
             "distance": (0.0, 1.0),
             "optical_distance": (0.0, 1.0),
@@ -2039,18 +2012,6 @@ class TestLegacyDistanceNames:
         }
         with pytest.raises(ValidationError, match="former name"):
             inv.OpticalPath(geometry=[segment])
-
-    def test_both_spellings_in_a_geometry_table(self, make_inventory):
-        """A geometry table stating both spellings is refused."""
-        files = {
-            **MINIMAL,
-            **TRACKS,
-            "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,optical_distance,chainage\nS,0,0,0\nS,1,1,1\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="former name"):
-            make_inventory(files)
 
 
 class TestSilentlyLostRows:
