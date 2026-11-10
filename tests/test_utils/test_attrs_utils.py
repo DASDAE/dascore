@@ -142,6 +142,8 @@ class TestMergeAttrs:
             start_channel: int
             flags: tuple[int, ...] = (1, 2)
             meta: dict = Field(default_factory=lambda: {"a": 1})
+            # PatchAttrs refuses a coords payload outright.
+            coords: dict = Field(default_factory=lambda: {"time": 1})
 
         pa1 = _Attrs(**dict(random_patch.attrs), start_channel=0)
         pa2 = _Attrs(**dict(random_patch.attrs), start_channel=1)
@@ -149,7 +151,7 @@ class TestMergeAttrs:
             warnings.simplefilter("error")
             out = combine_patch_attrs([pa1, pa2], conflict="drop")
         assert type(out) is PatchAttrs
-        assert "flags" not in dict(out)
+        assert "flags" not in dict(out) and "coords" not in dict(out)
         # Kept only where PatchAttrs holds a dict as an extra.
         assert out.get("meta", {"a": 1}) == {"a": 1}
 
