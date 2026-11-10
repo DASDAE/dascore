@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 
 import numpy as np
 import pytest
+from pydantic import Field
 
 from dascore import PatchAttrs
 from dascore.exceptions import ParameterError
@@ -129,6 +131,27 @@ class TestMergeAttrs:
         agree = combine_patch_attrs([pa1, pa1], conflict="drop")
         assert isinstance(agree, _Attrs)
         assert agree.start_channel == 0
+
+    def test_drop_required_keeps_only_what_extras_hold(self, random_patch):
+        """
+        A subclass field no extra attr holds, such as a tuple or a dict, is
+        left out of the fallback rather than warning or failing.
+        """
+
+        class _Attrs(PatchAttrs):
+            start_channel: int
+            flags: tuple[int, ...] = (1, 2)
+            meta: dict = Field(default_factory=lambda: {"a": 1})
+
+        pa1 = _Attrs(**dict(random_patch.attrs), start_channel=0)
+        pa2 = _Attrs(**dict(random_patch.attrs), start_channel=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = combine_patch_attrs([pa1, pa2], conflict="drop")
+        assert type(out) is PatchAttrs
+        assert "flags" not in dict(out)
+        # Kept only where PatchAttrs holds a dict as an extra.
+        assert out.get("meta", {"a": 1}) == {"a": 1}
 
     def test_keep_disjoint_values(self, random_patch):
         """Ensure disjoint values can be kept."""

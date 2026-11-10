@@ -21,7 +21,7 @@ from dascore.utils.identity import (
     result_ids,
     try_operation_id,
 )
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, suppress_warnings
 
 # Ids never decide a merge; the second pair are what the first were called
 # in attrs pickled before they were renamed.
@@ -162,43 +162,28 @@ def combine_patch_attrs(
     # A field the subclass requires can be dropped as a conflict, and the
     # subclass cannot then hold the result; the base class carries the rest
     # of its fields as extras, including the defaults the dump left out
-    # (but not those of fields the merge removed).
-    if _lacks_required(cls, out):
-        defaults = _subclass_defaults(cls)
-        kept = {i: v for i, v in defaults.items() if i not in removed}
-        out = {**kept, **out}
+    # (but not those of fields the merge removed, nor values no extra holds).
+    fields = cls.model_fields
+    if any(f.is_required() and n not in out for n, f in fields.items()):
+        kept = {
+            n: f.get_default(call_default_factory=True)
+            for n, f in fields.items()
+            if not f.is_required() and n not in removed
+        }
+        out = {n: v for n, v in {**kept, **out}.items() if _base_holds(n, v)}
         cls = dc.PatchAttrs
     return cls(**out)
 
 
-def _lacks_required(cls: type[dc.PatchAttrs], values: Mapping[str, Any]) -> bool:
-    """True if a required field of the attrs class is missing from values."""
-    return any(
-        name not in values
-        for name, field in cls.model_fields.items()
-        if field.is_required()
-    )
-
-
-def _subclass_defaults(cls: type[dc.PatchAttrs]) -> dict[str, Any]:
-    """
-    The defaults an attrs subclass holds which PatchAttrs would not.
-
-    These are the defaults of the fields it adds, and of the base fields
-    whose default it overrides, such as a fixed data_type.
-    """
-    base = dc.PatchAttrs.model_fields
-    out = {}
-    for name, field in cls.model_fields.items():
-        if field.is_required():
-            continue
-        default = field.get_default(call_default_factory=True)
-        if name in base and _values_equal(
-            default, base[name].get_default(call_default_factory=True)
-        ):
-            continue
-        out[name] = default
-    return out
+def _base_holds(name: str, value: Any) -> bool:
+    """True if PatchAttrs keeps a subclass's field as a field or an extra."""
+    if name in dc.PatchAttrs.model_fields:
+        return True
+    with suppress_warnings():
+        try:
+            return name in dict(dc.PatchAttrs(**{name: value}))
+        except ValueError:
+            return False
 
 
 def _is_missing(value) -> bool:
