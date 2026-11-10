@@ -611,7 +611,7 @@ def _held_coord(origin: Mapping, low, high, name: str):
         if isinstance(grid, tuple) and ticks and not grid_fits(grid, start, stop):
             return None  # an origin already trimmed has no grid to go by
         coord = _sized_coord(origin, name)
-    if coord is None or pd.isnull(low) or pd.isnull(high):
+    if coord is None or coord._partial or pd.isnull(low) or pd.isnull(high):
         return None
     return coord.select((_as_numpy(low), _as_numpy(high)))[0]
 
