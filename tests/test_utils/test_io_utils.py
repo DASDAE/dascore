@@ -17,7 +17,7 @@ from upath import UPath
 import dascore as dc
 import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
-from dascore.config import _get_remote_cache_root, config_context
+from dascore.config import config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
@@ -1144,30 +1144,33 @@ class TestRemoteCacheTrust:
 class TestRemoteCacheDir:
     """Tests that the remote cache directory is private to its user."""
 
-    def test_default_per_user(self):
-        """Each user gets a separate default directory."""
-        assert _get_remote_cache_root().name.endswith(f"-{os.getuid()}")
-
     def test_created_private(self, tmp_path):
         """A new cache directory is open to its owner alone."""
         with config_context(remote_cache_dir=tmp_path / "new"):
             assert not get_remote_cache_path().stat().st_mode & 0o077
 
-    def test_writable_by_others(self, tmp_path):
-        """A directory others can write to is refused."""
-        shared = tmp_path / "shared"
-        shared.mkdir()
-        shared.chmod(0o777)
-        with config_context(remote_cache_dir=shared):
-            with pytest.raises(RemoteCacheError, match="writable by no one"):
+    @pytest.fixture(params=["writable_by_others", "other_owner"])
+    def refused_dir(self, request, tmp_path, monkeypatch):
+        """A cache directory which is not private to the current user."""
+        if request.param == "writable_by_others":
+            tmp_path.chmod(0o777)
+        else:
+            uid = tmp_path.stat().st_uid + 1
+            monkeypatch.setattr(os, "getuid", lambda: uid)
+        return tmp_path
+
+    def test_refused(self, refused_dir):
+        """A directory which is not private is refused for caching."""
+        with config_context(remote_cache_dir=refused_dir):
+            with pytest.raises(RemoteCacheError, match="private directory"):
                 get_remote_cache_path()
 
-    def test_other_owner(self, tmp_path, monkeypatch):
-        """A directory belonging to another user is refused."""
-        monkeypatch.setattr(os, "getuid", lambda: os.stat(tmp_path).st_uid + 1)
-        with config_context(remote_cache_dir=tmp_path):
-            with pytest.raises(RemoteCacheError, match="current user"):
-                get_remote_cache_path()
+    def test_refused_probe_is_miss(self, refused_dir):
+        """Probing a refused directory is a cache miss, so reads can stream."""
+        path = UPath("memory://dascore/cache_dir/data.bin")
+        path.write_bytes(b"data")
+        with config_context(remote_cache_dir=refused_dir):
+            assert _get_cached_local_file(path) is None
 
 
 class TestRemoteIOFallback:

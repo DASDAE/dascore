@@ -37,20 +37,9 @@ _REMOTE_KEY_LOCKS: dict[tuple[str, Path], RLock] = {}
 # The fields of fsspec's info() which change when a remote file is
 # rewritten, across the http, s3, gcs, azure and memory backends.
 _VERSION_FIELDS = (
-    "size",
-    "ETag",
-    "etag",
-    "Content-MD5",
-    "md5Hash",
-    "Digest",
-    "generation",
-    "Last-Modified",
-    "LastModified",
-    "last_modified",
-    "mtime",
-    "updated",
-    "created",
-)
+    "size ETag etag Content-MD5 md5Hash Digest generation Last-Modified "
+    "LastModified last_modified mtime updated created"
+).split()
 # Cached copies already found current this session, so each is checked
 # against its remote once rather than on every open.
 _CURRENT_COPIES: set[Path] = set()
@@ -233,13 +222,7 @@ def get_remote_cache_scope() -> str:
 
 
 def get_remote_cache_path() -> Path:
-    """
-    Return the on-disk directory used for remote file caching.
-
-    A cached copy is read in place of the remote file, so the directory
-    must belong to the current user and be writable by no one else; a
-    new one is created that way.
-    """
+    """Return the remote-cache directory, created and checked as private."""
     path = get_config().remote_cache_dir
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     _check_private(path)
@@ -371,7 +354,7 @@ def clear_remote_file_cache():
     else is reading remote files.
     """
     shutil.rmtree(get_remote_cache_path(), ignore_errors=True)
-    get_remote_cache_path().mkdir(parents=True, exist_ok=True)
+    get_remote_cache_path()
     _REMOTE_RESOURCE_CACHE.clear()
     _CURRENT_COPIES.clear()
     _materialize_remote_file.cache_clear()
@@ -448,7 +431,6 @@ def _download_to_cache(resource: UPath, local_path: Path) -> None:
         _warn_remote_cache_download(resource, local_path)
     # Asked before the download, so a rewrite during it reads as stale later.
     version = _remote_version(resource)
-    _CURRENT_COPIES.discard(local_path)
     _download_remote_file(resource, local_path)
     _version_path(local_path).write_text(json.dumps(version))
     _CURRENT_COPIES.add(local_path)
@@ -474,7 +456,10 @@ def _get_cached_local_file(resource) -> Path | None:
     if not is_pathlike(resource) or is_local_path(resource):
         return None
     remote = coerce_to_upath(resource)
-    cache_root = _normalize_cache_root(get_remote_cache_path())
+    try:
+        cache_root = _normalize_cache_root(get_remote_cache_path())
+    except RemoteCacheError:  # A refused directory is a miss, so reads stream.
+        return None
     remote_id = normalize_remote_id(remote)
     local_path = _remote_cache_local_path(remote_id, cache_root, remote)
     if local_path.exists() and _is_current(remote, local_path):

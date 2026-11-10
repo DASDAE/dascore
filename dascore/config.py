@@ -181,10 +181,7 @@ class DascoreConfig(BaseModel):
     # Remote IO and local materialization policy.
     remote_cache_dir: Path = Field(
         default_factory=_get_remote_cache_root,
-        description=(
-            "Temporary directory used to materialize remote files locally. "
-            "It must belong to the current user and be writable by no one else."
-        ),
+        description="Private directory used to materialize remote files locally.",
     )
     allow_remote_cache: bool = Field(
         default=True,
