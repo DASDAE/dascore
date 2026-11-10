@@ -204,8 +204,8 @@ class _AutoPatchRoller(_NumpyPatchRoller):
             and not (self.center and self.step > 1)
             # pandas works in float64: wider types lose precision, int64 and
             # float16 sums stop overflowing as NumPy's do. float32 stays, as
-            # the common DAS dtype; only values near its limit (where NumPy
-            # overflows) differ.
+            # the common DAS dtype; only values past ~1e19, whose squares
+            # overflow NumPy's float32 std, differ.
             and ((kind == "f" and size in (4, 8)) or (kind in "iu" and size <= 4))
             # and treats infinities as missing
             and not (kind == "f" and np.isinf(data).any())
