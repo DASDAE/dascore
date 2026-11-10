@@ -12,6 +12,7 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.contract import Pointwise
 from dascore.lazy.recipe import Recipe
 from dascore.utils.identity import operation_context
+from dascore.utils.patch import stack_patches
 
 from .conftest import lazy_patch
 
@@ -206,6 +207,20 @@ class TestOtherReaders:
         with pytest.raises(LazyOperationError, match="stack"):
             dc.spool([eager, lazy]).stack(dim_vary="time")
         assert not recipe_loads
+
+    def test_stack_passes_once(self, random_patch):
+        """Stacking goes over its patches once; a spool reads on each pass."""
+
+        class Counted(list):
+            passes = 0
+
+            def __iter__(self):
+                type(self).passes += 1
+                return super().__iter__()
+
+        patches = Counted([random_patch, random_patch])
+        stack_patches(patches, dim_vary="time")
+        assert Counted.passes == 1
 
     def test_specplot(self, recipe_loads):
         """A lazy patch with a Fourier coordinate is not drawn either."""

@@ -1858,9 +1858,11 @@ def stack_patches(
     >>> stacked_patch = spool.stack(dim_vary='time')
     """
     # check the dims/coords of first patch (considered to be standard for rest)
-    # Adding arrays reads them, and zeros_like reads one for its shape.
-    refuse_lazy("stack", (x.data for x in patches))
     init_patch = patches[0]
+    # Adding arrays reads them, and zeros_like reads one for its shape. Each
+    # patch is checked as the loop meets it: a spool reads its files anew
+    # on every pass, so a pass made only to check would read them twice.
+    refuse_lazy("stack", (init_patch.data,))
     stack_arr = np.zeros_like(init_patch.data)
 
     # ensure dim_vary is in dims
@@ -1870,6 +1872,7 @@ def stack_patches(
 
     kept = []
     for p in patches:
+        refuse_lazy("stack", (p.data,))
         # check kind, then dimensions and coords of patch against init_patch.
         # Kind is compared strictly: a collection is being combined, so a
         # missing value is a value.
