@@ -12,7 +12,28 @@ This note explains how DASCore interprets a few important attributes, and its in
 
 `PatchAttrs` rejects nested coordinate payloads and does not own `dims` or coordinate-summary fields such as `time_min` and `distance_step`. Keeping these values out of attrs prevents coordinate edits from leaving stale duplicated metadata. Use coordinate APIs for structural changes and `Patch.summary.get_coord_summary(...)` or `PatchSummary.flat_dump(...)` for summary/index views.
 
-An extra attr holds one value. A one-value array, list or tuple, which is how HDF5 and netCDF store a scalar, is read as that scalar; one holding several values is skipped with a warning, because an array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension.
+## What an attr holds
+
+An extra attr (one the class does not declare) holds a single value of one of these types, and no other:
+
+| Kind | Types |
+|---|---|
+| Text | `str` |
+| Number | `bool`, `int`, `float`, numpy bool, integer and float scalars |
+| Missing | `None` |
+| Time | `np.datetime64`, `np.timedelta64`, of any unit |
+| Units | a scalar `Quantity`, a `Unit` |
+
+`PatchAttrs` enforces this when attrs are built, so every patch's attrs fit it and every format writer only needs to store these types:
+
+- Python and pandas times become numpy times (`dc.to_datetime64`, `dc.to_timedelta64`). A time-zone-aware time is refused; convert it to UTC first.
+- Bytes become text, as HDF5 text reads back, and `pd.NA` becomes `None`.
+- A one-value array, list or tuple, which is how HDF5 and netCDF store a scalar, is read as that scalar. One holding several values is skipped with a warning.
+- Anything else, including a dict, set, array quantity or other object, is refused with an error naming the attr.
+
+Attrs carry no arrays or mappings, and that is a design decision, not a gap to fill. Attrs are indexed, selected on, hashed into IDs and compared when patches combine, which only works for scalars; and a richer type would need a codec in every format. So no format reader or writer should add support for a dict, array or other value in attrs. An array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension. Structured metadata belongs in fields of a [format-specific subclass](#format-specific-subclasses), or in an [inventory](`dascore.Inventory`).
+
+`history`, a declared field rather than an extra attr, is the one sequence: a tuple of strings.
 
 ## `data_type`
 

@@ -9,7 +9,6 @@ specified in dastor's ``docs/arrow-patch-format.md``.
 
 from __future__ import annotations
 
-import datetime
 import functools
 import json
 import math
@@ -28,7 +27,6 @@ from dascore.io.utils import should_snap, stored_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.units import Quantity, Unit, get_quantity, get_quantity_str, get_unit
 from dascore.utils.misc import optional_import
-from dascore.utils.time import to_datetime64, to_timedelta64
 
 METADATA_KEY = b"dascore:patch"
 FORMAT_NAME = "dascore.patch"
@@ -99,11 +97,6 @@ def _encode(value):
     """Encode a value as JSON, tagging what JSON can't hold exactly."""
     if isinstance(value, np.ndarray | np.generic):  # before float: float64 is one
         return _encode_numpy(value)
-    if isinstance(value, datetime.datetime | datetime.timedelta):
-        if getattr(value, "tzinfo", None) is not None:
-            raise _UnsupportedError(f"time-zone-aware times can't be stored: {value}")
-        is_delta = isinstance(value, datetime.timedelta)
-        return _encode((to_timedelta64 if is_delta else to_datetime64)(value))
     if isinstance(value, float) and not math.isfinite(value):
         return {"$float": str(value)}
     if value is None or isinstance(value, bool | int | float | str):

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import datetime
 import warnings
 from collections.abc import Mapping
 from typing import Annotated, Any, Self, cast
 
 import numpy as np
+import pandas as pd
 from pydantic import (
     AfterValidator,
     ConfigDict,
@@ -21,14 +23,66 @@ from dascore.constants import (
     max_lens,
 )
 from dascore.models import DascoreBaseModel, UnitQuantity
+from dascore.units import Quantity, Unit
 from dascore.utils.misc import (
     to_str,
     unbyte,
     validate_acquisition_key,
 )
+from dascore.utils.time import to_datetime64, to_timedelta64
 
 str_validator = PlainValidator(to_str)
 _ARRAYS = frozenset({np.ndarray, list, tuple})
+# The types an extra attr may hold; see the PatchAttrs note.
+_SIMPLE = (
+    str,
+    bool,
+    int,
+    float,
+    np.bool_,
+    np.number,
+    np.datetime64,
+    np.timedelta64,
+    Unit,
+)
+
+
+def _simple_attr_value(name: str, value: Any) -> Any:
+    """
+    Return an extra attr's value as one of the types an attr holds.
+
+    Python and pandas times become numpy times, bytes become text and
+    `pd.NA` becomes None; any other type is refused.
+    """
+    if value is None or isinstance(value, _SIMPLE):
+        return value
+    if value is pd.NA:  # how a table spells unknown
+        return None
+    if isinstance(value, datetime.datetime | datetime.date):  # pd.NaT included
+        if getattr(value, "tzinfo", None) is not None:
+            msg = (
+                f"The attr {name!r} holds a time-zone-aware time, {value}. "
+                "Convert it to UTC and drop the zone first."
+            )
+            raise ValueError(msg)
+        return to_datetime64(value)
+    if isinstance(value, datetime.timedelta):  # pd.Timedelta included
+        return to_timedelta64(value)
+    if isinstance(value, bytes | np.bytes_):  # how binary files spell text
+        try:
+            return unbyte(value)
+        except UnicodeDecodeError:
+            pass
+    elif isinstance(value, Quantity) and np.ndim(value.magnitude) == 0:
+        return value
+    msg = (
+        f"The attr {name!r} holds a {type(value).__module__}."
+        f"{type(value).__qualname__}, but an attr holds a string, number, "
+        "bool, None, time, timedelta, or a scalar quantity or unit. Store "
+        "an array on a coordinate, and structured metadata as fields of a "
+        "PatchAttrs subclass."
+    )
+    raise ValueError(msg)
 
 
 class PatchAttrs(DascoreBaseModel):
@@ -38,6 +92,11 @@ class PatchAttrs(DascoreBaseModel):
     `PatchAttrs` stores non-structural metadata. Nested coordinate payloads in
     `coords` are rejected, while flat coord-like keys are treated like any
     other extra attrs. `dims` is ignored during normalization.
+
+    An extra attr holds one string, number, bool, None, numpy time or
+    timedelta, or scalar quantity or unit. Python and pandas times become
+    numpy times and bytes become text; a dict, array or other object is
+    refused. See the PatchAttrs note for why attrs hold no arrays or maps.
 
     The default attributes are:
     ```{python}
@@ -119,19 +178,20 @@ class PatchAttrs(DascoreBaseModel):
         for old, new in (("patch_id", "origin_id"), ("processing_id", "data_id")):
             if value := data.pop(old, None):
                 data.setdefault(new, value)
-        # An extra attr holds one value; an array belongs on a coordinate.
-        for name in [k for k, v in data.items() if type(v) in _ARRAYS]:
-            if name in cls.model_fields:
-                continue
-            # As objects, so a ragged list counts rather than raising and a
-            # python scalar stays one.
+        # An extra attr holds one value of a simple type; an array belongs
+        # on a coordinate.
+        for name in [k for k in data if k not in cls.model_fields]:
             value = data.pop(name)
-            value = np.asarray(value, None if type(value) is np.ndarray else object)
-            if value.size == 1:  # how HDF5 and netCDF spell a scalar
-                data[name] = unbyte(value.reshape(-1)[0])
-            else:
-                msg = f"Skipped attr {name!r}: an array belongs on a coordinate."
-                warnings.warn(msg, UserWarning, stacklevel=2)
+            if type(value) in _ARRAYS:
+                # As objects, so a ragged list counts rather than raising and
+                # a python scalar stays one.
+                value = np.asarray(value, None if type(value) is np.ndarray else object)
+                if value.size != 1:
+                    msg = f"Skipped attr {name!r}: an array belongs on a coordinate."
+                    warnings.warn(msg, UserWarning, stacklevel=2)
+                    continue
+                value = value.reshape(-1)[0]  # how HDF5 and netCDF spell a scalar
+            data[name] = _simple_attr_value(name, value)
         return data
 
     def __getitem__(self, item):

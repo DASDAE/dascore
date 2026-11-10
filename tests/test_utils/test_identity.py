@@ -1029,7 +1029,7 @@ class TestMutationBoundary:
     def test_a_refused_parameter_warns_and_randomizes(self, patch):
         """The call still works; its result is simply not named."""
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
-            out = patch.update_attrs(odd=object())
+            out = patch.update_attrs(odd=np.datetime64("3000-01-02"))
         assert out.attrs.data_id not in ("", patch.attrs.data_id)
 
     def test_a_repeated_refusal_warns_once(self, patch):
@@ -1063,7 +1063,7 @@ class TestMutationBoundary:
         @dc.patch_function()
         def odd(patch):
             """Set an attr no id can be derived for."""
-            return patch.update_attrs(odd=object())
+            return patch.update_attrs(odd=np.datetime64("3000-01-02"))
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", DASCoreWarning)
@@ -1602,19 +1602,6 @@ class TestPinId:
         assert pinned.attrs.origin_id == done.attrs.origin_id
         assert pinned.attrs.history == done.attrs.history
         assert pinned.equals(done)
-
-    def test_an_attr_holding_a_model(self, patch):
-        """The id describes the attrs as they are, so they are not rewritten."""
-        summary = patch.coords.coord_map["time"].to_summary()
-        with_model = dc.Patch(
-            data=patch.data,
-            coords=patch.coords,
-            dims=patch.dims,
-            attrs={"probe": summary},
-        )
-        pinned = with_model.pin_id()
-        assert isinstance(pinned.attrs.probe, type(summary))
-        assert pinned.attrs.data_id == strong_data_id(pinned)
 
     def test_metadata_has_no_pin(self, patch):
         """Metadata holds no data, so there is nothing to pin."""

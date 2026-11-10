@@ -84,6 +84,8 @@ Declare vendor fields on a format-specific `PatchAttrs` subclass when they need 
 
 Optional numeric vendor attrs should not default to NaN or infinity.
 
+An attr holds one scalar of the types listed in [what an attr holds](`dascore/docs/notes/patch_attrs.qmd`), and `PatchAttrs` refuses anything else. A reader turns a vendor array into a coordinate and a vendor structure into declared fields; a writer stores only those types, and adds no support for dicts or arrays in attrs.
+
 ## Read array windows
 
 [`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) accepts sample indices on the resource's original grid. The shared reader resolves coordinate selections first and calls this hook with a contiguous bounding window. It then applies any residual noncontiguous selection to the returned array.

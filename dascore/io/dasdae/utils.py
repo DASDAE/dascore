@@ -38,6 +38,7 @@ from dascore.io.dasdae._compat import (
 )
 from dascore.io.utils import resolve_keyed_source, should_snap, stored_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
+from dascore.units import Quantity, Unit, get_quantity, get_quantity_str, get_unit
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -566,15 +567,23 @@ def _encode_history_attr(value):
 
 
 def _encode_attr_value(key, value):
-    """Encode a patch attr into an HDF5-attr-safe representation."""
+    """
+    Encode a patch attr into an HDF5-attr-safe representation.
+
+    Returns the stored value and the type tag `_decode_attr_value` reads it
+    back with, or None where HDF5 holds the value as it is. A numpy time is
+    its integer count, tagged with its dtype (unit and multiplier
+    included); a quantity or unit is its text.
+    """
     if key == "history":
         return _encode_history_attr(value)
     if value is None:
         return "", "none"
-    if isinstance(value, np.datetime64):
-        return to_int(value), "datetime64[ns]"
-    if isinstance(value, np.timedelta64):
-        return to_int(value), "timedelta64[ns]"
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return int(value.view(np.int64)), value.dtype.name
+    if isinstance(value, Quantity | Unit):
+        tag = "quantity" if isinstance(value, Quantity) else "unit"
+        return get_quantity_str(value), tag
     return value, None
 
 
@@ -585,10 +594,12 @@ def _decode_attr_value(attrs, key, value, legacy: bool = True):
         return _decode_legacy_attr_value(attrs, key, value, legacy=legacy)
     if attr_type == "none":
         return None
-    if attr_type == "datetime64[ns]":
-        return np.asarray([value], dtype="int64").view("datetime64[ns]")[0]
-    if attr_type == "timedelta64[ns]":
-        return np.asarray([value], dtype="int64").view("timedelta64[ns]")[0]
+    if attr_type.startswith(("datetime64", "timedelta64")):
+        return np.asarray([value], dtype="int64").view(attr_type)[0]
+    if attr_type == "quantity":
+        return get_quantity(unbyte(value))
+    if attr_type == "unit":
+        return get_unit(unbyte(value))
     if attr_type == "history_json":
         return tuple(json.loads(unbyte(value) or "[]"))
     return value

@@ -15,7 +15,13 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
-from dascore.io.dasdae.utils import _read_coord, _save_coord
+from dascore.io.dasdae.utils import (
+    _ATTR_TYPE_PREFIX,
+    _decode_attr_value,
+    _encode_attr_value,
+    _read_coord,
+    _save_coord,
+)
 from tests.conftest import join_patches
 
 T0 = np.datetime64("2020-01-01T00:00:00")
@@ -276,3 +282,63 @@ class TestMultiRunRoundTrip:
         out = read.get_coord("time")
         assert out == coord and out.step_exact == coord.step_exact
         np.testing.assert_array_equal(read.data, patch.data)
+
+
+# One attr of each kind the codec tags.
+_ATTR_VALUES = {
+    "millis": np.timedelta64(5, "ms"),
+    "seconds": np.datetime64("2020-01-01T00:00:01", "s"),
+    "no_time": np.datetime64("NaT"),
+    "no_ns_time": np.datetime64("NaT", "ns"),
+    "length": dc.get_quantity("5 m"),
+    "ratio": dc.get_quantity(0.5),
+    "warmth": 2.5 * dc.get_quantity("degC"),
+    "unit": dc.get_quantity("m/s").units,
+}
+
+
+class TestAttrRoundTrip:
+    """Times keep their unit, and quantities and units their units."""
+
+    @pytest.fixture(scope="class")
+    def attr_path(self, tmp_path_factory):
+        """A file holding one attr of each kind."""
+        path = tmp_path_factory.mktemp("attrs") / "attrs.h5"
+        patch = dc.get_example_patch().update_attrs(**_ATTR_VALUES)
+        return dc.write(patch, path, "dasdae")
+
+    @staticmethod
+    def _assert_same(out, expected):
+        """Equal, NaT included, and of the same type and dtype."""
+        assert type(out) is type(expected)
+        if isinstance(expected, np.datetime64 | np.timedelta64):
+            assert out.dtype == expected.dtype
+            assert np.isnat(out) == np.isnat(expected)
+            assert np.isnat(expected) or out == expected
+        else:
+            assert out == expected
+
+    @pytest.mark.parametrize("name", sorted(_ATTR_VALUES))
+    def test_read_and_scan(self, attr_path, name):
+        """Read and scan give each value back as it was written."""
+        for attrs in (dc.read(attr_path)[0].attrs, dc.scan(attr_path)[0].attrs):
+            self._assert_same(attrs[name], _ATTR_VALUES[name])
+
+    def test_spool(self, attr_path):
+        """A patch loaded through a spool holds the same values."""
+        attrs = dc.spool(attr_path)[0].attrs
+        for name, expected in _ATTR_VALUES.items():
+            self._assert_same(attrs[name], expected)
+
+    def test_multiplied_unit(self):
+        """A unit such as 10ms keeps its multiplier."""
+        value = np.timedelta64(3, "10ms")
+        encoded, tag = _encode_attr_value("gap", value)
+        out = _decode_attr_value({f"{_ATTR_TYPE_PREFIX}gap": tag}, "gap", encoded)
+        self._assert_same(out, value)
+
+    def test_old_nanosecond_tags_read(self):
+        """Files written before a time kept its unit tag it as nanoseconds."""
+        tags = {f"{_ATTR_TYPE_PREFIX}t": "datetime64[ns]"}
+        out = _decode_attr_value(tags, "t", 1_000_000_000)
+        self._assert_same(out, np.datetime64(1, "s").astype("datetime64[ns]"))

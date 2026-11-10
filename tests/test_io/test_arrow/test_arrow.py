@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import datetime
 import json
+from typing import Any
 
 import numpy as np
-import pandas as pd
 import pytest
 
 import dascore as dc
@@ -193,29 +192,18 @@ class TestRoundTrip:
             "unit": get_quantity("m/s").units,
             "millis": np.timedelta64(5, "ms"),
             "gap": np.timedelta64(3, "10ms"),
-            "nested": {"a": {"b": [1, 2.0]}},
             "f32": np.float32(0.1),
             "f64": np.float64(0.1),
             "flag": np.bool_(True),
             "big": 2**60,
         }
-        patch = dc.get_example_patch().update_attrs(
-            when=datetime.datetime(2020, 1, 1, 1, 2, 3),
-            nanos=pd.Timestamp("2020-01-01T00:00:00.123456789"),
-            span=pd.Timedelta(3, "s"),
-            missing=float("nan"),
-            **values,
-        )
+        patch = dc.get_example_patch().update_attrs(missing=float("nan"), **values)
         new = _roundtrip(patch, tmp_path).attrs.model_dump()
         old = patch.attrs.model_dump()
         for name in values:
             assert new[name] == old[name], name
             assert type(new[name]) is type(old[name]), name
         assert np.isnan(new["missing"])
-        # Python and pandas times come back as numpy times at their precision.
-        assert new["span"] == np.timedelta64(3_000_000_000, "ns")
-        assert new["when"] == np.datetime64("2020-01-01T01:02:03", "us")
-        assert new["nanos"] == np.datetime64("2020-01-01T00:00:00.123456789", "ns")
 
     def test_attrs_class(self, tmp_path):
         """A registered attrs subclass comes back as itself."""
@@ -242,6 +230,12 @@ class TestRoundTrip:
         assert dc.read(path)[0].get_coord("time").jittered
 
 
+class _OddAttrs(dc.PatchAttrs):
+    """Declare a field which may hold anything, as a plugin's format may."""
+
+    thing: Any = None
+
+
 class TestRefuses:
     """What the format can't hold is refused when written."""
 
@@ -251,10 +245,7 @@ class TestRefuses:
             _plain(np.ones((2, 2), dtype=complex)),
             _plain(np.array([[T0]]).astype("M8[D]")),
             dc.get_example_patch().update_coords(c=("distance", np.ones(300) * 1j)),
-            dc.get_example_patch().update_attrs(when=pd.Timestamp("2020", tz="UTC")),
-            dc.get_example_patch().update_attrs(thing={(1, 2): "pair"}),
-            dc.get_example_patch().update_attrs(thing=object()),
-            dc.get_example_patch().update_attrs(raw=b"xy"),
+            dc.get_example_patch().update(attrs=_OddAttrs(thing=object())),
             _plain(np.ma.masked_array(np.ones((2, 2)), mask=[[0, 1], [0, 0]])),
             dc.get_example_patch().isel(distance=0, time=0),
         ],
@@ -262,10 +253,7 @@ class TestRefuses:
             "complex",
             "days",
             "complex-coord",
-            "tz-aware",
-            "tuple-key",
-            "object",
-            "bytes",
+            "odd-field",
             "masked",
             "no-dims",
         ],

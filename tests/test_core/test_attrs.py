@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -403,3 +405,88 @@ class TestExtrasHoldOneValue:
         out = patch.update_attrs(tag="new")
         assert isinstance(out.attrs, Flagged)
         assert out.attrs.flags == (True, False)
+
+
+# One value of each type an extra attr holds.
+_KEPT = {
+    "text": "a",
+    "flag": True,
+    "count": 3,
+    "ratio": 0.5,
+    "small": np.float32(0.1),
+    "np_flag": np.bool_(False),
+    "nothing": None,
+    "when": np.datetime64("2020-01-01T00:00:00.123", "ms"),
+    "gap": np.timedelta64(3, "10ms"),
+    "length": dc.get_quantity("5 m"),
+    "unit": dc.get_quantity("m/s").units,
+}
+
+
+class TestExtrasHoldSimpleTypes:
+    """An extra attr holds a scalar of a few types, and nothing else."""
+
+    @pytest.mark.parametrize("name", sorted(_KEPT))
+    def test_kept_as_is(self, name):
+        """A value of an allowed type is kept, type and all."""
+        value = _KEPT[name]
+        out = dc.PatchAttrs(**{name: value})[name]
+        assert type(out) is type(value) and (out is value or out == value)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (
+                pd.Timestamp("2020-01-01T00:00:00.1"),
+                np.datetime64("2020-01-01T00:00:00.1"),
+            ),
+            (datetime.datetime(2020, 1, 1, 1), np.datetime64("2020-01-01T01")),
+            (datetime.date(2020, 1, 2), np.datetime64("2020-01-02")),
+            (pd.Timedelta(3, "s"), np.timedelta64(3, "s")),
+            (datetime.timedelta(milliseconds=5), np.timedelta64(5, "ms")),
+            (b"xy", "xy"),
+            (np.bytes_(b"xy"), "xy"),
+        ],
+    )
+    def test_converted(self, value, expected):
+        """Python and pandas times become numpy times, and bytes text."""
+        out = dc.PatchAttrs(value=value).value
+        assert type(out) is type(expected) and out == expected
+
+    def test_missing_values_stay_missing(self):
+        """`pd.NaT` is a missing time, and `pd.NA` a missing anything."""
+        attrs = dc.PatchAttrs(when=pd.NaT, other=pd.NA)
+        assert isinstance(attrs.when, np.datetime64) and np.isnat(attrs.when)
+        assert attrs.other is None
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"a": 1},
+            {1, 2},
+            object(),
+            dc.get_quantity("m") * np.arange(3),
+            b"\xff",
+            [{"a": 1}],
+        ],
+        ids=["dict", "set", "object", "array-quantity", "binary", "boxed-dict"],
+    )
+    def test_refused(self, value):
+        """Anything else is refused, and the error names the attr."""
+        with pytest.raises(ValueError, match="'odd' holds"):
+            dc.PatchAttrs(odd=value)
+
+    def test_a_zoned_time_is_refused(self):
+        """Converting it would drop its zone, so it is refused."""
+        with pytest.raises(ValueError, match="time-zone-aware"):
+            dc.PatchAttrs(when=pd.Timestamp("2020", tz="UTC"))
+
+    def test_declared_fields_are_not_checked(self):
+        """A subclass decides what its own fields hold."""
+
+        class Mapped(dc.PatchAttrs):
+            """Declare a mapping, as a plugin's format may."""
+
+            table: dict | None = None
+
+        assert Mapped(table={"a": 1}).table == {"a": 1}
