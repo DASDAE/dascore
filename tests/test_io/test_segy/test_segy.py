@@ -157,8 +157,19 @@ class TestSegyWrite:
             segy.write(random_spool, tmp_path)
 
 
-def _write_segy_file(path, endian="big", revision=(1, 0), date=(2016, 22, 1, 23, 59)):
-    """Write a 3-trace SEG-Y file with the given byte order, revision bytes and date."""
+def _write_segy_file(
+    path,
+    endian="big",
+    revision=(1, 0),
+    date=(2016, 22, 1, 23, 59),
+    text=None,
+    ascii_text=False,
+):
+    """
+    Write a 3-trace SEG-Y file with the given byte order, revision bytes, date
+    and textual header lines (a dict of line number to content), stored as
+    EBCDIC or ASCII.
+    """
     segyio = pytest.importorskip("segyio")
     data = np.arange(3 * 20, dtype=np.float32).reshape(3, 20)
     spec = segyio.spec()
@@ -171,10 +182,16 @@ def _write_segy_file(path, endian="big", revision=(1, 0), date=(2016, 22, 1, 23,
     header.update({field.TRACE_SAMPLE_INTERVAL: 1000, field.TRACE_SAMPLE_COUNT: 20})
     with segyio.create(str(path), spec) as fi:
         fi.bin.update({segyio.BinField.Interval: 1000})
+        if text:
+            fi.text[0] = segyio.tools.create_text_header(text)
         for num, trace in enumerate(data):
             fi.header[num] = header
             fi.trace[num] = trace
     with path.open("r+b") as fi:
+        if ascii_text:
+            ebcdic = fi.read(3200)
+            fi.seek(0)
+            fi.write(ebcdic.decode("cp037").encode("latin-1"))
         fi.seek(3500)
         fi.write(bytes(revision))
     return path, data.T
@@ -195,6 +212,48 @@ class TestSegyCompatibility:
         path, data = _write_segy_file(tmp_path / "rev.sgy", revision=(1, 80))
         assert dc.get_format(path) == ("segy", "1.0")
         assert np.array_equal(dc.spool(path)[0].data, data)
+
+    @pytest.mark.parametrize(
+        "line, stamp",
+        [
+            # As quoted in #1311.
+            (13, "UTC File Time stamp: 2019/04/24 22:24:24.846233 (UTC)"),
+            # As in Booth et al. (2020), doi:10.6084/m9.figshare.12410390.
+            (11, "UTC Time stamp: 2019/04/24 22:24:24.846233 (UTC)"),
+        ],
+    )
+    @pytest.mark.parametrize("ascii_text", [False, True])
+    def test_text_header_sub_second_start(self, tmp_path, line, stamp, ascii_text):
+        """
+        Silixa's textual header time stamp, in EBCDIC or ASCII, gives the start
+        below the second.
+        """
+        date, text = (2019, 114, 22, 24, 24), {line: stamp}
+        path, _ = _write_segy_file(
+            tmp_path / "s.sgy", date=date, text=text, ascii_text=ascii_text
+        )
+        time = dc.spool(path)[0].get_coord("time")
+        assert time.min() == np.datetime64("2019-04-24T22:24:24.846233")
+        assert time.step == np.timedelta64(1, "ms")
+
+    @pytest.mark.parametrize(
+        "stamp", ["2019/04/24 22:24:25.846233", "2019/13/24 22:24:24.846233"]
+    )
+    def test_text_header_other_second_ignored(self, tmp_path, stamp):
+        """A stamp outside the trace header's second, or not a date, is ignored."""
+        text = {13: f"UTC File Time stamp: {stamp} (UTC)"}
+        date = (2019, 114, 22, 24, 24)
+        path, _ = _write_segy_file(tmp_path / "silixa.sgy", date=date, text=text)
+        time = dc.spool(path)[0].get_coord("time")
+        assert time.min() == np.datetime64("2019-04-24T22:24:24")
+
+    def test_text_header_without_trace_date(self, tmp_path):
+        """Without a valid trace header date, time stays relative."""
+        text = {13: "UTC File Time stamp: 2019/04/24 22:24:24.846233 (UTC)"}
+        path, _ = _write_segy_file(tmp_path / "s.sgy", date=(0,) * 5, text=text)
+        with pytest.warns(UserWarning, match="not valid"):
+            time = dc.spool(path)[0].get_coord("time")
+        assert time.min() == np.timedelta64(0, "ns")
 
     def test_nonstandard_minor_needs_whole_traces(self, tmp_path):
         """A non-standard revision is only claimed when whole traces fill the file."""
