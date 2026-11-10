@@ -72,7 +72,7 @@ with config_context(allow_remote_cache_for_metadata=True):
 
 Warnings occur on the first materialization when `warn_on_remote_cache=True`, making an unexpected local download visible without repeating the message for every file.
 
-Once per session, a cached copy is checked against the remote's size and version fields (such as `ETag`) and downloaded again if the remote changed; offline, the copy is kept.
+Once per session, a cached copy is checked against the remote's size and version fields (such as `ETag`) and downloaded again if the remote changed. Offline, the copy is kept; a remote which is gone or forbidden is never read from the cache.
 
 # Reads and spools
 

@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from tempfile import gettempdir
 from threading import Lock
 from typing import Literal
 
@@ -21,10 +20,9 @@ def _get_cache_root() -> Path:
 
 
 def _get_remote_cache_root() -> Path:
-    """Return the current user's temp directory used for remote-file caching."""
-    # A shared temp dir such as Linux /tmp is open to every user.
-    user = f"-{os.getuid()}" if hasattr(os, "getuid") else ""
-    return Path(gettempdir()) / f"dascore-remote-cache{user}"
+    """Return the per-user directory used for remote-file caching."""
+    # Not the shared temp dir, where another user could claim the name first.
+    return _get_cache_root() / "remote_cache"
 
 
 class DascoreConfig(BaseModel):

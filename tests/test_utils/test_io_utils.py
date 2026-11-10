@@ -8,6 +8,7 @@ import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
+from tempfile import gettempdir
 
 import h5py
 import pytest
@@ -17,7 +18,7 @@ from upath import UPath
 import dascore as dc
 import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
-from dascore.config import config_context
+from dascore.config import _get_remote_cache_root, config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
@@ -1117,25 +1118,58 @@ class TestRemoteCacheTrust:
         assert _get_cached_local_file(remote).read_bytes() == b"old"
         assert ensure_local_file(remote).read_bytes() == b"old"
 
-    def test_unreachable(self, remote, monkeypatch):
-        """A remote which cannot be asked keeps the copy it has."""
+    @staticmethod
+    def _info_raises(monkeypatch, remote, error):
+        """Make the remote's info() raise, as a new session would see it."""
         _new_session()
 
-        def _offline(*_args, **_kwargs):
-            raise OSError("offline")
+        def _raise(*_args, **_kwargs):
+            raise error
 
-        monkeypatch.setattr(type(remote.fs), "info", _offline)
-        assert _get_cached_local_file(remote).read_bytes() == b"old"
+        monkeypatch.setattr(type(remote.fs), "info", _raise)
 
-    def test_planted(self):
-        """A file placed at the cache path by something else is not read."""
-        path = UPath("memory://dascore/cache_trust/planted.bin")
+    @staticmethod
+    def _unrecorded_copy(contents):
+        """Place a copy with no version record, as older DASCore left them."""
+        path = UPath("memory://dascore/cache_trust/unrecorded.bin")
         path.write_bytes(b"real")
         remote_id = remote_io.normalize_remote_id(path)
         cache_root = get_remote_cache_path()
         local = remote_io._remote_cache_local_path(remote_id, cache_root, path)
         local.parent.mkdir(parents=True)
-        local.write_bytes(b"fake")
+        local.write_bytes(contents)
+        return path
+
+    def test_unreachable(self, remote, monkeypatch):
+        """A remote which cannot be asked keeps the copy it has."""
+        self._info_raises(monkeypatch, remote, OSError("offline"))
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+
+    @pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+    def test_gone_or_forbidden(self, remote, monkeypatch, error):
+        """A remote which is gone or forbidden is not read from the cache."""
+        self._info_raises(monkeypatch, remote, error("nope"))
+        assert _get_cached_local_file(remote) is None
+
+    def test_extra_info_fields(self, remote, monkeypatch):
+        """Fields info() reports on only some calls do not force a download."""
+        _new_session()
+        info = type(remote.fs).info
+        monkeypatch.setattr(
+            type(remote.fs), "info", lambda *a, **k: {**info(*a, **k), "ETag": "x"}
+        )
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+
+    def test_unrecorded_same_size_adopted(self, monkeypatch):
+        """A copy from before records were kept is used if its size agrees."""
+        path = self._unrecorded_copy(b"same")
+        monkeypatch.setattr(remote_io, "_download_remote_file", None)
+        with config_context(allow_remote_cache=False):
+            assert ensure_local_file(path).read_bytes() == b"same"
+
+    def test_unrecorded_other_size_refetched(self):
+        """A copy with no record and a different size is downloaded again."""
+        path = self._unrecorded_copy(b"stale copy")
         assert _get_cached_local_file(path) is None
         assert ensure_local_file(path).read_bytes() == b"real"
 
@@ -1144,19 +1178,26 @@ class TestRemoteCacheTrust:
 class TestRemoteCacheDir:
     """Tests that the remote cache directory is private to its user."""
 
+    def test_default_not_in_temp(self):
+        """The default directory is not in the shared temp directory."""
+        assert gettempdir() not in str(_get_remote_cache_root())
+
     def test_created_private(self, tmp_path):
         """A new cache directory is open to its owner alone."""
         with config_context(remote_cache_dir=tmp_path / "new"):
             assert not get_remote_cache_path().stat().st_mode & 0o077
 
-    @pytest.fixture(params=["writable_by_others", "other_owner"])
+    @pytest.fixture(params=["writable_by_others", "other_owner", "symlink"])
     def refused_dir(self, request, tmp_path, monkeypatch):
         """A cache directory which is not private to the current user."""
         if request.param == "writable_by_others":
             tmp_path.chmod(0o777)
-        else:
+        elif request.param == "other_owner":
             uid = tmp_path.stat().st_uid + 1
             monkeypatch.setattr(os, "getuid", lambda: uid)
+        else:
+            (target := tmp_path / "target").mkdir(mode=0o700)
+            (tmp_path := tmp_path / "link").symlink_to(target)
         return tmp_path
 
     def test_refused(self, refused_dir):
