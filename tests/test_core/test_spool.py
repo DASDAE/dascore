@@ -2455,28 +2455,22 @@ class TestAllBlankConcatenate:
         assert len(time) == len(reduced_spool)
         assert np.all(pd.isnull(time))
 
-    def test_reducer_keeping_a_label_is_quiet(self):
-        """dim_reduce='min' leaves a label per patch, which join silently."""
-        spool = dc.get_example_spool()
-        means = spool.map(lambda p: p.mean("time", dim_reduce="min"), progress=None)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", DASCoreWarning)
-            out = dc.spool(means).concatenate(time=None)[0]
-        time = out.get_array("time")
-        assert len(time) == len(spool)
-        assert not np.any(pd.isnull(time))
-
-    def test_one_blank_member_is_quiet(self):
-        """A blank member beside stated ones takes their null, as before."""
+    @pytest.mark.parametrize("blanks", [(), (1,)])
+    def test_stated_labels_are_quiet(self, blanks):
+        """
+        dim_reduce='min' leaves a label per patch, which join silently; a
+        blank member beside stated ones takes their null, as before.
+        """
         spool = dc.get_example_spool()
         patches = [p.mean("time", dim_reduce="min") for p in spool]
-        patches[1] = spool[1].mean("time")  # blank
+        for index in blanks:
+            patches[index] = spool[index].mean("time")
         with warnings.catch_warnings():
             warnings.simplefilter("error", DASCoreWarning)
             out = dc.spool(patches).concatenate(time=None)[0]
         time = out.get_array("time")
         assert len(time) == len(spool)
-        assert pd.isnull(time).sum() == 1
+        assert pd.isnull(time).sum() == len(blanks)
 
     def test_new_dimension_is_quiet(self, reduced_spool):
         """Stacking along a new dimension states that dimension itself."""
