@@ -104,7 +104,7 @@ def _open_segy(path, segyio):
     return segyio.open(str(path), ignore_geometry=True, endian=endian)
 
 
-def _get_coords(fi):
+def _get_coords(fi, path):
     """
     Get coordinates of the segy file.
 
@@ -121,8 +121,11 @@ def _get_coords(fi):
     trace_field = segyio.TraceField
     header_0 = fi.header[0]
 
-    # Get time array from SEGY headers
-    starttime = _get_time_from_text(fi.text[0], _get_time_from_header(header_0))
+    # Get time array from SEGY headers; the textual header is read raw since
+    # segyio decodes it as EBCDIC even when it is stored as ASCII.
+    with open(path, "rb") as fp:
+        text = fp.read(3200)
+    starttime = _get_time_from_text(text, _get_time_from_header(header_0))
     dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
     ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
     time_array = starttime + dt * np.arange(ns)
@@ -173,9 +176,10 @@ def _get_time_from_text(text, start):
 
     Only Silixa's "UTC (File) Time stamp" line is read, and only where it falls
     in the second the trace header gives, so a stamp from another clock or
-    event never moves the start.
+    event never moves the start. The header may be ASCII or EBCDIC.
     """
-    match = _TEXT_START.search(text)
+    texts = (text, text.decode("cp037").encode("latin-1"))
+    match = next(filter(None, map(_TEXT_START.search, texts)), None)
     if match is None or not np.issubdtype(start.dtype, np.datetime64):
         return start
     year, month, day, clock = (group.decode() for group in match.groups())

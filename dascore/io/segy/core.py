@@ -70,7 +70,7 @@ class SegyV1_0(FiberIO):  # noqa
         """
         segyio = optional_import(self._package_name)
         with _open_segy(resource, segyio) as fi:
-            coords = _get_coords(fi)
+            coords = _get_coords(fi, resource)
             attrs = dc.PatchAttrs()
             dtype = str(fi.dtype)
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype)]

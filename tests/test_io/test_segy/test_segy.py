@@ -158,11 +158,17 @@ class TestSegyWrite:
 
 
 def _write_segy_file(
-    path, endian="big", revision=(1, 0), date=(2016, 22, 1, 23, 59), text=None
+    path,
+    endian="big",
+    revision=(1, 0),
+    date=(2016, 22, 1, 23, 59),
+    text=None,
+    ascii_text=False,
 ):
     """
     Write a 3-trace SEG-Y file with the given byte order, revision bytes, date
-    and textual header lines (a dict of line number to content).
+    and textual header lines (a dict of line number to content), stored as
+    EBCDIC or ASCII.
     """
     segyio = pytest.importorskip("segyio")
     data = np.arange(3 * 20, dtype=np.float32).reshape(3, 20)
@@ -182,6 +188,10 @@ def _write_segy_file(
             fi.header[num] = header
             fi.trace[num] = trace
     with path.open("r+b") as fi:
+        if ascii_text:
+            ebcdic = fi.read(3200)
+            fi.seek(0)
+            fi.write(ebcdic.decode("cp037").encode("latin-1"))
         fi.seek(3500)
         fi.write(bytes(revision))
     return path, data.T
@@ -212,10 +222,16 @@ class TestSegyCompatibility:
             (11, "UTC Time stamp: 2019/04/24 22:24:24.846233 (UTC)"),
         ],
     )
-    def test_text_header_sub_second_start(self, tmp_path, line, stamp):
-        """Silixa's textual header time stamp gives the start below the second."""
-        date = (2019, 114, 22, 24, 24)
-        path, _ = _write_segy_file(tmp_path / "s.sgy", date=date, text={line: stamp})
+    @pytest.mark.parametrize("ascii_text", [False, True])
+    def test_text_header_sub_second_start(self, tmp_path, line, stamp, ascii_text):
+        """
+        Silixa's textual header time stamp, in EBCDIC or ASCII, gives the start
+        below the second.
+        """
+        date, text = (2019, 114, 22, 24, 24), {line: stamp}
+        path, _ = _write_segy_file(
+            tmp_path / "s.sgy", date=date, text=text, ascii_text=ascii_text
+        )
         time = dc.spool(path)[0].get_coord("time")
         assert time.min() == np.datetime64("2019-04-24T22:24:24.846233")
         assert time.step == np.timedelta64(1, "ms")
