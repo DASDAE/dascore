@@ -26,7 +26,7 @@ _SAMPLE_BYTES |= {9: 8, 10: 4, 11: 2, 12: 8, 15: 3, 16: 1}
 # "C11 UTC Time stamp: 2019/07/07 12:14:03.902170 (UTC)" (Booth et al., 2020,
 # doi:10.6084/m9.figshare.12410390).
 _TEXT_START = re.compile(
-    rb"UTC (?:File )?Time stamp: *(\d{4})/(\d{2})/(\d{2}) +"
+    rb"UTC (?:File )?Time stamp: *(\d{4}/\d{2}/\d{2}) +"
     rb"(\d{2}:\d{2}:\d{2}\.\d{1,9})"
 )
 
@@ -97,14 +97,16 @@ def _parse_binary_header(fp):
 
 
 def _open_segy(path, segyio):
-    """Open a SEG-Y file with segyio in the byte order its header uses."""
+    """Return the segyio file, in its header's byte order, and raw text header."""
     with open(path, "rb") as fp:
         parsed = _parse_binary_header(fp)
+        fp.seek(0)
+        text = fp.read(3200)  # Raw, as segyio decodes ASCII text as EBCDIC.
     endian = parsed[0] if parsed else "big"
-    return segyio.open(str(path), ignore_geometry=True, endian=endian)
+    return segyio.open(str(path), ignore_geometry=True, endian=endian), text
 
 
-def _get_coords(fi, path):
+def _get_coords(fi, text):
     """
     Get coordinates of the segy file.
 
@@ -121,10 +123,7 @@ def _get_coords(fi, path):
     trace_field = segyio.TraceField
     header_0 = fi.header[0]
 
-    # Get time array from SEGY headers; the textual header is read raw since
-    # segyio decodes it as EBCDIC even when it is stored as ASCII.
-    with open(path, "rb") as fp:
-        text = fp.read(3200)
+    # Get time array from SEGY headers.
     starttime = _get_time_from_text(text, _get_time_from_header(header_0))
     dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
     ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
@@ -178,13 +177,12 @@ def _get_time_from_text(text, start):
     in the second the trace header gives, so a stamp from another clock or
     event never moves the start. The header may be ASCII or EBCDIC.
     """
-    texts = (text, text.decode("cp037").encode("latin-1"))
-    match = next(filter(None, map(_TEXT_START.search, texts)), None)
+    match = _TEXT_START.search(text + text.decode("cp037").encode("latin-1"))
     if match is None or not np.issubdtype(start.dtype, np.datetime64):
         return start
-    year, month, day, clock = (group.decode() for group in match.groups())
+    date, clock = (group.decode().replace("/", "-") for group in match.groups())
     try:
-        stamp = np.datetime64(f"{year}-{month}-{day}T{clock}", "ns")
+        stamp = np.datetime64(f"{date}T{clock}", "ns")
     except ValueError:
         return start
     return stamp if stamp.astype("datetime64[s]") == start else start
