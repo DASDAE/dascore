@@ -131,6 +131,7 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 - **Silent: STFT.** `Patch.stft` places its windows differently, so depending on window length and overlap the output `time` values, and the number of windows, can differ from 0.1.x. The output also carries `{dim}_start` and `{dim}_stop` coordinates giving each window's edges.
 - **Silent: correlation units.** `correlate` reports the square of the input data units.
 - **Silent: taper.** `taper` builds its ramp from `2n + 1` samples rather than `2n`, changing edge values slightly.
+- **Inventory enrichment.** `Patch.enrich` and `Spool.enrich` raise `PatchError` when a value the file header states disagrees with the inventory; 0.1.x kept the header value. Fix the inventory, or pass `enrich(conflict="keep_first")` for the old behaviour (`"keep_last"` lets the inventory win).
 
 ## Units and time
 

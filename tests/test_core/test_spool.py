@@ -74,6 +74,22 @@ def random_spool_len_10():
     return dc.examples.get_example_spool(length=10)
 
 
+class TestMovedAttrQueryHint:
+    """Selecting on a 0.1.x attr that moved into acquisition_key says so."""
+
+    def test_station_points_to_acquisition_key(self, random_spool):
+        """The error names acquisition_key for station, network, instrument_id."""
+        for name in ("station", "network", "instrument_id"):
+            with pytest.raises(InvalidSpoolQueryError, match="acquisition_key"):
+                random_spool.select(**{name: "x"})
+
+    def test_other_unknown_names_get_no_hint(self, random_spool):
+        """An unrelated unknown name keeps the plain message."""
+        with pytest.raises(InvalidSpoolQueryError) as info:
+            random_spool.select(nonsense="x")
+        assert "acquisition_key" not in str(info.value)
+
+
 class TestSpoolBasics:
     """Tests for the basics of the spool."""
 
