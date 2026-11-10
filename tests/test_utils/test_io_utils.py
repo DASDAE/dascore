@@ -605,16 +605,18 @@ class TestGetHandleFromResource:
             get_handle_from_resource(bad_instance, H5Reader)
 
 
+@pytest.fixture
+def clear_remote_cache():
+    """Ensure remote cache state doesn't leak between tests."""
+    with config_context(warn_on_remote_cache=False):
+        clear_remote_file_cache()
+        yield
+        clear_remote_file_cache()
+
+
+@pytest.mark.usefixtures("clear_remote_cache")
 class TestIOResourceManager:
     """Tests for the IO resource manager."""
-
-    @pytest.fixture(autouse=True)
-    def clear_remote_cache(self):
-        """Ensure remote cache state doesn't leak between tests."""
-        with config_context(warn_on_remote_cache=False):
-            clear_remote_file_cache()
-            yield
-            clear_remote_file_cache()
 
     def test_basic_context_manager(self, tmp_path):
         """Ensure it works as a context manager."""
@@ -1085,16 +1087,9 @@ def _new_session():
     remote_io._CURRENT_COPIES.clear()
 
 
+@pytest.mark.usefixtures("clear_remote_cache")
 class TestRemoteCacheTrust:
     """Tests that a cached copy is used only while it matches its remote."""
-
-    @pytest.fixture(autouse=True)
-    def clear_remote_cache(self):
-        """Ensure remote cache state doesn't leak between tests."""
-        with config_context(warn_on_remote_cache=False):
-            clear_remote_file_cache()
-            yield
-            clear_remote_file_cache()
 
     @pytest.fixture
     def remote(self):
@@ -1187,11 +1182,14 @@ class TestRemoteCacheDir:
         with config_context(remote_cache_dir=tmp_path / "new"):
             assert not get_remote_cache_path().stat().st_mode & 0o077
 
-    @pytest.fixture(params=["writable_by_others", "other_owner", "symlink"])
+    @pytest.fixture(
+        params=[0o770, 0o707, "other_owner", "symlink"],
+        ids=["group_writable", "other_writable", "other_owner", "symlink"],
+    )
     def refused_dir(self, request, tmp_path, monkeypatch):
         """A cache directory which is not private to the current user."""
-        if request.param == "writable_by_others":
-            tmp_path.chmod(0o777)
+        if isinstance(request.param, int):  # Writable by the group or others.
+            tmp_path.chmod(request.param)
         elif request.param == "other_owner":
             uid = tmp_path.stat().st_uid + 1
             monkeypatch.setattr(os, "getuid", lambda: uid)
@@ -1199,6 +1197,12 @@ class TestRemoteCacheDir:
             (target := tmp_path / "target").mkdir(mode=0o700)
             (tmp_path := tmp_path / "link").symlink_to(target)
         return tmp_path
+
+    def test_readable_by_others(self, tmp_path):
+        """A directory others can read but not write to is accepted."""
+        tmp_path.chmod(0o755)
+        with config_context(remote_cache_dir=tmp_path):
+            assert get_remote_cache_path() == tmp_path
 
     def test_refused(self, refused_dir):
         """A directory which is not private is refused for caching."""
