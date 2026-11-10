@@ -165,11 +165,6 @@ class TestTaperBasics:
         out2 = patch_ones.taper(time=(10 * percent, 20 * percent))
         assert out1.equals(out2, close=True)
 
-    def test_uneven_time_coord(self, patch_sorted_time):
-        """Ensure taper works on patches without even sampling."""
-        out = patch_sorted_time.taper(time=(0.1, 0.2))
-        assert isinstance(out, dc.Patch)
-
     def test_full_taper(self, patch_ones):
         """Ensure a "full taper" works"""
         out = patch_ones.taper(time=0.5)

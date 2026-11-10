@@ -57,11 +57,8 @@ def _strided_diff(order, data, axes, dx_or_spacing, step):
         slicer = broadcast_for_index(data.ndim, axes[0], current_slice)
         # Need to either double DX or slice the coordinate spacing to
         # account for the fact we are skipping some columns/rows.
-        if is_array(dx_or_space):
-            _dx_or_space = dx_or_space[current_slice]
-        else:
-            _dx_or_space = dx_or_space * step
-        sub = _get_diff(order, data[slicer], axes, [_dx_or_space])
+        dx = dx_or_space[current_slice] if is_array(dx_or_space) else dx_or_space * step
+        sub = _get_diff(order, data[slicer], axes, [dx])
         if new_data is None:
             new_data = np.empty_like(data, dtype=sub.dtype)
         new_data[slicer] = sub

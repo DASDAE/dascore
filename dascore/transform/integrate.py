@@ -51,10 +51,8 @@ def _get_definite_integral(array, dxs_or_vals, axes):
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
         # Numpy 2/3 compat code
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
-        if is_array(dxs_or_val):
-            array = _TRAP_FUNC(array, x=dxs_or_val, axis=ax)[indexer]
-        else:
-            array = _TRAP_FUNC(array, dx=dxs_or_val, axis=ax)[indexer]
+        key = "x" if is_array(dxs_or_val) else "dx"
+        array = _TRAP_FUNC(array, **{key: dxs_or_val}, axis=ax)[indexer]
     return array
 
 
