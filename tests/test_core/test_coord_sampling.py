@@ -14,7 +14,7 @@ import dascore as dc
 import dascore.utils.patch
 from dascore.core.coords import NumericCoord, get_coord
 from dascore.exceptions import CoordError
-from dascore.io.dasdae.utils import _read_coord, _save_coord
+from dascore.io.dasdae.utils import _read_stored_coord, _save_coord
 
 T0 = np.datetime64("2024-01-01T00:00:00", "ns")
 MS = np.timedelta64(1, "ms")
@@ -234,7 +234,7 @@ class TestMicrosecondGrid:
         holed = time[np.r_[0:2000, 2010:4000]]
         with h5py.File(tmp_path / "holed.h5", "w") as h5:
             _save_coord(holed, "_coord_time", h5, compact=True)
-            back = _read_coord(h5["_coord_time"], "time", {}, snap=False)
+            back = _read_stored_coord(h5["_coord_time"], "time", {})
         assert back.step_exact == Fraction(1, 1024) and not back.jittered
         assert back.gapped and np.array_equal(back.values, holed.values)
 
@@ -245,7 +245,7 @@ class TestMicrosecondGrid:
         coord = dc.core.coords.concat_coords(sparse, dense)
         with h5py.File(tmp_path / "strided.h5", "w") as h5:
             _save_coord(coord, "_coord_x", h5, compact=True)
-            back = _read_coord(h5["_coord_x"], "x", {}, snap=False)
+            back = _read_stored_coord(h5["_coord_x"], "x", {})
         assert back.step == 1 and back.gapped
         np.testing.assert_array_equal(back.values, coord.values)
 

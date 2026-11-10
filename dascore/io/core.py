@@ -1286,8 +1286,10 @@ def _reinit_manager_lock():
 # find. Only a format which stores an id sets it; see the DASDAE reader.
 STORED_ORIGIN_ID = "_stored_origin_id"
 # A reader which knows exactly which dimensions it snapped states them in
-# this private attr, comma-separated ("" for none), so the read derives an
-# id only where labels moved. Attrs hold no sequences, hence the text.
+# this private attr, comma-separated ("" for none, and stated even then).
+# The read then derives an id only where labels moved: nothing moved reads
+# the stored thing however `snap` was spelled, and moved labels are an
+# operation on it. Attrs hold no sequences, hence the text.
 SNAPPED_DIMS = "_snapped_dims"
 
 
@@ -1670,13 +1672,12 @@ def _stamp_source_ids(
     for index in indices:
         patch = patches[index]
         origin = patch._source or ArraySource()
-        patch_decode = decode
-        if (snapped := patch.attrs.get(SNAPPED_DIMS, None)) is not None:
-            # The reader says which labels it moved, which is the decode
-            # itself: nothing moved reads the stored thing however `snap`
-            # was spelled, and moved labels are an operation on it.
-            names = tuple(x for x in str(snapped).split(",") if x)
-            patch_decode = read_operation_id(names, default=False)
+        snapped = patch.attrs.get(SNAPPED_DIMS)
+        patch_decode = (
+            decode
+            if snapped is None
+            else read_operation_id(filter(None, snapped.split(",")), default=False)
+        )
         stated = (tuple(patch.shape), size_bytes, mtime_ns)
         if (
             origin.offsets
@@ -1713,9 +1714,10 @@ def _stamp_source_ids(
             # The array the source loads is the one the patch holds, so a
             # window of it builds on that rather than on the whole file.
             origin = replace(origin, origin_id=data_id)
-        for private in (STORED_ORIGIN_ID, SNAPPED_DIMS):
-            if hasattr(attrs, private):
-                attrs = attrs.drop(private)
+        if present := [
+            x for x in (STORED_ORIGIN_ID, SNAPPED_DIMS) if hasattr(attrs, x)
+        ]:
+            attrs = attrs.drop(*present)
         # Expose positional keys after deriving IDs with the original ordinal.
         if len(patches) > 1 and not origin.key:
             origin = replace(origin, key=str(index))

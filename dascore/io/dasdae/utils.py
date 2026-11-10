@@ -396,16 +396,12 @@ def _node_step(attrs):
 
 def _read_coord(node, name, attrs2, snap):
     """
-    Rebuild one coordinate from its node, on a grid if `snap` and jittered.
+    Rebuild one coordinate from its node, on a grid if `snap` and jittered,
+    and say whether snapping moved its labels.
 
     Only labels written jittered snap: holes and irregular labels are what
     was written, not a grid's noise.
     """
-    return _read_coord_noting_snap(node, name, attrs2, snap)[0]
-
-
-def _read_coord_noting_snap(node, name, attrs2, snap):
-    """Rebuild one coordinate, and say whether snapping moved its labels."""
     coord = _read_stored_coord(node, name, attrs2)
     if not (snap and coord.jittered) or coord.gapped:
         return coord, False
@@ -484,7 +480,7 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
             continue
         name = name.removeprefix("_coord_")
         named = name in dims and should_snap(snap, name)
-        coord_dict[name], moved = _read_coord_noting_snap(node, name, attrs2, named)
+        coord_dict[name], moved = _read_coord(node, name, attrs2, named)
         if moved:
             snapped.append(name)
     # associates coordinates with dimensions
@@ -499,7 +495,7 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
     data = patch_group.get("data")
     shape = tuple(data.shape) if data is not None else None
     cm = get_coord_manager(coord_dim_dict, dims=dims, shape=shape)
-    return cm, tuple(sorted(snapped))
+    return cm, snapped
 
 
 def _get_dims(patch_group):
@@ -549,8 +545,6 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
     else:
         coords, snapped = _get_coords(group, dims, {}, snap=snap)
         attr_info = out
-    # Stated even when empty: the framework then derives an id only where
-    # labels moved, rather than from how `snap` was spelled.
     attr_info[SNAPPED_DIMS] = ",".join(snapped)
     # Marked here as it is when the patch is read: an id the file carries
     # is the one which survived the round trip, and `scan` prefers it to
