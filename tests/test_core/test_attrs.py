@@ -31,15 +31,18 @@ def random_attrs(random_patch) -> PatchAttrs:
 class TestCoordinateFieldHints:
     """A miss on a 0.1.x coordinate-derived attr name says where it went."""
 
-    def test_envelope_names_point_to_the_coordinate(self, random_patch):
+    @pytest.mark.parametrize(
+        "name, match",
+        [
+            ("time_min", r"get_coord\('time'\).min\(\)"),
+            ("distance_step", r"get_coord\('distance'\).step"),
+            ("time_units", r"get_coord\('time'\).units"),
+        ],
+    )
+    def test_envelope_names_point_to_the_coordinate(self, random_patch, name, match):
         """time_min, distance_step and friends name get_coord."""
-        attrs = random_patch.attrs
-        with pytest.raises(AttributeError, match=r"get_coord\('time'\).min\(\)"):
-            _ = attrs["time_min"]
-        with pytest.raises(AttributeError, match=r"get_coord\('distance'\).step"):
-            _ = attrs.distance_step
-        with pytest.raises(AttributeError, match=r"get_coord\('time'\).units"):
-            _ = attrs.time_units
+        with pytest.raises(AttributeError, match=match):
+            _ = random_patch.attrs[name]
 
     def test_coords_and_dims_point_to_the_patch(self, random_patch):
         """attrs.coords and attrs.dims moved onto the patch."""

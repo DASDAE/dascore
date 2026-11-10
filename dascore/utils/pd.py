@@ -25,10 +25,6 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 _RowType = TypeVar("_RowType")
 
 
-# 0.1.x attrs whose values now live inside acquisition_key.
-_MOVED_INTO_ACQUISITION_KEY = frozenset({"network", "station", "instrument_id"})
-
-
 def iter_rows(df: pd.DataFrame, row_type: type[_RowType]) -> Iterator[_RowType]:
     """
     Iterate over a dataframe's rows as named tuples of a known shape.
@@ -218,7 +214,7 @@ def resolve_selector_namespaces(
                 f"spool. Attributes: {sorted(known_attrs)}; "
                 f"coordinates: {sorted(known_coords)}."
             )
-            if name in _MOVED_INTO_ACQUISITION_KEY:
+            if name in {"network", "station", "instrument_id"}:  # 0.1.x attrs
                 msg += (
                     f" {name!r} moved into acquisition_key "
                     "(network.fiber_array.location.acquisition); select on "

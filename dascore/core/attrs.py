@@ -31,7 +31,13 @@ str_validator = PlainValidator(to_str)
 _ARRAYS = frozenset({np.ndarray, list, tuple})
 
 
-_COORD_FIELD_SUFFIXES = ("_min", "_max", "_step", "_units")
+# Each 0.1.x coordinate attr suffix, and how its coordinate now gives it.
+_COORD_FIELD_SUFFIXES = {
+    "_min": "min()",
+    "_max": "max()",
+    "_step": "step",
+    "_units": "units",
+}
 
 
 def _coordinate_field_hint(name: str) -> str:
@@ -43,10 +49,8 @@ def _coordinate_field_hint(name: str) -> str:
     """
     if name in ("coords", "dims"):
         return f"Coordinate metadata moved off the attrs: use `patch.{name}`."
-    for suffix in _COORD_FIELD_SUFFIXES:
+    for suffix, call in _COORD_FIELD_SUFFIXES.items():
         if name.endswith(suffix) and (dim := name[: -len(suffix)]):
-            method = suffix.removeprefix("_")
-            call = f"{method}()" if method in ("min", "max") else method
             return (
                 f"Coordinate metadata moved off the attrs: use "
                 f"`patch.get_coord({dim!r}).{call}`."
