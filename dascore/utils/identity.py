@@ -776,6 +776,10 @@ def _to_datetime64(value: datetime.datetime | datetime.date) -> np.datetime64:
     # converting one directly is deprecated and then dropped.
     if isinstance(value, datetime.datetime) and value.tzinfo is not None:
         value = value.astimezone(datetime.UTC).replace(tzinfo=None)
+    # A pandas Timestamp holds nanoseconds, which np.datetime64 reads as a
+    # datetime and floors to microseconds; its own conversion keeps them.
+    if isinstance(value, pd.Timestamp):
+        return value.to_datetime64()
     return np.datetime64(value)
 
 
