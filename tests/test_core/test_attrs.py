@@ -427,10 +427,9 @@ _KEPT = {
 class TestExtrasHoldSimpleTypes:
     """An extra attr holds a scalar of a few types, and nothing else."""
 
-    @pytest.mark.parametrize("name", sorted(_KEPT))
-    def test_kept_as_is(self, name):
+    @pytest.mark.parametrize("name, value", _KEPT.items())
+    def test_kept_as_is(self, name, value):
         """A value of an allowed type is kept, type and all."""
-        value = _KEPT[name]
         out = dc.PatchAttrs(**{name: value})[name]
         assert out is value
 

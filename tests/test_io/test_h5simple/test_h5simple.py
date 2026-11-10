@@ -323,6 +323,14 @@ class TestH5Simple:
         patch = dc.spool(h5simple_with_dim_attrs_path, file_format="h5simple")[0]
         assert isinstance(patch, dc.Patch)
 
+    def test_dims_array_in_attrs(self, h5simple_with_dim_attrs_path, tmp_path):
+        """A 'dims' attr stored as an array of names is used, not skipped."""
+        path = tmp_path / "dims_array.h5"
+        shutil.copy(h5simple_with_dim_attrs_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["dims"] = ["distance", "time"]
+        assert dc.read(path, file_format="h5simple")[0].dims == ("distance", "time")
+
     def test_provenance_in_file_is_not_a_patch_attr(self, h5simple_path, tmp_path):
         """A root attr naming where the bytes live is the spool's, not the patch's.
 

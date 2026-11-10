@@ -322,15 +322,10 @@ class TestAttrRoundTrip:
         else:
             assert out == expected
 
-    @pytest.mark.parametrize("name", sorted(_ATTR_VALUES))
-    def test_read_and_scan(self, attr_path, name):
-        """Read and scan give each value back as it was written."""
-        for attrs in (dc.read(attr_path)[0].attrs, dc.scan(attr_path)[0].attrs):
-            self._assert_same(attrs[name], _ATTR_VALUES[name])
-
-    def test_spool(self, attr_path):
-        """A patch loaded through a spool holds the same values."""
-        attrs = dc.spool(attr_path)[0].attrs
+    @pytest.mark.parametrize("load", [dc.read, dc.scan, dc.spool])
+    def test_loaded_as_written(self, attr_path, load):
+        """Read, scan and spool give each value back as it was written."""
+        attrs = load(attr_path)[0].attrs
         for name, expected in _ATTR_VALUES.items():
             self._assert_same(attrs[name], expected)
 

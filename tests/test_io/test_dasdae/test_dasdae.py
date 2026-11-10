@@ -748,9 +748,10 @@ class TestPyTablesAttrPayloads:
         attrs = pytables_attrs(history=("first", "second"))
         assert attrs["history"] == ("first", "second")
 
-    def test_payload_no_attr_holds_stays_text(self, pytables_attrs):
-        """A pickled dict, which no attr holds, keeps its text."""
-        assert isinstance(pytables_attrs(extra={"a": 1})["extra"], str)
+    @pytest.mark.parametrize("value", [{"a": 1}, [{"a": 1}]])
+    def test_payload_no_attr_holds_stays_text(self, pytables_attrs, value):
+        """A pickled dict, alone or in a one-item list, keeps its text."""
+        assert isinstance(pytables_attrs(extra=value)["extra"], str)
 
     def test_payload_needs_the_opt_in(self, pytables_attrs):
         """Without the opt-in an attr payload stays the text it was."""

@@ -36,7 +36,10 @@ def _get_attrs_coords_and_data(h5, snap):
     # only scan used to drop them, so scan and read disagreed.
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
     attr_names = set(attrs) - skip
-    attr_dict = drop_unheld_attrs({x: unbyte(attrs[x]) for x in attr_names})
+    attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
+    # Taken before filtering, which would skip a dims array as a coordinate.
+    dims = attr_dict.pop("dims", None)
+    attr_dict = drop_unheld_attrs(attr_dict)
     # Some files describe their units in prose ("same as input DAS data");
     # keep that text, but leave the patch without units rather than fail.
     units = attr_dict.get("data_units")
@@ -45,8 +48,7 @@ def _get_attrs_coords_and_data(h5, snap):
         msg = f"data_units {units!r} are not units; kept as data_units_description."
         warnings.warn(msg, UserWarning)
     relative = _relative_time_unit(attr_dict.get("time_units"))
-    cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"), relative=relative)
-    attr_dict.pop("dims", None)
+    cm, data = _get_cm_and_data(h5, snap, dims=dims, relative=relative)
     if relative is not None:  # spent on the time coordinate
         attr_dict.pop("time_units")
     return attr_dict, cm, data
@@ -110,9 +112,10 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     each is named by the node whose length matches that axis. Only node
     shapes are read here, never their values.
     """
-    if dims:
-        stated = tuple(dims.split(",")) if isinstance(dims, str) else tuple(dims)
-        return stated, other_nodes
+    if isinstance(dims, str):
+        dims = dims.split(",") if dims else None
+    if dims is not None:  # or an array of names
+        return tuple(unbyte(x) for x in dims), other_nodes
     can_guess_shape = len(data_node.shape) == len(set(data_node.shape))
     assert can_guess_shape, "Cant determine dims; shape values not unique!"
     assert len(time_node.shape) == 1, "time node has more than one dimension!"

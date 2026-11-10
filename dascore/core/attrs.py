@@ -34,16 +34,15 @@ from dascore.utils.time import numpy_time
 str_validator = PlainValidator(to_str)
 _ARRAYS = frozenset({np.ndarray, list, tuple})
 # The types an extra attr may hold, besides None and a scalar quantity
-# checked apart; see the PatchAttrs note.
+# checked apart; see the PatchAttrs note. bool is an int and
+# np.timedelta64 an np.number.
 _SIMPLE = (
     str,
-    bool,
     int,
     float,
     np.bool_,
     np.number,
     np.datetime64,
-    np.timedelta64,
     Unit,
 )
 _INT_RANGE = (np.iinfo(np.int64).min, np.iinfo(np.uint64).max)
@@ -70,7 +69,7 @@ def _simple_attr_value(name: str, value: Any) -> Any:
         return str(value) if isinstance(value, np.str_) else value
     elif value is pd.NA:  # how a table spells unknown
         return None
-    elif isinstance(value, datetime.datetime | datetime.date):  # pd.NaT included
+    elif isinstance(value, datetime.date):  # pd.NaT included
         if getattr(value, "tzinfo", None) is not None:
             msg = (
                 f"The attr {name!r} holds a time-zone-aware time, {value}. "
@@ -80,7 +79,7 @@ def _simple_attr_value(name: str, value: Any) -> Any:
         return numpy_time(value)
     elif isinstance(value, datetime.timedelta):  # pd.Timedelta included
         return numpy_time(value)
-    elif isinstance(value, bytes | np.bytes_):  # how binary files spell text
+    elif isinstance(value, bytes):  # how binary files spell text
         try:
             return unbyte(value)
         except UnicodeDecodeError:
@@ -146,10 +145,7 @@ class PatchAttrs(DascoreBaseModel):
     `coords` are rejected, while flat coord-like keys are treated like any
     other extra attrs. `dims` is ignored during normalization.
 
-    An extra attr holds one string, real number, bool, None, numpy time or
-    timedelta, or scalar quantity or unit. Python and pandas times become
-    numpy times and bytes become text; a dict, array or other object is
-    refused. See the PatchAttrs note for why attrs hold no arrays or maps.
+    See the PatchAttrs note for what an extra attr may hold.
 
     The default attributes are:
     ```{python}

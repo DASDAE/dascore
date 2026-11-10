@@ -596,10 +596,8 @@ def _decode_attr_value(attrs, key, value, legacy: bool = True):
         return None
     if attr_type.startswith(("datetime64", "timedelta64")):
         return np.asarray([value], dtype="int64").view(attr_type)[0]
-    if attr_type == "quantity":
-        return get_quantity(value)
-    if attr_type == "unit":
-        return get_unit(unbyte(value))
+    if attr_type in ("quantity", "unit"):
+        return (get_quantity if attr_type == "quantity" else get_unit)(unbyte(value))
     if attr_type == "history_json":
         return tuple(json.loads(unbyte(value) or "[]"))
     return value
@@ -630,8 +628,8 @@ def _attr_can_hold(value) -> bool:
     Return True if a decoded legacy value is one a patch attr holds; one
     which is not, such as a dict, keeps its text rather than failing the read.
     """
-    if isinstance(value, list | tuple):  # the attrs validator unpacks these
-        return True
+    if isinstance(value, list | tuple):  # the attrs validator unpacks one-item ones
+        return len(value) != 1 or _attr_can_hold(value[0])
     try:
         _simple_attr_value("", value)
     except ValueError:
