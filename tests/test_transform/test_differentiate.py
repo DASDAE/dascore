@@ -291,3 +291,10 @@ class TestHoles:
         """Step-less labels are an irregular axis, differentiated by label spacing."""
         out = stepless_seam_patch.differentiate("time")
         assert out.shape == stepless_seam_patch.shape
+
+    def test_fine_datetime_spacing(self):
+        """Nanosecond spacing of irregular modern times is kept, not rounded."""
+        offsets = np.array([0, 100, 400, 900])
+        time = np.datetime64("2026-01-01", "ns") + offsets.astype("m8[ns]")
+        patch = dc.Patch(data=offsets * 2.0, coords={"time": time}, dims=("time",))
+        np.testing.assert_allclose(patch.differentiate("time").data, 2e9)

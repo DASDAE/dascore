@@ -264,6 +264,14 @@ class TestNumericalIntegrals:
         out = patch.integrate(None)
         np.testing.assert_array_equal(out.data, x[:, None] * y[None, :])
 
+    def test_fine_datetime_spacing(self):
+        """Nanosecond spacing of irregular modern times is kept, not rounded."""
+        offsets = np.array([0, 100, 400, 900])
+        time = np.datetime64("2026-01-01", "ns") + offsets.astype("m8[ns]")
+        patch = dc.Patch(data=np.ones(4), coords={"time": time}, dims=("time",))
+        out = patch.integrate("time")
+        np.testing.assert_allclose(out.data, offsets / 1e9)
+
 
 class TestHoles:
     """Integration must not integrate across a coordinate hole."""

@@ -1115,8 +1115,16 @@ def _get_dx_or_spacing_and_axes(
             require_sorted=require_sorted,
             require_evenly_sampled=require_evenly_spaced,
         )
-        # need to convert to float so datetimes work
-        out.append(to_float(coord.step if coord.evenly_sampled else coord.values))
+        if coord.evenly_sampled:
+            val = coord.step
+        else:
+            val = coord.values
+            # Offsets from the first label keep a fine datetime spacing,
+            # which float seconds since 1970 would round away.
+            if val.dtype.kind == "M" and val.size:
+                val = val - val[0]
+        # need to convert val to float so datetimes work
+        out.append(to_float(val))
         axes.append(patch.get_axis(dim_))
 
     return tuple(out), tuple(axes)
