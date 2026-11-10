@@ -250,7 +250,8 @@ def _check_private(path: Path) -> None:
 
 def _safe_remote_name(path: UPath) -> str:
     """Return a basename suitable for a cached local copy."""
-    name = path.name or f"remote-file{path.suffix or '.tmp'}"
+    # a URL's query (e.g. a signed URL's token) is no part of the name
+    name = path.name.partition("?")[0] or f"remote-file{path.suffix or '.tmp'}"
     return Path(name).name
 
 
@@ -351,7 +352,7 @@ def _redact_remote_resource(resource: UPath | str) -> str:
     """Return a minimally identifying label for remote-cache messages."""
     path = coerce_to_upath(resource)
     protocol = getattr(path, "protocol", "remote")
-    name = path.name or f"remote-file{path.suffix or ''}"
+    name = path.name.partition("?")[0] or f"remote-file{path.suffix or ''}"
     if isinstance(protocol, list | tuple):
         protocol = "+".join(str(x) for x in protocol)
     return f"{protocol}://.../{name}"
@@ -486,13 +487,32 @@ def _download_to_cache(resource: UPath, local_path: Path) -> None:
     _CURRENT_COPIES.add(local_path)
 
 
-def ensure_local_file(resource) -> Path:
-    """Return a stable local path for one resource for the current session."""
+# fsspec info fields naming where a resource was found, not what it holds
+_URL_INFO = frozenset({"name", "url"})
+
+
+def ensure_local_file(resource, revalidate: bool = False) -> Path:
+    """
+    Return a stable local path for one resource for the current session.
+
+    With `revalidate`, the cache key includes the resource's fsspec info
+    (size, ETag, ...), so a changed resource is re-downloaded, at the cost
+    of one metadata request per call.
+    """
     if is_pathlike(resource) and is_local_path(resource):
         return Path(resource)
     if is_pathlike(resource):
         cache_root = _normalize_cache_root(get_remote_cache_path())
         remote_id = normalize_remote_id(resource)
+        if revalidate:
+            remote = coerce_to_upath(resource)
+            # skip fsspec's listing cache, and the URL fields a redirect to a
+            # freshly signed URL changes on every request
+            remote.fs.invalidate_cache(remote.path)
+            info = remote.fs.info(remote.path)
+            state = sorted((k, str(v)) for k, v in info.items() if k not in _URL_INFO)
+            remote_id = f"{remote_id}#{sha256(str(state).encode()).hexdigest()}"
+            _REMOTE_RESOURCE_CACHE[remote_id] = remote
         return _materialize_remote_file(remote_id, cache_root)
     name = getattr(resource, "name", None)
     if name and is_local_path(name):

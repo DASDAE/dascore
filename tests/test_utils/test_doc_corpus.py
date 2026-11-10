@@ -35,6 +35,7 @@ class TestAuthoredDocuments:
             "[directory](./)\n"
             "[unavailable](missing.qmd)\n"
             "[API](`dascore.missing.Plugin`)\n"
+            "[page](`dascore/docs/fragment`#details)\n"
             "```{python}\nraise AssertionError('must not run')\n```\n"
         )
         for directory in ("api", "_site", ".quarto", "page_files"):
@@ -49,6 +50,7 @@ class TestAuthoredDocuments:
         assert "Included instructions." in text
         assert "(fragment.md?mode=one#details)" in text
         assert "(fragment.md)" in text
+        assert "[page](fragment.md#details)" in text
         assert "[directory](./)" in text
         assert "https://dascore.org/missing.html" in text
         assert "https://dascore.org/api/dascore.html" in text

@@ -192,6 +192,15 @@ class TestTimes:
         assert digest(aware) == expected
         assert digest(pd.Timedelta("5s")) == digest(np.timedelta64(5, "s"))
 
+    def test_timestamp_keeps_nanoseconds(self):
+        """A Timestamp's nanoseconds are part of the instant it names."""
+        text = "2020-01-01T00:00:00.123456789"
+        stamp = pd.Timestamp(text)
+        assert digest(stamp) == digest(np.datetime64(text, "ns"))
+        assert digest(stamp) != digest(pd.Timestamp(text[:-3]))
+        aware = pd.Timestamp(text, tz="America/Denver")
+        assert digest(aware) == digest(aware.tz_convert("UTC").to_datetime64())
+
     def test_out_of_range_is_refused(self):
         """A time nanoseconds cannot hold would wrap to another one."""
         with pytest.raises(ParameterError, match="nanoseconds"):
@@ -1340,7 +1349,7 @@ class TestStoredIds:
         ids = []
         for name in ("one", "two"):
             index = tmp_path / f"{name}.sqlite"
-            spool = dc.spool(data, index_path=index).update()
+            spool = dc.spool(data, index=index).update()
             ids.append(spool.get_contents()["origin_id"].iloc[0])
         assert ids[0] == ids[1] == dc.read(data / "a.hdf5")[0].attrs.origin_id
 

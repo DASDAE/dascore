@@ -71,7 +71,8 @@ jobs:
 
   # Run the full pytest suite inside a Pyodide virtual environment.
   # Tests needing threads, subprocesses, or network are deselected since
-  # WebAssembly does not support them.
+  # WebAssembly does not support them; wasm_skip marks long sweeps of pure
+  # Python logic that the native jobs already cover.
   test_wasm_suite:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -128,5 +129,5 @@ jobs:
       - name: Run test suite in WebAssembly
         run: >
           .venv-pyodide/bin/python -m pytest tests
-          -m "not network and not concurrency"
-          -p no:cacheprovider --tb=short
+          -m "not network and not concurrency and not wasm_skip"
+          -p no:cacheprovider --tb=short --durations=30

@@ -43,7 +43,8 @@ class SegyV1_0(FiberIO):  # noqa
     ) -> np.ndarray:
         """Read selected trace samples in time/channel order."""
         segyio = optional_import(self._package_name)
-        with _open_segy(resource, segyio) as stream:
+        stream, _ = _open_segy(resource, segyio)
+        with stream:
             shape = (len(stream.samples), len(stream.header))
             time, channel = windows_to_slices(windows, shape)
             channels = range(shape[1])[channel]
@@ -60,10 +61,16 @@ class SegyV1_0(FiberIO):  # noqa
         Used to get metadata about a file without reading the whole file.
 
         Returns lightweight scan metadata without loading the data array.
+
+        Notes
+        -----
+        Trace headers store the start in whole seconds; a Silixa textual
+        header time stamp within that second refines it.
         """
         segyio = optional_import(self._package_name)
-        with _open_segy(resource, segyio) as fi:
-            coords = _get_coords(fi)
+        fi, text = _open_segy(resource, segyio)
+        with fi:
+            coords = _get_coords(fi, text)
             attrs = dc.PatchAttrs()
             dtype = str(fi.dtype)
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype)]

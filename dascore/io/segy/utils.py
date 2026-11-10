@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 
 import numpy as np
@@ -19,6 +20,15 @@ from dascore.utils.misc import optional_import
 # Bytes per sample of each SEG-Y (rev 2.1) data sample format code.
 _SAMPLE_BYTES = {1: 4, 2: 4, 3: 2, 4: 4, 5: 4, 6: 8, 7: 3, 8: 1}
 _SAMPLE_BYTES |= {9: 8, 10: 4, 11: 2, 12: 8, 15: 3, 16: 1}
+
+# Silixa's textual header line stating the start below the second, eg
+# "C13 UTC File Time stamp: 2019/04/24 22:24:24.846233 (UTC)" (#1311) or
+# "C11 UTC Time stamp: 2019/07/07 12:14:03.902170 (UTC)" (Booth et al., 2020,
+# doi:10.6084/m9.figshare.12410390).
+_TEXT_START = re.compile(
+    rb"UTC (?:File )?Time stamp: *(\d{4}/\d{2}/\d{2}) +"
+    rb"(\d{2}:\d{2}:\d{2}\.\d{1,9})"
+)
 
 
 def twos_comp(bytes_, byteorder="big"):
@@ -87,18 +97,21 @@ def _parse_binary_header(fp):
 
 
 def _open_segy(path, segyio):
-    """Open a SEG-Y file with segyio in the byte order its header uses."""
+    """Return the segyio file, in its header's byte order, and raw text header."""
     with open(path, "rb") as fp:
         parsed = _parse_binary_header(fp)
+        fp.seek(0)
+        text = fp.read(3200)  # Raw, as segyio decodes ASCII text as EBCDIC.
     endian = parsed[0] if parsed else "big"
-    return segyio.open(str(path), ignore_geometry=True, endian=endian)
+    return segyio.open(str(path), ignore_geometry=True, endian=endian), text
 
 
-def _get_coords(fi):
+def _get_coords(fi, text):
     """
     Get coordinates of the segy file.
 
-    Time comes from the SEGY format of year, julian day, hour, minute, second.
+    Time comes from the SEGY format of year, julian day, hour, minute, second,
+    refined below the second by the textual header where it states the start.
 
     Distance axis is channel number. If the user knows the delta_x,
     then the axis should be modified.
@@ -110,8 +123,8 @@ def _get_coords(fi):
     trace_field = segyio.TraceField
     header_0 = fi.header[0]
 
-    # Get time array from SEGY headers
-    starttime = _get_time_from_header(header_0)
+    # Get time array from SEGY headers.
+    starttime = _get_time_from_text(text, _get_time_from_header(header_0))
     dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
     ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
     time_array = starttime + dt * np.arange(ns)
@@ -154,6 +167,25 @@ def _get_time_from_header(header):
     start = np.datetime64(f"{year:04d}-01-01", "ns")
     seconds = (((julday - 1) * 24 + hour) * 60 + minute) * 60 + second
     return start + np.timedelta64(seconds, "s")
+
+
+def _get_time_from_text(text, start):
+    """
+    Return the textual header's sub-second start, else the trace header start.
+
+    Only Silixa's "UTC (File) Time stamp" line is read, and only where it falls
+    in the second the trace header gives, so a stamp from another clock or
+    event never moves the start. The header may be ASCII or EBCDIC.
+    """
+    match = _TEXT_START.search(text + text.decode("cp037").encode("latin-1"))
+    if match is None or not np.issubdtype(start.dtype, np.datetime64):
+        return start
+    date, clock = (group.decode().replace("/", "-") for group in match.groups())
+    try:
+        stamp = np.datetime64(f"{date}T{clock}", "ns")
+    except ValueError:
+        return start
+    return stamp if stamp.astype("datetime64[s]") == start else start
 
 
 def _get_patch_with_channel_coord(patch):

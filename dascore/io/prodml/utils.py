@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
+    parse_units,
     require_grid,
     resolve_keyed_source,
     should_snap,
@@ -34,6 +36,8 @@ from dascore.utils.misc import (
 )
 
 # --- Getting format/version
+
+_POWER = re.compile(r"\b([A-Za-z]+)(\d+)\b")
 
 _EXPECTED_ATTRS = (
     "NumberOfLoci",
@@ -281,6 +285,14 @@ def _get_data_unit_and_type(node):
     # some vendors (eg Fosina) use "unitless", which pint can't parse
     if str(out.get("data_units", "")).upper() in {"UNKNOWN", "UNITLESS"}:
         out.pop("data_units")
+    if (units := out.get("data_units")) is not None:
+        # Energistics symbols write a power as a trailing digit (rad2/Hz).
+        units = str(unbyte(units))
+        units = parse_units(units) or parse_units(_POWER.sub(r"\1**\2", units))
+        if units is None:
+            out.pop("data_units")
+        else:
+            out["data_units"] = units
     if (data_type := out.get("data_type")) is not None:
         clean = data_type.lower().replace(" ", "_")
         out["data_type"] = clean if clean in VALID_DATA_TYPES else ""
@@ -573,18 +585,21 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     """Get information about the processed patches."""
     out = dict(base_info)
     t_coord = _get_time_coord(node_info.parent_node, snap=snap)
-    out.update(_get_data_unit_and_type(node_info.node))
+    # FbeDataUnit may sit on FbeData[i], Fbe[i] or Processed; nearest wins.
+    parent = node_info.parent_node
+    nodes = (node_info.node, parent, parent.parent)
+    node = next((x for x in nodes if "FbeDataUnit" in x.attrs), node_info.node)
+    out.update(_get_data_unit_and_type(node))
     dtype = str(node_info.node.dtype)
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
-    # For some reason, the distance coords in raw and fbe data are not the
-    # same. For now, we just assume the FBE distance is a subset of the raw
-    # distance referenced by StartLocusIndex. It may be that the test file used
-    # develop this code was malformed and we need to revise this.
-    start = node_info.parent_node.attrs.get("StartLocusIndex", 0)
-    total = node_info.parent_node.attrs["NumberOfLoci"]
-    ind_1 = int(unbyte(start) if isinstance(start, bytes | np.bytes_) else start)
-    count = int(unbyte(total) if isinstance(total, bytes | np.bytes_) else total)
+    # The FBE distance is assumed to be the slice of the acquisition distance
+    # given by StartLocusIndex and NumberOfLoci, read together from Fbe[i]
+    # or, as Sintela ONYX writes them, from Processed. Acquisition's own
+    # values describe the raw loci, so they are never used here.
+    owner = parent if "NumberOfLoci" in parent.attrs else parent.parent
+    ind_1 = int(unbyte(owner.attrs.get("StartLocusIndex", 0)))
+    count = int(unbyte(owner.attrs["NumberOfLoci"]))
     # Put the coords back together.
     distance = d_coord[ind_1 : ind_1 + count]
     coords = dc.get_coord_manager(

@@ -10,6 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
+from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_keys
 from dascore.io import FiberIO
 from dascore.io.core import (
@@ -36,11 +37,11 @@ from .protobuf_utils import (
 from .utils import (
     _HEADER_SIZES,
     SYNC_WORD,
-    _get_attrs_coords_header,
     _get_complete_header,
-    _get_data_shape,
     _read_base_header,
     _read_sample_range,
+    _run_blocks,
+    _scan_runs,
 )
 
 
@@ -72,12 +73,22 @@ class SintelaBinaryV3(FiberIO):
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
-        """Scan a file, return summary information on the contents."""
-        attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
+        """
+        Scan a file, return summary information on the contents.
+
+        A file with dropped or repeated packets gives one patch per run of
+        contiguous packets, keyed by the run's first packet.
+        """
+        header, runs = _scan_runs(resource, SintelaPatchAttrs)
+        dtype = str(np.dtype(header["dtype"]))
         return [
             dc.PatchMeta(
-                attrs=attrs, coords=coords, dtype=str(np.dtype(header["dtype"]))
+                attrs=attrs,
+                coords=coords,
+                dtype=dtype,
+                source=ArraySource(key=key) if key else None,
             )
+            for key, attrs, coords in runs
         ]
 
     def read_array(
@@ -93,9 +104,10 @@ class SintelaBinaryV3(FiberIO):
         skips each packet's header, so the window indexes samples.
         """
         header = _get_complete_header(resource)
-        shape = _get_data_shape(header)
+        blocks = _run_blocks(resource, header, key)
+        shape = (len(blocks) * int(header["num_samples"]), header["num_channels"])
         time_slice, dist_slice = windows_to_slices(windows, shape)
-        data = _read_sample_range(resource, header, time_slice.start, time_slice.stop)
+        data = _read_sample_range(blocks, header, time_slice.start, time_slice.stop)
         return np.asarray(data[:, dist_slice])
 
 

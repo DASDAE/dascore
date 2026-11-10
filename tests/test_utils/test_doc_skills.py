@@ -80,11 +80,12 @@ class TestSkills:
             assert f"name: {name}" not in printed
 
     def test_install(self, tmp_path, capsys, monkeypatch):
-        """One command copies every shipped skill and replaces an older copy."""
+        """One command installs an entry for every skill, replacing older ones."""
         target = tmp_path / "agent" / "skills"
-        stale = target / "dascore" / "SKILL.md"
-        stale.parent.mkdir(parents=True)
-        stale.write_text("An older copy.")
+        for name in ("dascore", "make-inventory"):
+            stale = target / name / "SKILL.md"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("An older copy.")
         # Agents often quote the path, which leaves `~` for the command to expand.
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -92,11 +93,65 @@ class TestSkills:
         installed = capsys.readouterr().out.split()
         sources = sorted(SKILL_PATH.glob("*/SKILL.md"))
         assert installed == [str(target / x.parent.name / x.name) for x in sources]
+        # Each of these serves a project whose DASCore may have no command line.
+        assert doc_skills._STANDALONE == {
+            "dascore",
+            "migrate-to-v1",
+            "start-task",
+            "test-beta",
+        }
+        descriptions = {k: v["description"] for k, v in doc_skills.get_skills().items()}
         for source in sources:
-            copy = target / source.parent.name / source.name
-            assert copy.read_text(encoding="utf-8") == source.read_text(
-                encoding="utf-8"
-            )
+            name = source.parent.name
+            shipped = source.read_text(encoding="utf-8")
+            entry = (target / name / source.name).read_text(encoding="utf-8")
+            if name in doc_skills._STANDALONE:
+                # These must work where the project's DASCore has no CLI.
+                assert entry == shipped
+                continue
+            # Other entries keep the metadata and defer the procedure to the CLI.
+            front, body = entry.removeprefix("---\n").split("\n---\n", 1)
+            assert yaml.safe_load(front) == {
+                "name": name,
+                "description": descriptions[name],
+            }
+            assert f"-m dascore skill {name}`" in body
+            procedure = shipped.split("\n---\n", 1)[1].splitlines()
+            assert not {x for x in procedure if x.strip()} & set(body.splitlines())
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+    def test_install_over_links(self, tmp_path):
+        """A linked or dangling skill folder is replaced, not written through."""
+        other = tmp_path / "other-environment" / "make-inventory"
+        other.mkdir(parents=True)
+        procedure = other / "SKILL.md"
+        procedure.write_text("Another installation's procedure.")
+        target = tmp_path / "skills"
+        target.mkdir()
+        (target / "make-inventory").symlink_to(other, target_is_directory=True)
+        (target / "add-format").symlink_to(
+            tmp_path / "deleted", target_is_directory=True
+        )
+        doc_skills.install_skills(target)
+        assert procedure.read_text() == "Another installation's procedure."
+        for name in ("make-inventory", "add-format"):
+            entry = target / name / "SKILL.md"
+            assert not entry.parent.is_symlink()
+            assert f"-m dascore skill {name}`" in entry.read_text(encoding="utf-8")
+
+    def test_install_into_package(self, tmp_path, monkeypatch):
+        """Installing into a directory that is the shipped skills changes nothing."""
+        shipped = tmp_path / "skills"
+        for name in ("dascore", "make-inventory"):
+            source = SKILL_PATH / name / "SKILL.md"
+            copy = shipped / name / "SKILL.md"
+            copy.parent.mkdir(parents=True)
+            copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        monkeypatch.setattr(doc_skills, "SKILL_PATH", shipped)
+        before = (shipped / "make-inventory" / "SKILL.md").read_text(encoding="utf-8")
+        doc_skills.install_skills(shipped)
+        after = (shipped / "make-inventory" / "SKILL.md").read_text(encoding="utf-8")
+        assert before == after
 
     @pytest.mark.parametrize(
         "args, code, message",

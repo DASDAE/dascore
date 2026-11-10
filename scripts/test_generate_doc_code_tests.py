@@ -47,7 +47,13 @@ print("not executed")
 """,
         )
         out = extract_qmd_file(path)
-        assert out.chunks == (Chunk(start_line=5, source="import dascore as dc\n"),)
+        assert out.chunks == (Chunk(start_line=6, source="import dascore as dc\n"),)
+
+    def test_line_numbers_after_empty_front_matter(self, tmp_path):
+        """Empty front matter still counts toward source line numbers."""
+        path = _write(tmp_path / "example.qmd", "---\n---\n```{python}\nx = 1\n```\n")
+        out = extract_qmd_file(path)
+        assert out.chunks == (Chunk(start_line=4, source="x = 1\n"),)
 
     def test_skips_doc_with_eval_false(self, tmp_path):
         """Document-level eval false should skip all chunks."""
@@ -202,7 +208,7 @@ class TestIncludes:
         )
         out = extract_qmd_file(path)
         assert out.chunks == (
-            Chunk(start_line=5, source='print("included")\n', path=skill.resolve()),
+            Chunk(start_line=6, source='print("included")\n', path=skill.resolve()),
         )
 
     def test_circular_include(self, tmp_path):

@@ -2,27 +2,68 @@
 title: Spool Selection
 ---
 
-`Spool.select` uses one selector model for memory and directory spools. Patch-list and directory spools compose selections in a `PatchCatalog`; ordinary metadata predicates are pushed into SQLite and remain lazy until contents, length, indexing, or iteration requires rows.
+`Spool.select` works the same way on in-memory and directory spools. Both build up selections in a `PatchCatalog`. Arguments are validated immediately, but ordinary metadata filters run in SQLite and stay lazy until you ask for contents, length, an item, or iterate.
 
-Bare selector names resolve to attributes first and then coordinates. `_attrs` and `_coords` provide explicit namespaces when needed: either a `name -> selector` mapping (the fully general form, required when a name cannot be a Python keyword) or a name/collection of names tagging which bare keyword arguments belong to that namespace (e.g. `select(sensor=(1, 10), _coords="sensor")`). Unknown names raise immediately instead of being ignored.
+## Names
 
-Attribute equality, membership, ranges, and glob predicates are evaluated by the index. Regular expressions use a SQL candidate predicate and an exact residual filter; chained regular expressions are combined with AND. Quantities are converted to the canonical unit recorded by the index, and dimensionally incompatible queries raise rather than silently returning incorrect matches. Values stored without units can never be proven incompatible, so they remain candidates for quantity selectors rather than being silently excluded.
+A bare name like `select(station=...)` is looked up as an attribute first, then as a coordinate. Unknown names raise immediately rather than being ignored.
 
-Coordinate predicates select by range — a `(start, stop)` tuple or slice, with `None`/`...` for an open end. A range open at both ends is no predicate at all, like `None`, so it keeps patches without the coordinate. Scalar, value-membership, and boolean-sample-mask coordinate selectors have no exact patch-level meaning spool-wide and are rejected (apply masks per patch, e.g. `spool.map(lambda p: p.select(...))`; boolean arrays over patches, `spool[mask]`, still select membership). Numeric coordinate envelopes are stored in each coordinate's original units, so bare numeric range bounds mean the coordinate's own units — exactly what `Patch.select` means by them — and quantities convert themselves to whatever units each stored definition uses. In an archive whose files state different units for one coordinate, a bare range therefore selects a per-file interval; pass a quantity to mean one physical interval. The exact per-patch trim defers its representation until each patch is known, so a mixed archive of unit-bearing and unitless patches is handled correctly in one selection.
+To be explicit, use `_attrs` or `_coords`, in either of two forms:
 
-Coordinate predicates first select patches whose summary envelopes can overlap the request. The loaded patch is then selected exactly. `samples=True` never excludes a patch at the index stage. With `relative=True`, bounds resolve independently against each patch: positive offsets count from the coordinate minimum and negative offsets from its maximum. The first bound is the lower limit and the second is the upper limit. Crossed bounds select nothing; equal bounds include a sample at that value when one exists. Attribute predicates in the same call remain unchanged.
+- a `name -> selector` mapping, the fully general form, needed when a name is not a valid Python keyword;
+- a name, or collection of names, saying which bare keywords belong to that namespace, e.g. `select(sensor=(1, 10), _coords="sensor")`.
 
-Relative selection excludes patches without the requested coordinate and drops rows whose indexed envelopes establish that the selected window is empty. For a patch spanning three seconds, both `select(time=(5, -1), relative=True)` and `select(time=(5, ...), relative=True)` therefore return an empty spool. `Patch.select` returns a patch with zero samples for either request. Spool length, contents, indexing, and iteration use the surviving rows. These metadata checks preserve lazy loading: a window overlapping an envelope may still fall between samples or inside a gap, so its exact result is determined when the patch loads. Sample-index selection continues to retain empty patch entries.
+## Attribute selectors
 
-A selection pushed into a reader gives the loaded patch the `data_id` of the window it read — the id the same selection on the loaded patch gives — so the replayed `select` finds its work done and records nothing. `select` does not append a history entry. A window is named by the samples it holds, not by the call which reached it, so the spelling of a bound no longer matters for a file-backed patch: `...`, `None`, and a quantity in any unit all reach the same id. A selection the source cannot load — stepped, fancy, or on a coordinate the file's array cannot be sliced along — derives from the whole array and the `select` call instead, where those spellings still tell apart. A single native-unit range can be pushed into the reader on either an even or uneven coordinate. Composed ranges on uneven or float16/float32 coordinates replay against the loaded patch because their envelopes cannot reliably identify which samples earlier selections left. Selections involving associated coordinates also replay there, so a trim on one coordinate can make a later trim on another coordinate sharing its axis a no-op. Attribute predicates, including `data_id`, always query indexed source metadata; they do not query provenance generated when a selected patch loads.
+The index evaluates equality, membership, ranges, and glob patterns. Regular expressions use a rough SQL filter followed by an exact check in Python; several regular expressions combine with AND.
 
-Sample selections leave indexed sample count and `data_id` unknown until loading, including full-span sample ranges. For relative selections on coordinates the index records as float16/float32, indexed sample count and `data_id` remain unknown until loading: index arithmetic cannot reliably predict whether rounding removes a sample. The loaded patch still applies the exact selection and provides its resulting identity.
+Quantities are converted to the unit the index recorded for that attribute. A dimensionally incompatible query raises rather than quietly matching the wrong rows. Values stored without units can't be proven incompatible, so they stay candidates for quantity selectors.
 
-Restructuring operations that create new patch identities (chunking, concatenation) materialize a derived in-memory catalog whose rows are the plan outputs, so selection on a chunked spool runs the identical catalog engine. Sorting, slicing, and array selection never restructure: they compose lazy order and membership specs on the current catalog. Exact selections already attached to a parent view still apply when member source patches load.
+## Coordinate selectors
 
-Catalog views share their source state. Adding, removing, or rescanning sources invalidates realized metadata so existing views observe the updated catalog under their composed predicates.
+Coordinates are selected by range: a `(start, stop)` tuple or slice, with `None` or `...` for an open end. A range open at both ends means no filter, like `None`, so it keeps patches that lack the coordinate.
 
-The core contract, executed here so drift fails the doc build: names resolve attributes-first then coordinates, unknown names raise, and coordinate ranges are exact on the loaded patches (candidacy by envelope at the index, exactness at load):
+Scalars, value lists, and boolean sample masks have no exact meaning across a whole spool, so they raise. Apply them per patch with `spool.map(lambda p: p.select(...))`. A boolean array over patches, `spool[mask]`, still picks patches.
+
+**Units.** The index stores each coordinate in the units its file used, so bare numbers mean the coordinate's own units, just as in `Patch.select`. Quantities convert to whatever units each patch uses. In an archive where files state different units for one coordinate, a bare range therefore picks a different physical interval per file; pass a quantity to mean one interval. Archives mixing patches with and without units work in one selection, because the exact trim is worked out per patch.
+
+**Two stages.** The index first keeps patches whose stored ranges could overlap the request. Each patch is then trimmed exactly when it loads. `samples=True` never excludes a patch at the index stage.
+
+**Relative selection.** With `relative=True`, bounds are resolved per patch: positive offsets count from the coordinate's minimum, negative ones from its maximum. The first bound is always the lower limit and the second the upper. Crossed bounds select nothing. Equal bounds keep a sample at that value if there is one. Attribute filters in the same call are unaffected.
+
+A relative selection drops patches that lack the coordinate, and patches whose stored ranges show the window is empty. For a three-second patch, both `select(time=(5, -1), relative=True)` and `select(time=(5, ...), relative=True)` return an empty spool, while `Patch.select` returns a zero-sample patch for either. Length, contents, indexing, and iteration all use the remaining rows. A window that overlaps a stored range can still land between samples or inside a gap, so its exact result is only known at load time. Sample-index selection keeps empty patches.
+
+### Sample counts and ids before loading
+
+Some selections leave a row's sample count and `data_id` unknown until the patch loads:
+
+- every sample-index selection, even one spanning the whole patch;
+- relative selections on coordinates stored as float16 or float32, where index arithmetic can't tell whether rounding removes a sample.
+
+The loaded patch still applies the exact selection and reports its real identity.
+
+### Identity of a selected patch
+
+When a selection is pushed into the file reader, the loaded patch gets the `data_id` of the window it read. That is the same id the selection would give on the loaded patch, so replaying `select` finds nothing to do. `select` adds no history entry.
+
+A window is named by the samples it holds, not by how you asked for it. For a file-backed patch, `...`, `None`, and a quantity in any unit all give the same id. A selection the reader can't do itself — stepped, fancy indexing, or along an axis the file's array can't be sliced on — gets an id derived from the whole array plus the `select` call, so those spellings still differ.
+
+A single range in native units can be pushed into the reader on even or uneven coordinates. These instead replay on the loaded patch:
+
+- several ranges composed on an uneven or float16/float32 coordinate, since stored ranges can't reliably tell which samples earlier selections left;
+- selections involving associated coordinates, so a trim on one coordinate can make a later trim on another coordinate along the same axis a no-op.
+
+Attribute filters, including on `data_id`, always query the indexed file metadata, not ids generated when a selected patch loads.
+
+## Views
+
+Operations that make new patches (chunking, concatenation) produce a new in-memory catalog whose rows are the planned outputs, so selecting on a chunked spool uses the same engine. Sorting, slicing, and array selection never restructure; they stack lazy order and membership onto the current catalog. Selections attached to a parent view still apply when its source patches load.
+
+Views share their source catalog. Adding, removing, or rescanning sources clears cached metadata, so existing views see the updated catalog through their own filters.
+
+## Examples
+
+Names resolve attributes first, unknown names raise, and coordinate ranges are exact on loaded patches:
 
 ```{python}
 import pytest
@@ -45,7 +86,7 @@ for patch in spool.select(time=window):
     assert coord.min() >= window[0] and coord.max() <= window[1]
 ```
 
-Bare numeric coordinate bounds mean the coordinate's own units, matching `Patch.select`, and scalar/membership coordinate selectors raise:
+Bare numbers mean the coordinate's own units, and scalar coordinate selectors raise:
 
 ```{python}
 ft_patch = dc.get_example_patch().convert_units(distance="ft")
@@ -53,10 +94,10 @@ coord = dc.spool([ft_patch]).select(distance=(20, 60))[0].get_coord("distance")
 assert float(coord.min()) >= 20 and float(coord.max()) <= 60  # 20-60 ft
 
 with pytest.raises(InvalidSpoolQueryError):
-    dc.spool([ft_patch]).select(distance=100)  # scalar has no range meaning
+    dc.spool([ft_patch]).select(distance=100)  # a scalar is not a range
 ```
 
-Relative trimming never swaps crossed bounds to recover data from the other end of a short patch:
+Relative selection never swaps crossed bounds to pull data from the other end of a short patch:
 
 ```{python}
 short_patch = dc.get_example_patch().select(time=(0, 3), relative=True)
@@ -65,11 +106,17 @@ for bounds in [(5, -1), (5, ...)]:
     assert len(dc.spool([short_patch]).select(time=bounds, relative=True)) == 0
 ```
 
-## Independent coordinate windows
+## Several windows at once
 
-Pass a rectangular `(n, 2)` array to select several absolute ranges along a coordinate; several coordinates may take arrays with equal row counts, row `i` of each forming one box, and open bounds follow the chunking rules in the chunking notes. Each row is applied to each matching source patch in input order. Overlapping, repeated, and shared-endpoint ranges retain separate pieces, so selecting two rows over a file boundary can return more than two patches. The endpoints are inclusive coordinate bounds; an empty `(0, 2)` array selects nothing. Ordinary selectors on other attributes or coordinates can accompany the array. Array windows currently require `samples=False` and `relative=False`.
+Pass an `(n, 2)` array to select several absolute ranges along a coordinate. Several coordinates can take arrays with the same number of rows; row `i` of each forms one box. Open bounds follow the rules in [Spool Chunking](spool_chunking.qmd#explicit-output-windows).
 
-The view is deferred and follows source catalog updates. Its contents report the selected sample envelopes when the source metadata holds the full coordinate values, including uneven coordinates; file scans can read coordinate payloads without loading the measurement arrays. A single `(start, stop)` selector keeps its existing semantics.
+- Each row is applied to each matching patch, in input order.
+- Overlapping, repeated, and touching ranges stay separate pieces, so two rows across a file boundary can return more than two patches.
+- Endpoints are inclusive. An empty `(0, 2)` array selects nothing.
+- Ordinary selectors on other attributes or coordinates can be combined with it.
+- Arrays require `samples=False` and `relative=False`.
+
+The result is lazy and follows updates to the source catalog. Its contents show each piece's exact sample range when the index holds the full coordinate values, including uneven coordinates; file scans can read coordinates without loading data. A single `(start, stop)` selector behaves as before.
 
 ```{python}
 import numpy as np

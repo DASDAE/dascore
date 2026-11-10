@@ -31,6 +31,8 @@ format:
     code-copy: true
     code-overflow: wrap
     css: styles.css
+    # Quarto defaults this to png, which breaks extensionless image URLs.
+    default-image-extension: ""
 
 website:
   title: {{ dascore_version_str }}
@@ -44,6 +46,19 @@ website:
   repo-branch: {{ repo_branch }}
   repo-actions: [edit]
   page-navigation: true
+
+  # Site-wide banner above the navbar. Links start with "/" so quarto
+  # resolves them from the project root; relative links break on nested pages.
+  announcement:
+    icon: megaphone-fill
+    dismissable: true
+    position: above-navbar
+    type: primary
+    content: >-
+      **DASCore 1.0 beta is out!**
+      Read the [announcement](/migrations/dascore_1.0_announcement.qmd),
+      check the [migration guide](/migrations/dascore_1.0_migration.qmd),
+      and [help us test it](/migrations/test_latest_beta.qmd).
 
   navbar:
     logo: _static/logo.png
@@ -224,6 +239,9 @@ website:
 
         - text: General Guidelines
           href: contributing/general_guidelines.qmd
+
+        - text: AI Policy
+          href: contributing/ai_policy.qmd
 
         - text: "Adding a new format"
           href: contributing/new_format.qmd
