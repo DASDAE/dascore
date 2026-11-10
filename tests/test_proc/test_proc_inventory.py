@@ -335,7 +335,8 @@ class TestChannelResolution:
     def test_channel_map_needs_a_channel_coord(self, patch, inventory):
         """A channel-axis map has nothing to read on a meters patch."""
         channel_map = _replace_acquisition(
-            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
+            inventory,
+            distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
         )
         with pytest.raises(PatchError, match=r"\['channel'\]"):
             patch.enrich(channel_map, attrs=False, coords=("x",))
@@ -343,7 +344,8 @@ class TestChannelResolution:
     def test_channel_map_with_a_channel_coord(self, patch, inventory):
         """Given channel numbers, a one-point channel map resolves them."""
         channel_map = _replace_acquisition(
-            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
+            inventory,
+            distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
         )
         channels = np.arange(len(patch.get_coord("distance")))
         with_channel = patch.update_coords(channel=("distance", channels))
@@ -356,8 +358,8 @@ class TestChannelResolution:
             inventory,
             distance_map=DistanceMap(
                 channel=(0.0, 299.0),
-                instrument_distance=(0.0, 299.0),
-                distance=(100.0, 399.0),
+                acquisition_distance=(0.0, 299.0),
+                optical_distance=(100.0, 399.0),
             ),
         )
         by_meters = patch.enrich(both, attrs=False, coords=("zone",))
@@ -371,13 +373,14 @@ class TestChannelResolution:
 
     def test_optical_distance_is_requestable(self, patch, inventory):
         """The path axis can be added once it does not collide."""
-        renamed = patch.rename_coords(distance="instrument_distance")
+        renamed = patch.rename_coords(distance="acquisition_distance")
         out = renamed.enrich(inventory, attrs=False, coords=("distance",))
         assert out.get_coord("distance").min() == 100.0
 
     def test_distance_collision_raises(self, patch, inventory):
         """Overwriting the mapped axis would break the next resolution."""
-        with pytest.raises(PatchError, match="will not overwrite"):
+        match = r"will not overwrite.*rename_coords\(distance='acquisition_distance'\)"
+        with pytest.raises(PatchError, match=match):
             patch.enrich(inventory, attrs=False, coords=("distance",))
 
 
@@ -399,13 +402,14 @@ class TestCoordinateUnits:
     def test_incompatible_units_raise(self, patch, inventory):
         """A coordinate which is not a length cannot be a distance."""
         seconds = patch.set_units(distance="s")
-        with pytest.raises(UnitError, match="instrument_distance"):
+        with pytest.raises(UnitError, match="acquisition_distance"):
             seconds.enrich(inventory, attrs=False, coords=("zone",))
 
     def test_a_channel_axis_ignores_units(self, patch, inventory):
         """Channel numbers count channels, so they state no unit."""
         channel_map = _replace_acquisition(
-            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
+            inventory,
+            distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
         )
         channels = np.arange(len(patch.get_coord("distance")))
         with_channel = patch.update_coords(channel=("distance", channels))
@@ -424,7 +428,7 @@ class TestGeometryColumns:
         """Add a borehole-depth column over part of the path."""
         segment = Geometry(
             name="hole",
-            distance=(100.0, 200.0),
+            optical_distance=(100.0, 200.0),
             columns={"borehole_depth": (0.0, 100.0)},
             units={"borehole_depth": "m"},
             **kwargs,
@@ -474,7 +478,7 @@ class TestGeometryColumns:
         """Geometry which measures but does not place defines no axis."""
         segment = Geometry(
             name="hole",
-            distance=(100.0, 200.0),
+            optical_distance=(100.0, 200.0),
             columns={"borehole_depth": (0.0, 100.0)},
         )
         inv = _replace_path(inventory, geometry=(segment,))
@@ -489,12 +493,12 @@ class TestGeometryColumns:
         """Two holes are two holes, and the fiber between them is neither."""
         first = Geometry(
             name="hole 1",
-            distance=(100.0, 150.0),
+            optical_distance=(100.0, 150.0),
             columns={"borehole_depth": (0.0, 50.0)},
         )
         second = Geometry(
             name="hole 2",
-            distance=(300.0, 350.0),
+            optical_distance=(300.0, 350.0),
             columns={"borehole_depth": (0.0, 50.0)},
         )
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
@@ -913,7 +917,8 @@ class TestEdgeCases:
     def test_multidimensional_channel_coord_raises(self, patch, inventory):
         """One channel coordinate maps to one dimension of the patch."""
         affine = _replace_acquisition(
-            inventory, distance_map=DistanceMap(channel=(0.0,), distance=(100.0,))
+            inventory,
+            distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
         )
         shape = patch.shape
         two_d = patch.update_coords(channel=(patch.dims, np.ones(shape, dtype=float)))
@@ -930,7 +935,7 @@ class TestEdgeCases:
         """A two-axis CRS has no third axis to return."""
         flat = Geometry(
             name="flat",
-            distance=(100.0, 400.0),
+            optical_distance=(100.0, 400.0),
             columns={"x": (0.0, 1.0), "y": (0.0, 1.0)},
         )
         crs = CoordinateReferenceSystem(
@@ -968,7 +973,7 @@ class TestProjectionDetails:
 
     def test_optical_distance_is_in_meters(self, patch, inventory):
         """Path lengths are meters, so path distance is too."""
-        renamed = patch.rename_coords(distance="instrument_distance")
+        renamed = patch.rename_coords(distance="acquisition_distance")
         out = renamed.enrich(inventory, attrs=False, coords=("distance",))
         assert out.get_coord("distance").units == dc.get_quantity("m")
 
@@ -1081,9 +1086,9 @@ class TestEnrichContracts:
     def test_geometry_endpoint_is_local(self, patch, inventory):
         """The same rule holds for the geometry track."""
         columns = {"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)}
-        first = Geometry(distance=(100.0, 200.0), columns=columns)
+        first = Geometry(optical_distance=(100.0, 200.0), columns=columns)
         second = Geometry(
-            distance=(300.0, 400.0),
+            optical_distance=(300.0, 400.0),
             columns={"x": (3.0, 4.0), "y": (3.0, 4.0), "z": (3.0, 4.0)},
         )
         inv = _replace_path(inventory, geometry=(first, second))
@@ -1162,17 +1167,48 @@ class TestEnrichContracts:
         acq = inventory.networks[0].fiber_arrays[0].acquisitions[0]
         one_point = acq.new(
             spatial_interval=2.0,
-            distance_map=DistanceMap(instrument_distance=(0.0,), distance=(100.0,)),
+            distance_map=DistanceMap(
+                acquisition_distance=(0.0,), optical_distance=(100.0,)
+            ),
         )
         inv = inventory.replace(acq, one_point)
-        renamed = patch.rename_coords(distance="instrument_distance")
+        renamed = patch.rename_coords(distance="acquisition_distance")
         out = renamed.enrich(inv, attrs=False, coords=("distance",))
         assert out.get_coord("distance").values[10] == 110.0
 
-    def test_reserved_label_group_raises(self, inventory):
+    def test_former_coordinate_name_raises(self, patch, inventory):
+        """
+        A patch still carrying instrument_distance is told to rename it.
+
+        Beside an optical distance coordinate, it would otherwise be read
+        on that one instead, moving every channel by the map's offset.
+        """
+        dist_map = DistanceMap(acquisition_distance=(0.0,), optical_distance=(100.0,))
+        inv = _replace_acquisition(inventory, distance_map=dist_map)
+        old = patch.rename_coords(distance="instrument_distance")
+        values = old.get_array("instrument_distance") + 100.0
+        old = old.update_coords(distance=("instrument_distance", values))
+        with pytest.raises(PatchError, match="former name of 'acquisition_distance'"):
+            old.enrich(inv, attrs=False, coords=("x",))
+
+    def test_former_coordinate_name_ignored_by_channel_map(self, patch, inventory):
+        """A map read on channels never read the former name, so it is no issue."""
+        inv = _replace_acquisition(
+            inventory,
+            spatial_interval=1.0,
+            distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
+        )
+        channels = np.arange(len(patch.get_coord("distance")))
+        old = patch.rename_coords(distance="instrument_distance")
+        old = old.update_coords(channel=("instrument_distance", channels))
+        out = old.enrich(inv, attrs=False, coords=("x",))
+        assert "x" in out.coords.coord_map
+
+    @pytest.mark.parametrize("group", ["time", "acquisition_distance"])
+    def test_reserved_label_group_raises(self, inventory, group):
         """A group named after a coordinate would shadow it at enrichment."""
         path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
-        label = OpticalPathLabel(distance_min=100.0, distance_max=200.0, group="time")
+        label = OpticalPathLabel(distance_min=100.0, distance_max=200.0, group=group)
         with pytest.raises(InvalidInventoryError, match="reserved name"):
             path.new(labels=(label,)).check()
 
@@ -1213,8 +1249,8 @@ class TestEnrichContracts:
             inventory,
             distance_map=DistanceMap(
                 channel=(0.0, 299.0),
-                instrument_distance=(0.0, 598.0),
-                distance=(100.0, 399.0),
+                acquisition_distance=(0.0, 598.0),
+                optical_distance=(100.0, 399.0),
             ),
         )
         channels = np.arange(len(patch.get_coord("distance")))
@@ -1228,8 +1264,8 @@ class TestEnrichContracts:
             inventory,
             distance_map=DistanceMap(
                 channel=(0.0, 299.0),
-                instrument_distance=(0.0, 299.0),
-                distance=(100.0, 399.0),
+                acquisition_distance=(0.0, 299.0),
+                optical_distance=(100.0, 399.0),
             ),
         )
         channels = np.arange(len(patch.get_coord("distance")))
@@ -1243,8 +1279,8 @@ class TestEnrichContracts:
             inventory,
             distance_map=DistanceMap(
                 channel=(0.0, 299.0),
-                instrument_distance=(0.0, 299.0),
-                distance=(100.0, 399.0),
+                acquisition_distance=(0.0, 299.0),
+                optical_distance=(100.0, 399.0),
             ),
         )
         mislabeled = patch.update_coords(
@@ -1259,7 +1295,7 @@ class TestEnrichContracts:
             inventory,
             spatial_interval=None,
             distance_map=DistanceMap(
-                channel=(0.0,), instrument_distance=(0.0,), distance=(100.0,)
+                channel=(0.0,), acquisition_distance=(0.0,), optical_distance=(100.0,)
             ),
         )
         channels = np.arange(len(patch.get_coord("distance")))
@@ -1272,7 +1308,7 @@ class TestEnrichContracts:
         no_slope = _replace_acquisition(
             inventory,
             spatial_interval=None,
-            distance_map=DistanceMap(channel=(0.0,), distance=(100.0,)),
+            distance_map=DistanceMap(channel=(0.0,), optical_distance=(100.0,)),
         )
         channels = np.arange(len(patch.get_coord("distance")))
         with_channel = patch.update_coords(channel=("distance", channels))
