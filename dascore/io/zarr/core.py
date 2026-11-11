@@ -63,23 +63,44 @@ def _open_zarr(path: UPath, zarr_format: int | None, group: str | None, node):
         )
 
 
-def _cf_dataset(spool):
+# Encoding keys which lay out storage without changing the labels read back.
+_LAYOUT_KEYS = frozenset(
+    ("chunks", "shards", "compressor", "compressors", "filters", "serializer")
+)
+
+
+def _range_fields(coord) -> dict | None:
+    """
+    Return the JSON description of a coordinate's grid (see `RANGE_ATTR`).
+
+    None where it has no grid (holes, jitter, partial), or where JSON (no
+    numpy scalar types) leaves the description unable to rebuild the labels
+    exactly; those labels are read instead.
+    """
+    if (fields := grid_fields(coord)) is None:
+        return None
+    fields = {
+        k: v.item() if isinstance(v, np.generic) else v for k, v in fields.items()
+    }
+    back = read_grid_fields(fields, coord.units)
+    same = back.dtype == coord.dtype and np.array_equal(back.values, coord.values)
+    return fields if same and back == coord else None
+
+
+def _cf_dataset(spool, encoding: dict | None):
     """
     Return the only patch of a spool as a CF dataset, describing its grids.
 
-    The labels are written too, so any CF tool reads them. A description
-    which JSON (no numpy scalar types) leaves unable to rebuild the labels
-    exactly is left out, and those labels are read instead.
+    The labels are written too, so any CF tool reads them. A coordinate
+    whose ``encoding`` changes the labels stored (a dtype, units or
+    scaling) is not described, so its stored labels are read.
     """
-    dataset = spool_to_cf_dataset(spool)
-    patch = spool if isinstance(spool, dc.Patch) else spool[0]
-    for name, coord in patch.coords.coord_map.items():
-        if (fields := grid_fields(coord)) is None:  # e.g. holes, or partial
+    patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
+    dataset = spool_to_cf_dataset(patches)
+    for name, coord in patches[0].coords.coord_map.items():
+        if set((encoding or {}).get(name, ())) - _LAYOUT_KEYS:
             continue
-        fields = {
-            k: v.item() if isinstance(v, np.generic) else v for k, v in fields.items()
-        }
-        if read_grid_fields(fields, coord.units) == coord:
+        if (fields := _range_fields(coord)) is not None:
             dataset[name].attrs[RANGE_ATTR] = fields
     return dataset
 
@@ -229,13 +250,13 @@ class ZarrV3(FiberIO):
             suppress_warnings(UserWarning, message="Consolidated metadata"),
         ):
             if len(names) <= 1:
-                dataset = _cf_dataset(spool)
+                dataset = _cf_dataset(spool, encoding)
                 dataset.to_zarr(staging, mode="w", consolidated=True, **options)
             else:
                 zarr.open_group(staging, mode="w", zarr_format=zarr_format)
                 names = _unique_patch_names(names)
                 for name, patch in zip(names, spool, strict=True):
-                    dataset = _cf_dataset(patch)
+                    dataset = _cf_dataset(patch, encoding)
                     dataset.to_zarr(
                         staging, group=name, mode="w", consolidated=False, **options
                     )

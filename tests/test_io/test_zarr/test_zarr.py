@@ -23,6 +23,7 @@ import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
 from dascore.io import core as io_core
 from dascore.io.core import source_identity
+from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.netcdf.utils import RANGE_ATTR, STEP_ATTR
 from dascore.io.zarr import ZarrV3
@@ -396,7 +397,33 @@ class TestRangeAttr:
         distance = np.arange(size, dtype=np.float32) * np.float32(1.02)
         patch = zarr_patch.update_coords(distance=distance)
         dc.write(patch, path, "zarr")
-        assert dc.read(path)[0] == patch
+        out = dc.read(path)[0]
+        assert out == patch
+        assert out.get_array("distance").tobytes() == distance.tobytes()
+
+    def test_coord_encoding_not_described(self, zarr_patch, tmp_path):
+        """A coordinate encoded to other labels reads them, as a CF tool does."""
+        path = tmp_path / "enc.zarr"
+        size = zarr_patch.shape[zarr_patch.get_axis("distance")]
+        patch = zarr_patch.update_coords(distance=np.arange(size) + 0.25)
+        encoding = {"distance": {"dtype": "int32"}, "time": {"chunks": (100,)}}
+        dc.write(patch, path, "zarr", encoding=encoding)
+        group = zarr.open_group(path, mode="r")
+        assert RANGE_ATTR not in group["distance"].attrs
+        assert RANGE_ATTR in group["time"].attrs
+        stored = xr.open_dataset(path, engine="zarr")["distance"].values
+        assert np.array_equal(dc.read(path)[0].get_array("distance"), stored)
+
+    def test_spool_loaded_once(self, zarr_patch, tmp_path):
+        """A file spool's one patch is loaded once to be written."""
+        dc.write(zarr_patch, tmp_path / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path / "a.h5")
+        resolve = PatchCatalog.resolve_row
+        with mock.patch.object(
+            PatchCatalog, "resolve_row", autospec=True, side_effect=resolve
+        ) as spy:
+            dc.write(spool, tmp_path / "a.zarr", "zarr")
+        assert spy.call_count == 1
 
     def test_holes_keep_step(self, zarr_patch, tmp_path):
         """Labels with holes store only their step, and read back with them."""
