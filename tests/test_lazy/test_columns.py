@@ -43,13 +43,18 @@ class TestFoldedColumns:
     def test_memory_per_member(self):
         """A large array of like members keeps well under a column per field."""
         paths = [f"/data/f{x:05d}.h5" for x in range(20_000)]
-        tracemalloc.start()
+        # Count only allocations made under this file, so other threads
+        # alive in the worker don't inflate the total.
+        tracemalloc.start(100)
         try:
             array = Recipe.from_columns(paths, (1000, 100), **FORMAT)
-            held = tracemalloc.get_traced_memory()[0]
+            snapshot = tracemalloc.take_snapshot()
             assert len(array) == len(paths)
         finally:
             tracemalloc.stop()
+        mine = tracemalloc.Filter(True, __file__, all_frames=True)
+        traces = snapshot.filter_traces([mine]).traces
+        held = sum(trace.size for trace in traces)
         assert held / len(paths) < 120
 
     def test_folding_changes_nothing(self, monkeypatch):
