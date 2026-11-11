@@ -77,7 +77,9 @@ jobs:
       - name: prepare test data cache
         uses: ./.github/actions/prime-test-data-cache
 
-      # gilguard, loaded first in each worker, fails the test whose import
-      # turns the GIL back on (extensions loaded lazily, after startup).
+      # gilguard, loaded first in each worker, fails any test whose import
+      # turns the GIL back on, catching extensions the scan above misses.
+      # Erroring on unhandled thread exceptions makes a flip in a bare
+      # thread fail the job too.
       - name: run test suite without the GIL
-        run: python -m pytest -p gilguard tests -m "not network" -q --timeout=900 -n logical --dist loadfile
+        run: python -m pytest -p gilguard -W error::pytest.PytestUnhandledThreadExceptionWarning tests -m "not network" -q --timeout=900 -n logical --dist loadfile
