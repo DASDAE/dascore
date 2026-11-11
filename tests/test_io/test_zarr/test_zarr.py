@@ -20,7 +20,11 @@ from upath import UPath
 from upath.implementations.memory import MemoryPath
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
+from dascore.exceptions import (
+    MissingOptionalDependencyError,
+    ParameterError,
+    PatchAttributeError,
+)
 from dascore.io import core as io_core
 from dascore.io.core import source_identity
 from dascore.io.index.catalog import PatchCatalog
@@ -908,3 +912,250 @@ class TestSeveralPayloads:
             ZarrV3().read_array(path, key="levels/1min")
         with pytest.raises(PatchAttributeError, match="No patch named"):
             ZarrV3().read_array(path, key="levels/1min/count")
+
+
+def _halves(patch, dim="time"):
+    """Split a patch in two along ``dim``, at a sample no chunk ends on."""
+    size = patch.shape[patch.get_axis(dim)]
+    first = patch.select(**{dim: (None, size // 2 + 3)}, samples=True)
+    return first, patch.select(**{dim: (size // 2 + 3, None)}, samples=True)
+
+
+class TestAppend:
+    """append adds patches to a store, or extends one along a dimension."""
+
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_add_patch(self, zarr_spool, tmp_path, version):
+        """A patch is added beside the stored ones, which are not rewritten."""
+        first, later, twin = zarr_spool
+        path = tmp_path / "add.zarr"
+        dc.write(first, path, "zarr", file_version=version)
+        meta = {"zarr.json", ".zarray", ".zattrs", ".zgroup", ".zmetadata"}
+        chunks = [x for x in path.rglob("*") if x.is_file() and x.name not in meta]
+        before = {x: x.stat().st_mtime_ns for x in chunks}
+        assert chunks
+        dc.write(dc.spool([later, twin]), path, "zarr", append=True)
+        assert {x: x.stat().st_mtime_ns for x in chunks} == before
+        assert sorted(dc.read(path), key=str) == sorted(zarr_spool, key=str)
+        assert dc.get_format(path) == ("ZARR", version)
+
+    def test_add_repeated_name(self, multi_written, tmp_path):
+        """A name already taken is suffixed, as a fresh write does."""
+        path, names = multi_written
+        copy = tmp_path / "copy.zarr"
+        LocalFileSystem().copy(str(path), str(copy), recursive=True)
+        dc.write(dc.read(path)[0], copy, "zarr", append=True)
+        keys = {x.source_patch_key for x in dc.scan(copy)}
+        assert f"{names[0]}__2" in keys and len(keys) == 4
+
+    def test_missing_store_written(self, zarr_patch, tmp_path):
+        """With no store at the path, append writes one."""
+        path = tmp_path / "new.zarr"
+        dc.write(zarr_patch, path, "zarr", append="time")
+        assert dc.read(path)[0] == zarr_patch
+
+    def test_remote_add(self, zarr_spool):
+        """A patch is added to a store on another filesystem."""
+        path = UPath("memory://dascore_zarr_append/add.zarr")
+        first, later, _ = zarr_spool
+        dc.write(first, path, "zarr")
+        dc.write(later, path, "zarr", append=True)
+        assert len(dc.read(path)) == 2
+        assert [x.name for x in path.parent.iterdir()] == ["add.zarr"]
+
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_extend(self, zarr_patch, tmp_path, version):
+        """A patch extended along time reads back whole, its grid described."""
+        path = tmp_path / "grow.zarr"
+        first, second = _halves(zarr_patch)
+        encoding = {"data": {"chunks": (50, 64)}, "time": {"chunks": (64,)}}
+        dc.write(first, path, "zarr", file_version=version, encoding=encoding)
+        dc.write(second, path, "zarr", append="time")
+        assert dc.read(path)[0] == zarr_patch
+        attrs = zarr.open_group(path, mode="r")["time"].attrs
+        assert attrs[RANGE_KEY] == len(zarr_patch.get_coord("time"))
+
+    @pytest.mark.parametrize("step", [np.int64(2), np.float32(1.02)])
+    def test_extend_distance(self, tmp_path, step):
+        """A patch grows along a numeric dimension, described or not."""
+        patch = dc.get_example_patch()
+        size = patch.shape[patch.get_axis("distance")]
+        patch = patch.update_coords(distance=np.arange(size, dtype=step.dtype) * step)
+        path = tmp_path / "grow.zarr"
+        first, second = _halves(patch, "distance")
+        dc.write(first, path, "zarr")
+        dc.write(second, path, "zarr", append="distance")
+        assert dc.read(path)[0] == patch
+
+    def test_failed_add_leaves_store(self, zarr_spool, tmp_path, monkeypatch):
+        """An add failing part way leaves the store and no staged group."""
+        first, later, _ = zarr_spool
+        path = tmp_path / "add.zarr"
+        dc.write(first, path, "zarr")
+
+        def _fail(*args, **kwargs):
+            raise OSError("no space")
+
+        monkeypatch.setattr(LocalFileSystem, "mv", _fail)
+        with pytest.raises(OSError, match="no space"):
+            dc.write(later, path, "zarr", append=True)
+        assert list(dc.read(path)) == [first]
+        assert [x.name for x in tmp_path.iterdir()] == ["add.zarr"]
+
+    def test_extend_twice(self, zarr_patch, tmp_path):
+        """Several pieces in one write each extend what the last one left."""
+        path = tmp_path / "grow.zarr"
+        first, rest = _halves(zarr_patch)
+        second, third = _halves(rest)
+        dc.write(first, path, "zarr")
+        dc.write(dc.spool([second, third]), path, "zarr", append="time")
+        assert dc.read(path)[0] == zarr_patch
+
+    def test_partial_move_removed(self, zarr_spool, tmp_path, monkeypatch):
+        """A move copying part of a group before failing leaves none of it."""
+        first, later, _ = zarr_spool
+        path = tmp_path / "add.zarr"
+        dc.write(first, path, "zarr")
+        mv = LocalFileSystem.mv
+
+        def _fail(self, source, target, **kwargs):
+            mv(self, source, target, **kwargs)
+            raise OSError("interrupted")
+
+        monkeypatch.setattr(LocalFileSystem, "mv", _fail)
+        with pytest.raises(OSError, match="interrupted"):
+            dc.write(later, path, "zarr", append=True)
+        monkeypatch.undo()
+        dc.write(first.update_attrs(tag="x"), path, "zarr", append=True)
+        assert len(dc.read(path)) == 2  # the interrupted group never shows
+
+    def test_extend_one_group(self, zarr_spool, tmp_path):
+        """Only the patch the new one continues is extended."""
+        first, later, twin = zarr_spool
+        path = tmp_path / "grow.zarr"
+        start, end = _halves(later)
+        dc.write(dc.spool([first, start, twin]), path, "zarr")
+        dc.write(end, path, "zarr", append="time")
+        assert list(dc.read(path)) == [first, twin, later]
+
+    def test_update_sees_append(self, zarr_spool, tmp_path):
+        """A spool's update sees an added and an extended patch."""
+        first, _, twin = zarr_spool
+        path = tmp_path / "grow.zarr"
+        start, end = _halves(first)
+        dc.write(start, path, "zarr")
+        spool = dc.spool(path).update()
+        dc.write(end, path, "zarr", append="time")
+        assert spool.update()[0] == first
+        dc.write(twin, path, "zarr", append=True)
+        assert len(spool.update()) == 2
+
+    def test_chunks_before_shape(self, zarr_patch, tmp_path, monkeypatch):
+        """Until a shape grows, a reader sees the stored patch exactly."""
+        path = tmp_path / "grow.zarr"
+        first, second = _halves(zarr_patch)
+        dc.write(first, path, "zarr", encoding={"time": {"chunks": (64,)}})
+        resize, seen = zarr.Array.resize, []
+
+        def _resize(self, shape):
+            if not seen:  # every chunk is written; no shape has changed
+                seen.append(dc.read(path)[0])
+            return resize(self, shape)
+
+        monkeypatch.setattr(zarr.Array, "resize", _resize)
+        dc.write(second, path, "zarr", append="time")
+        assert seen == [first]
+
+    def test_unmatched_added(self, zarr_patch, tmp_path):
+        """A patch continuing none is added beside; one continuing two raises."""
+        path = tmp_path / "grow.zarr"
+        first, second = _halves(zarr_patch)
+        dc.write(first, path, "zarr")
+        gap = second.select(time=(1, None), samples=True)
+        other = second.update_attrs(station="SUE")
+        moved = second.update_coords(distance=second.get_array("distance") + 1)
+        single = second.update(data=second.data.astype(np.float32))
+        units = second.set_units("km")
+        before = first.select(time=(0, 10), samples=True)
+        late = tmp_path / "late.zarr"
+        dc.write(second, late, "zarr")
+        dc.write(first, late, "zarr", append="time")  # precedes it
+        assert sorted(dc.read(late), key=str) == sorted([first, second], key=str)
+        for i, patch in enumerate((gap, other, moved, single, units, first)):
+            path = tmp_path / f"grow{i}.zarr"
+            dc.write(first, path, "zarr")
+            dc.write(dc.spool([patch, before]), path, "zarr", append="time")
+            out = list(dc.read(path))
+            assert len(out) == 3 and first in out and patch in out and before in out
+        start, end = _halves(dc.get_example_patch(), "distance")
+        holes = end.unselect(distance=(5, 7), samples=True)  # not evenly sampled
+        dc.write(start, path, "zarr")
+        dc.write(holes, path, "zarr", append="distance")
+        assert sorted(dc.read(path), key=str) == sorted([start, holes], key=str)
+        twins = tmp_path / "twins.zarr"
+        dc.write(dc.spool([first, first.update(data=first.data * 2)]), twins, "zarr")
+        with pytest.raises(ParameterError, match="Several patches"):
+            dc.write(second, twins, "zarr", append="time")
+
+    def test_associated_coord_refused(self, zarr_patch, tmp_path):
+        """A coordinate riding the dimension (latitude) is not extended."""
+        first, second = _halves(zarr_patch, "distance")
+        path = tmp_path / "grow.zarr"
+        dc.write(first, path, "zarr")
+        with pytest.raises(NotImplementedError, match="latitude"):
+            dc.write(second, path, "zarr", append="distance")
+        assert dc.read(path)[0] == first
+
+    def test_shared_coords_refused(self, level_store, tmp_path):
+        """One of several payloads on shared coordinates is not extended alone."""
+        path = tmp_path / "level.zarr"
+        LocalFileSystem().copy(str(level_store[0]), str(path), recursive=True)
+        patch = dc.spool(path).select(tag="hi_max")[0]
+        step = patch.get_coord("time").step
+        later = patch.update_coords(time_min=patch.get_coord("time").max() + step)
+        with pytest.raises(NotImplementedError, match="shares 'time'"):
+            dc.write(later, path, "zarr", append="time")
+
+    def test_helper_along_dim_refused(self, zarr_patch, tmp_path):
+        """A lower-rank array along the dimension is not left short."""
+        path = tmp_path / "helper.zarr"
+        first, second = _halves(zarr_patch)
+        dc.write(first, path, "zarr")
+        count = xr.DataArray(np.arange(first.shape[1]), dims="time", name="count")
+        count.to_zarr(path, mode="a", consolidated=True)
+        with pytest.raises(NotImplementedError, match="count"):
+            dc.write(second, path, "zarr", append="time")
+        assert dc.read(path)[0] == first
+
+    def test_scaled_payload_refused(self, foreign_store, tmp_path):
+        """A payload stored scaled (CF scale_factor) is not extended."""
+        path = tmp_path / "foreign.zarr"
+        LocalFileSystem().copy(str(foreign_store[0]), str(path), recursive=True)
+        patch = dc.read(path)[0]
+        step = patch.get_coord("time").step
+        later = patch.update_coords(time_min=patch.get_coord("time").max() + step)
+        with pytest.raises(NotImplementedError, match="stored encoded"):
+            dc.write(later, path, "zarr", append="time")
+
+    @pytest.mark.parametrize("name", ["data", "time"])
+    def test_same_dtype_scaled_refused(self, zarr_patch, tmp_path, name):
+        """A payload or labels scaled in their own dtype are not extended."""
+        path = tmp_path / "scaled.zarr"
+        first, second = _halves(zarr_patch.update(data=zarr_patch.data * 1.0))
+        dc.write(first, path, "zarr")
+        group = zarr.open_group(path, mode="r+")
+        group[name].attrs.update(scale_factor=1, add_offset=0)
+        with pytest.raises(NotImplementedError, match="stored encoded"):
+            dc.write(second, path, "zarr", append="time")
+
+    def test_bad_append(self, zarr_patch, tmp_path):
+        """Append is a bool or a dimension the patch has."""
+        path = tmp_path / "bad.zarr"
+        for value in (1.5, ""):
+            with pytest.raises(ParameterError, match="append must be"):
+                dc.write(zarr_patch, path, "zarr", append=value)
+        dc.write(zarr_patch, path, "zarr")
+        with pytest.raises(ParameterError, match="no dimension"):
+            dc.write(zarr_patch, path, "zarr", append="bob")
+        with pytest.raises(ValueError, match="empty"):
+            dc.write(dc.spool([]), path, "zarr", append=True)

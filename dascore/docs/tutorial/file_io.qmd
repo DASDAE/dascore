@@ -60,6 +60,16 @@ patch.io.write(zarr_path, "ZARR", encoding=encoding)
 zarr_patch = dc.read(zarr_path)[0]
 ```
 
+`append=True` adds to a store instead, in its own zarr format and without rewriting what it holds: each patch becomes a new group, named as above and suffixed if the name is taken. `append="time"` (any dimension name) also extends: a patch which continues a stored patch along that dimension (the same kind, data units, dimensions, dtype and other coordinates, its labels starting one step after the stored ones end) extends it, and a patch which continues none, such as one after a gap or of another kind, is added as a new group. A patch which could continue several stored patches raises, as does one DASCore cannot extend whole: one sharing the dimension with other arrays (sibling payloads or helpers), one with a coordinate other than the dimension itself running along it, or one whose payload or labels are stored scaled. The new chunks are written before any shape grows, and each patch ends by consolidating the store's metadata, so readers and a spool's `update` see the new content only once it is complete. A reader opening a group in the moment between an extension's coordinate and payload resizes can fail on their lengths, though it never reads unwritten samples; an extension killed in that moment leaves them unequal, and the store must be rewritten. One writer should append at a time. With no store at the path, `append` writes one.
+
+```python
+store = UPath("memory://dascore/tutorial/growing.zarr")
+first, second = patch.select(time=(None, 100), samples=True), patch.select(time=(100, None), samples=True)
+first.io.write(store, "ZARR")
+second.io.write(store, "ZARR", append="time")  # one patch, now whole
+patch.update_attrs(tag="other").io.write(store, "ZARR", append=True)  # a second patch
+```
+
 A store on object storage is a `UPath` carrying its storage options, and `dc.read`, `dc.scan`, and `dc.spool` take it as they take a local store. A scan reads only metadata and coordinates, and loading a patch reads only the chunks its selection touches. Beside the labels of each evenly sampled coordinate DASCore writes attributes describing its grid, one per field of a DASDAE `CoordRange` node (`_dascore_coord_dtype`, `_dascore_coord_length`, `_dascore_coord_start`, ...), so a scan reads none of the labels it describes, however long the coordinate. The labels are still written for other tools, and a scan reads those of any coordinate left undescribed: one with holes or jitter, one the description cannot rebuild exactly (such as a float32 grid), one whose `encoding` names more than `chunks` or `shards`, and one whose `_dascore_coord_length` no longer matches its labels. A tool which rewrites the labels in place, keeping their length, must drop the attributes. A remote directory of stores cannot be indexed.
 
 ```python
