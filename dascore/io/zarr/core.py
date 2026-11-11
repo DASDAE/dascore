@@ -13,7 +13,7 @@ from dascore.io.dasdae.utils import grid_fields, read_grid_fields
 from dascore.io.netcdf.utils import (
     COORD_PREFIX,
     dataset_to_patch_meta,
-    get_xarray_data_var_name,
+    payload_datasets,
     read_dataset_array,
     spool_to_cf_dataset,
     stated_range,
@@ -34,7 +34,7 @@ def _open_group(path: UPath, zarr_format: int | None):
         return zarr.open_group(path, mode="r", zarr_format=zarr_format)
 
 
-def _open_zarr(path: UPath, zarr_format: int | None, group: str | None, node):
+def _open_zarr(path: UPath, zarr_format: int | None, group: str, node):
     """
     Open a store (or one group) as a lazy dataset.
 
@@ -42,25 +42,41 @@ def _open_zarr(path: UPath, zarr_format: int | None, group: str | None, node):
     needs. A CF time is decoded, reading its first and last chunk, unless
     its grid is described beside it (see `COORD_PREFIX`); such labels are
     never read. ``node`` is the group open with zarr, which states that.
+
+    A child group is read from its own metadata, not the root's
+    consolidated copy, which xarray would parse again for every group.
     Naming the format (None sniffs it) saves probing for the other format's
     metadata files, each a request on a remote store.
     """
     xr = optional_import("xarray")
-    ranged = [name for name, array in node.arrays() if stated_range(array)]
-    undecoded = dict.fromkeys(ranged, False)
-    # A store without consolidated metadata still opens, only slower.
-    with suppress_warnings(RuntimeWarning, message="Failed to open Zarr store"):
-        return xr.open_dataset(
-            path,
-            engine="zarr",
-            group=group,
-            chunks=None,
-            cache=False,
-            create_default_indexes=False,
-            zarr_format=zarr_format,
-            decode_times=undecoded,
-            decode_timedelta=undecoded,
-        )
+
+    def _open(undecoded):
+        # A store without consolidated metadata still opens, only slower.
+        with suppress_warnings(RuntimeWarning, message="Failed to open Zarr store"):
+            return xr.open_dataset(
+                path,
+                engine="zarr",
+                group=group or None,
+                consolidated=False if group else None,
+                chunks=None,
+                cache=False,
+                create_default_indexes=False,
+                zarr_format=zarr_format,
+                decode_times=undecoded,
+                decode_timedelta=undecoded,
+            )
+
+    ranged = {name for name, array in node.arrays() if stated_range(array)}
+    dataset = _open(dict.fromkeys(ranged, False))
+    # Consolidated metadata older than the group's own (an append not yet
+    # consolidated) can describe labels which no longer match: decode them.
+    variables = dataset.variables
+    if stale := {
+        x for x in ranged if x in variables and not stated_range(variables[x])
+    }:
+        dataset.close()
+        dataset = _open(dict.fromkeys(ranged - stale, False))
+    return dataset
 
 
 # Encoding keys which lay out storage without changing the labels read back;
@@ -106,35 +122,68 @@ def _cf_dataset(spool, encoding: dict | None):
     return dataset
 
 
-def _has_payload(dataset) -> bool:
-    """Return True if an open dataset holds a dimensioned payload."""
+def _payloads(dataset) -> dict:
+    """
+    Map each payload of an open dataset to a dataset holding it alone.
+
+    ``data``, else the only variable, is the payload; otherwise each
+    variable sharing the largest one's dimensions is, as NetCDF reads them
+    (see `payload_datasets`). Coordinates, the auxiliary coordinates a
+    ``coordinates`` attribute names, CF ``bounds`` tables and scalars never
+    are.
+    """
     try:
-        name = get_xarray_data_var_name(dataset)
+        payloads = payload_datasets(dataset)
     except ValueError:
-        return False
-    return bool(dataset[name].dims)
+        return {}
+    # a lone bounds table passes the only-variable rule
+    bounds = {x.attrs.get("bounds") for x in dataset.variables.values()}
+    return {k: v for k, v in payloads.items() if v[k].dims and k not in bounds}
 
 
-def _patch_datasets(path: UPath, zarr_format: int | None):
+def _patch_keys(group: str, payloads: dict) -> dict:
     """
-    Yield ``(group, open dataset)`` for each patch of a store.
+    Key each payload of a group by its path.
 
-    A root payload is the one patch (group None) and child groups are then
-    ignored; otherwise each child group holding a payload is a patch.
+    A group's only payload is keyed by the group's path instead (the root's
+    by its own name), as stores DASCore writes have always been read.
     """
-    group = _open_group(path, zarr_format)
-    with _open_zarr(path, zarr_format, None, group) as root:
-        if _has_payload(root):
-            yield None, root
-            return
-    for name in sorted(group.group_keys()):
-        try:
-            dataset = _open_zarr(path, zarr_format, name, group[name])
-        except KeyError:  # raw zarr arrays with no dimension names
+    if len(payloads) == 1 and group:
+        return {group: next(iter(payloads.values()))}
+    return {f"{group}/{k}".lstrip("/"): v for k, v in payloads.items()}
+
+
+def _groups(root):
+    """Yield ``(path, group)`` for a store's root and every group below it."""
+    zarr = optional_import("zarr")
+    yield "", root
+    members = root.members(max_depth=None)
+    groups = (x for x in members if isinstance(x[1], zarr.Group))
+    yield from sorted(groups, key=lambda x: x[0])
+
+
+def _open_payload_group(path: UPath, zarr_format: int | None, node):
+    """Open one group as a dataset, or return None if xarray finds no payload."""
+    if not any(True for _ in node.array_keys()):
+        return None  # e.g. a group of groups, never opened by xarray
+    try:
+        return _open_zarr(path, zarr_format, node.path, node)
+    except KeyError:  # raw zarr arrays with no dimension names
+        return None
+
+
+def _patches(path: UPath, zarr_format: int | None):
+    """
+    Yield ``(key, dataset holding its payload alone)`` for each patch.
+
+    Every group at any depth is a path to its payloads; attributes are the
+    payload's own, never inherited from the groups above it.
+    """
+    for group, node in _groups(_open_group(path, zarr_format)):
+        if (dataset := _open_payload_group(path, zarr_format, node)) is None:
             continue
         with dataset:
-            if _has_payload(dataset):
-                yield name, dataset
+            yield from _patch_keys(group, _payloads(dataset)).items()
 
 
 def _marked_zarr_format(path: UPath) -> str | None:
@@ -149,7 +198,7 @@ def _store_format(path: UPath) -> int | None:
 
 
 class ZarrV3(FiberIO):
-    """Zarr IO (zarr format 3); the payload is ``data``, else the only variable."""
+    """Zarr IO (zarr format 3); each payload in any group is a patch."""
 
     name = "ZARR"
     version = "3"
@@ -161,8 +210,9 @@ class ZarrV3(FiberIO):
         """
         Return a store's root metadata files, which every dascore write renews.
 
-        Chunks rewritten in place, or array metadata edited without
-        consolidating, go unseen.
+        Chunks rewritten in place, or groups and arrays added or edited
+        without consolidating, go unseen: stating every group's metadata
+        files would cost a store of thousands of arrays as many requests.
         """
         if _marked_zarr_format(path) is None:
             return None
@@ -176,7 +226,7 @@ class ZarrV3(FiberIO):
         if version is None:
             return None
         try:
-            for _ in _patch_datasets(resource, int(version)):
+            for _ in _patches(resource, int(version)):
                 return version
         except MissingOptionalDependencyError:
             # Claimed, so reading names the missing package and a scan
@@ -190,8 +240,8 @@ class ZarrV3(FiberIO):
         """Describe each patch from its metadata and coordinates."""
         return [
             meta
-            for group, dataset in _patch_datasets(resource, _store_format(resource))
-            for meta in dataset_to_patch_meta(dataset, snap, key=group)
+            for key, dataset in _patches(resource, _store_format(resource))
+            for meta in dataset_to_patch_meta(dataset, snap, key=key)
         ]
 
     def read_array(
@@ -199,20 +249,24 @@ class ZarrV3(FiberIO):
     ) -> np.ndarray:
         """Read a window of one patch; only the chunks it touches are read."""
         where, zarr_format = str(resource), _store_format(resource)
-        group = _open_group(resource, zarr_format)
-        with _open_zarr(resource, zarr_format, None, group) as root:
-            if _has_payload(root):
-                return read_dataset_array(root, windows, key, where)
-        if not key:  # groups are listed only when no key names one
-            groups = [x for x, _ in _patch_datasets(resource, zarr_format)]
-            key = resolve_keyed_source(dict(zip(groups, groups)), key, where)
-        try:
-            dataset = _open_zarr(resource, zarr_format, key, group[key])
-        except (KeyError, FileNotFoundError) as exc:
-            msg = f"No patch named '{key}' in {where}."
-            raise PatchAttributeError(msg) from exc
+        if not key:  # every group is opened only when no key names a patch
+            keys = [x for x, _ in _patches(resource, zarr_format)]
+            key = resolve_keyed_source(dict(zip(keys, keys)), key, where)
+        root = _open_group(resource, zarr_format)
+        zarr = optional_import("zarr")
+        try:  # a key names a group holding one payload, else a payload array
+            node = root[key]
+        except KeyError as exc:
+            raise PatchAttributeError(f"No patch named '{key}' in {where}.") from exc
+        if not isinstance(node, zarr.Group):
+            group = key.rpartition("/")[0]
+            node = root[group] if group else root
+        if (dataset := _open_payload_group(resource, zarr_format, node)) is None:
+            raise PatchAttributeError(f"No patch named '{key}' in {where}.")
         with dataset:
-            return read_dataset_array(dataset, windows, "", where)
+            patches = _patch_keys(node.path, _payloads(dataset))
+            payload = resolve_keyed_source(patches, key, where)
+            return read_dataset_array(payload, windows, "", where)
 
     def write(self, spool, resource: UPath, encoding: dict | None = None, **kwargs):
         """

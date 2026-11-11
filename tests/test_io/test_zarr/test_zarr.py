@@ -669,9 +669,20 @@ class TestMultiPatch:
     def test_keyed_read_skips_listing(self, multi_written, zarr_spool, monkeypatch):
         """A keyed read opens its group without listing the others."""
         path, names = multi_written
-        monkeypatch.setattr(zarr_core, "_patch_datasets", None)
+        monkeypatch.setattr(zarr_core, "_patches", None)
         out = ZarrV3().read_array(path, key=names[1])
         assert np.array_equal(out, zarr_spool[1].data)
+
+    def test_stale_consolidated_range(self, zarr_spool, tmp_path):
+        """A group's own metadata wins over an older consolidated copy."""
+        path = tmp_path / "stale.zarr"
+        dc.write(zarr_spool, path, "zarr")
+        root = zarr.open_group(path, mode="r+", use_consolidated=False)
+        for _, group in root.groups():
+            attrs = group["time"].attrs  # not consolidated after
+            attrs[RANGE_KEY] = 3
+        first, later, twin = zarr_spool
+        assert list(dc.read(path)) == [first, twin, later]
 
     def test_key_required(self, multi_written):
         """read_array needs a key, and a known one, on a multi-patch store."""
@@ -713,6 +724,8 @@ class TestMultiPatch:
         group.create_group("raw").create_array("values", data=np.arange(3))
         zarr.consolidate_metadata(path)
         assert len(dc.read(path)) == len(zarr_spool)
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            ZarrV3().read_array(path, key="raw")
 
     def test_streams(self, zarr_spool, tmp_path, monkeypatch):
         """Each patch is converted and written before the next is converted."""
@@ -778,6 +791,18 @@ class TestMultiPatch:
         view = pickle.loads(pickle.dumps((spool + dc.spool([twin])).select()))
         assert all(x.data.size for x in view)
 
+    def test_scan_reads_root_once(self, zarr_spool):
+        """A scan parses the consolidated root once, not once per group."""
+        fsspec.register_implementation("zarrcount", CountMemory, clobber=True)
+        upath.registry.register_implementation("zarrcount", MemoryPath, clobber=True)
+        path = UPath("zarrcount://dascore_zarr_count/root_once.zarr")
+        dc.write(zarr_spool, path, "zarr")
+        CountMemory.read.clear()
+        assert len(ZarrV3().get_metadata(path)) == len(zarr_spool)
+        assert (
+            sum(x.endswith("root_once.zarr/zarr.json") for x in CountMemory.read) == 1
+        )
+
     def test_remote_spool_reads_one_group(self, zarr_spool):
         """
         A remote store is a spool; scanning reads no payload chunk, and
@@ -801,17 +826,18 @@ class TestMultiPatch:
 
 
 class TestForeignGroups:
-    """Stores other tools write with groups: a root payload wins."""
+    """Stores other tools write: every group, at any depth, holds patches."""
 
     @pytest.mark.parametrize("version", VERSIONS)
-    def test_root_payload_wins(self, tmp_path, version):
-        """Root data beside aux, attrs-only and nested groups reads alone."""
+    def test_nested_groups(self, tmp_path, version):
+        """Payloads at the root and in nested groups are each a patch."""
         data = xr.Dataset({"data": (("distance", "time"), np.ones((3, 4)))})
         aux = xr.Dataset({"temp": ("sensor", np.arange(3.0))})
         groups = {"/": data, "/aux": aux, "/meta": xr.Dataset(attrs={"a": 1})}
-        path = _store(tmp_path / "s.zarr", groups | {"/x/y": data}, version)
-        (patch,) = dc.read(path)
-        assert patch.shape == (3, 4)
+        path = _store(tmp_path / "s.zarr", groups | {"/x/y": data * 2}, version)
+        keys = sorted(x.source_patch_key for x in dc.scan(path))
+        assert keys == ["aux", "data", "x/y"]
+        assert ZarrV3().read_array(path, key="x/y").sum() == 24
 
     @pytest.mark.parametrize("version", VERSIONS)
     def test_groups_without_payload_skipped(self, tmp_path, version):
@@ -819,6 +845,66 @@ class TestForeignGroups:
         data = xr.Dataset({"data": (("distance", "time"), np.ones((3, 4)))})
         meta = xr.Dataset(attrs={"a": 1})
         groups = {"/a_meta": meta, "/p1": data, "/p2": data * 2, "/z_meta": meta}
+        groups["/coords"] = xr.Dataset(coords={"x": np.arange(3)})
+        x = ("x", np.arange(3.0), {"bounds": "x_bnds"})
+        bounds = {"x_bnds": (("x", "nv"), np.zeros((3, 2)))}
+        groups["/bounds"] = xr.Dataset(bounds, coords={"x": x})
         path = _store(tmp_path / "s.zarr", groups, version)
         assert sorted(x.source_patch_key for x in dc.scan(path)) == ["p1", "p2"]
         assert len(dc.read(path)) == 2
+
+
+@pytest.fixture(scope="module", params=VERSIONS)
+def level_store(request, tmp_path_factory):
+    """
+    A group of several statistics on one grid, beside their coordinates,
+    an auxiliary coordinate, a bounds table and a lower-rank helper.
+    """
+    time = np.datetime64("2024-01-01") + np.arange(4) * np.timedelta64(60, "s")
+    bounds = np.stack([time, time + np.timedelta64(60, "s")], axis=1)
+    dims = ("time", "distance")
+    level = xr.Dataset(
+        {
+            "hi_max": (dims, np.arange(12.0).reshape(4, 3)),
+            "hi_mean": (dims, np.arange(12.0).reshape(4, 3) / 2),
+            "count": ("time", np.arange(4)),
+            "time_bnds": (("time", "nv"), bounds),
+        },
+        coords={
+            "time": ("time", time, {"bounds": "time_bnds"}),
+            "distance": np.arange(3) * 10.0,
+            "latitude": ("distance", np.arange(3) + 40.0),
+        },
+    )
+    path = tmp_path_factory.mktemp("zarr") / "levels.zarr"
+    return _store(path, {"/levels/1min": level}, request.param), level
+
+
+class TestSeveralPayloads:
+    """A group of several payloads is a patch each, keyed by its path."""
+
+    def test_keys(self, level_store):
+        """Only the payloads are patches; helpers and coordinates are not."""
+        path, _ = level_store
+        keys = sorted(x.source_patch_key for x in dc.scan(path))
+        assert keys == ["levels/1min/hi_max", "levels/1min/hi_mean"]
+
+    def test_read_each(self, level_store):
+        """Each payload reads back with the group's coordinates."""
+        path, level = level_store
+        for name in ("hi_max", "hi_mean"):
+            data = ZarrV3().read_array(path, key=f"levels/1min/{name}")
+            assert np.array_equal(data, level[name].values)
+        patches = {x.attrs.tag: x for x in dc.read(path)}
+        assert set(patches) == {"hi_max", "hi_mean"}  # told apart, not merged
+        patch = patches["hi_mean"]
+        assert np.array_equal(patch.data, level["hi_mean"].values)
+        assert np.array_equal(patch.get_array("latitude"), level["latitude"].values)
+
+    def test_group_key_ambiguous(self, level_store):
+        """A group of several payloads names none of them."""
+        path, _ = level_store
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            ZarrV3().read_array(path, key="levels/1min")
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            ZarrV3().read_array(path, key="levels/1min/count")
