@@ -17,7 +17,7 @@ from dascore.utils.array_api import array_namespace
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
-    _require_evenly_sampled,
+    _refuse_holes_and_jitter,
     drop_associated_coords,
     get_dim_axis_value,
     get_start_stop_step,
@@ -84,10 +84,11 @@ class Decimate(_DecimateFields):
       it: taking every nth value of a dimension takes every nth value of
       everything indexed by it.
 
-    - With a filter, a dimension which is not evenly sampled (holes or
-      jitter) raises; use
-      [split_gaps](`dascore.Patch.split_gaps`) or
-      [fill_gaps](`dascore.Patch.fill_gaps`) first.
+    - With a filter, a dimension with holes or jitter raises; use
+      [split_gaps](`dascore.Patch.split_gaps`),
+      [fill_gaps](`dascore.Patch.fill_gaps`) or
+      [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with
+      no step is filtered sample by sample, as an irregular axis.
 
     See Also
     --------
@@ -113,7 +114,7 @@ class Decimate(_DecimateFields):
         dim, axis, factor = get_dim_axis_value(meta, kwargs=extras)[0]
         coords, slices = meta.coords.decimate(**{dim: int(factor)})
         if self.filter_type:
-            _require_evenly_sampled(meta, dim, "filtered decimate")
+            _refuse_holes_and_jitter(meta, dim, "filtered decimate")
             coords = coords._update_grid(dim)
             # scipy's own refusal of a factor which is not an integer.
             operator.index(factor)

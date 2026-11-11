@@ -21,7 +21,7 @@ from dascore.utils.identity import (
     result_ids,
     try_operation_id,
 )
-from dascore.utils.misc import iterate
+from dascore.utils.misc import iterate, suppress_warnings
 
 # Ids never decide a merge; the second pair are what the first were called
 # in attrs pickled before they were renamed.
@@ -128,8 +128,12 @@ def combine_patch_attrs(
                 "unequal attributes."
             )
             raise AttributeMergeError(msg)
+        # Kept for the subclass fallback, which must not restore them.
+        removed.update(conflicts)
         return [out]
 
+    # Fields the merge leaves out on purpose: dropped or conflicting.
+    removed: set[str] = set(iterate(drop_attrs))
     mod_dict_list = _get_model_dict_list(model_list)
     members = [_to_patch_attrs(x) for x in model_list]
     ids: dict[str, Any] = {}
@@ -154,7 +158,32 @@ def combine_patch_attrs(
         _to_patch_attrs(first).__class__ if not isinstance(first, dict) else dict
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
-    return cls(**{**mod_dict_list[0], **history, **ids})
+    out = {**mod_dict_list[0], **history, **ids}
+    # A field the subclass requires can be dropped as a conflict, and the
+    # subclass cannot then hold the result; the base class carries the rest
+    # of its fields as extras, including the defaults the dump left out
+    # (but not those of fields the merge removed, nor values no extra holds).
+    fields = cls.model_fields
+    if any(f.is_required() and n not in out for n, f in fields.items()):
+        kept = {
+            n: f.get_default(call_default_factory=True)
+            for n, f in fields.items()
+            if not f.is_required() and n not in removed
+        }
+        out = {n: v for n, v in {**kept, **out}.items() if _base_holds(n, v)}
+        cls = dc.PatchAttrs
+    return cls(**out)
+
+
+def _base_holds(name: str, value: Any) -> bool:
+    """True if PatchAttrs keeps a subclass's field as a field or an extra."""
+    if name in dc.PatchAttrs.model_fields:
+        return True
+    with suppress_warnings():
+        try:
+            return name in dict(dc.PatchAttrs(**{name: value}))
+        except ValueError:
+            return False
 
 
 def _is_missing(value) -> bool:

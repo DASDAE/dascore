@@ -604,6 +604,31 @@ class TestChunkMerge:
         assert len(out) == 1
         assert out[0].attrs.data_type == ""
 
+    def test_drop_required_subclass_attr(self):
+        """
+        Dropping a conflicting attr a PatchAttrs subclass requires returns a
+        merged patch rather than a validation error.
+        """
+
+        class _Attrs(dc.PatchAttrs):
+            start_channel: int
+
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        first = patch.update(attrs=_Attrs(**dict(patch.attrs), start_channel=0))
+        second = first.update_coords(time_min=time.max() + time.step)
+        second = second.update(
+            attrs=_Attrs(**{**dict(second.attrs), "start_channel": 1000})
+        )
+        spool = dc.spool([first, second])
+        kept = spool.chunk(time=None, conflict="keep_first")[0]
+        assert kept.attrs.start_channel == 0
+        out = spool.chunk(time=None, conflict="drop")
+        assert len(out) == 1
+        merged = out[0]
+        assert merged.shape[1] == 2 * patch.shape[1]
+        assert "start_channel" not in dict(merged.attrs)
+
     def test_surviving_member_takes_the_rows_attrs(self):
         """Whichever duplicate survives overlap removal, patch and row agree."""
         p1 = dc.get_example_patch().update_attrs(foo="a", data_type="velocity")

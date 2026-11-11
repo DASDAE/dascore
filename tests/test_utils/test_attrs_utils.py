@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 
 import numpy as np
 import pytest
+from pydantic import Field
 
 from dascore import PatchAttrs
 from dascore.exceptions import ParameterError
@@ -97,6 +99,61 @@ class TestMergeAttrs:
         defaults = PatchAttrs()
         assert out.tag == defaults.tag
         assert out.acquisition_key == defaults.acquisition_key
+
+    def test_drop_required_subclass_field(self, random_patch):
+        """
+        Dropping a conflicting field a subclass requires falls back to the
+        base class rather than failing validation.
+        """
+
+        class _Attrs(PatchAttrs):
+            start_channel: int
+            vendor: str = "acme"
+            data_type: str = "velocity"
+
+        base = {i: v for i, v in dict(random_patch.attrs).items() if i != "data_type"}
+        pa1 = _Attrs(**base, start_channel=0)
+        pa2 = _Attrs(**base, start_channel=1000)
+        out = combine_patch_attrs([pa1, pa2], conflict="drop")
+        assert type(out) is PatchAttrs
+        assert "start_channel" not in dict(out)
+        assert out["vendor"] == "acme"
+        # A base field's default the subclass overrides is kept too.
+        assert out.data_type == "velocity"
+        # A field the merge was asked to drop is not restored as a default.
+        dropped = combine_patch_attrs([pa1, pa2], conflict="drop", drop_attrs="vendor")
+        assert "vendor" not in dict(dropped)
+        # Nor is one dropped for conflicting.
+        pa3 = _Attrs(**base, start_channel=5, vendor="other")
+        conflicted = combine_patch_attrs([pa1, pa3], conflict="drop")
+        assert "vendor" not in dict(conflicted)
+        # Agreeing required fields keep the subclass.
+        agree = combine_patch_attrs([pa1, pa1], conflict="drop")
+        assert isinstance(agree, _Attrs)
+        assert agree.start_channel == 0
+
+    def test_drop_required_keeps_only_what_extras_hold(self, random_patch):
+        """
+        A subclass field no extra attr holds, such as a tuple or a dict, is
+        left out of the fallback rather than warning or failing.
+        """
+
+        class _Attrs(PatchAttrs):
+            start_channel: int
+            flags: tuple[int, ...] = (1, 2)
+            meta: dict = Field(default_factory=lambda: {"a": 1})
+            # PatchAttrs refuses a coords payload outright.
+            coords: dict = Field(default_factory=lambda: {"time": 1})
+
+        pa1 = _Attrs(**dict(random_patch.attrs), start_channel=0)
+        pa2 = _Attrs(**dict(random_patch.attrs), start_channel=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = combine_patch_attrs([pa1, pa2], conflict="drop")
+        assert type(out) is PatchAttrs
+        assert "flags" not in dict(out) and "coords" not in dict(out)
+        # Kept only where PatchAttrs holds a dict as an extra.
+        assert out.get("meta", {"a": 1}) == {"a": 1}
 
     def test_keep_disjoint_values(self, random_patch):
         """Ensure disjoint values can be kept."""

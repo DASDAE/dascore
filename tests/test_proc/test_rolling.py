@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -14,6 +16,9 @@ from dascore.proc.rolling import _NumpyPatchRoller, _PandasPatchRoller
 from dascore.units import m
 from dascore.utils.misc import all_close
 from dascore.utils.pd import rolling_df
+
+# dascore.proc re-exports the rolling function over its module name
+rolling_module = importlib.import_module("dascore.proc.rolling")
 
 
 @pytest.fixture(scope="class")
@@ -187,6 +192,64 @@ class TestRolling:
         row = random_patch.isel(distance=slice(0, 1))
         assert isinstance(row.rolling(time=5, samples=True), _PandasPatchRoller)
         assert isinstance(random_patch.rolling(time=5, samples=True), _NumpyPatchRoller)
+
+    @pytest.mark.parametrize("name", ("mean", "median", "min", "max", "std", "sum"))
+    @pytest.mark.parametrize("step", (1, 3))
+    def test_default_long_window_uses_pandas(
+        self, random_patch, name, step, monkeypatch
+    ):
+        """A 2D patch's long windows reduce via pandas, giving NumPy's output."""
+        kwargs = dict(time=300, step=step, samples=True)
+        expected = getattr(random_patch.rolling(**kwargs, engine="numpy"), name)()
+        monkeypatch.setattr(rolling_module, "_rolling_numpy", None)
+        out = getattr(random_patch.rolling(**kwargs), name)()
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, expected.data, equal_nan=True)
+        suffix = expected.attrs.history[-1].split(")", 1)[1]
+        assert out.attrs.history[-1].endswith(suffix)
+
+    @pytest.mark.parametrize(
+        "case",
+        ("short", "centered_step", "3d", "inf", "int64", "complex", "float16"),
+    )
+    def test_default_falls_back_to_numpy(self, random_patch, case, monkeypatch):
+        """Where pandas would disagree with NumPy, the default stays NumPy."""
+        kwargs = dict(time=200, samples=True)
+        patch = random_patch
+        if case == "short":
+            kwargs.update(time=199, step=2)
+        elif case == "centered_step":
+            kwargs.update(step=2, center=True)
+        elif case == "3d":
+            data = np.random.default_rng(0).random((2, 3, 400))
+            coords = {"a": [0, 1], "b": [0, 1, 2], "time": np.arange(400)}
+            patch = dc.Patch(data=data, coords=coords, dims=tuple(coords))
+        elif case == "inf":
+            data = random_patch.data.copy()
+            data[0, 10] = np.inf
+            patch = random_patch.new(data=data)
+        else:
+            dtypes = {"int64": np.int64, "float16": np.float16}
+            dtype = dtypes.get(case, np.complex128)
+            patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
+        expected = patch.rolling(**kwargs, engine="numpy").max()
+        monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
+        out = patch.rolling(**kwargs).max()
+        assert np.array_equal(out.data, expected.data, equal_nan=True)
+
+    def test_default_other_backend_stays_numpy(self, random_patch, monkeypatch):
+        """Data from another array backend keeps NumPy's sliding windows."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = random_patch.new(data=xp.asarray(random_patch.data))
+        expected = random_patch.rolling(time=200, samples=True).mean()
+        monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
+        out = patch.rolling(time=200, samples=True).mean()
+        assert np.allclose(np.asarray(out.data), expected.data, equal_nan=True)
+
+    def test_default_apply_stays_numpy(self, random_patch, monkeypatch):
+        """Apply keeps NumPy's sliding windows for long windows too."""
+        monkeypatch.setattr(rolling_module, "_rolling_pandas", None)
+        random_patch.rolling(time=200, samples=True).apply(np.mean)
 
     def test_misc(self, random_patch):
         """Test miscellaneous functionality."""

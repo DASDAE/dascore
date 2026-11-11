@@ -45,6 +45,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
+from dascore.warnings import DASCoreWarning
 
 
 def _gigo(garbage):
@@ -71,6 +72,22 @@ class _SerialClient:
 def random_spool_len_10():
     """Return a spool of length 10."""
     return dc.examples.get_example_spool(length=10)
+
+
+class TestMovedAttrQueryHint:
+    """Selecting on a 0.1.x attr that moved into acquisition_key says so."""
+
+    def test_station_points_to_acquisition_key(self, random_spool):
+        """The error names acquisition_key for station, network, instrument_id."""
+        for name in ("station", "network", "instrument_id"):
+            with pytest.raises(InvalidSpoolQueryError, match="acquisition_key"):
+                random_spool.select(**{name: "x"})
+
+    def test_other_unknown_names_get_no_hint(self, random_spool):
+        """An unrelated unknown name keeps the plain message."""
+        with pytest.raises(InvalidSpoolQueryError) as info:
+            random_spool.select(nonsense="x")
+        assert "acquisition_key" not in str(info.value)
 
 
 class TestSpoolBasics:
@@ -2433,6 +2450,51 @@ class TestSpoolFromPaths:
         """A path which does not exist is reported as such."""
         with pytest.raises(InvalidSpoolError, match="may not exist"):
             dc.spool([tmp_path / "nope.h5"])
+
+
+class TestAllBlankConcatenate:
+    """Joining a dimension no patch holds values for warns, naming dim_reduce."""
+
+    @pytest.fixture(scope="class")
+    def reduced_spool(self):
+        """Each patch's time reduced away with the default dim_reduce."""
+        spool = dc.get_example_spool()
+        return dc.spool(spool.map(lambda p: p.mean("time"), progress=None))
+
+    def test_all_blank_members_warn_at_plan_time(self, reduced_spool):
+        """The plan warns, naming dim_reduce, and the join still happens."""
+        with pytest.warns(DASCoreWarning, match="dim_reduce") as record:
+            out = reduced_spool.concatenate(time=None)
+        # The warning points at the user's call, not at dascore internals.
+        assert record[0].filename == __file__
+        time = out[0].get_array("time")
+        assert len(time) == len(reduced_spool)
+        assert np.all(pd.isnull(time))
+
+    @pytest.mark.parametrize("blanks", [(), (1,)])
+    def test_stated_labels_are_quiet(self, blanks):
+        """
+        dim_reduce='min' leaves a label per patch, which join silently; a
+        blank member beside stated ones takes their null, as before.
+        """
+        spool = dc.get_example_spool()
+        patches = [p.mean("time", dim_reduce="min") for p in spool]
+        for index in blanks:
+            patches[index] = spool[index].mean("time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            out = dc.spool(patches).concatenate(time=None)[0]
+        time = out.get_array("time")
+        assert len(time) == len(spool)
+        assert pd.isnull(time).sum() == len(blanks)
+
+    def test_new_dimension_is_quiet(self, reduced_spool):
+        """Stacking along a new dimension states that dimension itself."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            out = reduced_spool.concatenate(stack=None)[0]
+        assert "stack" in out.dims
+        assert len(out.get_coord("stack")) == len(reduced_spool)
 
 
 class TestSpoolRepr:

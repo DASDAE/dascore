@@ -19,7 +19,7 @@ from dascore.io.dasdae.utils import (
     _ATTR_TYPE_PREFIX,
     _decode_attr_value,
     _encode_attr_value,
-    _read_coord,
+    _read_stored_coord,
     _save_coord,
 )
 from dascore.units import Quantity
@@ -75,7 +75,7 @@ class TestNodeCodec:
         """A coordinate reads back equal to what was written."""
         coord = CASES[name]
         _save_coord(coord, name, h5, compact=True)
-        back = _read_coord(h5[name], name, {}, snap=False)
+        back = _read_stored_coord(h5[name], name, {})
         assert back == coord
         assert back.dtype == coord.dtype
 
@@ -84,7 +84,7 @@ class TestNodeCodec:
         coord = get_coord(start=T0, step=(1, 1024), shape=(10**9,))
         _save_coord(coord, "long", h5, compact=True)
         assert h5["long"].shape == (0,)
-        back = _read_coord(h5["long"], "long", {}, snap=False)
+        back = _read_stored_coord(h5["long"], "long", {})
         assert back == coord
 
     def test_every_node_states_its_class(self, h5):
@@ -102,7 +102,7 @@ class TestNodeCodec:
         coord = get_coord(start=start, step=np.longdouble("0.1"), shape=(10,))
         _save_coord(coord, "wide", h5, compact=True)
         assert h5["wide"].shape == (10,)
-        back = _read_coord(h5["wide"], "wide", {}, snap=False)
+        back = _read_stored_coord(h5["wide"], "wide", {})
         assert back.dtype == coord.dtype
         assert np.array_equal(back.values, coord.values)
 
@@ -116,7 +116,7 @@ class TestNodeCodec:
         jitter = NumericCoord.from_labels(np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
         coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
         _save_coord(coord, "jitter", h5, compact=True)
-        back = _read_coord(h5["jitter"], "jitter", {}, snap=False)
+        back = _read_stored_coord(h5["jitter"], "jitter", {})
         np.testing.assert_array_equal(back.values, coord.values)
 
     @pytest.mark.parametrize(
@@ -130,7 +130,7 @@ class TestNodeCodec:
         name = f"slice_{indexer.start}_{indexer.stop}_{indexer.step}"
         _save_coord(coord, name, h5, compact=True)
         assert h5[name].shape == (0,)
-        back = _read_coord(h5[name], name, {}, snap=False)
+        back = _read_stored_coord(h5[name], name, {})
         assert back.values.tobytes() == parent.values[indexer].tobytes()
         assert back.data_id == coord.data_id
 
@@ -141,7 +141,7 @@ class TestNodeCodec:
         coord = parent[89:2:-2]
         name = f"window_{type(step).__name__}"
         _save_coord(coord, name, h5, compact=True)
-        back = _read_coord(h5[name], name, {}, snap=False)
+        back = _read_stored_coord(h5[name], name, {})
         assert back.values.tobytes() == parent.values[89:2:-2].tobytes()
         assert back.data_id == coord.data_id
 
@@ -151,7 +151,7 @@ class TestNodeCodec:
             start=np.float32(92.97747), step=0.49223355932786406, shape=(5_482_063,)
         )
         _save_coord(coord, "mixed", h5, compact=True)
-        back = _read_coord(h5["mixed"], "mixed", {}, snap=False)
+        back = _read_stored_coord(h5["mixed"], "mixed", {})
         assert len(back) == len(coord)
         assert back == coord
 
@@ -259,6 +259,61 @@ class TestVersion2Files:
         for back in (once, twice):
             np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
             np.testing.assert_array_equal(back.data, data)
+
+
+class TestSnapIds:
+    """A read derives a new data_id only where snapping moved labels."""
+
+    @pytest.fixture(scope="class")
+    def jittered_patch(self):
+        """A patch whose time labels sit off the step they declare."""
+        coord = get_coord(data=np.array([0.0, 1.1, 1.95, 3.02]), step=1.0)
+        return dc.Patch(data=np.arange(4.0), coords={"time": coord}, dims=("time",))
+
+    @pytest.fixture(scope="class")
+    def jittered_path(self, jittered_patch, tmp_path_factory):
+        """The jittered patch written to DASDAE."""
+        path = tmp_path_factory.mktemp("snap_ids") / "jittered.h5"
+        dc.write(jittered_patch, path, "DASDAE")
+        return path
+
+    def test_default_snap_moves_labels_and_derives_id(
+        self, jittered_path, jittered_patch
+    ):
+        """The default read snaps the labels, so its id is a new one."""
+        out = dc.read(jittered_path)[0]
+        assert not np.array_equal(
+            out.get_array("time"), jittered_patch.get_array("time")
+        )
+        assert out.attrs.data_id != jittered_patch.attrs.data_id
+        assert out.attrs.origin_id == jittered_patch.attrs.origin_id
+        # the explicit spellings of the same decode give the same id
+        assert dc.read(jittered_path, snap=True)[0].attrs.data_id == out.attrs.data_id
+        assert dc.read(jittered_path, snap="time")[0].attrs.data_id == out.attrs.data_id
+
+    def test_exact_read_keeps_id(self, jittered_path, jittered_patch):
+        """snap=False returns the stored patch, labels and id alike."""
+        out = dc.read(jittered_path, snap=False)[0]
+        assert np.array_equal(out.get_array("time"), jittered_patch.get_array("time"))
+        assert out.attrs.data_id == jittered_patch.attrs.data_id
+
+    def test_scan_and_spool_agree_with_read(self, jittered_path):
+        """The index holds the ids the loaded patches carry."""
+        for snap in (None, False):
+            read_id = dc.read(jittered_path, snap=snap)[0].attrs.data_id
+            assert dc.scan(jittered_path, snap=snap)[0].attrs.data_id == read_id
+        spool = dc.spool(jittered_path)
+        assert spool.get_contents()["data_id"].iloc[0] == spool[0].attrs.data_id
+
+    def test_even_labels_keep_id_however_snap_is_spelled(self, tmp_path):
+        """Nothing moves on an evenly sampled patch, so no read derives."""
+        patch = dc.get_example_patch()
+        path = tmp_path / "even.h5"
+        dc.write(patch, path, "DASDAE")
+        for snap in (None, True, False, "time"):
+            out = dc.read(path, snap=snap)[0]
+            assert out.attrs.data_id == patch.attrs.data_id
+            assert "_snapped_dims" not in dict(out.attrs)
 
 
 class TestMultiRunRoundTrip:

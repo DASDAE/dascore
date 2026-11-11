@@ -6,7 +6,7 @@ import functools
 import inspect
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -1065,13 +1065,33 @@ def _get_data_units_from_dims(patch, dims, operator):
     return data_units
 
 
+@overload
+def _get_dx_or_spacing_and_axes(
+    patch,
+    dim,
+    require_sorted: bool = ...,
+    *,
+    require_evenly_spaced: Literal[True],
+) -> tuple[tuple[float, ...], tuple[int, ...]]: ...
+
+
+@overload
+def _get_dx_or_spacing_and_axes(
+    patch,
+    dim,
+    require_sorted: bool = ...,
+    require_evenly_spaced: bool = ...,
+) -> tuple[tuple[float | np.ndarray, ...], tuple[int, ...]]: ...
+
+
 def _get_dx_or_spacing_and_axes(
     patch,
     dim,
     require_sorted=True,
-) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    require_evenly_spaced=False,
+) -> tuple[tuple[float | np.ndarray, ...], tuple[int, ...]]:
     """
-    Return the spacing of evenly sampled dims and their axes.
+    Return dx (spacing) or values for a list of dims and corresponding axes.
 
     Parameters
     ----------
@@ -1081,18 +1101,30 @@ def _get_dx_or_spacing_and_axes(
         The dimension name or sequence of such
     require_sorted
         If True, raise an error if all requested dimensions are not sorted.
-
-    Raises a CoordError for a dimension which is not evenly sampled.
+    require_evenly_spaced
+        If True, raise an error if all requested dimensions are not evenly sampled.
+        Every returned value is then a scalar spacing rather than an array of
+        values, which the overloads above make visible to callers.
     """
     dims = iterate(dim if dim is not None else patch.dims)
     out = []
     axes = []
     for dim_ in dims:
         coord = patch.get_coord(
-            dim_, require_sorted=require_sorted, require_evenly_sampled=True
+            dim_,
+            require_sorted=require_sorted,
+            require_evenly_sampled=require_evenly_spaced,
         )
-        # need to convert the step to float so datetimes work
-        out.append(to_float(coord.step))
+        if coord.evenly_sampled:
+            val = coord.step
+        else:
+            val = coord.values
+            # Offsets from the first label keep a fine datetime spacing,
+            # which float seconds since 1970 would round away.
+            if val.dtype.kind == "M" and val.size:
+                val = val - val[0]
+        # need to convert val to float so datetimes work
+        out.append(to_float(val))
         axes.append(patch.get_axis(dim_))
 
     return tuple(out), tuple(axes)
@@ -1116,16 +1148,17 @@ def _uneven_message(name: str, coord, caller: str) -> str:
     )
 
 
-def _require_evenly_sampled(patch, dims, operation: str) -> None:
+def _refuse_holes_and_jitter(patch, dims, operation: str) -> None:
     """
-    Require evenly sampled dims for an operation 0.1.24 ran on any labels.
+    Refuse dims with missing samples or labels off their step's grid.
 
-    Raises a CoordError naming the operation, as
-    ``patch.get_coord(dim, require_evenly_sampled=True)`` does its caller.
+    A coordinate with no step is an irregular axis, which an operation
+    computes on by its labels, as DASCore 0.1.x did; one with a step it does
+    not keep (holes or jitter) raises a CoordError naming the operation.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)
-        if not coord.evenly_sampled:
+        if coord.gapped or coord.jittered:
             raise CoordError(_uneven_message(dim, coord, operation))
 
 
