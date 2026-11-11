@@ -63,10 +63,9 @@ def _open_zarr(path: UPath, zarr_format: int | None, group: str | None, node):
         )
 
 
-# Encoding keys which lay out storage without changing the labels read back.
-_LAYOUT_KEYS = frozenset(
-    ("chunks", "shards", "compressor", "compressors", "filters", "serializer")
-)
+# Encoding keys which lay out storage without changing the labels read back;
+# codecs (filters, compressors, serializers) may be lossy.
+_LAYOUT_KEYS = frozenset(("chunks", "shards"))
 
 
 def _range_fields(coord) -> dict | None:
@@ -83,8 +82,10 @@ def _range_fields(coord) -> dict | None:
         k: v.item() if isinstance(v, np.generic) else v for k, v in fields.items()
     }
     back = read_grid_fields(fields, coord.units)
-    same = back.dtype == coord.dtype and np.array_equal(back.values, coord.values)
-    return fields if same and back == coord else None
+    # Whole ticks survive JSON exactly; float labels are compared one by one.
+    exact = "step_numerator" in fields
+    same = exact or np.array_equal(back.values, coord.values)
+    return fields if same and back.dtype == coord.dtype and back == coord else None
 
 
 def _cf_dataset(spool, encoding: dict | None):

@@ -406,10 +406,15 @@ class TestRangeAttr:
         path = tmp_path / "enc.zarr"
         size = zarr_patch.shape[zarr_patch.get_axis("distance")]
         patch = zarr_patch.update_coords(distance=np.arange(size) + 0.25)
-        encoding = {"distance": {"dtype": "int32"}, "time": {"chunks": (100,)}}
+        encoding = {
+            "distance": {"dtype": "int32"},
+            "latitude": {"compressors": ()},  # codecs may be lossy
+            "time": {"chunks": (100,)},
+        }
         dc.write(patch, path, "zarr", encoding=encoding)
         group = zarr.open_group(path, mode="r")
         assert RANGE_ATTR not in group["distance"].attrs
+        assert RANGE_ATTR not in group["latitude"].attrs
         assert RANGE_ATTR in group["time"].attrs
         stored = xr.open_dataset(path, engine="zarr")["distance"].values
         assert np.array_equal(dc.read(path)[0].get_array("distance"), stored)
