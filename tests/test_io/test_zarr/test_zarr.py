@@ -25,7 +25,7 @@ from dascore.io import core as io_core
 from dascore.io.core import source_identity
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.indexer import scan_unit_stats
-from dascore.io.netcdf.utils import RANGE_ATTR, STEP_ATTR
+from dascore.io.netcdf.utils import COORD_PREFIX, STEP_ATTR
 from dascore.io.zarr import ZarrV3
 from dascore.io.zarr import core as zarr_core
 from dascore.utils.misc import suppress_warnings
@@ -34,6 +34,8 @@ xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
 
 VERSIONS = ("3", "2")
+# Present wherever a coordinate's grid is described beside its labels.
+RANGE_KEY = f"{COORD_PREFIX}length"
 
 
 @pytest.fixture(scope="module")
@@ -339,7 +341,7 @@ class TestScanDirectory:
 def _edit_ranges(path, edit):
     """Apply ``edit`` to each array's grid description, then consolidate."""
     for _, array in zarr.open_group(path, mode="r+").arrays():
-        if RANGE_ATTR in array.attrs:
+        if RANGE_KEY in array.attrs:
             edit(array.attrs)
     with suppress_warnings(UserWarning, message="Consolidated metadata"):
         zarr.consolidate_metadata(path)
@@ -369,14 +371,19 @@ class TestRangeAttr:
         """A CF tool reads the labels, beside the description it ignores."""
         _, path = written
         dataset = xr.open_dataset(path, engine="zarr")
-        assert RANGE_ATTR in dataset["time"].attrs
+        assert RANGE_KEY in dataset["time"].attrs
         assert np.array_equal(dataset["time"].values, zarr_patch.get_array("time"))
 
     def test_store_without_ranges(self, zarr_patch, tmp_path):
         """A store written before the description reads its labels, as before."""
         path = tmp_path / "old.zarr"
         dc.write(zarr_patch, path, "zarr")
-        _edit_ranges(path, lambda attrs: attrs.pop(RANGE_ATTR))
+
+        def _strip(attrs):
+            for name in [x for x in attrs if x.startswith(COORD_PREFIX)]:
+                del attrs[name]
+
+        _edit_ranges(path, _strip)
         assert dc.read(path)[0] == zarr_patch
 
     def test_stale_range_ignored(self, zarr_patch, tmp_path):
@@ -385,7 +392,7 @@ class TestRangeAttr:
         dc.write(zarr_patch, path, "zarr")
 
         def _shorten(attrs):
-            attrs[RANGE_ATTR] = attrs[RANGE_ATTR] | {"length": 3}
+            attrs[RANGE_KEY] = 3
 
         _edit_ranges(path, _shorten)
         assert dc.read(path)[0] == zarr_patch
@@ -413,9 +420,9 @@ class TestRangeAttr:
         }
         dc.write(patch, path, "zarr", encoding=encoding)
         group = zarr.open_group(path, mode="r")
-        assert RANGE_ATTR not in group["distance"].attrs
-        assert RANGE_ATTR not in group["latitude"].attrs
-        assert RANGE_ATTR in group["time"].attrs
+        assert RANGE_KEY not in group["distance"].attrs
+        assert RANGE_KEY not in group["latitude"].attrs
+        assert RANGE_KEY in group["time"].attrs
         stored = xr.open_dataset(path, engine="zarr")["distance"].values
         assert np.array_equal(dc.read(path)[0].get_array("distance"), stored)
 
@@ -436,7 +443,7 @@ class TestRangeAttr:
         patch = zarr_patch.unselect(distance=(10, 20), samples=True)
         dc.write(patch, path, "zarr")
         attrs = zarr.open_group(path, mode="r")["distance"].attrs
-        assert RANGE_ATTR not in attrs and STEP_ATTR in attrs
+        assert RANGE_KEY not in attrs and STEP_ATTR in attrs
         assert dc.read(path)[0] == patch
 
 

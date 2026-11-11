@@ -11,7 +11,7 @@ from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeErr
 from dascore.io import FiberIO
 from dascore.io.dasdae.utils import grid_fields, read_grid_fields
 from dascore.io.netcdf.utils import (
-    RANGE_ATTR,
+    COORD_PREFIX,
     dataset_to_patch_meta,
     get_xarray_data_var_name,
     read_dataset_array,
@@ -40,7 +40,7 @@ def _open_zarr(path: UPath, zarr_format: int | None, group: str | None, node):
 
     No indexes are built, so a windowed read touches only the chunks it
     needs. A CF time is decoded, reading its first and last chunk, unless
-    its grid is described beside it (see `RANGE_ATTR`); such labels are
+    its grid is described beside it (see `COORD_PREFIX`); such labels are
     never read. ``node`` is the group open with zarr, which states that.
     Naming the format (None sniffs it) saves probing for the other format's
     metadata files, each a request on a remote store.
@@ -70,7 +70,7 @@ _LAYOUT_KEYS = frozenset(("chunks", "shards"))
 
 def _range_fields(coord) -> dict | None:
     """
-    Return the JSON description of a coordinate's grid (see `RANGE_ATTR`).
+    Return the fields describing a coordinate's grid (see `COORD_PREFIX`).
 
     None where it has no grid (holes, jitter, partial), or where JSON (no
     numpy scalar types) leaves the description unable to rebuild the labels
@@ -102,7 +102,7 @@ def _cf_dataset(spool, encoding: dict | None):
         if set((encoding or {}).get(name, ())) - _LAYOUT_KEYS:
             continue
         if (fields := _range_fields(coord)) is not None:
-            dataset[name].attrs[RANGE_ATTR] = fields
+            dataset[name].attrs.update({COORD_PREFIX + k: v for k, v in fields.items()})
     return dataset
 
 

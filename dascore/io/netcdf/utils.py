@@ -28,9 +28,10 @@ XDAS_PAYLOAD_VARIABLE = "__values__"
 # The attribute holding the step of labels which are not one grid, so they
 # read back with their holes and jitter (in nanoseconds for times).
 STEP_ATTR = "dascore_step"
-# The attribute describing labels which are one grid (the fields of a DASDAE
-# ``CoordRange`` node), so a scan rebuilds them without reading them.
-RANGE_ATTR = "dascore_range"
+# The prefix of the attributes describing labels which are one grid, one per
+# field of a DASDAE ``CoordRange`` node (``_dascore_coord_start``, ...), so a
+# scan rebuilds them without reading them.
+COORD_PREFIX = "_dascore_coord_"
 
 
 def get_xarray_data_var_name(dataset) -> str | None:
@@ -138,17 +139,19 @@ def _get_dim_coord(dataset, coord_name: str, coord_len: int) -> np.ndarray:
     return np.arange(coord_len)
 
 
-def stated_range(variable) -> Mapping | None:
+def stated_range(variable) -> dict | None:
     """
     Return the grid a variable's (xarray's or zarr's) attrs describe, else None.
 
     A description of another length than the labels is stale (they were
     appended to by another tool) and is ignored, so the labels are read.
     """
-    fields = variable.attrs.get(RANGE_ATTR)
-    if not isinstance(fields, Mapping):
+    attrs = variable.attrs.items()
+    size = len(COORD_PREFIX)
+    fields = {k[size:]: v for k, v in attrs if k.startswith(COORD_PREFIX)}
+    if not fields or (fields.get("length"),) != tuple(variable.shape):
         return None
-    return fields if (fields.get("length"),) == tuple(variable.shape) else None
+    return fields
 
 
 def get_scan_coord(coord, snap: snap_type = False, where=""):
