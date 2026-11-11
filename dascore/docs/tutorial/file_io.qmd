@@ -60,7 +60,7 @@ patch.io.write(zarr_path, "ZARR", encoding=encoding)
 zarr_patch = dc.read(zarr_path)[0]
 ```
 
-A store on object storage is a `UPath` carrying its storage options, and `dc.read`, `dc.scan`, and `dc.spool` take it as they take a local store. A scan reads only metadata and coordinates, and loading a patch reads only the chunks its selection touches. A remote directory of stores cannot be indexed.
+A store on object storage is a `UPath` carrying its storage options, and `dc.read`, `dc.scan`, and `dc.spool` take it as they take a local store. A scan reads only metadata and coordinates, and loading a patch reads only the chunks its selection touches. Beside the labels of each evenly sampled coordinate DASCore writes a `dascore_range` attribute describing its grid (the fields of a DASDAE `CoordRange` node), so scanning a store it wrote reads no labels however long the coordinate; the labels are still written for other tools, and are read where the attribute is missing or its `length` no longer matches them. A tool which rewrites the labels in place, keeping their length, must drop the attribute. A remote directory of stores cannot be indexed.
 
 ```python
 store = UPath("s3://bucket/das.zarr", anon=True)

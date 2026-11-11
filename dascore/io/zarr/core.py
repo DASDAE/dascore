@@ -9,11 +9,14 @@ from dascore.compat import UPath
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
 from dascore.io import FiberIO
+from dascore.io.dasdae.utils import grid_fields, read_grid_fields
 from dascore.io.netcdf.utils import (
+    RANGE_ATTR,
     dataset_to_patch_meta,
     get_xarray_data_var_name,
     read_dataset_array,
     spool_to_cf_dataset,
+    stated_range,
 )
 from dascore.io.utils import resolve_keyed_source
 from dascore.utils.io import staged_path
@@ -24,17 +27,27 @@ from dascore.utils.patch import _unique_patch_names, get_patch_names
 _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
 
 
-def _open_zarr(path: UPath, zarr_format: int | None, group: str | None = None):
+def _open_group(path: UPath, zarr_format: int | None):
+    """Open a store's root group with zarr, from consolidated metadata if any."""
+    zarr = optional_import("zarr")
+    with suppress_warnings(UserWarning, message="Consolidated metadata"):
+        return zarr.open_group(path, mode="r", zarr_format=zarr_format)
+
+
+def _open_zarr(path: UPath, zarr_format: int | None, group: str | None, node):
     """
     Open a store (or one group) as a lazy dataset.
 
     No indexes are built, so a windowed read touches only the chunks it
-    needs; decoding reads a CF time's first and last chunk. Naming the format
-    (None sniffs it) saves probing for the other format's metadata files,
-    each a request on a remote store.
+    needs. A CF time is decoded, reading its first and last chunk, unless
+    its grid is described beside it (see `RANGE_ATTR`); such labels are
+    never read. ``node`` is the group open with zarr, which states that.
+    Naming the format (None sniffs it) saves probing for the other format's
+    metadata files, each a request on a remote store.
     """
     xr = optional_import("xarray")
-    optional_import("zarr")
+    ranged = [name for name, array in node.arrays() if stated_range(array)]
+    undecoded = dict.fromkeys(ranged, False)
     # A store without consolidated metadata still opens, only slower.
     with suppress_warnings(RuntimeWarning, message="Failed to open Zarr store"):
         return xr.open_dataset(
@@ -45,7 +58,30 @@ def _open_zarr(path: UPath, zarr_format: int | None, group: str | None = None):
             cache=False,
             create_default_indexes=False,
             zarr_format=zarr_format,
+            decode_times=undecoded,
+            decode_timedelta=undecoded,
         )
+
+
+def _cf_dataset(spool):
+    """
+    Return the only patch of a spool as a CF dataset, describing its grids.
+
+    The labels are written too, so any CF tool reads them. A description
+    which JSON (no numpy scalar types) leaves unable to rebuild the labels
+    exactly is left out, and those labels are read instead.
+    """
+    dataset = spool_to_cf_dataset(spool)
+    patch = spool if isinstance(spool, dc.Patch) else spool[0]
+    for name, coord in patch.coords.coord_map.items():
+        if (fields := grid_fields(coord)) is None:  # e.g. holes, or partial
+            continue
+        fields = {
+            k: v.item() if isinstance(v, np.generic) else v for k, v in fields.items()
+        }
+        if read_grid_fields(fields, coord.units) == coord:
+            dataset[name].attrs[RANGE_ATTR] = fields
+    return dataset
 
 
 def _has_payload(dataset) -> bool:
@@ -64,17 +100,14 @@ def _patch_datasets(path: UPath, zarr_format: int | None):
     A root payload is the one patch (group None) and child groups are then
     ignored; otherwise each child group holding a payload is a patch.
     """
-    with _open_zarr(path, zarr_format) as root:
+    group = _open_group(path, zarr_format)
+    with _open_zarr(path, zarr_format, None, group) as root:
         if _has_payload(root):
             yield None, root
             return
-    zarr = optional_import("zarr")
-    with suppress_warnings(UserWarning, message="Consolidated metadata"):
-        group = zarr.open_group(path, mode="r", zarr_format=zarr_format)
-        names = sorted(group.group_keys())
-    for name in names:
+    for name in sorted(group.group_keys()):
         try:
-            dataset = _open_zarr(path, zarr_format, name)
+            dataset = _open_zarr(path, zarr_format, name, group[name])
         except KeyError:  # raw zarr arrays with no dimension names
             continue
         with dataset:
@@ -144,14 +177,15 @@ class ZarrV3(FiberIO):
     ) -> np.ndarray:
         """Read a window of one patch; only the chunks it touches are read."""
         where, zarr_format = str(resource), _store_format(resource)
-        with _open_zarr(resource, zarr_format) as root:
+        group = _open_group(resource, zarr_format)
+        with _open_zarr(resource, zarr_format, None, group) as root:
             if _has_payload(root):
                 return read_dataset_array(root, windows, key, where)
         if not key:  # groups are listed only when no key names one
             groups = [x for x, _ in _patch_datasets(resource, zarr_format)]
             key = resolve_keyed_source(dict(zip(groups, groups)), key, where)
         try:
-            dataset = _open_zarr(resource, zarr_format, key)
+            dataset = _open_zarr(resource, zarr_format, key, group[key])
         except (KeyError, FileNotFoundError) as exc:
             msg = f"No patch named '{key}' in {where}."
             raise PatchAttributeError(msg) from exc
@@ -195,13 +229,13 @@ class ZarrV3(FiberIO):
             suppress_warnings(UserWarning, message="Consolidated metadata"),
         ):
             if len(names) <= 1:
-                dataset = spool_to_cf_dataset(spool)
+                dataset = _cf_dataset(spool)
                 dataset.to_zarr(staging, mode="w", consolidated=True, **options)
             else:
                 zarr.open_group(staging, mode="w", zarr_format=zarr_format)
                 names = _unique_patch_names(names)
                 for name, patch in zip(names, spool, strict=True):
-                    dataset = spool_to_cf_dataset(patch)
+                    dataset = _cf_dataset(patch)
                     dataset.to_zarr(
                         staging, group=name, mode="w", consolidated=False, **options
                     )

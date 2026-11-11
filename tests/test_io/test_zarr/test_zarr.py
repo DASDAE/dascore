@@ -24,6 +24,7 @@ from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeErr
 from dascore.io import core as io_core
 from dascore.io.core import source_identity
 from dascore.io.index.indexer import scan_unit_stats
+from dascore.io.netcdf.utils import RANGE_ATTR, STEP_ATTR
 from dascore.io.zarr import ZarrV3
 from dascore.io.zarr import core as zarr_core
 from dascore.utils.misc import suppress_warnings
@@ -332,6 +333,79 @@ class TestScanDirectory:
         with pytest.warns(UserWarning, match="Failed to scan"):
             (summary,) = dc.scan(chunked_store.parent)
         assert summary.source_format == "DASDAE"
+
+
+def _edit_ranges(path, edit):
+    """Apply ``edit`` to each array's grid description, then consolidate."""
+    for _, array in zarr.open_group(path, mode="r+").arrays():
+        if RANGE_ATTR in array.attrs:
+            edit(array.attrs)
+    with suppress_warnings(UserWarning, message="Consolidated metadata"):
+        zarr.consolidate_metadata(path)
+
+
+class TestRangeAttr:
+    """A grid is described beside its labels, so a scan never reads them."""
+
+    def test_scan_reads_no_labels(self, zarr_patch):
+        """Scanning reads metadata only, and gets the patch's coordinates."""
+        fsspec.register_implementation("zarrcount", CountMemory, clobber=True)
+        upath.registry.register_implementation("zarrcount", MemoryPath, clobber=True)
+        path = UPath("zarrcount://dascore_zarr_count/range.zarr")
+        names = ("time", "distance", "latitude")
+        encoding = {x: {"chunks": (100,)} for x in names}
+        dc.write(zarr_patch, path, "zarr", encoding=encoding)
+        CountMemory.read.clear()
+        assert len(dc.scan(path)) == 1
+        (meta,) = ZarrV3().get_metadata(path)
+        assert not [x for x in CountMemory.read if "/c/" in x]
+        assert meta.coords == zarr_patch.coords
+        # a read loads payload chunks only
+        assert dc.read(path)[0] == zarr_patch
+        assert not [x for x in CountMemory.read if any(f"/{n}/c/" in x for n in names)]
+
+    def test_labels_still_written(self, written, zarr_patch):
+        """A CF tool reads the labels, beside the description it ignores."""
+        _, path = written
+        dataset = xr.open_dataset(path, engine="zarr")
+        assert RANGE_ATTR in dataset["time"].attrs
+        assert np.array_equal(dataset["time"].values, zarr_patch.get_array("time"))
+
+    def test_store_without_ranges(self, zarr_patch, tmp_path):
+        """A store written before the description reads its labels, as before."""
+        path = tmp_path / "old.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        _edit_ranges(path, lambda attrs: attrs.pop(RANGE_ATTR))
+        assert dc.read(path)[0] == zarr_patch
+
+    def test_stale_range_ignored(self, zarr_patch, tmp_path):
+        """A description of another length than the labels is not believed."""
+        path = tmp_path / "stale.zarr"
+        dc.write(zarr_patch, path, "zarr")
+
+        def _shorten(attrs):
+            attrs[RANGE_ATTR] = attrs[RANGE_ATTR] | {"length": 3}
+
+        _edit_ranges(path, _shorten)
+        assert dc.read(path)[0] == zarr_patch
+
+    def test_float32_grid(self, zarr_patch, tmp_path):
+        """A float32 grid, which JSON cannot describe exactly, reads its labels."""
+        path = tmp_path / "f32.zarr"
+        size = zarr_patch.shape[zarr_patch.get_axis("distance")]
+        distance = np.arange(size, dtype=np.float32) * np.float32(1.02)
+        patch = zarr_patch.update_coords(distance=distance)
+        dc.write(patch, path, "zarr")
+        assert dc.read(path)[0] == patch
+
+    def test_holes_keep_step(self, zarr_patch, tmp_path):
+        """Labels with holes store only their step, and read back with them."""
+        path = tmp_path / "holes.zarr"
+        patch = zarr_patch.unselect(distance=(10, 20), samples=True)
+        dc.write(patch, path, "zarr")
+        attrs = zarr.open_group(path, mode="r")["distance"].attrs
+        assert RANGE_ATTR not in attrs and STEP_ATTR in attrs
+        assert dc.read(path)[0] == patch
 
 
 class TestRemote:

@@ -12,6 +12,7 @@ from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import CoordError, InvalidFiberFileError
+from dascore.io.dasdae.utils import read_grid_fields
 from dascore.io.utils import (
     resolve_keyed_source,
     should_snap,
@@ -27,6 +28,9 @@ XDAS_PAYLOAD_VARIABLE = "__values__"
 # The attribute holding the step of labels which are not one grid, so they
 # read back with their holes and jitter (in nanoseconds for times).
 STEP_ATTR = "dascore_step"
+# The attribute describing labels which are one grid (the fields of a DASDAE
+# ``CoordRange`` node), so a scan rebuilds them without reading them.
+RANGE_ATTR = "dascore_range"
 
 
 def get_xarray_data_var_name(dataset) -> str | None:
@@ -134,8 +138,27 @@ def _get_dim_coord(dataset, coord_name: str, coord_len: int) -> np.ndarray:
     return np.arange(coord_len)
 
 
+def stated_range(variable) -> Mapping | None:
+    """
+    Return the grid a variable's (xarray's or zarr's) attrs describe, else None.
+
+    A description of another length than the labels is stale (they were
+    appended to by another tool) and is ignored, so the labels are read.
+    """
+    fields = variable.attrs.get(RANGE_ATTR)
+    if not isinstance(fields, Mapping):
+        return None
+    return fields if (fields.get("length"),) == tuple(variable.shape) else None
+
+
 def get_scan_coord(coord, snap: snap_type = False, where=""):
     """Return a coordinate for scanning, on a grid if `snap` names it."""
+    if (fields := stated_range(coord)) is not None:
+        # Already a grid, so snapping changes nothing. A time's "units" are
+        # its CF encoding, left undecoded so its labels are never read.
+        time_like = np.dtype(fields["dtype"]).kind in "mM"
+        units = None if time_like else _cf_units(coord.attrs.get("units"), coord.name)
+        return read_grid_fields(fields, units)
     values = coord.values
     if values.dtype == object:
         # e.g. times on a non-standard calendar, decoded as cftime objects
