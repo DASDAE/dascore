@@ -66,6 +66,11 @@ class SegyV1_0(FiberIO):  # noqa
         -----
         Trace headers store the start in whole seconds; a Silixa textual
         header time stamp within that second refines it.
+
+        Trace header positions become x, y and z coordinates along channel:
+        GroupX and GroupY (else CDP_X and CDP_Y) and ReceiverGroupElevation,
+        with their scalars applied. Traces with x and y both zero get NaN.
+        Units are not set, since files often misstate their measurement system.
         """
         segyio = optional_import(self._package_name)
         fi, text = _open_segy(resource, segyio)
