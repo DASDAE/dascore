@@ -1275,20 +1275,18 @@ class TestForcePatchMergeOverlap:
             out.append(info)
         return out
 
-    def test_conflict_policy_reaches_coordinates(self, random_patch):
+    def test_conflict_policy_reaches_coordinates(self, channel_conflict_pair):
         """Differing non-dimensional coords follow the conflict policy."""
-        n = random_patch.shape[random_patch.get_axis("distance")]
-        time = random_patch.get_coord("time")
-        first = random_patch.update_coords(channel=("distance", np.arange(n)))
-        second = first.update_coords(
-            channel=("distance", np.arange(n) + 1000), time=time + time.coord_range()
-        )
-        infos = self._infos(first, second)
+        first, _ = channel_conflict_pair
+        infos = self._infos(*channel_conflict_pair)
         with pytest.raises(CoordMergeError, match="channel"):
             _force_patch_merge(infos, merge_kwargs={})
+        with pytest.raises(CoordMergeError, match="channel"):
+            _force_patch_merge(infos, merge_kwargs={"conflict": "bogus"})
         with pytest.warns(DASCoreWarning, match="kept"):
             out = _force_patch_merge(infos, merge_kwargs={"conflict": "keep_first"})
-        assert np.array_equal(out[0]["patch"].get_array("channel"), np.arange(n))
+        channel = out[0]["patch"].get_array("channel")
+        assert np.array_equal(channel, first.get_array("channel"))
 
 
 class TestDottedPatchNames:

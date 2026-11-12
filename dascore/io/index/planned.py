@@ -324,6 +324,7 @@ def _aux_coord_info(
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
     concat: bool = False,
+    conflict: str | None = None,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -341,6 +342,9 @@ def _aux_coord_info(
     a rider whose members share one step and meet end to end keeps that
     step (its values still differ member by member, so not its identity).
 
+    A merge's `conflict` settles a coordinate the members do not hold
+    alike (see `merge_coord_managers`): "drop", or a rider some member
+    lacks, leaves it out; "keep_first" describes the first member's.
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -422,6 +426,17 @@ def _aux_coord_info(
         if key_col in joined.columns:
             held = held | (grouped[key_col].count().to_numpy() > 0)
         absent = ~held
+        if conflict in ("keep_first", "drop") and not concat:
+            ends = grouped[[c for c in (cmin, cmax, key_col) if c in joined]]
+            lacking = (grouped[cmin].count() < grouped.size()).to_numpy()
+            differs = (ends.nunique(dropna=False) > 1).any(axis=1).to_numpy()
+            settled = lacking if rides else lacking | differs
+            first = ends.agg(lambda x: x.iloc[0]).to_numpy().T
+            gone = pd.isnull(first[0]) | (conflict == "drop") | rides
+            absent |= settled & gone
+            lows = np.where(settled, first[0], lows)
+            highs = np.where(settled, first[1], highs)
+            keep, step_ok = keep & ~settled, step_ok & ~settled
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -1230,7 +1245,13 @@ def derived_catalog(
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(
-        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
+        sources,
+        trims,
+        name,
+        coord_dims_map,
+        trimmed_dims,
+        concat=mode == "concat",
+        conflict=merge_kwargs.get("conflict"),
     )
     if merge_kwargs.get("fill_value") is not None:
         aux_info = _aux_info_for_unfed(

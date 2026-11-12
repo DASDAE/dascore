@@ -184,28 +184,23 @@ class TestMergeCoordManagers:
     def test_conflicting_non_dimensional_coords(self, conflicting_non_dim_coords):
         """
         Ensure conflicting non-dimensional coords can be merged if
-        conflict="drop", otherwise raise. Private coordinates drop silently.
+        conflict is loosened, otherwise raise. Private coordinates drop
+        silently, even under keep_first.
         """
         c1, c2 = conflicting_non_dim_coords
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            out = merge_coord_managers([c1, c2], dim="time", conflict="drop")
-        assert not any([x.startswith("_") for x in out.coord_map])
+        for conflict in ("drop", "keep_first"):
+            with warnings.catch_warnings(action="error"):
+                out = merge_coord_managers([c1, c2], dim="time", conflict=conflict)
+            assert not any([x.startswith("_") for x in out.coord_map])
 
         with pytest.raises(CoordMergeError, match="cannot be merged"):
             merge_coord_managers([c1, c2], dim="time", conflict="raise")
 
     @pytest.fixture
-    def channel_pair(self, cm_basic):
-        """Consecutive managers whose distance `channel` coords differ by 1000."""
-        n = cm_basic.shape[cm_basic.get_axis("distance")]
-        time = cm_basic.get_coord("time")
-        early = cm_basic.update_coords(channel=("distance", np.arange(n)))
-        late = early.update_coords(
-            channel=("distance", np.arange(n) + 1000), time=time + time.coord_range()
-        )
-        return early, late
+    def channel_pair(self, channel_conflict_pair):
+        """Consecutive managers whose distance `channel` coords differ."""
+        return tuple(x.coords for x in channel_conflict_pair)
 
     def test_keep_first_keeps_public_coordinate(self, channel_pair):
         """
@@ -213,10 +208,9 @@ class TestMergeCoordManagers:
         non-merge dimension, and both loosened policies warn, naming it.
         """
         cm1, cm2 = channel_pair
-        n = len(cm1.get_array("channel"))
         with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept"):
             out = merge_coord_managers([cm1, cm2], dim="time", conflict="keep_first")
-        assert np.array_equal(out.get_array("channel"), np.arange(n))
+        assert np.array_equal(out.get_array("channel"), cm1.get_array("channel"))
         with pytest.warns(DASCoreWarning, match=r"\['channel'\] dropped"):
             out = merge_coord_managers([cm1, cm2], dim="time", conflict="drop")
         assert "channel" not in out.coord_map

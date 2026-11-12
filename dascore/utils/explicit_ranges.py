@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -13,6 +14,7 @@ from dascore.config import config_context
 from dascore.exceptions import ChunkError, ParameterError
 from dascore.units import Quantity, convert_units
 from dascore.utils.misc import express_range_for_coord
+from dascore.warnings import DASCoreWarning
 
 
 @dataclass(frozen=True)
@@ -291,8 +293,10 @@ def _planned_manager(plan, row, files=None, projection=None):
         )
 
         merge_dim = recovered[0].dim_map[plan.dim][0]
-        _, coord_kwargs = _split_coord_merge_kwargs(plan.merge_kwargs)
-        coords = _get_merged_coord(pd.DataFrame(), merge_dim, recovered, **coord_kwargs)
+        _, kwargs = _split_coord_merge_kwargs(plan.merge_kwargs)
+        # the merge which loads the output says what its policy settled
+        with warnings.catch_warnings(action="ignore", category=DASCoreWarning):
+            coords = _get_merged_coord(pd.DataFrame(), merge_dim, recovered, **kwargs)
     if coords is None:
         return None
     if projected:

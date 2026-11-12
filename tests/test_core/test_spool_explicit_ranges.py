@@ -3,6 +3,7 @@
 import pickle
 import re
 import threading
+import warnings
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -12,13 +13,20 @@ import pytest
 import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import inventory_patch_pair
-from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
+from dascore.exceptions import (
+    ChunkError,
+    InvalidSpoolQueryError,
+    MissingPatchError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
 from dascore.utils.patch_assembly import coord_from_row
+from dascore.warnings import DASCoreWarning
 from tests.test_core.test_patch_chunk import (
     _T0,
     _assert_labels,
@@ -967,18 +975,25 @@ class TestExplicitMetadataSources:
             )
             assert np.array_equal(loaded.data, wanted.data)
 
-    @pytest.mark.filterwarnings("ignore::dascore.warnings.DASCoreWarning")
     @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
-    def test_planned_members_follow_conflict(self, conflict):
-        """Rebuilding a merged output's coordinates applies its conflict policy."""
-        patch = dc.get_example_patch()
-        n = len(patch.get_coord("distance"))
-        time = patch.get_coord("time")
-        first = patch.update_coords(channel=("distance", np.arange(n)))
-        second = first.update_coords(time_min=time.max() + time.step)
-        second = second.update_coords(channel=("distance", np.arange(n) + 1000))
-        merged = dc.spool([first, second]).chunk(time=None, conflict=conflict)
-        out = merged.select(distance=np.array([[0, 10]]))[0]
+    def test_planned_members_follow_conflict(self, conflict, channel_conflict_pair):
+        """
+        A merged output's index and rebuilt coordinates apply its conflict
+        policy, warning only when the output loads.
+        """
+        with warnings.catch_warnings(action="error"):
+            merged = dc.spool(list(channel_conflict_pair)).chunk(
+                time=None, conflict=conflict
+            )
+            out = merged.select(distance=np.array([[0, 10]]))
+            if conflict == "drop":
+                with pytest.raises(InvalidSpoolQueryError, match="channel"):
+                    merged.select(channel=(0, 10))
+            else:  # the index holds only the channels the merge keeps
+                assert not len(merged.select(channel=(1000, 1010)))
+                assert len(merged.select(channel=(0, 10))) == 1
+        with pytest.warns(DASCoreWarning):
+            out = out[0]
         assert ("channel" in out.coords.coord_map) == (conflict == "keep_first")
         assert _ends(out) == (0, 10)
 

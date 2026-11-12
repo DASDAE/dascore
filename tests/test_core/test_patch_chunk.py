@@ -605,25 +605,21 @@ class TestChunkMerge:
         assert len(out) == 1
         assert out[0].attrs.data_type == ""
 
-    def test_conflicting_coordinate_follows_conflict(self):
+    def test_conflicting_coordinate_follows_conflict(self, channel_conflict_pair):
         """
         A non-dimensional coordinate on another dimension which differs
         between members follows `conflict`: raise, keep the first patch's,
-        or drop it, the loosened policies warning by name.
+        or drop it, the loosened policies warning by name at the caller.
         """
-        patch = dc.get_example_patch()
-        n = len(patch.get_coord("distance"))
-        time = patch.get_coord("time")
-        first = patch.update_coords(channel=("distance", np.arange(n)))
-        second = first.update_coords(time_min=time.max() + time.step)
-        second = second.update_coords(channel=("distance", np.arange(n) + 1000))
-        spool = dc.spool([first, second])
+        first, _ = channel_conflict_pair
+        spool = dc.spool(list(channel_conflict_pair))
         with pytest.raises(CoordMergeError, match="channel"):
             spool.chunk(time=None)
-        with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept"):
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept") as record:
             kept = spool.chunk(time=None, conflict="keep_first")[0]
-        assert np.array_equal(kept.get_array("channel"), np.arange(n))
-        assert kept.shape[1] == 2 * patch.shape[1]
+        assert record[0].filename == __file__
+        assert np.array_equal(kept.get_array("channel"), first.get_array("channel"))
+        assert kept.shape[1] == 2 * first.shape[1]
         with pytest.warns(DASCoreWarning, match=r"\['channel'\] dropped"):
             dropped = spool.chunk(time=None, conflict="drop")[0]
         assert "channel" not in dropped.coords.coord_map

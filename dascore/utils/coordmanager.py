@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 from _operator import and_, or_
 from collections.abc import Sequence
@@ -46,7 +47,7 @@ def merge_coord_managers(
         it out. A coordinate some manager lacks is dropped under "raise"
         and otherwise follows the same policy. The loosened policies warn,
         naming the coordinate; private coordinates (names starting with
-        "_") are never named.
+        "_") are dropped without being named.
     dim_coord
         If provided, use this coordinate for `dim` instead of
         concatenating the members' values (which materializes them);
@@ -73,15 +74,16 @@ def merge_coord_managers(
         coordinate on the merged dimension cannot be kept from one member
         (`keepable` False), so "keep_first" drops it like "drop".
         """
-        if conflict == "raise":
+        if conflict not in ("keep_first", "drop"):
             msg = (
                 f"Non merging coordinates {name} are not equal. "
                 "Coordinate managers cannot be merged. Try using "
                 "spool.chunk with conflict='drop'."
             )
             raise CoordMergeError(msg)
-        keep = conflict == "keep_first" and keepable
-        if not name.startswith("_"):
+        private = name.startswith("_")
+        keep = conflict == "keep_first" and keepable and not private
+        if not private:
             decided["kept" if keep else "dropped"].append(name)
         return keep
 
@@ -104,7 +106,7 @@ def merge_coord_managers(
         # Under "raise" an unshared coordinate is dropped silently, as it
         # always was here; Spool.chunk polices members lacking a coordinate
         # before they reach this function.
-        if conflict != "raise":
+        if conflict in ("keep_first", "drop"):
             for name in sorted({x[0] for x in drop_coords}):
                 # A manager which renames a dimension is refused by _get_dims,
                 # so an unshared coordinate is never a dimension here.
@@ -150,7 +152,8 @@ def merge_coord_managers(
             f"not all stated: {' and '.join(parts)}. With "
             f"conflict={conflict!r} {detail}."
         )
-        warnings.warn(msg, DASCoreWarning, stacklevel=3)
+        skip = (os.path.dirname(dc.__file__),)
+        warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
 
     def _snap_coords(coord_list):
         """Snap coordinates together."""
