@@ -84,7 +84,7 @@ Declare vendor fields on a format-specific `PatchAttrs` subclass when they need 
 
 Optional numeric vendor attrs should not default to NaN or infinity.
 
-An extra attr holds one scalar of the types listed in [what an attr holds](`dascore/docs/notes/patch_attrs.qmd`), and `PatchAttrs` refuses anything else; this is deliberate. A reader turns a vendor array into a coordinate and a vendor structure into fields of its subclass, and one copying every attr a file holds passes them through `dascore.core.attrs.drop_unheld_attrs`. A writer stores extra attrs of only those types, plus its subclass's fields, and adds no support for dicts or arrays as extra attrs.
+An extra attr holds one scalar of the types in [what an attr holds](`dascore/docs/notes/patch_attrs.qmd`); this is deliberate, so add no support for dicts or arrays as extra attrs. A reader copying every attr a file holds passes them through `dascore.core.attrs.drop_unheld_attrs`.
 
 ## Read array windows
 

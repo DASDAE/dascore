@@ -323,13 +323,15 @@ class TestH5Simple:
         patch = dc.spool(h5simple_with_dim_attrs_path, file_format="h5simple")[0]
         assert isinstance(patch, dc.Patch)
 
-    def test_dims_array_in_attrs(self, h5simple_with_dim_attrs_path, tmp_path):
-        """A 'dims' attr stored as an array of names is used, not skipped."""
-        path = tmp_path / "dims_array.h5"
-        shutil.copy(h5simple_with_dim_attrs_path, path)
+    def test_odd_root_attrs(self, h5simple_with_dim_attrs_path, tmp_path):
+        """A dims array is used, and an attr no patch holds is skipped."""
+        path = shutil.copy(h5simple_with_dim_attrs_path, tmp_path / "odd.h5")
         with h5py.File(path, "r+") as h5:
             h5.attrs["dims"] = ["distance", "time"]
-        assert dc.read(path, file_format="h5simple")[0].dims == ("distance", "time")
+            h5.attrs["pair"] = np.array((1, 2.0), dtype=[("a", "i4"), ("b", "f8")])
+        with pytest.warns(UserWarning, match="Skipped attr 'pair'"):
+            patch = dc.read(path, file_format="h5simple")[0]
+        assert patch.dims == ("distance", "time") and "pair" not in dict(patch.attrs)
 
     def test_provenance_in_file_is_not_a_patch_attr(self, h5simple_path, tmp_path):
         """A root attr naming where the bytes live is the spool's, not the patch's.
@@ -348,16 +350,6 @@ class TestH5Simple:
         assert not read_names & set(STORAGE_PROVENANCE_ATTRS)
         # Stripping it in only one of the two is how they came to disagree.
         assert read_names == scan_names
-
-    def test_attr_no_patch_holds_is_skipped(self, h5simple_path, tmp_path):
-        """A root attr of a type no patch attr holds is skipped, not fatal."""
-        path = tmp_path / "compound.h5"
-        shutil.copy(h5simple_path, path)
-        with h5py.File(path, "r+") as h5:
-            h5.attrs["pair"] = np.array((1, 2.0), dtype=[("a", "i4"), ("b", "f8")])
-        with pytest.warns(UserWarning, match="Skipped attr 'pair'"):
-            attrs = dc.read(path)[0].attrs
-        assert "pair" not in dict(attrs)
 
     @pytest.mark.parametrize("name", ["__format__", "format", "file_format"])
     @pytest.mark.parametrize("value", ["h5simple", np.bytes_(b"h5simple")])

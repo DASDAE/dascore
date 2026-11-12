@@ -14,28 +14,11 @@ This note explains how DASCore interprets a few important attributes, and its in
 
 ## What an attr holds
 
-An extra attr (one the class does not declare) holds a single value of one of these types, and no other:
+An extra attr (one the class does not declare) holds a single string, real number (ints within 64 bits), bool, None, `np.datetime64` or `np.timedelta64` of any unit, or a scalar `Quantity` or `Unit`. A declared field of a [subclass](#format-specific-subclasses) is checked by its own type instead.
 
-| Kind | Types |
-|---|---|
-| Text | `str` |
-| Number | `bool`, `int` that fits 64 bits, `float`, numpy bool, integer and float scalars; not complex |
-| Missing | `None` |
-| Time | `np.datetime64`, `np.timedelta64`, of any unit |
-| Units | a scalar `Quantity` with a real magnitude, a `Unit` |
+Python and pandas times become numpy times at their own precision; a time-zone-aware one is refused, so convert it to UTC first. Bytes and numpy strings become `str`, `pd.NA` becomes `None`, and a one-value array, list or tuple (how HDF5 and netCDF store a scalar) becomes that value. An array of several values is skipped with a warning, and anything else, such as a dict, is refused with an error naming the attr. A reader copying every attr a file holds passes them through [`drop_unheld_attrs`](`dascore.core.attrs.drop_unheld_attrs`), which skips refused ones with a warning.
 
-`PatchAttrs` enforces this when attrs are built, so a format writer stores only these types for extra attrs. A field a [subclass](#format-specific-subclasses) declares is checked by its declared type instead, and its writer stores what that type allows.
-
-- Python and pandas times become numpy times at their own precision (pandas' unit, Python's microsecond, a date's day). A time-zone-aware time is refused; convert it to UTC first.
-- A numpy string becomes `str`, bytes that decode as UTF-8 become text (as HDF5 text reads back), and `pd.NA` becomes `None`.
-- A one-value array, list or tuple, which is how HDF5 and netCDF store a scalar, is read as that scalar. One holding several values is skipped with a warning.
-- Anything else, including a dict, set, complex number, array quantity, undecodable bytes or other object, is refused with an error naming the attr.
-
-A reader which copies every attr a file holds, rather than choosing them, passes them through [`drop_unheld_attrs`](`dascore.core.attrs.drop_unheld_attrs`), which skips those refused with a warning, so one odd attr does not fail the read.
-
-Attrs carry no arrays or mappings, and that is a design decision, not a gap to fill. Attrs are indexed, selected on, hashed into IDs and compared when patches combine, which is simple and cheap only for scalars; and a richer type would need a codec in every format. So no format reader or writer should add support for a dict, array or other value in attrs. An array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension. Structured metadata belongs in fields of a [format-specific subclass](#format-specific-subclasses), or in an [inventory](`dascore.Inventory`).
-
-`history` is a declared field, not an extra attr: a string or a tuple of strings.
+This is deliberate: attrs are indexed, hashed into ids and compared when patches combine, and every format would need a codec for richer types. Put an array on a coordinate, `patch.update_coords(name=(dims, array))` (or `(None, array)` for one riding no dimension), and structured metadata in fields of a [format-specific subclass](#format-specific-subclasses) or an [inventory](`dascore.Inventory`).
 
 ## `data_type`
 

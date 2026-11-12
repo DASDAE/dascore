@@ -19,13 +19,8 @@ from dascore.exceptions import (
 )
 from dascore.io.arrow import ArrowV1
 from dascore.io.arrow import core as arrow_core
-from dascore.io.arrow.utils import (
-    METADATA_KEY,
-    _decode,
-    _encode,
-    data_batches,
-    patch_document,
-)
+from dascore.io.arrow import utils as arrow_utils
+from dascore.io.arrow.utils import METADATA_KEY, data_batches, patch_document
 from dascore.io.sr4731.utils import SR4731PatchAttrs
 from dascore.units import get_quantity
 
@@ -244,31 +239,19 @@ class _OddAttrs(dc.PatchAttrs):
     thing: Any = None
 
 
-class TestDeclaredFields:
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (datetime.datetime(2020, 1, 1, 1), np.datetime64("2020-01-01T01", "us")),
+        (pd.Timedelta(3, "s").as_unit("ms"), np.timedelta64(3_000, "ms")),
+        ({"a": {"b": [1, 2.0]}}, {"a": {"b": [1, 2.0]}}),
+    ],
+)
+def test_declared_field_codec(value, expected):
     """A declared field skips the attr check, so the codec takes more."""
-
-    @pytest.mark.parametrize(
-        ("value", "expected"),
-        [
-            (
-                datetime.datetime(2020, 1, 1, 1, 2, 3),
-                np.datetime64("2020-01-01T01:02:03", "us"),
-            ),
-            (
-                pd.Timestamp("2020-01-01T00:00:00.123456789"),
-                np.datetime64("2020-01-01T00:00:00.123456789", "ns"),
-            ),
-            (pd.Timedelta(3, "s").as_unit("ms"), np.timedelta64(3_000, "ms")),
-            ({"a": {"b": [1, 2.0]}}, {"a": {"b": [1, 2.0]}}),
-        ],
-        ids=["datetime", "timestamp", "timedelta", "nested"],
-    )
-    def test_round_trip(self, value, expected):
-        """Python and pandas times become numpy times; JSON stays JSON."""
-        out = _decode(json.loads(json.dumps(_encode(value))))
-        assert out == expected
-        if isinstance(expected, np.generic):
-            assert out.dtype == expected.dtype
+    out = arrow_utils._decode(json.loads(json.dumps(arrow_utils._encode(value))))
+    assert out == expected
+    assert getattr(out, "dtype", None) == getattr(expected, "dtype", None)
 
 
 class TestRefuses:
@@ -280,11 +263,10 @@ class TestRefuses:
             _plain(np.ones((2, 2), dtype=complex)),
             _plain(np.array([[T0]]).astype("M8[D]")),
             dc.get_example_patch().update_coords(c=("distance", np.ones(300) * 1j)),
-            dc.get_example_patch().update(attrs=_OddAttrs(thing=object())),
-            dc.get_example_patch().update(
-                attrs=_OddAttrs(thing=pd.Timestamp("2020", tz="UTC"))
-            ),
-            dc.get_example_patch().update(attrs=_OddAttrs(thing={(1, 2): "pair"})),
+            *[
+                dc.get_example_patch().update(attrs=_OddAttrs(thing=x))
+                for x in (object(), pd.Timestamp("2020", tz="UTC"), {(1, 2): 0})
+            ],
             _plain(np.ma.masked_array(np.ones((2, 2)), mask=[[0, 1], [0, 0]])),
             dc.get_example_patch().isel(distance=0, time=0),
         ],

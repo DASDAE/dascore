@@ -11,7 +11,7 @@ import json
 import numpy as np
 
 import dascore as dc
-from dascore.core.attrs import PatchAttrs, _simple_attr_value
+from dascore.core.attrs import PatchAttrs, _ArrayAttrError, _held_value
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
@@ -581,12 +581,8 @@ def _encode_history_attr(value):
 
 def _encode_attr_value(key, value):
     """
-    Encode a patch attr into an HDF5-attr-safe representation.
-
-    Returns the stored value and the type tag `_decode_attr_value` reads it
-    back with; the tag is None where HDF5 holds the value as it is. A numpy time is
-    its integer count, tagged with its dtype (unit and multiplier
-    included); a quantity or unit is its text.
+    Return a patch attr as an HDF5-attr-safe value and its type tag, or None
+    where HDF5 holds it as is; a numpy time is its count tagged with its dtype.
     """
     if key == "history":
         return _encode_history_attr(value)
@@ -637,16 +633,11 @@ def _holds_pytables_payload(attrs, key, value) -> bool:
 
 
 def _attr_can_hold(value) -> bool:
-    """
-    Return True if a decoded legacy value is one a patch attr holds; one
-    which is not, such as a dict, keeps its text rather than failing the read.
-    """
-    if isinstance(value, list | tuple):  # the attrs validator unpacks one-item ones
-        return len(value) != 1 or _attr_can_hold(value[0])
+    """Return True if an attr holds a decoded legacy value; a dict keeps its text."""
     try:
-        _simple_attr_value("", value)
-    except ValueError:
-        return False
+        _held_value("", value)
+    except ValueError as error:
+        return isinstance(error, _ArrayAttrError)  # skipped by the validator
     return True
 
 

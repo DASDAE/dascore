@@ -244,10 +244,7 @@ def _cf_unit_str(units) -> str:
 
 
 def _cf_attrs(attrs, name) -> dict:
-    """
-    A CF variable's attrs as patch attrs: an edited ``units`` wins, and an
-    attr of a type no patch holds, such as a dict, is skipped with a warning.
-    """
+    """A CF variable's attrs as patch attrs: an edited ``units`` wins."""
     out = drop_unheld_attrs(attrs)
     units, data_units = out.get("units"), out.get("data_units")
     if units is not None and data_units and units == _cf_unit_str(data_units):

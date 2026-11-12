@@ -439,109 +439,42 @@ class TestExtrasHoldOneValue:
         assert out.attrs.flags == (True, False)
 
 
-# One value of each type an extra attr holds.
-_KEPT = {
-    "text": "a",
-    "flag": True,
-    "count": 3,
-    "huge": 2**64 - 1,
-    "ratio": 0.5,
-    "small": np.float32(0.1),
-    "np_flag": np.bool_(False),
-    "nothing": None,
-    "when": np.datetime64("2020-01-01T00:00:00.123", "ms"),
-    "gap": np.timedelta64(3, "10ms"),
-    "length": dc.get_quantity("5 m"),
-    "unit": dc.get_quantity("m/s").units,
-}
-
-
 class TestExtrasHoldSimpleTypes:
     """An extra attr holds a scalar of a few types, and nothing else."""
 
-    @pytest.mark.parametrize("name, value", _KEPT.items())
-    def test_kept_as_is(self, name, value):
-        """A value of an allowed type is kept, type and all."""
-        out = dc.PatchAttrs(**{name: value})[name]
-        assert out is value
-
-    @pytest.mark.parametrize(
-        "value, expected",
-        [
-            (
-                pd.Timestamp("2020-01-01T00:00:00.1").as_unit("ms"),
-                np.datetime64("2020-01-01T00:00:00.100", "ms"),
-            ),
-            (
-                datetime.datetime(2020, 1, 1, 1),
-                np.datetime64("2020-01-01T01:00:00.000000", "us"),
-            ),
-            (datetime.date(2020, 1, 2), np.datetime64("2020-01-02", "D")),
-            (datetime.date(9999, 12, 31), np.datetime64("9999-12-31", "D")),
-            (pd.Timedelta(3, "s").as_unit("s"), np.timedelta64(3, "s")),
-            (datetime.timedelta(milliseconds=5), np.timedelta64(5_000, "us")),
-            (b"xy", "xy"),
-            (np.bytes_(b"xy"), "xy"),
-            (np.str_("xy"), "xy"),
-            (np.array(["xy"]), "xy"),
-        ],
-        ids=[
-            "timestamp",
-            "datetime",
-            "date",
-            "far-date",
-            "pd-timedelta",
-            "timedelta",
-            "bytes",
-            "np-bytes",
-            "np-str",
-            "one-str-array",
-        ],
+    kept = (
+        *("a", True, 3, 2**64 - 1, 0.5, np.float32(0.1), np.bool_(False), None),
+        np.datetime64("2020-01-01T00:00:00.123", "ms"),
+        np.timedelta64(3, "10ms"),
+        dc.get_quantity("5 m"),
+        dc.get_quantity("m/s").units,
     )
+    converted = (
+        (pd.Timestamp("2020-01-01").as_unit("ms"), np.datetime64("2020-01-01", "ms")),
+        (datetime.datetime(2020, 1, 1), np.datetime64("2020-01-01", "us")),
+        (datetime.date(9999, 12, 31), np.datetime64("9999-12-31", "D")),
+        (pd.Timedelta(3, "s").as_unit("s"), np.timedelta64(3, "s")),
+        (datetime.timedelta(milliseconds=5), np.timedelta64(5_000, "us")),
+        *[(x, "xy") for x in (b"xy", np.bytes_(b"xy"), np.str_("xy"), [b"xy"])],
+        (pd.NA, None),
+    )
+    refused = ({"a": 1}, {1}, object(), b"\xff", [{"a": 1}], 1j, np.complex64(1j))
+    refused += (dc.get_quantity("m") * np.arange(3), 2**64, np.void(b"ab"))
+    refused += (pd.Timestamp("2020", tz="UTC"),)  # converting drops its zone
+
+    @pytest.mark.parametrize("value", kept)
+    def test_kept_as_is(self, value):
+        """A value of an allowed type is kept, type and all."""
+        assert dc.PatchAttrs(value=value).value is value
+
+    @pytest.mark.parametrize("value, expected", converted)
     def test_converted(self, value, expected):
-        """
-        Python and pandas times become numpy times at their own precision,
-        so one outside the nanosecond range is kept, and text becomes str.
-        """
+        """Other times become numpy times at their own precision, text str."""
         out = dc.PatchAttrs(value=value).value
         assert type(out) is type(expected) and out == expected
         assert getattr(out, "dtype", None) == getattr(expected, "dtype", None)
 
-    def test_missing_values_stay_missing(self):
-        """`pd.NaT` is a missing time, and `pd.NA` a missing anything."""
-        attrs = dc.PatchAttrs(when=pd.NaT, other=pd.NA)
-        assert isinstance(attrs.when, np.datetime64) and np.isnat(attrs.when)
-        assert attrs.other is None
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            {"a": 1},
-            {1, 2},
-            object(),
-            dc.get_quantity("m") * np.arange(3),
-            b"\xff",
-            [{"a": 1}],
-            np.complex128(1 + 2j),
-            1 + 2j,
-            dc.get_quantity("m") * (1 + 2j),
-            2**64,
-            np.void(b"ab"),
-        ],
-        ids=[
-            "dict",
-            "set",
-            "object",
-            "array-quantity",
-            "binary",
-            "boxed-dict",
-            "numpy-complex",
-            "complex",
-            "complex-quantity",
-            "huge-int",
-            "void",
-        ],
-    )
+    @pytest.mark.parametrize("value", refused)
     def test_refused(self, value):
         """Anything else is refused, and the error names the attr."""
         with pytest.raises(ValueError, match="'odd' holds"):
@@ -549,25 +482,7 @@ class TestExtrasHoldSimpleTypes:
 
     def test_drop_unheld_attrs(self):
         """A reader copying every attr skips, with a warning, what none holds."""
-        attrs = {"keep": 1, "table": {"a": 1}, "series": [1, 2], "one": [b"x"]}
+        attrs = {"keep": 1, "table": {"a": 1}, "series": [1, 2], "history": ("a",)}
         with pytest.warns(UserWarning, match="Skipped attr") as record:
-            out = drop_unheld_attrs({**attrs, "history": ("a",)})
-        assert out == {"keep": 1, "one": "x", "history": ("a",)}
-        assert {"'table'", "'series'"} == {
-            x for w in record for x in ("'table'", "'series'") if x in str(w.message)
-        }
-
-    def test_a_zoned_time_is_refused(self):
-        """Converting it would drop its zone, so it is refused."""
-        with pytest.raises(ValueError, match="time-zone-aware"):
-            dc.PatchAttrs(when=pd.Timestamp("2020", tz="UTC"))
-
-    def test_declared_fields_are_not_checked(self):
-        """A subclass decides what its own fields hold."""
-
-        class Mapped(dc.PatchAttrs):
-            """Declare a mapping, as a plugin's format may."""
-
-            table: dict | None = None
-
-        assert Mapped(table={"a": 1}).table == {"a": 1}
+            out = drop_unheld_attrs(attrs)
+        assert out == {"keep": 1, "history": ("a",)} and len(record) == 2

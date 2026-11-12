@@ -112,10 +112,9 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     each is named by the node whose length matches that axis. Only node
     shapes are read here, never their values.
     """
-    if isinstance(dims, str):
-        dims = dims.split(",") if dims else None
-    if dims is not None:  # or an array of names
-        return tuple(unbyte(x) for x in dims), other_nodes
+    if dims is not None and len(dims):  # text, or an array of names
+        names = dims.split(",") if isinstance(dims, str) else dims
+        return tuple(unbyte(x) for x in names), other_nodes
     can_guess_shape = len(data_node.shape) == len(set(data_node.shape))
     assert can_guess_shape, "Cant determine dims; shape values not unique!"
     assert len(time_node.shape) == 1, "time node has more than one dimension!"
