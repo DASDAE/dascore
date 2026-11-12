@@ -6,10 +6,11 @@ execute:
 
 # Installation
 
-Install DASCore with [uv](https://docs.astral.sh/uv/):
+Install DASCore with [uv](https://docs.astral.sh/uv/), into a uv project or any virtual environment:
 
 ```bash
-uv add dascore
+uv add dascore          # in a uv project
+uv pip install dascore  # in a virtual environment
 ```
 
 or with [mamba](https://mamba.readthedocs.io/):
@@ -18,7 +19,7 @@ or with [mamba](https://mamba.readthedocs.io/):
 mamba install -c conda-forge dascore
 ```
 
-`uv pip install dascore`, `pip install dascore`, and `conda install -c conda-forge dascore` also work.
+`pip install dascore` and `conda install -c conda-forge dascore` also work.
 
 See [this recipe](../recipes/docker_basic.qmd) for installation with Docker.
 

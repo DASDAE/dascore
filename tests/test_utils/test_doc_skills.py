@@ -232,6 +232,18 @@ class TestCatalogValidation:
             doc_skills.get_skills()["example"]["description"] == "Updated description"
         )
 
+    def test_quoted_include_in_markdown(self, sources):
+        """A quoted include on a Markdown page serves the skill too."""
+        _, recipe, pages = sources
+        guide = recipe.with_name("guide.md")
+        guide.write_text(
+            "---\ntitle: Guide\n---\n"
+            '{{< include "../.agents/skills/example/SKILL.md" >}}\n'
+        )
+        pages[:] = [guide]
+        info = doc_skills.get_skills()["example"]
+        assert (info["target"], info["title"]) == ("guide", "Guide")
+
     def test_named_in_front_matter(self, sources):
         """A page holding a skill's procedure itself names it in its front matter."""
         _, recipe, _ = sources

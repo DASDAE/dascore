@@ -35,21 +35,18 @@ _INSTALLED_BODY = (
 
 # A page serves a skill by including its file.
 _SKILL_INCLUDE = re.compile(
-    r"\{\{<\s*include\s+\S*\.agents/skills/([^/\s]+)/SKILL\.md\s*>\}\}"
+    r"\{\{<\s*include\s+[\"']?\S*\.agents/skills/([^/\s\"']+)/SKILL\.md[\"']?\s*>\}\}"
 )
 
 
 def _read_skill_file(name: str) -> tuple[dict, str]:
     """Return a shipped skill file's metadata and body, its title from its heading."""
-    path = SKILL_PATH / name / "SKILL.md"
-    if not path.is_file():
-        raise DocumentationError(f"No skill file for {name!r}.")
-    front, body = _read_source(path)
+    front, body = _read_source(SKILL_PATH / name / "SKILL.md")
     heading = re.search(r"^# (.+)$", body, flags=re.MULTILINE)
     return {**front, "title": heading[1].strip() if heading else None}, body
 
 
-def _skill_pages() -> dict[str, str]:
+def _skill_pages() -> dict[str, Path]:
     """
     Map each skill to the docs page serving it.
 
@@ -63,11 +60,10 @@ def _skill_pages() -> dict[str, str]:
         claimed = set(_SKILL_INCLUDE.findall(text))
         if named := _frontmatter(text)[0].get("skill"):
             claimed.add(named)
-        doc_id = path.relative_to(DOC_PATH).with_suffix("").as_posix()
         for name in claimed:
-            if out.setdefault(name, doc_id) != doc_id:
+            if out.setdefault(name, path) != path:
                 raise DocumentationError(
-                    f"Skill {name!r} is served by both {out[name]!r} and {doc_id!r}."
+                    f"Skill {name!r} is served by both {out[name]} and {path}."
                 )
     return out
 
@@ -89,15 +85,17 @@ def get_skills() -> dict[str, dict[str, str | None]]:
         if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
             raise DocumentationError(f"Invalid skill name: {name!r}.")
         front, _body = _read_skill_file(name)
-        target = pages.get(name)
-        if target is not None:
-            page = (DOC_PATH / f"{target}.qmd").read_text(encoding="utf-8")
-            front["title"] = _frontmatter(page)[0].get("title")
+        page, target = pages.get(name), None
+        if page is not None:
+            target = page.relative_to(DOC_PATH).with_suffix("").as_posix()
+            front["title"] = _frontmatter(page.read_text(encoding="utf-8"))[0].get(
+                "title"
+            )
         if not all(
             isinstance(front.get(key), str) and front[key].strip()
             for key in ("title", "description")
         ):
-            source = f"{target}.qmd" if target else f"{name}/SKILL.md"
+            source = page.name if page else f"{name}/SKILL.md"
             raise DocumentationError(
                 f"Skill {name!r} needs a title and description in {source!r}."
             )

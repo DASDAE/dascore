@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-DASCore supports users who prefer to work with [xarray](https://docs.xarray.dev/). Spools become lazy `DataTree`s, patches convert to `DataArray`s and back, patch methods run directly on `DataArray`s, and patches index, compute, and write the way xarray users expect. Xarray is optional; install it with `uv add "dascore[all]"`.
+DASCore supports users who prefer to work with [xarray](https://docs.xarray.dev/). Spools become lazy `DataTree`s, patches convert to `DataArray`s and back, patch methods run directly on `DataArray`s, and patches index, compute, and write the way xarray users expect. Xarray is optional; install it with `uv pip install "dascore[all]"`.
 
 ## Spools as lazy DataTrees
 
@@ -34,7 +34,7 @@ assert dc.io.xarray_to_patch(dar) == patch
 dar
 ```
 
-`lazy_coords=True` keeps DASCore's coordinates as the index, computing labels only for the samples selected, so converting back is exact even for fractional sampling rates and gaps:
+`lazy_coords=True` keeps DASCore's coordinates as the index, computing labels only for the samples selected, so converting back is exact even for fractional sampling rates and gaps. Use it to keep the sampling step of a dimension with one sample, which materialized labels cannot record:
 
 ```{python}
 lazy = patch.io.to_xarray(lazy_coords=True)

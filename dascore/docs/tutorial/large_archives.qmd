@@ -21,7 +21,7 @@ spool = dc.get_example_spool()
 
 # Metadata without data
 
-[`PatchMeta`](`dascore.PatchMeta`) is everything a patch is apart from its data: coordinates, attrs and dtype. Scanning a file returns these, so a patch's shape and extents can be read without loading samples.
+[`PatchMeta`](`dascore.PatchMeta`) is everything a patch is apart from its data: coordinates, attrs and dtype. [`dc.scan_payloads`](`dascore.scan_payloads`) returns these for a file, so a patch's shape and extents can be read without loading samples.
 
 ```{python}
 meta = patch.drop_data()

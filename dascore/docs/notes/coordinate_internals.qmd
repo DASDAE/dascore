@@ -156,7 +156,7 @@ Operations that change array alignment accept the array and return an updated ma
 patch = dc.get_example_patch()
 patch_manager, data = patch.coords, patch.data
 
-selected_manager, selected_data = patch_manager.select(data=data, distance=(..., 100))
+selected_manager, selected_data = patch_manager.select(array=data, distance=(..., 100))
 sorted_manager, sorted_data = patch_manager.sort("time", "distance", array=data, reverse=True)
 renamed = patch_manager.rename_coord(time="elapsed_time")
 ```
