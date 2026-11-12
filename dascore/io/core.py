@@ -751,6 +751,12 @@ def _returns_stored_bytes(func: Callable) -> Callable:
     return func
 
 
+def _version_sort_key(version: str) -> list[tuple[int, int | str]]:
+    """Order version strings numerically, e.g. 0.100 after 0.0 and 10 after 9."""
+    # Tag each part so numbers and text never compare directly.
+    return [(0, int(x)) if x.isdigit() else (1, x) for x in version.split(".")]
+
+
 class FiberIO:
     """
     Interface for a fiber data format; subclass it to add format support.
@@ -1087,10 +1093,7 @@ class FiberIO:
             return table
 
         def _join(versions):
-            def key(version):
-                return [int(x) if x.isdigit() else x for x in version.split(".")]
-
-            return ", ".join(sorted(map(str, versions), key=key))
+            return ", ".join(sorted(map(str, versions), key=_version_sort_key))
 
         return (
             table.groupby("name", sort=True)

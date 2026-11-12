@@ -22,16 +22,18 @@ mamba install -c conda-forge dascore
 
 `pip install "dascore[extras]"` and `conda install -c conda-forge dascore` also work.
 
+These install the latest stable release. To try a newer pre-release, see [Pre-releases](#pre-releases).
+
 ## Optional extras
 
 `[extras]` adds SEG-Y, miniSEED, Zarr, and NetCDF support, plus xarray and dask (for [xarray support](tutorial/xarray.qmd)), Parquet (for saving annotations), ObsPy, and faster numerical backends. Without it, `dascore` alone is a lighter install that reads the HDF5-based formats most DAS instruments write.
 
 ## Pre-releases
 
-Allow pre-releases to get the newest one (this lets dependencies resolve to pre-releases too):
+Allow pre-releases, and upgrade DASCore if it is already installed (this lets dependencies resolve to pre-releases too):
 
 ```bash
-uv pip install --prerelease=allow "dascore[extras]"
+uv pip install --prerelease=allow --upgrade-package dascore "dascore[extras]"
 ```
 
 Pre-releases are published to PyPI only, not conda-forge.

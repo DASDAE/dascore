@@ -50,6 +50,7 @@ from dascore.io.core import (
     _select_patch_from_spool,
     _size_and_mtime,
     _source_stats,
+    _version_sort_key,
     is_directory_format,
 )
 from dascore.io.dasdae.core import DASDAEV1
@@ -2084,6 +2085,12 @@ class TestGetSupportedIOTable:
         assert rows.loc["OPTODAS", "version"] == "8, 9, 10, 11"
         assert rows.loc["NETCDF_CF", "write"]
         assert not rows.loc["TDMS", "write"]
+
+    def test_version_sort_key(self):
+        """Numeric and textual version parts sort without comparing across."""
+        versions = ["1.0rc1", "10", "1.0", "0.100", "9", "0.0"]
+        ordered = sorted(versions, key=_version_sort_key)
+        assert ordered == ["0.0", "0.100", "1.0", "1.0rc1", "9", "10"]
 
 
 class TestMissingInstallName:
