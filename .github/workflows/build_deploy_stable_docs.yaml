@@ -128,10 +128,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" docs.zip --clobber
 
+      # Netlify holds the docs of the newest pre-release. Builds are grouped
+      # per tag, so an older pre-release can finish, or be re-run, after a
+      # newer one; it still attaches its docs.zip but must not publish.
+      - name: Check no newer release exists
+        id: newest
+        if: steps.kind.outputs.prerelease == 'true'
+        run: |
+          # Fetch again: a tag may have been pushed since the checkout.
+          git fetch --tags --quiet origin
+          newest="$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
+          if [ "$newest" = "$GITHUB_REF_NAME" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Not publishing docs for $GITHUB_REF_NAME to netlify; $newest is newer."
+          fi
+
       # The site was rendered above, so publish it as built rather than
       # rendering again.
       - name: Publish pre-release docs to netlify
-        if: steps.kind.outputs.prerelease == 'true'
+        if: steps.newest.outputs.publish == 'true'
         shell: bash
         env:
           QUARTO_PRINT_STACK: true
