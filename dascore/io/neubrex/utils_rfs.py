@@ -1,8 +1,8 @@
 """Utilities functions for Neubrex IO support"""
 
 import dascore as dc
-from dascore.io.utils import stored_coord
-from dascore.utils.misc import maybe_get_items
+from dascore.io.utils import parse_units, stored_coord
+from dascore.utils.misc import maybe_get_items, unbyte
 
 
 def _is_neubrex(h5fi):
@@ -27,7 +27,9 @@ def _get_coord_manager(h5fi, snap=True):
         where=h5fi,
         decode=lambda x: dc.to_datetime64(x / 1_000_000),
     )
-    distance = stored_coord(h5fi["depth"], snap, name="distance", where=h5fi)
+    depth = h5fi["depth"]
+    units = parse_units(unbyte(depth.attrs.get("unit")))
+    distance = stored_coord(depth, snap, name="distance", where=h5fi, units=units)
     coords = {"time": time, "distance": distance}
     return dc.get_coord_manager(coords=coords, dims=("time", "distance"))
 
