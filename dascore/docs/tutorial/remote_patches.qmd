@@ -40,18 +40,19 @@ Remote behavior is controlled through `dascore.config`:
 
 | Setting | Purpose |
 |---|---|
-| `remote_cache_dir` | Directory for materialized remote files |
+| `remote_cache_dir` | Directory for materialized remote files; must be private to the current user |
 | `allow_remote_cache` | Permit caching for data reads |
 | `allow_remote_cache_for_metadata` | Permit caching for metadata operations |
 | `warn_on_remote_cache` | Warn on the first download into the cache |
 
 ```{python}
 from pathlib import Path
+from tempfile import mkdtemp
 
 from dascore.config import config_context
 
 with config_context(
-    remote_cache_dir=Path("/tmp/dascore-remote-cache"),
+    remote_cache_dir=Path(mkdtemp()),
     allow_remote_cache=True,
     allow_remote_cache_for_metadata=False,
 ):
@@ -70,6 +71,8 @@ with config_context(allow_remote_cache_for_metadata=True):
 `scan_payloads` avoids the data array but may still transfer and retain exact coordinate arrays. Prefer `scan` or `scan_to_df` for broad directory listings.
 
 Warnings occur on the first materialization when `warn_on_remote_cache=True`, making an unexpected local download visible without repeating the message for every file.
+
+Once per session, a cached copy is checked against the remote's size and version fields (such as `ETag`) and downloaded again if the remote changed. Offline, the copy is kept; a remote which is gone or forbidden is never read from the cache.
 
 # Reads and spools
 

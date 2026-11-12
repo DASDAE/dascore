@@ -44,6 +44,7 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 dependencies = [
      # Provides array_namespace and friends for array-API backed code.
      "array-api-compat>=1.9",
+     "filelock>=3.12",  # serialize remote-cache copies across processes
      "h5py",
      "matplotlib>=3.10",
      # 2.0 is the first numpy with native array API support, which is what
@@ -82,8 +83,9 @@ extras = [
     "pyarrow",
     "netCDF4",
     "h5netcdf",
-    # The ZARR format; zarr 3 reads and writes both zarr formats 2 and 3.
-    "zarr>=3",
+    # The ZARR format, both zarr formats 2 and 3; older zarr 3 releases
+    # cannot open a UPath store.
+    "zarr>=3.4",
     "findiff",
     "obspy",
     "numba",
