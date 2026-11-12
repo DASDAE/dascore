@@ -48,6 +48,7 @@ from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
+from dascore.io.puniu import PuniuV1
 from dascore.io.rsf import RSFV1
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
@@ -70,11 +71,14 @@ from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from dascore.warnings import SnapWarning
 from tests.test_io._common_io_test_utils import (
+    FixtureFile,
     get_flat_io_test,
+    get_matrix_path,
     skip_missing,
     skip_timeout,
 )
 from tests.test_io.test_asdf.test_asdf import write_asdf
+from tests.test_io.test_puniu.test_puniu import write_puniu
 from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 
 # No shipped file is DASDAE version 2 yet: the current writer makes one
@@ -127,11 +131,20 @@ def _write_dasdae_v2():
 
 # --- Fixtures
 
+
+@pytest.fixture(scope="session")
+def puniu_matrix_file(tmp_path_factory):
+    """A synthetic PUNIU file; no registry file exists for the format."""
+    return write_puniu(tmp_path_factory.mktemp("puniu") / "puniu.h5")
+
+
 # These fixtures are for attaching FiberIO objects to a suite of common
 # read, scan, and get_format tests that all FiberIO instances which implement
 # more than just a write method should pass.
 # The format is {FiberIO class: [path_or_fetch_name]} where fetch_name
 # is the name passed to dascore.utils.downloader.fetch to load the file.
+# A FixtureFile entry instead names a session fixture returning the path,
+# for a format with no registry file.
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
@@ -161,6 +174,7 @@ COMMON_IO_READ_TESTS = {
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
     ),
+    PuniuV1(): (FixtureFile("puniu_matrix_file"),),
     RSFV1(): ("example_dascore.rsf",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     SegyV1_0(): ("conoco_segy_1.sgy",),
@@ -438,9 +452,8 @@ def io_path_tuple(request):
     A fixture which returns io instance, path_to_file.
     This is used for common testing.
     """
-    io, fetch_name = request.param
-    with skip_timeout():
-        return io, fetch(fetch_name)
+    io, entry = request.param
+    return io, get_matrix_path(entry, request)
 
 
 @pytest.fixture(scope="session", params=get_registry_df()["name"])
@@ -562,14 +575,13 @@ class TestGetFormat:
         """Ensure a dummy h5 file the format (it isn't any fiber format)."""
         assert io_instance.get_format(generic_hdf5) is False
 
-    def test_all_other_files_arent_format(self, io_instance):
+    def test_all_other_files_arent_format(self, io_instance, request):
         """All other data files should not show up as this format."""
         for other_io, data_files in COMMON_IO_READ_TESTS.items():
             if isinstance(other_io, type(io_instance)):
                 continue
-            for key in iterate(data_files):
-                with skip_timeout():
-                    path = fetch(key)
+            for entry in iterate(data_files):
+                path = get_matrix_path(entry, request)
                 out = io_instance.get_format(path)
                 if out and isinstance(io_instance, NetCDFNoCF):
                     # It claims netCDF-written files with no CF version, such

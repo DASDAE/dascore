@@ -1,4 +1,6 @@
-"""Schema validation, coordinates, and partial reads for PUNIU HDF5."""
+"""Schema checks and metadata for PUNIU HDF5 files."""
+
+from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
@@ -6,168 +8,163 @@ import h5py
 import numpy as np
 
 import dascore as dc
-from dascore.exceptions import InvalidFiberFileError, ParameterError
+from dascore.exceptions import InvalidFiberFileError
+from dascore.io.utils import step_from_rate
 
 _DATASET = "default"
-_REQUIRED_ATTRS = {
-    "version",
-    "format",
-    "row_major_order",
-    "column_major_order",
-    "channel_count",
-    "start_channel",
-    "end_channel",
-    "step",
-    "sampling_rate",
-    "epoch",
-    "ns",
-    "spatial_sampling_rate",
-    "spatial_resolution",
-}
+_REQUIRED_ATTRS = frozenset(
+    {
+        "version",
+        "format",
+        "row_major_order",
+        "column_major_order",
+        "channel_count",
+        "start_channel",
+        "end_channel",
+        "step",
+        "sampling_rate",
+        "epoch",
+        "ns",
+        "spatial_sampling_rate",
+        "spatial_resolution",
+    }
+)
+_ORDERS = (("time", "channel"), ("channel", "time"))
+_NS_PER_S = 1_000_000_000
 
 
-def _is_puniu(resource):
-    """Check the dataset and attribute signature without reading samples."""
-    ds = resource.get(_DATASET)
-    if not isinstance(ds, h5py.Dataset) or ds.ndim != 2:
-        return False
-    attrs = ds.attrs
-    return (
-        _REQUIRED_ATTRS.issubset(attrs)
-        and _text(attrs["version"]) == "1"
-        and _text(attrs["format"]) == "differential"
-    )
-
-
-def _text(value):
+def _text(value) -> str:
     """Decode a scalar HDF5 string."""
     return value.decode() if isinstance(value, bytes) else str(value)
 
 
-def _integer(attrs, name):
-    """Read an integer attribute without truncating fractional values."""
-    value = attrs[name]
+def _scalar(value):
+    """Return the one value an attribute holds, unwrapping 1-element arrays."""
+    array = np.asarray(value)
+    if array.size != 1:
+        raise ValueError(f"expected a scalar, got {value!r}")
+    item = array.reshape(()).item()
+    return _text(item) if isinstance(item, bytes) else item
+
+
+def _version(value) -> float | None:
+    """Return the schema version as a number, or None if it is not one."""
+    try:
+        return float(_scalar(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def _is_puniu(resource) -> bool:
+    """Check the dataset and attribute signature without reading samples."""
+    dataset = resource.get(_DATASET)
+    if not isinstance(dataset, h5py.Dataset) or dataset.ndim != 2:
+        return False
+    attrs = dataset.attrs
+    return (
+        _REQUIRED_ATTRS.issubset(attrs)
+        and _version(attrs["version"]) == 1
+        and _text(attrs["format"]) == "differential"
+    )
+
+
+def _integer(attrs, name) -> int:
+    """Read an integer attribute, refusing fractional values."""
+    value = _scalar(attrs[name])
     out = int(value)
     if float(value) != out:
         raise InvalidFiberFileError(f"{name} must be an integer")
     return out
 
 
+def _positive(attrs, name) -> float:
+    """Read a finite, positive float attribute."""
+    value = float(_scalar(attrs[name]))
+    if not np.isfinite(value) or value <= 0:
+        raise InvalidFiberFileError(f"{name} must be finite and positive")
+    return value
+
+
+def _axis_order(attrs) -> bool:
+    """Return True if the file stores (channel, time) rather than (time, channel)."""
+    order = tuple(x.strip() for x in _text(attrs["row_major_order"]).split(","))
+    if order not in _ORDERS:
+        raise InvalidFiberFileError("row_major_order must be time/channel")
+    reverse = tuple(x.strip() for x in _text(attrs["column_major_order"]).split(","))
+    if reverse != order[::-1]:
+        raise InvalidFiberFileError("row_major_order and column_major_order disagree")
+    return order == ("channel", "time")
+
+
+def _channel_spacing(attrs) -> Decimal:
+    """Return the base channel spacing, rounded half-up to 0.1 m."""
+    base = Decimal(str(_positive(attrs, "spatial_sampling_rate")))
+    out = base.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    if out <= 0:
+        raise InvalidFiberFileError("spatial_sampling_rate rounds to zero")
+    return out
+
+
+def _time_coord(attrs, count):
+    """Build the time coordinate from epoch seconds, nanoseconds and rate."""
+    rate = _positive(attrs, "sampling_rate")
+    ns = _integer(attrs, "ns")
+    if not 0 <= ns < _NS_PER_S:
+        raise InvalidFiberFileError("ns must be within one second")
+    start = _integer(attrs, "epoch") * _NS_PER_S + ns
+    end = start + (count - 1) * _NS_PER_S / rate
+    limit = np.iinfo(np.int64)
+    if not limit.min < start <= end < limit.max:
+        raise InvalidFiberFileError("Time range is outside datetime64[ns]")
+    return dc.get_coord(
+        start=np.datetime64(start, "ns"), step=step_from_rate(rate), shape=(count,)
+    )
+
+
 def _get_metadata(resource):
-    """Build coordinates and acquisition attributes from the dataset header."""
+    """
+    Return the coordinates, attrs, and whether storage is (channel, time).
+
+    Only the dataset header is read.
+    """
     try:
-        ds = resource[_DATASET]
-        if not isinstance(ds, h5py.Dataset):
+        dataset = resource[_DATASET]
+        if not isinstance(dataset, h5py.Dataset):
             raise InvalidFiberFileError("Expected /default to be a dataset")
-        a = ds.attrs
-        if ds.ndim != 2 or ds.dtype.kind not in "if":
+        attrs = dataset.attrs
+        if dataset.ndim != 2 or dataset.dtype.kind not in "iuf":
             raise InvalidFiberFileError("Expected a numeric two-dimensional dataset")
-        if _integer(a, "version") != 1 or _text(a["format"]) != "differential":
+        if _version(attrs["version"]) != 1 or _text(attrs["format"]) != "differential":
             raise InvalidFiberFileError("Expected differential HDF5 version 1")
-        order = tuple(x.strip() for x in _text(a["row_major_order"]).split(","))
-        if order not in (("time", "channel"), ("channel", "time")):
-            raise InvalidFiberFileError(
-                "Explicit time/channel row_major_order is required"
-            )
-        reverse = tuple(x.strip() for x in _text(a["column_major_order"]).split(","))
-        if reverse != order[::-1]:
-            raise InvalidFiberFileError("Contradictory axis declarations")
-        nt = ds.shape[order.index("time")]
-        nc = ds.shape[order.index("channel")]
-        start = _integer(a, "start_channel")
-        step = _integer(a, "step")
-        end = _integer(a, "end_channel")
-        if nt < 1 or nc < 1 or step <= 0 or _integer(a, "channel_count") != nc:
+        transposed = _axis_order(attrs)
+        nt, nc = dataset.shape[::-1] if transposed else dataset.shape
+        start = _integer(attrs, "start_channel")
+        step = _integer(attrs, "step")
+        end = _integer(attrs, "end_channel")
+        if nt < 1 or nc < 1 or step <= 0 or _integer(attrs, "channel_count") != nc:
             raise InvalidFiberFileError("Invalid shape, channel count or step")
-        # end_channel bounds the acquisition range;
-        # it need not itself be a sampled channel when step > 1.
+        # end_channel bounds the acquisition range; with step > 1 it need not
+        # be a sampled channel itself.
         if not start + (nc - 1) * step <= end < start + nc * step:
             raise InvalidFiberFileError("Channel range contradicts shape and step")
-        fs = float(a["sampling_rate"])
-        if not np.isfinite(fs) or fs <= 0:
-            raise InvalidFiberFileError("sampling_rate must be finite and positive")
-        period = 1e9 / fs
-        dt = round(period)
-        if dt < 1 or abs(period - dt) > 1e-6:
-            raise InvalidFiberFileError(
-                "Sampling interval not exactly representable in ns"
-            )
-        ns = _integer(a, "ns")
-        epoch = _integer(a, "epoch")
-        if not 0 <= ns < 1_000_000_000:
-            raise InvalidFiberFileError("ns must be within one second")
-        total = epoch * 1_000_000_000 + ns
-        limit = np.iinfo(np.int64)
-        if not limit.min < total <= total + (nt - 1) * dt <= limit.max:
-            raise InvalidFiberFileError("Time range outside datetime64[ns]")
-        base_spacing = float(a["spatial_sampling_rate"])
-        if not np.isfinite(base_spacing) or base_spacing <= 0:
-            raise InvalidFiberFileError(
-                "spatial_sampling_rate must be finite and positive"
-            )
-        # The acquisition workflow rounds base spacing to 0.1 m before striding.
-        dx = (
-            float(
-                Decimal(str(base_spacing)).quantize(
-                    Decimal("0.1"), rounding=ROUND_HALF_UP
-                )
-            )
-            * step
+        spacing = _channel_spacing(attrs)
+        distance = dc.get_coord(
+            start=float(spacing * start),
+            step=float(spacing * step),
+            shape=(nc,),
+            units="m",
         )
-        if not np.isfinite(dx) or dx <= 0:
-            raise InvalidFiberFileError(
-                "Rounded spatial sampling interval must be positive"
-            )
-        coords = dict(
-            time=dc.get_coord(
-                start=np.datetime64(total, "ns"),
-                step=np.timedelta64(dt, "ns"),
-                shape=nt,
-            ),
-            distance=dc.get_coord(start=0.0, step=dx, shape=nc, units="m"),
-            channel=("distance", dc.get_coord(start=start, step=step, shape=nc)),
-        )
-        gauge_length = float(a["spatial_resolution"])
-        if not np.isfinite(gauge_length) or gauge_length <= 0:
-            raise InvalidFiberFileError(
-                "spatial_resolution must be finite and positive"
-            )
-        attrs = dict(
-            data_category="DAS",
-            sampling_rate=fs,
-            gauge_length=gauge_length,
-            spatial_sampling_rate=base_spacing,
-            channel_stride=step,
-            recording_start_channel=start,
-        )
-        return dc.get_coord_manager(coords, dims=("time", "distance")), attrs, order
+        coords = {
+            "time": _time_coord(attrs, nt),
+            "distance": distance,
+            "channel": ("distance", dc.get_coord(start=start, step=step, shape=nc)),
+        }
+        out_attrs = {
+            "data_category": "DAS",
+            # The acquisition reader treats spatial_resolution as gauge length.
+            "gauge_length": _positive(attrs, "spatial_resolution"),
+        }
     except (KeyError, ValueError, TypeError, OverflowError, InvalidOperation) as exc:
-        raise InvalidFiberFileError(f"Invalid Puniu metadata: {exc}") from exc
-
-
-def _read_data(resource, coords, order, time=None, distance=None, channel=None):
-    """Select coordinate intervals before reading the HDF5 hyperslab."""
-    slices = {name: slice(0, size) for name, size in zip(coords.dims, coords.shape)}
-    for name, window in (("time", time), ("distance", distance), ("channel", channel)):
-        if window is None:
-            continue
-        if not isinstance(window, tuple | list) or len(window) != 2:
-            raise ParameterError(f"{name} must be a two-ended interval")
-        coord = coords.get_coord(name)
-        _, index = coord.select(tuple(window))
-        start, stop, _ = index.indices(len(coord))
-        dim = coords.dim_map[name][0]
-        previous = slices[dim]
-        start = max(previous.start, start)
-        stop = min(previous.stop, stop)
-        slices[dim] = slice(start, max(start, stop))
-    # Apply the same integer bounds to coordinates and data without converting
-    # selected endpoints back to floating-point distances.
-    selected, _ = coords.select(samples=True, **slices)
-    if not selected.size:
-        return selected, None
-    storage_dims = tuple("distance" if name == "channel" else name for name in order)
-    data = resource[_DATASET][tuple(slices[name] for name in storage_dims)]
-    if storage_dims != coords.dims:
-        data = data.T
-    return selected, data
+        raise InvalidFiberFileError(f"Invalid PUNIU metadata: {exc}") from exc
+    cm = dc.get_coord_manager(coords, dims=("time", "distance"))
+    return cm, out_attrs, transposed

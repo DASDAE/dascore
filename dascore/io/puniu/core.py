@@ -2,85 +2,51 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO
+from dascore.constants import snap_type, windows_type
+from dascore.io import FiberIO, H5ArrayMixin
+from dascore.io.utils import windows_to_slices
+from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import _get_metadata, _is_puniu, _read_data
+from .utils import _DATASET, _axis_order, _get_metadata, _is_puniu
 
 
 class PuniuPatchAttrs(dc.PatchAttrs):
-    """Acquisition metadata for PUNIU HiFi-DAS files."""
+    """Patch attrs for PUNIU HiFi-DAS files. Lengths are in metres."""
 
-    sampling_rate: float
-    gauge_length: float
-    gauge_length_units: str = "m"
-    spatial_sampling_rate: float
-    channel_stride: int
-    recording_start_channel: int
-    spatial_reference: str = "file_start"
-    acquisition_clock_basis: str = "unspecified"
+    gauge_length: OptionalFiniteFloat = None
 
 
-class PuniuV1(FiberIO):
-    """Read PUNIU HiFi-DAS differential HDF5 version 1."""
+class PuniuV1(H5ArrayMixin, FiberIO):
+    """Support for PUNIU HiFi-DAS differential HDF5, version 1."""
 
     name = "PUNIU"
     version = "1"
     preferred_extensions = ("hdf5", "h5")
 
-    def get_format(self, resource: H5Reader, **kwargs) -> tuple[str, str] | bool:
-        """Return the format and version if the file has the PUNIU schema."""
-        return (self.name, self.version) if _is_puniu(resource) else False
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the version if the file has the PUNIU version 1 schema."""
+        return self.version if _is_puniu(resource) else None
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[dc.PatchAttrs]:
-        """Extract coordinates and metadata without reading signal samples."""
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = ()
+    ) -> list[dc.PatchMeta]:
+        """Build coordinates and attrs from the dataset header."""
         coords, attrs, _ = _get_metadata(resource)
-        return [
-            PuniuPatchAttrs(
-                **attrs,
-                coords=coords.to_summary_dict(),
-                dims=coords.dims,
-                path=resource.filename,
-                file_format=self.name,
-                file_version=self.version,
-            )
-        ]
+        attrs = PuniuPatchAttrs.model_validate(attrs)
+        return self._dataset_meta(attrs, coords, resource[_DATASET])
 
-    def read(
-        self,
-        resource: H5Reader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        channel: tuple[int | None, int | None] | None = None,
-        **kwargs,
-    ) -> dc.BaseSpool:
-        """Read signal samples within time, distance, and channel intervals.
-
-        Parameters
-        ----------
-        resource
-            The input HDF5 file.
-        time
-            Start and end of the acquisition-clock interval.
-        distance
-            Start and end in metres from the file's first recorded channel.
-        channel
-            Start and end of the original channel-number interval.
-        **kwargs
-            Additional arguments supplied by DASCore.
-        """
-        coords, attrs, order = _get_metadata(resource)
-        coords, data = _read_data(
-            resource,
-            coords,
-            order,
-            time=time,
-            distance=distance,
-            channel=channel,
-        )
-        if not coords.size:
-            return dc.spool([])
-        patch = dc.Patch(data=data, coords=coords, attrs=PuniuPatchAttrs(**attrs))
-        return dc.spool([patch])
+    def read_array(
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
+    ) -> np.ndarray:
+        """Slice the stored array and return it as (time, distance)."""
+        dataset = resource[_DATASET]
+        if not _axis_order(dataset.attrs):
+            return dataset[windows_to_slices(windows, dataset.shape)]
+        # Stored as (channel, time): windows arrive as (time, distance).
+        shape = dataset.shape[::-1]
+        time, distance = windows_to_slices(windows, shape)
+        return np.asarray(dataset[distance, time]).T

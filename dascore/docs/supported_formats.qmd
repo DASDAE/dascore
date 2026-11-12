@@ -14,20 +14,3 @@ out_str = FiberIO.get_supported_io_table().replace(True, value='✅').replace(Fa
 out_str += '\n: {.striped}'
 print(out_str)
 ```
-
-
-## PUNIU HiFi-DAS
-
-The PUNIU reader supports differential HDF5 version 1 files with a two-dimensional `/default` dataset. [HiFi-DAS](https://puniutech.com/en/products/hifi-das-v2-0/) is PUNIU's TGD-OFDR distributed acoustic sensing system.
-
-The output dimensions are `time` and `distance`. Distance is in metres relative to the first recorded channel of each file, with spacing `round(spatial_sampling_rate, 1) * step` (halfway values round away from zero). Original channel numbers are preserved in the auxiliary `channel` coordinate. Selecting a window preserves the file-relative distance origin. Files with different starting channels require spatial alignment before merging.
-
-Time is constructed from integer `epoch` seconds and `ns` nanoseconds without a timezone adjustment. The file does not establish a timezone or signal unit; amplitudes are preserved without calibration. The reader requires explicit axis-order attributes and a sampling interval representable as integer nanoseconds. `spatial_resolution` maps to gauge length, following the acquisition reader's convention.
-
-```python
-import dascore as dc
-
-spool = dc.read("recording.h5", file_format="PUNIU", distance=(100, 200))
-```
-
-`dc.scan` reads metadata without loading the signal. Time, distance, and channel intervals are applied before reading the HDF5 data; an interval outside the recording returns an empty spool.
