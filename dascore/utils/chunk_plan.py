@@ -1740,9 +1740,8 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     the overlap (D3: complete overlaps keep the first member,
     deterministically): ascending sources (rows ordered by start, patch
     row) lose their start, descending ones their stop. Returns the
-    corrected starts and stops, the row modification flags, and the
-    kept-row mask (sources left degenerate by the correction contribute
-    nothing).
+    corrected starts and stops and the kept-row mask (sources left
+    degenerate by the correction contribute nothing).
     """
     start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
     is_first = np.zeros(len(sorted_df), dtype=bool)
@@ -1761,11 +1760,7 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
         rows = rows[np.lexsort(key)]
         negated = (_negated(stop[rows]), _negated(start[rows]), step[rows], codes[rows])
         lo[desc], hi[rows] = start[desc], _negated(_owned_starts(*negated))
-    modified = lo != start
-    if "_modified" in sorted_df.columns:
-        modified = sorted_df["_modified"].to_numpy() | modified
-    keep = lo <= hi
-    return lo, hi, modified, keep
+    return lo, hi, lo <= hi
 
 
 # Prefixes the dims standing in for the envelope of a riding coordinate.
@@ -2485,7 +2480,8 @@ def build_chunk_plan(
                 size_diagnostics.append({"first_output_id": next_id, **diag})
         if gridded[part]:
             if merge_mode:
-                firsts, lasts = np.array([0]), np.array([len(grids[part]) - 1])
+                firsts = np.array([0], dtype=np.int64)
+                lasts = np.array([len(grids[part]) - 1], dtype=np.int64)
             else:
                 sub_sample[part] = value_c < abs(part_step)
                 try:
@@ -2497,8 +2493,6 @@ def build_chunk_plan(
                 except Exception as exc:
                     deferred = exc
                     break
-            if not len(firsts):
-                continue
             active[part] = True
             ids_p = np.arange(next_id, next_id + len(firsts))
             next_id += len(firsts)
@@ -2631,7 +2625,7 @@ def build_chunk_plan(
             clipped["_patch_row"] = kpids[rel_src + lo_k]
             clipped["_source_max"] = korig_max[rel_src + lo_k]
             firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
-            lo, hi, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
+            lo, hi, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
             rel_src, rel_out, lo, hi = rel_src[own], rel_out[own], lo[own], hi[own]
             m_counts = np.bincount(rel_out, minlength=n_out)
             total = int(m_counts.sum())
@@ -2670,7 +2664,7 @@ def build_chunk_plan(
         win_parts = np.concatenate([np.full(len(x[3]), x[1]) for x in pending])
         win_first = np.concatenate([x[3] for x in pending])
         win_last = np.concatenate([x[4] for x in pending])
-        counts = np.array([len(x) if x is not None else 0 for x in grids])
+        counts = np.array([0 if x is None else len(x) for x in grids], np.int64)
         # a stretch with no grid numbers no positions any window reaches
         offsets = np.where(gridded, np.r_[0, np.cumsum(counts)[:-1]], -(2**62))
         windows = (win_parts, win_first, win_last)
@@ -3701,6 +3695,7 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
     exact = list(outputs[grid_col]) if grid_col in outputs else [None] * len(outputs)
     specs = [None] * len(outputs)
     for out, (part, first, size) in enumerate(slices):
+        first, size = int(first), int(size)  # Python ints: grid terms are big
         if not grids or (part >= 0 and not relabel[part]):
             continue
         grid = grids[parts[out]]
@@ -3747,7 +3742,8 @@ def stretch_coordinate(spec, units=None):
     from dascore.core.coords import get_coord  # noqa: PLC0415
 
     origin, num, den, count, phase, first, length, dtype = spec
-    run = Grid(origin, num, den, count, phase=phase).sliced(first, 1, length)
+    # Python ints: a platform's numpy int times a big grid term overflows
+    run = Grid(origin, num, den, count, phase=phase).sliced(int(first), 1, int(length))
     return get_coord(runs=(run,), dtype=dtype, units=units)
 
 

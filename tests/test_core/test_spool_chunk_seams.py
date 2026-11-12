@@ -15,10 +15,10 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.coords import get_coord
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import ChunkError, CoordError, ParameterError
 from dascore.units import get_quantity
 from dascore.units import s as seconds
-from dascore.utils.chunk_plan import build_chunk_plan
+from dascore.utils.chunk_plan import build_chunk_plan, stretch_coordinate
 from dascore.utils.gaps import GapTolerance
 
 T0 = np.datetime64("2020-01-01T00:00:00", "ns")
@@ -164,6 +164,14 @@ class TestSeamTest:
         assert len(spool.chunk(time=None)) == 2
         assert len(spool.chunk(time=None, tolerance=10)) == 2
         assert len(spool.chunk(time=None, tolerance=2 * STEP)) == 1
+
+    def test_stepless_windows_are_checked(self):
+        """Windows over labels with no step still refuse what cannot chunk."""
+        spool = dc.spool([_patch(T0 + np.array([0, 3, 4, 9]) * STEP)])
+        with pytest.raises(ChunkError, match="Could not chunk"):
+            spool.chunk(time=1000 * STEP)
+        with pytest.raises(ParameterError, match="overlap"):
+            spool.chunk(time=2 * STEP, overlap=3 * STEP)
 
     def test_step_is_the_earlier_patch(self):
         """The seam is judged against the earlier patch's step."""
@@ -597,6 +605,13 @@ class TestPlanRecords:
         assert members["reason"].tolist() == ["stretch", "seam", "gap", "tolerance"]
         windowed = spool.chunk_plan(time=5 * STEP).members
         assert "window" in set(windowed["reason"])
+
+    def test_slice_positions_of_any_integer_width(self):
+        """A slice named by 32-bit positions labels as one of Python ints does."""
+        origin, num, den = 1_577_836_800_000_000_000, 3_600_008_850_000, 3_599_999
+        spec = (origin, num, den, 3_600_000, 0)
+        narrow = stretch_coordinate((*spec, np.int32(5), np.int32(3), "datetime64[ns]"))
+        assert narrow == stretch_coordinate((*spec, 5, 3, "datetime64[ns]"))
 
     def test_diagnostics_never_reach_patches(self):
         """The diagnostic columns are not attributes of what chunk yields."""
