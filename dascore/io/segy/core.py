@@ -70,6 +70,8 @@ class SegyV1_0(FiberIO):  # noqa
         Trace header positions become x, y and z coordinates along channel:
         GroupX and GroupY (else CDP_X and CDP_Y) and ReceiverGroupElevation,
         with their scalars applied. Traces with x and y both zero get NaN.
+        z keeps the file's convention: Silixa writes receiver true vertical
+        depth (positive down) in ReceiverGroupElevation, so there z is depth.
         Units are not set, since files often misstate their measurement system.
         """
         segyio = optional_import(self._package_name)
