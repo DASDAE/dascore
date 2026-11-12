@@ -34,6 +34,16 @@ _PAREN_NUMBER = re.compile(
     r"[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[\d⁰¹²³⁴⁵⁶⁷⁸⁹⁻\s.,eE+\-*/^]*[)\]]"
 )
 _EXPONENT_END = re.compile(r"(\^|\*\*)\s*$")
+# Temperature spellings found in files, e.g. "degrees C", "degreesC",
+# "degrees_Celsius"; pint reads the spaced ones as degree * coulomb (or farad).
+_DEGREE_TEMPERATURE = re.compile(
+    r"\b[Dd]eg(?:ree)?s?\.?[\s_]*(?:(C)(?:elsius)?|F(?:ahrenheit)?)\b"
+)
+
+
+def _normalize_temperature(text: str) -> str:
+    """Rewrite degree temperature spellings to degC or degF."""
+    return _DEGREE_TEMPERATURE.sub(lambda x: "degC" if x[1] else "degF", text)
 
 
 def _has_bracketed_factor(text: str) -> bool:
@@ -80,6 +90,7 @@ def get_registry():
             ureg.define("Radian=radians")
             # define strain
             ureg.define("strain=[]=ϵ")
+            ureg.preprocessors.append(_normalize_temperature)
             # allow multiplication with offset units.
             ureg.autoconvert_offset_to_baseunit = True
             # set the shortest display for units.
