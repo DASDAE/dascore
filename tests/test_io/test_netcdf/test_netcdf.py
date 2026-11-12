@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import tracemalloc
+import warnings
 from typing import ClassVar
 
 import h5py
@@ -1202,6 +1203,44 @@ class TestNoCFNetCDF:
         flags = [x.fallback for x in dc.io.FiberIO.manager._get_prioritized_list()]
         assert True in flags
         assert flags == sorted(flags)
+
+    @pytest.mark.parametrize(
+        ("units", "expected"), [("microstrain", "microstrain"), ("m s-1", "m/s")]
+    )
+    def test_file_units_apply_to_payloads(self, tmp_path, units, expected):
+        """Units stated once on the file, in CF spelling too, are the payloads'."""
+        path = self._write_cables(tmp_path / "cables.nc", attrs={"units": units})
+        patches = list(dc.spool(path))
+        assert len(patches) == 2
+        for patch in patches:
+            assert patch.attrs.data_units == dc.get_quantity(expected)
+
+    @pytest.mark.parametrize("name", ["units", "data_units"])
+    def test_variable_units_win(self, tmp_path, name):
+        """A variable's own units are kept over the file's."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {"a": (("x",), np.ones(3), {name: "m"})}, attrs={"units": "s"}
+        )
+        dataset.to_netcdf(tmp_path / "a.nc", engine="h5netcdf")
+        (patch,) = dc.spool(tmp_path / "a.nc")
+        assert patch.attrs.data_units == dc.get_quantity("m")
+
+    @pytest.mark.parametrize("units", ["same as input", 2.5])
+    def test_file_units_which_do_not_parse(self, tmp_path, units):
+        """File units which are not units leave the payload without any."""
+        path = self._write_cables(tmp_path / "cables.nc", attrs={"units": units})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # and raise no unit-parse warning
+            patches = list(dc.spool(path))
+        assert all(x.attrs.data_units is None for x in patches)
+
+    def test_cf_files_do_not_take_file_units(self, tmp_path):
+        """A CF file's root units are not its payload's."""
+        attrs = {"units": "microstrain", "Conventions": "CF-1.8"}
+        path = self._write_cables(tmp_path / "cf.nc", cables=("data",), attrs=attrs)
+        assert dc.get_format(path) == ("NETCDF_CF", "1.8")
+        assert dc.spool(path)[0].attrs.data_units is None
 
     def test_not_the_next_files_guess(self, cable_path):
         """A Silixa file scanned after a version 0 file is still Silixa."""

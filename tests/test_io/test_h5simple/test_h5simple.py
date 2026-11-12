@@ -341,6 +341,30 @@ class TestH5Simple:
         # Stripping it in only one of the two is how they came to disagree.
         assert read_names == scan_names
 
+    @pytest.mark.parametrize(
+        ("root", "expected", "left"),
+        [
+            ({"units": "microns"}, "microns", None),
+            ({"units": "microns", "data_units": "m/s"}, "m/s", "microns"),
+            ({"units": "same as input"}, None, "same as input"),
+            ({"units": 2.5}, None, 2.5),
+        ],
+    )
+    def test_root_units(self, h5simple_path, tmp_path, root, expected, left):
+        """
+        A root units attr which parses is the data units, unless data_units is
+        present; otherwise it stays a plain units attr.
+        """
+        path = tmp_path / "units.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs.update(root)
+        units = None if expected is None else dc.get_quantity(expected)
+        read, scanned = dc.read(path)[0], dc.scan(path)[0]
+        for patch in (read, scanned):
+            assert patch.attrs.data_units == units
+        assert read.attrs.get("units") == left
+
     @pytest.mark.parametrize("name", ["__format__", "format", "file_format"])
     @pytest.mark.parametrize("value", ["h5simple", np.bytes_(b"h5simple")])
     def test_declared_format_is_recognized(self, h5simple_path, tmp_path, name, value):
