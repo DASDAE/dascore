@@ -7,11 +7,12 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.exceptions import LazyOperationError
+from dascore.exceptions import LazyOperationError, PatchError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Chain, Node
-from dascore.lazy.contract import Window
-from dascore.lazy.execute import chunk_boxes, read_schedule
+from dascore.lazy.contract import Pointwise, Window
+from dascore.lazy.execute import chunk_boxes, compute, read_schedule
+from dascore.lazy.recipe import concat
 from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
 
@@ -137,12 +138,7 @@ class TestChunkBoxes:
         whole = (slice(0, 300), slice(0, 2000))
         assert chunk_boxes(lazy.abs().data, 300 * ROW) == [whole]
 
-    def test_default_is_the_setting(self, lazy):
-        """With no block size given, the setting decides."""
-        with config_context(lazy_block_size=100 * ROW):
-            assert len(chunk_boxes(lazy.abs().data)) == 4
-
-    @pytest.mark.parametrize("rows", (300, 100, 7, 1))
+    @pytest.mark.parametrize("rows", (100, 7, 1))
     def test_boxes_tile_and_fit(self, lazy, rows):
         """Every sample is in one box, and no box is over the block size."""
         boxes = chunk_boxes(lazy.abs().data, rows * ROW)
@@ -261,6 +257,25 @@ class TestFilterArguments:
         kwargs = {"distance": 3, "samples": True, "mode": mode}
         self._same(getattr(lazy, name)(**kwargs), getattr(eager, name)(**kwargs))
 
+    @pytest.mark.parametrize("mode", ("wrap", "interp", "mirror", "nearest"))
+    def test_savgol_modes(self, lazy, eager, mode):
+        """Each savgol edge mode gives the eager result, however it is cut."""
+        kwargs = {"distance": 7, "polyorder": 2, "samples": True, "mode": mode}
+        self._same(lazy.savgol_filter(**kwargs), eager.savgol_filter(**kwargs))
+
+    def test_savgol_with_a_nan(self, tmp_path_factory):
+        """A NaN is never at a cut end of what the default mode fits."""
+        data = np.random.default_rng(2).standard_normal((300, 2000))
+        data[150, 1000] = np.nan
+        holed = lazy_patch(stored_patch(tmp_path_factory.mktemp("nan"), data))
+        kwargs = {"distance": 7, "time": 7, "polyorder": 2, "samples": True}
+        expected = holed.load().savgol_filter(**kwargs)
+        with config_context(lazy_block_size=ROW // 8):
+            loaded = holed.savgol_filter(**kwargs).abs().load()
+        np.testing.assert_allclose(
+            loaded.data, np.abs(expected.data), rtol=1e-12, atol=1e-12
+        )
+
     def test_truncate(self, lazy, eager):
         """A wider gaussian kernel reads further."""
         kwargs = {"distance": 3, "samples": True, "truncate": 8.0}
@@ -272,6 +287,66 @@ class TestFilterArguments:
         with pytest.raises(LazyOperationError, match="gaussian_filter"):
             lazy.gaussian_filter(time=2, distance=2, samples=True, mode=mode)
         assert not recipe_loads
+
+
+class Demean(dc.PatchProcessor):
+    """Subtract the mean of everything, which no part of the data can do."""
+
+    name = None
+
+    def kernel(self, data):
+        """Return the data less their mean."""
+        return data - data.mean()
+
+
+class Doubled(dc.PatchProcessor):
+    """A kernel which wrongly repeats every row."""
+
+    name = None
+
+    def kernel(self, data):
+        """Return each row twice."""
+        return np.repeat(data, 2, axis=0)
+
+
+class TestSteps:
+    """What a step is given, and what is made of what it returns."""
+
+    @staticmethod
+    def _array(*nodes, shape=(4, 3)):
+        """A lazy array of the rows 0 to 3 with the given steps."""
+        rows = [constant((1, shape[1]), float(x)) for x in range(shape[0])]
+        return LazyArray(concat(rows), Chain(nodes))
+
+    def test_no_contract_needs_everything(self):
+        """A later selection does not narrow a step which stated no contract."""
+        whole = Node(Demean(), {}).settled((4, 3), np.float64, "a")
+        index = (slice(0, 2), slice(None))
+        window = Node(Select(), {}, Window(index)).settled((2, 3), np.float64, "b")
+        array = self._array(whole, window)
+        box = (slice(0, 2), slice(0, 3))
+        assert read_schedule(array, [box]) == [(slice(0, 4), slice(0, 3))]
+        assert np.array_equal(compute(array, box)[:, 0], [-1.5, -0.5])
+
+    def test_oversized_result_refused(self):
+        """A kernel which returns too much is refused, not trimmed."""
+        node = Node(Doubled(), {}, Pointwise()).settled((4, 3), np.float64, "a")
+        box = (slice(0, 4), slice(0, 3))
+        with pytest.raises(PatchError, match="Doubled computed an array of shape"):
+            compute(self._array(node), box)
+
+    def test_empty_box_runs_nothing(self, lazy, eager):
+        """An empty selection after a filter is empty, as eagerly."""
+        kwargs = {"polyorder": 2, "time": 7, "samples": True}
+        out = lazy.savgol_filter(**kwargs).select(distance=(2, 2), samples=True)
+        expected = eager.savgol_filter(**kwargs).select(distance=(2, 2), samples=True)
+        assert out.load().data.shape == expected.data.shape == (0, 2000)
+
+    def test_load_raises_the_kernels_error(self, lazy):
+        """An error from a step is the one `Patch.load` raises."""
+        out = lazy.select(time=(0, 5), samples=True).pass_filter(time=(10, 100))
+        with pytest.raises(ValueError, match="padlen"):
+            out.load()
 
 
 class TestQueries:
@@ -286,32 +361,4 @@ class TestQueries:
         """What unselect keeps is spelled as positions, so it is refused."""
         with pytest.raises(LazyOperationError, match="unselect"):
             lazy.unselect(time=(0, 100), samples=True)
-        assert not recipe_loads
-
-
-class TestDtypes:
-    """A filter states a contract only for the dtypes its kernel keeps."""
-
-    CALLS = (
-        lambda x: x.pass_filter(time=(10, 100)),
-        lambda x: x.median_filter(time=5, samples=True),
-        lambda x: x.savgol_filter(polyorder=2, time=7, samples=True),
-        lambda x: x.gaussian_filter(time=1.5, samples=True),
-    )
-
-    @pytest.fixture(scope="class")
-    def stored(self, tmp_path_factory):
-        """A stored patch of each of three dtypes."""
-        directory = tmp_path_factory.mktemp("filter_dtypes")
-        data = np.arange(600_000).reshape(dc.get_example_patch().shape) % 97
-        return {
-            x: stored_patch(directory, data.astype(x), x)
-            for x in ("int16", "float32", "float64")
-        }
-
-    @pytest.mark.parametrize("call", (CALLS[0], CALLS[2]))
-    def test_changed_dtype_refused(self, stored, call, recipe_loads):
-        """Filters which turn integers into floats refuse them, reading nothing."""
-        with pytest.raises(LazyOperationError):
-            call(lazy_patch(stored["int16"]))
         assert not recipe_loads

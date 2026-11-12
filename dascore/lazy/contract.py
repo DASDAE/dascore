@@ -83,11 +83,15 @@ class ChunkContract:
             What [`needs`](`dascore.lazy.contract.ChunkContract.needs`)
             returned for `box`.
         """
-        # The kernel's result starts where its input did, so the box sits
-        # in it at the distance the input was grown by.
+        out = run(data)
+        # A result which is not the shape of what went in is handed back as
+        # it is, for the caller to refuse: trimming it would hide the fault.
+        if tuple(out.shape) != tuple(data.shape):
+            return out
+        # The result starts where its input did, so the box sits in it at
+        # the distance the input was grown by.
         spans = zip(box, needed, strict=True)
-        index = tuple(slice(b.start - n.start, b.stop - n.start) for b, n in spans)
-        return run(data)[index]
+        return out[tuple(slice(b.start - n.start, b.stop - n.start) for b, n in spans)]
 
 
 @dataclass(frozen=True)

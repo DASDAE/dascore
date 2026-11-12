@@ -6,8 +6,8 @@ A chunk is a box of the final array, and the work is three separate steps:
 boxes, [`read_schedule`](`dascore.lazy.execute.read_schedule`) says which
 box of the stored array each one needs, and
 [`compute`](`dascore.lazy.execute.compute`) reads that box and runs each
-step on it. [`load`](`dascore.lazy.execute.load`) does all three and puts
-the boxes together in memory.
+step on it. [`load`](`dascore.lazy.execute.load`) cuts and computes, and
+puts the boxes together in memory.
 
 Examples
 --------
@@ -23,7 +23,7 @@ Examples
 >>> lazy = patch.select(time=(10, 90), samples=True)
 >>> lazy = lazy.median_filter(time=3, samples=True).data
 >>>
->>> # Four boxes of 20 samples, each read with a sample either side of it.
+>>> # Four boxes of 20 samples; the second is read with a sample either side.
 >>> boxes = chunk_boxes(lazy, block_size=22 * 8 * 8)
 >>> assert [x[0] for x in boxes[:2]] == [slice(0, 20), slice(20, 40)]
 >>> assert read_schedule(lazy, boxes)[1][0] == slice(29, 51)
@@ -46,11 +46,24 @@ from dascore.lazy.contract import Box, ChunkContract, Window
 if TYPE_CHECKING:
     from dascore.lazy.array import LazyArray
 
-# A step with no contract recorded is run as one which needs its own box.
-_SAME_PLACE = ChunkContract()
-# The least a halving must save for an axis to be worth cutting again. Half
-# is what it saves when nothing else is needed of the axis; an axis needed
-# whole saves nothing, and one read with a halo less the shorter its pieces.
+
+class _Everything(ChunkContract):
+    """What a step which recorded no contract needs: all of its input."""
+
+    def needs(self, box: Box, shape: tuple[int, ...]) -> Box:
+        """Return the whole input."""
+        return tuple(slice(0, size) for size in shape)
+
+    def apply(self, run, data, box: Box, needed: Box):
+        """Return the box of the whole result."""
+        return run(data)[box]
+
+
+_EVERYTHING = _Everything()
+# The most of its size a halved box may keep for the axis to be worth
+# cutting. Half is what is left when nothing else is needed of the axis; an
+# axis needed whole keeps it all, and one read with a halo keeps more the
+# shorter its pieces get.
 _WORTH_CUTTING = 0.75
 
 
@@ -61,7 +74,7 @@ def _needs(array: LazyArray, box: Box) -> list[Box]:
     shapes = [array.recipe.shape, *(x.made()[0] for x in nodes)][: len(nodes)]
     out = [box]
     for node, shape in zip(reversed(nodes), reversed(shapes), strict=True):
-        out.append((node.contract or _SAME_PLACE).needs(out[-1], shape))
+        out.append((node.contract or _EVERYTHING).needs(out[-1], shape))
     return out[::-1]
 
 
@@ -89,11 +102,12 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     """
     Cut a lazy array into the boxes it is computed in.
 
-    The whole array is one box if no array computing it needs is larger
+    There is one box if none of the arrays needed to compute it is larger
     than the block size, or if no step computes anything: reading in
     pieces would only open each file again. Otherwise the box is halved
-    along the first axis worth cutting until they fit, so the block size
-    is aimed for rather than promised.
+    along the first axis worth cutting until its arrays fit. An axis a step
+    needs whole is never worth cutting, so the block size is aimed for
+    rather than promised.
 
     Parameters
     ----------
@@ -107,10 +121,8 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     block_size = get_config().lazy_block_size if block_size is None else block_size
     sizes = list(shape)
     cost = _largest(array, _middle(shape, sizes))
-    contracts = [x.contract for x in array.chain]
-    # A step with no contract says nothing of what a part of it needs, and
-    # with nothing but windows there is nothing to compute in parts.
-    cut = None not in contracts and not all(isinstance(x, Window) for x in contracts)
+    # With nothing but windows there is nothing to compute in parts.
+    cut = not all(isinstance(x.contract, Window) for x in array.chain)
     while cut and block_size and cost > block_size:
         for axis, size in enumerate(sizes):
             trial = [*sizes[:axis], math.ceil(size / 2), *sizes[axis + 1 :]]
@@ -142,15 +154,18 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     """
     Read what one box of a lazy array needs, and compute it.
 
-    Each step runs its processor's NumPy kernel, and what it makes of the
-    box is checked against the shape and dtype its metadata stated.
+    Each step runs its processor's NumPy kernel, and what it makes is
+    checked against the dtype its metadata stated and the shape of the box.
+    An empty box is returned without running anything.
 
     Raises
     ------
     PatchError
-        If a step is still pending, or computed an array other than the
-        one its metadata stated.
+        If a step is still pending, or computed an array of another shape
+        or dtype than its metadata stated.
     """
+    if 0 in _sizes(box):
+        return np.empty(_sizes(box), array.dtype)
     needed = _needs(array, box)
     data = array.recipe[needed[0]].load()
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
@@ -159,14 +174,14 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         processor = node.processor
         kernel = type(processor).kernel_for("numpy")
         run = partial(kernel, processor, **node.plan)
-        data = (node.contract or _SAME_PLACE).apply(run, data, after, before)
+        data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         shape, dtype = tuple(data.shape), np.dtype(data.dtype)
         if shape != _sizes(after) or dtype != stated_dtype:
             name = type(processor).__name__
             msg = (
                 f"{name} computed an array of shape {shape} and dtype "
-                f"{dtype}, but its metadata stated {_sizes(after)} and "
-                f"{stated_dtype}. Its get_metadata must state what its "
+                f"{dtype} where its metadata stated one of {_sizes(after)} "
+                f"and {stated_dtype}. Its get_metadata must state what its "
                 "kernel returns."
             )
             raise PatchError(msg)

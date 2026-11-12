@@ -470,12 +470,13 @@ class SavgolFilter(_WindowFilter):
     cval: Any = 0.0
 
     def chunk_contract(self, dtype, plan):
-        """Return a reach of the window along each filtered axis."""
-        # The whole window rather than half: the default mode fits each end
-        # of the array from the window's length of samples there, so a chunk
-        # at an end must hold that many.
-        widths = {axis: plan["size"][axis] for axis in plan["axes"]}
-        return _reach(self.mode, widths, dtype)
+        """Return a reach of half the window along each filtered axis."""
+        widths = {axis: plan["size"][axis] // 2 for axis in plan["axes"]}
+        # The default mode fits a polynomial to each end of whatever it is
+        # given, and refuses a NaN there, so a cut end is not one it can be
+        # handed: it needs the axis whole, as a wrapping mode does.
+        mode = "wrap" if self.mode == "interp" else self.mode
+        return _reach(mode, widths, dtype)
 
     def numpy_kernel(self, data, *, size, axes):
         """Return the data filtered along each axis in turn."""

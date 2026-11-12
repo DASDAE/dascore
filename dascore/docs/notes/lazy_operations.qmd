@@ -21,7 +21,7 @@ print(out.backend, len(out.data.chain))
 
 ## The rules a lazy operation keeps
 
-**Chunk size is an implementation detail.** The result is the same, within floating-point precision, whether it was computed in memory or a chunk at a time, and it has the same `data_id`. An operation states what a chunk of its output needs of its input by returning a [chunk contract](`dascore.lazy.contract`) from [`chunk_contract`](`dascore.core.processor.PatchProcessor.chunk_contract`), given the input's dtype and its plan. The contracts are listed [below](#the-contracts). A contract is decided from the dtype and the plan, never from the values: an operation whose no-op depends on the values, such as `fillna`, cannot state one.
+**Chunk size is an implementation detail.** The result is the same, within floating-point precision, whether it was computed whole or a chunk at a time, and it has the same `data_id`. An operation states what a chunk of its output needs of its input by returning a [chunk contract](`dascore.lazy.contract`) from [`chunk_contract`](`dascore.core.processor.PatchProcessor.chunk_contract`), given the input's dtype and its plan. The contracts are listed [below](#the-contracts). A contract is decided from the dtype and the plan, never from the values: an operation whose no-op depends on the values, such as `fillna`, cannot state one.
 
 **Metadata is never lazy.** A lazy patch always has concrete coords, attrs, shape and dtype. They come from `get_metadata`, which runs when the operation is called and knows nothing of chunks, so it must state the dtype the kernel returns as well as the shape. [`load`](`dascore.lazy.array.LazyArray.load`) checks each step's result against what its metadata stated, and refuses a mismatch naming the processor. An operation whose metadata depends on the data cannot be lazy.
 
@@ -62,12 +62,12 @@ A chunk is a box of the array: one slice for each axis. A contract says which bo
 | Contract | A box of the output needs | Stated by |
 |---|---|---|
 | `Pointwise` | the same box of the input | `abs`, `real`, `imag`, `angle`, `conj` |
-| `Halo` | the same box and a fixed number of samples around it, stopping at the ends of the array | `median_filter`, `savgol_filter`, `gaussian_filter` |
-| `WholeAxis` | the whole of some axes, and the same place along the others | `pass_filter`, and the three above when their edge mode wraps |
+| `Halo` | the same box and a fixed number of samples around it, stopping at the ends of the array | `median_filter`, `gaussian_filter`, and `savgol_filter` with an edge mode other than its default |
+| `WholeAxis` | the whole of some axes, and the same place along the others | `pass_filter`; the three above when their edge mode wraps; `savgol_filter` in its default mode, which fits a polynomial to each end of what it is given |
 | `Window` | the same box moved by where a selection starts | `select` with ranges |
 | `Unchanged` | nothing: the kernel hands its input back | `real` and `conj` of real data, a `select` which keeps everything |
 
-The filters state a contract for `float32` and `float64` data only, the dtypes their kernels hand back unchanged, and `gaussian_filter` states none when its edge mode is given axis by axis. A query which does not resolve to one range for each dimension is no window and is refused: a `select` by an array of values or a mask, and what `unselect` and `order` build.
+The filters state a contract for `float32` and `float64` data only, the dtypes their kernels return as given, and `gaussian_filter` states none when its edge mode is given axis by axis. A query which does not resolve to one range for each dimension is no window and is refused: a `select` by an array of values or a mask, and what `unselect` and `order` build.
 
 A `Halo` kernel sees the true ends of the array in the chunks which hold them, so it treats them as it does eagerly, and what it makes of a cut end is trimmed off. A halo never reaches past an earlier selection: to a filter after a `select`, the window's ends are the array's.
 
@@ -93,7 +93,11 @@ boxes = chunk_boxes(chain.data)
 print(boxes, read_schedule(chain.data, boxes))
 ```
 
-The whole result is still put together in memory; writing each box out as it is made is a later change.
+The whole result is still put together in memory; writing each box out as it is made is a later change. Until then:
+
+- Nothing is kept between loads. Each piece a spool cuts from a lazy patch runs the chain for itself, so a piece cut along an axis a step needs whole reads and computes that whole axis again.
+- A kernel is not run until the chain is, so an argument its kernel refuses, such as an edge mode scipy does not know, is refused at `load` rather than at the call.
+- A step which recorded no contract, as a kernel registered for the lazy backend may leave, is given all of its input.
 
 ## Where it happens
 

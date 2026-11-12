@@ -385,7 +385,10 @@ class Patch(NamespaceOwner, PatchMeta):
             return self
         # Inside an operation, so the attrs are taken to describe the array.
         with operation_context():
-            return self.update(data=to_numpy(data))
+            # A lazy array loads itself, so an error from one of its steps
+            # is the one raised.
+            lazy = isinstance(data, LazyArray)
+            return self.update(data=data.load() if lazy else to_numpy(data))
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

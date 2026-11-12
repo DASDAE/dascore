@@ -45,6 +45,8 @@ def _values(shape, dtype):
     """Distinct values of a dtype, negative ones and both parts included."""
     values = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
     values = (values - values.mean()) / values.size * 200
+    # Not a ramp, which a smoothing filter would hand back as it was.
+    values = values + 20 * np.sin(np.arange(values.size) * 0.7).reshape(shape)
     if dtype == "bool":
         return values > 0
     if np.dtype(dtype).kind == "u":
@@ -180,7 +182,9 @@ CALLS = {
     "_Query": lambda x: x.select(time=(5, 300), distance=(2, 90), samples=True),
     "PassFilter": lambda x: x.pass_filter(time=(10, 100)),
     "MedianFilter": lambda x: x.median_filter(time=5, distance=3, samples=True),
-    "SavgolFilter": lambda x: x.savgol_filter(polyorder=2, time=7, samples=True),
+    "SavgolFilter": lambda x: x.savgol_filter(
+        polyorder=2, time=7, distance=5, samples=True, mode="mirror"
+    ),
     "GaussianFilter": lambda x: x.gaussian_filter(time=1.5, distance=1, samples=True),
 }
 
@@ -209,7 +213,8 @@ class TestContractsHold:
         try:
             lazy = call(lazy_in)
         except LazyOperationError:
-            # No contract for this dtype; every one states one for these.
+            # Only the filters refuse a dtype, and never these two.
+            assert cls.__name__.endswith("Filter")
             assert dtype not in ("float32", "float64")
             return
         eager = call(eager_in)

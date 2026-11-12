@@ -721,7 +721,7 @@ with warnings.catch_warnings():
             return _selected(data, indexer, self.copy)
 
         def chunk_contract(self, dtype, plan):
-            """Return a window for contiguous slices; anything else has none."""
+            """Return a window for one range per axis, and none for anything else."""
             if (index := plan.get("indexer")) is None:
                 return Unchanged()
             if all(isinstance(x, slice) and x.step in (None, 1) for x in index):

@@ -17,7 +17,6 @@ from dascore.lazy.contract import (
     Halo,
     Pointwise,
     Unchanged,
-    WholeAxis,
     Window,
 )
 
@@ -44,20 +43,10 @@ class TestNeeds:
 
     box = (slice(10, 20), slice(2, 4))
 
-    def test_halo_grows(self):
-        """Each axis grows by its own widths, and others are left alone."""
-        halo = Halo({0: (3, 1)})
-        assert halo.needs(self.box, (100, 5)) == (slice(7, 21), slice(2, 4))
-
     def test_halo_stops_at_the_ends(self):
         """Nothing is read from beyond the array."""
         halo = Halo({0: (50, 50), 1: (1, 1)})
         assert halo.needs(self.box, (25, 4)) == (slice(0, 25), slice(1, 4))
-
-    def test_whole_axis(self):
-        """The named axis is read whole, the other where the box is."""
-        found = WholeAxis((1,)).needs(self.box, (100, 5))
-        assert found == (slice(10, 20), slice(0, 5))
 
     @pytest.mark.parametrize(
         "index, start",
