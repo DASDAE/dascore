@@ -94,6 +94,7 @@ extras = [
     "bottleneck",
     "pymseed[numpy]>=0.9.1",
     "protobuf",
+    "msgpack",
 ]
 
 docs = [
@@ -180,6 +181,8 @@ FEBUS_T1__V1 = "dascore.io.febus.core:FebusT1V1"
 NEUBREXRFS__V1 = "dascore.io.neubrex:NeubrexRFSV1"
 ODH4__V1 = "dascore.io.odh4.core:ODH4V1"
 NEUBREXDAS__V1 = "dascore.io.neubrex:NeubrexDASV1"
+NOKIAOFDR__V1 = "dascore.io.nokia.core:NokiaOFDRV1"
+NOKIAOFDRH5__V1 = "dascore.io.nokia.core:NokiaOFDRH5V1"
 OPTODAS__V8 = "dascore.io.optodas.core:OptoDASV8"
 OPTODAS__V9 = "dascore.io.optodas.core:OptoDASV9"
 OPTODAS__V10 = "dascore.io.optodas.core:OptoDASV10"
