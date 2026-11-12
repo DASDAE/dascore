@@ -11,6 +11,7 @@ from dascore.exceptions import (
     PatchError,
 )
 from dascore.io.segy.core import SegyV1_0
+from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 
@@ -304,3 +305,39 @@ class TestSegyCompatibility:
             time=patch.get_coord("time") + dc.to_datetime64(start)
         )
         assert new.get_coord("time").min() == np.datetime64(start)
+
+
+class TestSegyTextHeader:
+    """Tests for reading the textual header into attrs."""
+
+    @pytest.mark.parametrize("ascii_text", [False, True])
+    def test_silixa_strain_rate_scale(self, tmp_path, ascii_text):
+        """
+        Silixa's strain rate line, in EBCDIC or ASCII, sets the data type and
+        scaled units, and the header is kept line by line.
+        """
+        line = "AMPLITUDE VALUES PROPORTIONAL TO STRAINRATE; SC= X11600 TO NM/M/S"
+        path, _ = _write_segy_file(
+            tmp_path / "s.sgy", text={14: line}, ascii_text=ascii_text
+        )
+        attrs = dc.spool(path)[0].attrs
+        assert attrs.data_type == "strain_rate"
+        assert attrs.data_units == get_quantity("11600 nm/m/s")
+        assert f"C14 {line}" in attrs.segy_text_header.split("\n")
+
+    def test_strain_rate_without_scale(self):
+        """A strain rate line without a scale sets the data type only."""
+        pytest.importorskip("segyio")
+        attrs = dc.spool(fetch("conoco_segy_1.sgy"))[0].attrs
+        assert attrs.data_type == "strain_rate"
+        assert attrs.data_units is None
+        assert "C3 Manufacturer: Silixa" in attrs.segy_text_header.split("\n")
+
+    def test_blank_header(self, tmp_path):
+        """A blank textual header gives no attrs."""
+        path, _ = _write_segy_file(tmp_path / "blank.sgy")
+        with path.open("r+b") as fi:
+            fi.write(b"\x40" * 3200)
+        attrs = dc.spool(path)[0].attrs
+        assert "segy_text_header" not in attrs.model_dump()
+        assert attrs.data_type == ""

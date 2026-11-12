@@ -30,6 +30,14 @@ _TEXT_START = re.compile(
     rb"(\d{2}:\d{2}:\d{2}\.\d{1,9})"
 )
 
+# Silixa's textual header line stating the data type, and maybe the scale, eg
+# "C14 AMPLITUDE VALUES PROPORTIONAL TO STRAINRATE; SC= X11600 TO NM/M/S" or
+# "C9 Amplitude values are proportional to strainrate." (conoco_segy_1.sgy).
+_TEXT_STRAIN_RATE = re.compile(
+    r"PROPORTIONAL TO STRAINRATE(?:; *SC= *X *(\d+(?:\.\d+)?) TO NM/M/S)?",
+    re.IGNORECASE,
+)
+
 
 def twos_comp(bytes_, byteorder="big"):
     """Decode a signed integer from bytes."""
@@ -186,6 +194,35 @@ def _get_time_from_text(text, start):
     except ValueError:
         return start
     return stamp if stamp.astype("datetime64[s]") == start else start
+
+
+def _decode_text(text):
+    """Return the textual header as lines, decoded as EBCDIC or ASCII."""
+    # The decoding giving more ASCII letters and digits is the file's; a tie
+    # (eg a blank header) is EBCDIC, as the standard says.
+    decoded = max(
+        (text.decode("cp037"), text.decode("latin-1")),
+        key=lambda x: sum(char.isascii() and char.isalnum() for char in x),
+    )
+    lines = (decoded[i : i + 80] for i in range(0, len(decoded), 80))
+    return "\n".join(x.replace("\x00", " ").rstrip() for x in lines).rstrip()
+
+
+def _get_text_attrs(text):
+    """
+    Return the textual header, and the data type and units it states.
+
+    Only Silixa's "PROPORTIONAL TO STRAINRATE" line is read. Its scale, eg
+    "SC= X11600 TO NM/M/S", means a value times 11600 is in nm/m/s, so the
+    data units are "11600 nm/m/s".
+    """
+    header = _decode_text(text)
+    out = {"segy_text_header": header} if header else {}
+    if match := _TEXT_STRAIN_RATE.search(header):
+        out["data_type"] = "strain_rate"
+        if match[1]:
+            out["data_units"] = f"{match[1]} nm/m/s"
+    return out
 
 
 def _get_patch_with_channel_coord(patch):
