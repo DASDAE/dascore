@@ -328,9 +328,10 @@ class TestSteps:
         assert read_schedule(array, [box]) == [(slice(0, 4), slice(0, 3))]
         assert np.array_equal(compute(array, box)[:, 0], [-1.5, -0.5])
 
-    def test_oversized_result_refused(self):
+    @pytest.mark.parametrize("contract", (Pointwise(), None))
+    def test_oversized_result_refused(self, contract):
         """A kernel which returns too much is refused, not trimmed."""
-        node = Node(Doubled(), {}, Pointwise()).settled((4, 3), np.float64, "a")
+        node = Node(Doubled(), {}, contract).settled((4, 3), np.float64, "a")
         box = (slice(0, 4), slice(0, 3))
         with pytest.raises(PatchError, match="Doubled computed an array of shape"):
             compute(self._array(node), box)

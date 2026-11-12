@@ -55,8 +55,8 @@ class _Everything(ChunkContract):
         return tuple(slice(0, size) for size in shape)
 
     def apply(self, run, data, box: Box, needed: Box):
-        """Return the box of the whole result."""
-        return run(data)[box]
+        """Return the whole result, which `compute` checks and then cuts."""
+        return run(data)
 
 
 _EVERYTHING = _Everything()
@@ -170,21 +170,26 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     data = array.recipe[needed[0]].load()
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
-        _, stated_dtype, _ = node.made()
+        stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
         kernel = type(processor).kernel_for("numpy")
         run = partial(kernel, processor, **node.plan)
         data = (node.contract or _EVERYTHING).apply(run, data, after, before)
+        # A step with no contract made the whole of its result, which is
+        # checked as a whole before the box is taken from it.
+        expected = _sizes(after) if node.contract else stated_shape
         shape, dtype = tuple(data.shape), np.dtype(data.dtype)
-        if shape != _sizes(after) or dtype != stated_dtype:
+        if shape != expected or dtype != stated_dtype:
             name = type(processor).__name__
             msg = (
                 f"{name} computed an array of shape {shape} and dtype "
-                f"{dtype} where its metadata stated one of {_sizes(after)} "
+                f"{dtype} where its metadata stated one of {expected} "
                 f"and {stated_dtype}. Its get_metadata must state what its "
                 "kernel returns."
             )
             raise PatchError(msg)
+        if node.contract is None:
+            data = data[after]
     return data
 
 
