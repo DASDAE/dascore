@@ -2,53 +2,93 @@
 title: Spool Index
 ---
 
-Directory and in-memory spools use the same metadata model. The persisted directory index is one SQLite file named `.dascore_index.sqlite3`; in-memory spools use the same schema in an in-memory SQLite database. The index stores summaries and source identities, not patch data.
+A spool needs to know what patches it holds — their times, coordinates, and attributes — without loading their data. It keeps that metadata in a small SQLite database called the index. A directory spool saves it to disk as `.dascore_index.sqlite3`; an in-memory spool builds the same database in memory. Either way, the index holds only summaries and where to find each patch, never patch data.
 
-## Why nine tables?
+## Tables
 
-The schema separates records with different lifetimes and cardinalities. This avoids repeating source and coordinate metadata on every patch and gives SQLite enforceable ownership boundaries.
+The index splits its metadata across several tables so nothing is stored more than once. For example, a hundred files sharing a distance axis store that axis once, not a hundred times.
 
-| Table | One row per | Purpose |
+| Table | One row per | What it holds |
 |---|---|---|
-| `meta_data` | index | Identifies the file and its schema version, and counts its patches |
-| `sources` | file or directory-format source | Tracks the source path, format, size, modification time, hive-style path attrs (JSON), and presentation ordinal |
-| `patches` | patch within a source | Stores patch identity, the data array's type and sample count, and common time/distance envelopes |
-| `attrs` | patch | Stores typed attribute values in dynamically added columns |
-| `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
-| `coord_defs` | unique coordinate value definition | Stores coordinate summaries and deduplicates identical definitions |
-| `coord_runs` | run of a coordinate definition | Stores the runs of a coordinate with several, which hold no hole, so reports and plans see holes inside a patch |
-| `patch_coords` | coordinate attached to a patch | Links patches to coordinate definitions while retaining the coordinate name and dimensions |
-| `coord_variants` | distinct coordinate name, dtype, kind, units, and relativity | Counts the patches stating each variant, so coordinate discovery reads a few rows rather than every link |
+| `meta_data` | index | Schema version and total patch count |
+| `sources` | file (or directory-format unit) | Path, format, size, modification time, path attributes, and sort position |
+| `patches` | patch | Patch identity, data type, sample count, and time/distance ranges |
+| `attrs` | patch | Attribute values, one column per attribute name and value kind |
+| `attr_meta` | attribute name and value kind | Which `attrs` column holds which attribute, and its canonical units |
+| `coord_defs` | distinct coordinate | A summary of each unique coordinate |
+| `coord_runs` | run of a coordinate | The pieces of a coordinate with holes in it |
+| `patch_coords` | coordinate on a patch | Links each patch to its coordinates |
+| `coord_variants` | coordinate name, dtype, kind, units, and relativity | How many patches have each variant |
 
-Writers also keep a one-row `patch_row_floor` table holding the next unallocated patch row (see Lifecycle and validation). They create it on demand rather than with the schema, so indexes written before it existed need no rebuild.
+Two notes on these:
 
-`coord_defs` and `patch_coords` are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive the coordinate's exact `data_id`, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides one. A coordinate is hashed in the units it was written in, so one length spelled in metres and in centimetres is two definitions — as it must be, since the stored envelopes are in the original spelling too. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
+- `attrs` gains columns as new attribute names appear, since nobody can list every attribute in advance. `attr_meta` records how to read each column.
+- `coord_variants` and `meta_data.patch_count` are running totals. Database triggers update them in the same transaction as the rows they count, so they stay exact even when something writes to the database directly. Asking an unfiltered spool for its length, or any spool for its coordinate names, is therefore just as fast on a huge archive as on a small one.
 
-The index mirrors the coordinate (rule 12 of the [coordinate guidelines](coordinates.qmd)). A `coord_defs` row states the coordinate's envelope and step, whether its labels are `jittered` or `gapped` on that step, how far they sit from the grid through the first label (`offset_min` and `offset_max`, in steps), and how many runs it is (`run_count`). A coordinate of several runs stores them in `coord_runs`, in order: each run's sample count, envelope, step, and `position` on the coordinate's grid, so the positions between two runs are its holes. Runs never contain holes: a stored array of labels with holes is cut at them. The same records come from a coordinate in memory (`dascore.utils.gaps.RunRecord`), and one function joins them into the stretches between holes, so a spool of patches in memory and a directory of the same patches report the same gaps. Past `dascore.config.max_index_runs` (256) runs a coordinate is stored by its envelope, step and flags alone, with a warning naming the file; a report or plan which needs its runs reads the coordinate from its source. The flat relation states `{dim}_step` for evenly sampled coordinates only.
+Writers also create a one-row `patch_row_floor` table when they first need it (see [Updating the index](#updating-the-index)). Because it is created on demand, older indexes work without a rebuild.
 
-A directory index also records the `snap` it was scanned under and the `max_shift` its readers judged grids by; opened with another, it rescans every file, and it reads patches under the ones it recorded.
+## Coordinates
 
-`coord_variants` and `meta_data.patch_count` are summaries rather than records. Triggers update them in the transaction that changes the rows they count, so every connection keeps them exact, including one writing straight through SQL, and a spool's coordinate names, kinds and units, and a root spool's length, cost the same on a large archive as on a small one.
+Each unique coordinate is stored once in `coord_defs`; `patch_coords` links it to every patch that uses it.
 
-`attrs` and `attr_meta` are also complementary. Attribute names are open-ended, so the index cannot define every typed column in advance. `attr_meta` records the stable mapping and units needed to interpret the columns added to `attrs` as data is ingested.
+Matching ranges never imply matching values. Evenly spaced (range) coordinates are identified by an exact `data_id` computed from their values. Other coordinates get a value identity only when the file scan provides one; without it they are deduplicated by their summary, which saves storage but does not mark their values as equal. Units are part of the identity: the same length written in metres and in centimetres is two coordinates.
+
+A `coord_defs` row describes a coordinate the same way the coordinate describes itself (rule 12 of the [coordinate guidelines](coordinates.qmd)):
+
+- its range and step;
+- whether its values are `jittered` (slightly off the step grid) or `gapped` (missing grid points);
+- how far its values stray from the grid, in steps (`offset_min`, `offset_max`);
+- how many runs it has (`run_count`).
+
+Range coordinates also store their exact grid (`step_numerator`, `step_denominator`, `origin_offset`, and `length`, the sample count). `is_exact` marks rows that can rebuild every value of the coordinate without opening the file. Range columns are named by storage type: `*_int` for nanosecond times and durations, `*_float` for numbers, and `*_str` for text.
+
+### Holes and runs
+
+A coordinate with holes is stored as several runs: gap-free stretches, each with its sample count, range, step, and `position` on the grid. The holes are the grid positions between runs. In-memory coordinates produce the same run records (`dascore.utils.gaps.RunRecord`) and the same code joins them, so a spool in memory and a directory of the same patches report identical gaps.
+
+A coordinate with more than `dascore.config.max_index_runs` (256) runs is stored by range, step, and flags only, with a warning naming the file. Anything that needs its runs reads them from the file.
+
+### What else is kept
+
+The index also keeps each numeric attribute's and coordinate's original dtype, and whether the scalar attributes fully describe the patch (history is never stored). That lets DASCore tell which rows it can rebuild from metadata alone and which need the file opened. A coordinate whose values have no supported range form keeps its name, but you cannot select on it. `{dim}_step` is filled in only for evenly sampled coordinates.
 
 ## Time queries
 
-Absolute-time range queries use the nanosecond `time_min` and `time_max` envelopes already stored on `patches`. Database writes derive these cached time bounds from the coordinate records, including auxiliary time coordinates in planned outputs; duration and numeric time coordinates leave the absolute-time bounds empty. These bounds select candidate patches; exact coordinate trimming still happens when a patch loads. Duration, numeric, string, and other coordinate queries retain the general coordinate-table path; which kinds and units a coordinate has comes from `coord_variants`.
+Absolute-time selections use the nanosecond `time_min` and `time_max` columns on `patches`, which are filled in from the coordinates when the index is written. These columns only narrow down which patches might match; the exact trim happens when a patch loads. Duration and numeric time coordinates leave them empty and, like every other coordinate, are selected through the coordinate tables.
 
-## Lifecycle and validation
+## Updating the index
 
-The index is an incrementally updated cache. A directory update scans new or changed sources, transactionally replaces their patch rows, and removes rows for deleted sources. Foreign keys cascade source deletion through patches, attributes, and patch-coordinate links. Unreferenced coordinate definitions may remain available for reuse. Patch rows are not: the index records the next row it has never handed out, so a replaced or removed patch's row never names another patch. A window or array view held across an update therefore drops the patches whose rows are gone instead of resolving to a newer file's.
+The index is a cache, and the files are the truth. An update rescans new and changed files, replaces their rows in one transaction, and removes rows for deleted files. Removing a file removes its patches, attributes, and coordinate links with it. Coordinate definitions nothing uses any more may be kept for reuse.
 
-An update given `paths` walks only those files or directories: it scans, prunes, and detects moves within them, and also drops the old row of a source that moved into them. Sources moved out of them, and changes elsewhere, wait for a full update. This holds for a new index's first update too, so a large archive can be indexed one folder at a time. An index DASCore rebuilt (after a schema or `snap` change), or whose first update was interrupted, ignores `paths` with a warning and walks everything once.
+Patch row numbers are never reused. If you keep a view of a spool across an update, patches that disappeared simply drop out of it; their old row numbers can never point at a newer file's patch.
 
-The schema version is validated before any mutation. An unrelated or incomplete database raises an error with instructions to delete and rebuild it; DASCore does not silently repair or migrate it. A file that identifies itself as a DASCore spool index of an older schema version is rebuilt automatically by the directory indexer — the index is a disposable cache whose truth is the files. An index written by a newer DASCore is left untouched and raises an error instead: upgrade DASCore, or give the older version its own `index`. A read-only index (see `dc.spool`'s `index`) is never rebuilt: any version mismatch raises.
+`update(paths=...)` looks only at the given files or folders. Inside them it rescans, prunes, and finds moved files, including files moved in from elsewhere. Files moved out, and changes anywhere else, wait for a full update. This also works on a brand-new index, so you can index a large archive one folder at a time. The exception is an index DASCore just rebuilt, or whose first update was interrupted: it ignores `paths` with a warning and scans everything once.
 
-## Hive-style path attributes
+A directory index remembers the `snap` and `max_shift` settings it was scanned with. Open it with different settings and it rescans every file; otherwise patches load with the remembered settings.
 
-Stored source paths are parsed for `key=value` pairs (each directory segment containing the source, with `__`-separated pairs allowed in a segment). The last segment names the source itself — a file, or a directory-format unit's directory — and is never parsed: a file extension is indistinguishable from a value ending in one, which the `acquisition_key=XX.R2D1..RAW` partition in the example below would be if it named a source. The pairs are merged into every patch's attrs at ingest as plain string values — the path wins over a same-named file attr, since renaming a path is the user's way of correcting metadata. The applied dict is also persisted on the source row (`sources.path_attrs`, JSON) and surfaced privately as `_path_attrs` in the flat relation: derived and union catalogs absolutize paths, so provenance must ride with the row for patch loading to stamp the attrs and for moves to rewrite them. Reserved/underscore key names follow the same skip rules as file attrs; values are never type-inferred.
+### Version checks
 
-Renames are detected during a directory update by exact `(mtime_ns, size_bytes)` stat identity (the rename-invariant manifest signature for directory-format units) between a disappeared and a brand-new path, each unique on its side. A detected move rewrites the source path and its path-derived attr values in SQL without re-reading file contents, so renaming a partition directory over a large archive is cheap. A rename that *removes* a hive key falls back to a rescan — the file's own value for that attr is only recoverable by reading it — and ambiguous stat matches also rescan rather than guess.
+The index checks its schema version before writing anything:
+
+- **Not a DASCore index, or incomplete:** raises an error telling you to delete it. DASCore never tries to repair it.
+- **Older schema version:** rebuilt automatically from the files.
+- **Newer schema version:** left untouched, with an error. Upgrade DASCore, or give the older version its own `index`.
+- **Read-only** (see `dc.spool`'s `index` argument): raises on any version mismatch.
+
+### Concurrency
+
+Many processes can read the index at once; writes take turns. Setup and updates hold the write lock for the whole transaction and wait up to 30 seconds for it. This relies on the filesystem's locking working correctly, so network filesystems with weak locking are not supported.
+
+## Path attributes
+
+Folder names written as `key=value` become attributes, hive-style. A folder name can hold several pairs separated by `__`. Some details:
+
+- **The file's own name is never parsed.** A file extension looks just like the end of a value such as `XX.R2D1..RAW`, so there would be no way to tell them apart.
+- **Paths win over files.** If a path attribute and a file attribute share a name, the path's value is used, because renaming a folder is how you correct metadata.
+- **Values stay strings.** They are never converted to numbers or times. Reserved and underscore-prefixed keys are skipped, the same as for file attributes.
+- **They travel with the row.** The parsed pairs are saved in `sources.path_attrs` and carried in a private `_path_attrs` column. Combined catalogs rewrite paths as absolute, so the pairs must be stored rather than reparsed.
+
+Renaming a folder is cheap. During an update, a missing path and a new path with the same `(mtime_ns, size_bytes)` are treated as a move. (Directory-format units use their manifest signature instead.) DASCore then updates the path and its attributes in the database without opening the file. It rescans instead when the rename removes a key, since the file's own value has to be read again, or when the match is ambiguous.
 
 ```{python}
 import tempfile
@@ -66,36 +106,50 @@ row = spool.get_contents().iloc[0]
 assert (row["acquisition_key"], row["cable"]) == ("XX.R2D1..RAW", "A")
 assert spool[0].attrs.get("cable") == "A"
 
-# a directory rename is a pure metadata rewrite
+# renaming a folder only rewrites metadata
 sub.rename(sub.parent / "cable=B")
 assert dc.spool(root).update().get_contents()["cable"].iloc[0] == "B"
 ```
 
 ## Ordering
 
-The base ordering contract is `(sources.ordinal, patch_row)`: ordinals are assigned at ingest, a replaced source keeps its position while new sources append, so merging catalogs concatenates and duplicate sources keep their first-occurrence position with last-occurrence metadata (dict-merge semantics). Spools built from in-memory patches therefore iterate in construction order on every path.
+By default, patches come out in the order their sources were added, then by row: `(sources.ordinal, patch_row)`. A replaced file keeps its place; new files go at the end. Combining spools concatenates them, and a file present in both keeps its first position but its latest metadata. In-memory spools therefore iterate in the order you built them.
 
-Directory catalogs additionally carry a **per-patch default presentation order**: rows present by time (`time IS NULL` last, then time, with ordinal and patch row as deterministic tiebreaks), because source-grain ordinals alone cannot interleave a multi-patch file whose span straddles a patch of another file. The default order is a catalog contract, not view state — a directory root still updates — and an explicit `sort(...)` replaces it. The directory indexer still renumbers source ordinals to time order (earliest patch per source, path as tiebreak) after each sync, which keeps the ordinal grain stable for replacement and union dedup.
+Directory spools instead sort patches by time by default, with untimed patches last and ties broken by ordinal and row. Sorting by file alone can't handle a file whose patches overlap patches in another file. This default is part of the catalog rather than a view, so the spool can still update. Calling `sort(...)` replaces it. After each update the indexer also renumbers file ordinals by each file's earliest patch, with path as the tiebreak.
 
-Sorting by a coordinate stated under several value kinds, such as numbers in some patches and text in others, orders each kind's values among themselves in every view: numbers, then text, then times.
+If a coordinate holds different kinds of values across patches, such as numbers in some and text in others, sorting groups each kind together: numbers, then text, then times.
 
-SQLite permits concurrent readers and serializes writers. Initialization and updates use an immediate write transaction and a 30-second busy timeout. This relies on correct local-filesystem locking; reliable operation on network filesystems with weak locking is not promised.
+## Reading metadata cheaply
 
-## Bounded metadata access
+On an indexed spool:
 
-For an indexed spool, the first integer access projects the selected patch's metadata row, and forward contiguous slices limit the membership query in SQL. Use `spool[:10].get_contents()` for a small preview. A second integer access on the same view realizes and caches its metadata frame, so repeated positional reads do not repeatedly pay for SQL and dataframe setup. An update resets this behavior. Regex predicates and coordinate selections whose residual operations can remove candidate rows still require exact filtering before a positional limit can be applied.
+- `spool[i]` fetches just that patch's row the first time. A second integer access on the same spool loads and caches the whole metadata table instead, so repeated lookups stay fast. An update clears the cache.
+- Forward contiguous slices are limited in SQL, so `spool[:10].get_contents()` is a cheap preview.
+- Regex filters, and coordinate selections that might drop rows, must still filter every row before a slice can apply.
+- `split()` fetches the list of patches once and reuses it for every batch. A batch can come out empty after exact filtering.
 
-`split()` fetches the ordered candidate membership once and reuses it for every batch. A batch can be empty after exact filtering; candidate rows are not discarded merely because a refined count is smaller. Chunk planning and full iteration continue to realize metadata when their existing execution paths require it.
+Chunk planning and full iteration still load all the metadata when they need to.
 
-## The flat relation
+## The flat table
 
-Spool-facing operations consume the tables through one flat relation: a dataframe with one row per patch carrying `{dim}_min/max/step` envelopes, private structural columns (`_patch_row`, `_{name}_def_key` coordinate identities, and `_{name}_units` original unit spellings, normalized per dimensionality by the chunk planner before partitioning), the `dims` signature, and one column per attribute. Attrs and coords are independent namespaces, so an attr may share a name with a coordinate envelope column (e.g. an attr `channel_step` alongside a `channel` coordinate); in that rare genuine collision the envelope column owns the flat name, the attr column is omitted with a warning, and the attr remains queryable through the `_attrs` namespace. The private columns are the index's own bookkeeping, so the relation a caller receives from `get_contents` (and from `get_gaps` and `get_coverage`) is the public one. `present_columns` builds it from an explicit list of steps (`dascore.utils.pd.PRESENTERS`): each step gives one private column back its public spelling — the unit spellings become `{name}_units`, `_dtype` and `_data_size` become `dtype` and `data_size` — and the last step drops every underscore-prefixed column that is left, so a column no step claims never leaves.
+Most spool operations work from one flat dataframe with a row per patch. It has:
 
-`_dtype` and `_data_size` (the samples in the data array, the product of its shape) are private for the same reason: chunk's merge-compatibility grouping and conflict policing compare every public column, and patches of different element types — or, far more often, different lengths — must still merge. A row states no size when it does not know one. A patch assembled from several, a piece cut from one, and a row a selection trims all describe a patch which does not exist yet, and how many samples it comes out with is known only once it is loaded: those rows leave `data_size` null rather than repeating a member's count. An output which is one whole, untrimmed member *is* that patch, so it keeps that patch's size, and so does a row a selection leaves whole. Only a selection the presented envelopes cannot describe — sample indices, or a selector which is not a range — blanks every row it presents, since nothing then marks which rows it cut. The chunk planner and selection both operate on the full relation (see the [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd) notes).
+- `{dim}_min`, `{dim}_max`, and `{dim}_step` columns for each coordinate;
+- a `dims` column;
+- one column per attribute;
+- private bookkeeping columns starting with `_`: `_patch_row`, `_{name}_def_key` (coordinate identity), `_{name}_units` (units as written; the chunk planner normalizes them per dimensionality before grouping), `_dtype`, and `_data_size`.
 
-A patch's own `origin_id` and `data_id` are ordinary indexed attrs, so a patch can be found by the id it carries without loading anything. The storage schema's row number, `patch_row`, is renamed `_patch_row` before attr columns are applied, and `patch_row` is a reserved attr name, so no attr can collide with it. Neither id takes part in chunk's merge compatibility: every patch states a different one, and a merged patch derives its ids from its members' (a `Merge` operation over their `data_id`s, in order) rather than inheriting any one of them.
+Attributes and coordinates are separate, so an attribute can have the same name as a coordinate column, like an attribute `channel_step` next to a `channel` coordinate. When that happens, the coordinate column keeps the name, the attribute is left out with a warning, and you can still query it through `_attrs`.
 
-The cell below runs against the real catalog so this description cannot silently drift.
+`get_contents`, `get_gaps`, and `get_coverage` return a cleaned-up version made by `present_columns`. It applies the steps in `dascore.utils.pd.PRESENTERS`, each turning one private column public (`_{name}_units` becomes `{name}_units`, `_dtype` becomes `dtype`, `_data_size` becomes `data_size`). The last step drops any underscore columns that are left.
+
+`_dtype` and `_data_size` (the number of samples) are private because chunking compares every public column to decide what can merge, and patches with different dtypes or lengths must still merge.
+
+`data_size` is empty when the size isn't known until load time: merged outputs, pieces cut from a patch, and rows trimmed by a selection. A row that is one whole, untrimmed patch keeps its size. Sample-index and non-range selections clear `data_size` on every row. See [Spool Chunking](spool_chunking.qmd) and [Spool Selection](spool_selection.qmd).
+
+A patch's `origin_id` and `data_id` are ordinary indexed attributes, so you can find a patch by id without loading it. `patch_row` is a reserved attribute name, so no attribute can collide with the row number. Neither id affects whether patches can merge, since every patch has its own. A merged patch gets ids built from its members' `data_id`s, in order.
+
+This check runs against the real catalog, so the description above can't silently go stale:
 
 ```{python}
 import dascore as dc
@@ -118,54 +172,53 @@ required = {
 assert required.issubset(df.columns)
 ```
 
-## Patch identity and spool set semantics
+## Patch identity
 
-A spool of in-memory patches has **set semantics by patch identity**: constructing a spool from a sequence keeps one entry per distinct patch instance, and `spool + spool` unions membership. Each patch carries an instance identity minted eagerly at construction; because patches are immutable, copies (including deep copies and unpickled patches) share that identity, while every patch operation produces a new instance with its own. The identity is the patch's synthetic `memorypatch://` source path in the index, so identity, deduplication, and resolution all agree:
+An in-memory spool is a set of patches: adding the same patch twice keeps one copy, and `spool + spool` is a union. Each patch gets an identity when it is created. Patches are immutable, so copies, deep copies, and unpickled patches share it, while any operation on a patch makes a new patch with a new identity. The identity is stored as the patch's `memorypatch://` source path, so deduplication and lookup always agree.
 
 ```{python}
 import copy
 
 patch = dc.get_example_patch()
 
-# a sequence with the same instance twice is one spool entry
+# the same patch twice is one entry
 assert len(dc.spool([patch, patch])) == 1
 
-# copies share identity regardless of when they are made — identity is
-# eager, so there is no access-order dependence
+# copies share identity
 clone = copy.deepcopy(patch)
 assert clone._instance_id == patch._instance_id
 assert len(dc.spool([patch, clone])) == 1
 
-# any operation mints a new, distinct identity
+# any operation makes a new patch
 assert len(dc.spool([patch, patch.new()])) == 2
 
-# the identity is the row's synthetic path, and it resolves back to the
-# very same object
-cat = PatchCatalog.from_patches([patch, patch])  # one entry, not two
+# the row's path leads back to the same object
+cat = PatchCatalog.from_patches([patch, patch])
 row = cat.to_df().iloc[0]
 assert len(cat.to_df()) == 1
 assert row["source_path"].startswith("memorypatch://")
 assert cat.resolve_row(row.to_dict()) is patch
 ```
 
-A patch whose dimensional coordinates have holes enters whole, as one row; the index states its runs, so reports and plans see its holes. Adding it twice still leaves one entry.
+A patch whose dimensional coordinates have holes is still one row; the index stores its runs, so reports and plans see the holes.
 
-File-backed patches are identified by `(base_uri, source_path, source_patch_key)` instead; their rows resolve through readers rather than the registry.
+Patches from files are identified by `(base_uri, source_path, source_patch_key)` and loaded through their readers.
 
-## Federation
+## Combining spools
 
-`spool + spool` merges catalogs table-to-table: source records are reconstructed from the member backends and re-ingested, so coordinate definitions deduplicate by definition key, the same source appearing in several members keeps a single entry, and file paths are absolutized so members with different roots coexist. A composite resolver routes in-memory rows to the shared registry, plan-output rows to their plan resolvers, and everything else through file readers.
+`spool + spool` builds one catalog from both sides. Coordinate definitions are shared, a file in both keeps one entry, and paths become absolute so spools with different roots can combine. Each row then loads from the right place: in-memory patches from memory, planned outputs from their plans, and the rest from files.
 
-Row-membership state (attribute predicates, slice windows, patch-row arrays) transfers as rows, preserving the set semantics above. State that only lives Python-side — coordinate/samples residual trims, sort specs, and a directory default order that record-grain transfer would actually scramble — is first **baked into an identity-plan derived catalog** (table work only; no patch data loads), so each operand contributes exactly its current contents in its current order. Baking mints new patch identities, so a trimmed operand no longer deduplicates against its source: its contents genuinely differ. Spool equality follows the same philosophy — it compares *effective contents* (residual trims folded into the envelopes, representation artifacts like def keys and backing excluded), so a trimmed view equals its union-materialized twin.
+Simple filters (attribute selections, slices, row lists) carry over as rows. State that exists only in Python, such as coordinate trims, sorts, and a directory's default time order when transferring rows would scramble it, is first written into a new derived catalog, without loading any data. Each side then contributes exactly what it currently shows, in its current order. Because this makes new patches, a trimmed spool no longer deduplicates against its untrimmed source: its contents really are different.
+
+Spool equality compares what each spool actually contains: trims are folded into the ranges, and internal details like coordinate keys are ignored. A trimmed spool therefore equals the result of combining it with an empty spool.
 
 ```{python}
 other = dc.get_example_patch().new()
 union = dc.spool([patch]) + dc.spool([other])
 assert len(union) == 2
-assert len(dc.spool([patch]) + dc.spool([patch])) == 1  # same patch dedups
+assert len(dc.spool([patch]) + dc.spool([patch])) == 1  # same patch, one entry
 
-# A trimmed operand contributes its trimmed contents (baked, not dropped),
-# and equality compares those effective contents.
+# a trimmed spool contributes its trimmed contents
 t = patch.get_coord("time")
 trimmed = dc.spool([patch]).select(time=(t.min() + 10 * t.step, t.min() + 20 * t.step))
 combined = trimmed + dc.spool([])
@@ -173,9 +226,8 @@ assert combined[0].shape == trimmed[0].shape
 assert combined == trimmed
 ```
 
-## Scope
+## What the index does not do
 
-The index answers metadata selection, identifies candidate patches, and plans chunk operations — all without touching patch data. Exact coordinate selection is applied again when a patch is loaded because summary envelopes cannot prove arbitrary-coordinate membership. Materialized derived data (persisting chunked results) remains future work.
+The index handles metadata selection, finding candidate patches, and planning chunks, all without reading data. Ranges can't prove which exact values fall inside a selection, so the exact coordinate selection runs again when a patch loads. Saving chunked results back into the index is not supported yet.
 
-
-The index retains source `data_id` values, original numeric attribute and coordinate dtypes, and whether scalar attributes fully describe a source patch (history remains excluded). Temporal dtype names follow the existing summary normalization and temporal envelopes use nanoseconds. Coordinate names are retained even when their values have no supported envelope representation; such names are not selectable. This metadata lets consumers distinguish rows they can reconstruct from those that require loading the source patch. Plan output rows require resolution through their members. Index version 15 added this reconstruction metadata; version 16 stores each range coordinate's exact grid (`step_numerator`, `step_denominator`, `origin_offset`, with `length` authoritative for the sample count), marks with `is_exact` the rows which rebuild every value of their coordinate, and names the envelope columns by storage type (`min_int`/`max_int`/`step_int` for nanosecond times and durations, `min_float`/`max_float`/`step_float` for numbers, `min_str`/`max_str` for text). Version 18 adds `coord_variants` and `meta_data.patch_count`. Version 23 records a coordinate's dtype with the unit it counts in, so a row rebuilds the coordinate the file holds rather than one in nanoseconds. Version 24 identifies a coordinate by its runs, so an index written before it states other ids for the same labels. Version 25 gives runs cut from one fractional-rate grid (such as 1024 Hz) their shared step, which changes those coordinates' ids. Version 26 scans labels that are exactly the floors of a fractional-step grid as that grid rather than as a rounded whole-tick step. Version 27 indexes a patch whose coordinate holds holes by its envelope alone. Older indexes are rebuilt when opened.
+Version history lives in `INDEX_VERSION` in `dascore/io/index/schema.py`. Indexes from older versions are rebuilt automatically.

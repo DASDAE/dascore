@@ -31,6 +31,8 @@ format:
     code-copy: true
     code-overflow: wrap
     css: styles.css
+    # Quarto defaults this to png, which breaks extensionless image URLs.
+    default-image-extension: ""
 
 website:
   title: {{ dascore_version_str }}

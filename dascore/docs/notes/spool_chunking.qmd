@@ -2,11 +2,25 @@
 title: Spool Chunking
 ---
 
-`Spool.chunk` runs in two stages: a **planner** decides everything from metadata alone, and **assembly** loads, trims, and combines patch data only when a patch is requested. The code cells below execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
+`Spool.chunk` works in two stages. A **planner** decides everything from metadata alone. **Assembly** then loads, trims, and joins patch data, but only when a patch is requested. The code cells in this note run against the real implementation, so the doc build fails if the note drifts.
 
 ## Plans
 
-The planner consumes the spool's flat metadata relation and produces a `ChunkPlan`: an `outputs` table (one row per patch the chunked spool will contain) and a `members` table (which slice of which source patch feeds each output). `Spool.chunk_plan` exposes the plan `chunk` would execute, with the same arguments. The chunked spool *is* a fresh in-memory catalog whose patch rows are the plan outputs; a plan resolver loads each output's members through the parent's resolver and executes the assembly engine (`dascore.utils.patch_assembly`) row by row. Chunking is one dimension per call; multi-dimensional chunking chains. Re-chunking a chunked spool along the *same* dimension re-plans from the current view's members (the collapse rule); chunking a *different* dimension plans over the spool's current output rows, preserving the boundaries the earlier operation assembled — `chunk(time=2).chunk(distance=100)` partitions both dimensions. `concatenate` is the same machinery with order-based grouping instead of continuity: `build_concat_plan` partitions as a chunk plan does (kind, dimensions, the identity of every other dimension, the dimension's units), polices the remaining attributes with `conflict` the same way (coordinates are settled when the output loads, not by the plan), then groups each partition's rows by the requested count in the order of the dimension with no sampling or gap test, and the assembled patches execute the plan rather than re-deciding it.
+The planner reads the spool's flat metadata table (see [Spool Index](spool_index.qmd#the-flat-table)) and produces a `ChunkPlan` with two tables:
+
+- `outputs`: one row per patch the chunked spool will hold;
+- `members`: which slice of which source patch feeds each output.
+
+`Spool.chunk_plan` takes the same arguments as `chunk` and returns the plan it would run. The chunked spool is a new in-memory catalog whose rows are the plan's outputs. Asking for a patch loads its members through the parent spool and runs the assembly engine (`dascore.utils.patch_assembly`) on them.
+
+Each call chunks one dimension; chain calls for more.
+
+- Chunking the **same** dimension again re-plans from the current view's members (the collapse rule).
+- Chunking a **different** dimension plans over the current outputs, keeping the earlier boundaries. `chunk(time=2).chunk(distance=100)` splits both dimensions.
+
+`concatenate` uses the same machinery but groups by order instead of continuity. `build_concat_plan` splits patches into groups exactly as a chunk plan does (kind, dimensions, every other dimension's coordinate, the dimension's units) and checks other attributes with `conflict` the same way.
+
+It then takes each group's rows in order along the dimension and bundles them by the requested count, with no sampling or gap test. Coordinates are checked when the output loads, not by the plan, and assembled patches follow the plan rather than re-deciding it.
 
 ```{python}
 import dascore as dc
@@ -19,24 +33,33 @@ assert {"output_id", "_patch_row", "_modified"}.issubset(plan.members.columns)
 assert isinstance(plan.params["group"], tuple)
 assert plan.params["sampling_group_tolerance"] == dc.get_config().sampling_group_tolerance
 
-# Chaining partitions both dimensions: the second chunk plans over the
+# Chaining splits both dimensions: the second chunk plans over the
 # first one's outputs, not the original members.
 chained = dc.get_example_spool("random_das").chunk(time=None).chunk(distance=100)
 assert all(p.shape[p.get_axis("distance")] <= 100 for p in chained)
 ```
 
-Plans are deterministic: the same spool produces the same plan regardless of metadata row order, and members with `_modified=False` load whole (no per-patch selection cost).
+Plans are deterministic: the same spool gives the same plan whatever its row order. Members marked `_modified=False` load whole, skipping per-patch selection.
 
-## Partitioning
+## Which patches can merge
 
-Patches may only combine when they agree on all of:
+Patches merge only when they agree on all four of these.
 
-1. **Kind** — the config option `patch_kind_attrs` by default (conventional categorical identity: acquisition key, data category, and tag; see [Patch Compatibility](patch_compatibility.qmd)), overridden per call with `group=`. Differing values are never an error; the patches simply land in separate outputs. A missing value is a value: patches which never recorded an attribute partition together, and apart from those which did. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
-2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet are normalized to one unit per dimensionality before partitioning, so they plan together, and assembly converts each member to the first member's units).
-3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
-4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap. A patch with holes is one row, which the planner cuts into the stretches between its holes (the pieces [`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns) from the runs the index stores, so a hole inside a patch is judged like a gap between patches; the stretches landing in one output are read from their patch once. `tolerance` may also be a quantity (`1 * s`, `2 * m`) or a timedelta, which bounds the excess over one step in the coordinate's own units rather than counting steps: a spacing is a gap when it exceeds `step + tolerance`, so adjacent patches stay contiguous under any tolerance and a zero excess admits exactly one step. Since it needs no sampling interval, an absolute tolerance also measures gaps between patches whose step is unknown (there the step counts as nothing) — patches a sample-count tolerance has nothing to scale, and so never splits. Both spellings are one object, [`GapTolerance`](`dascore.utils.gaps.GapTolerance`), and its one predicate is what coordinates' `get_discontinuities` and the waterfall's `gap_factor` use, so the three agree on every spacing given the same object; a bare number to `get_discontinuities` is an absolute excess, not a count.
+**1. Kind.** By default, the attributes in the `patch_kind_attrs` config option: acquisition key, data category, and tag (see [Patch Compatibility](patch_compatibility.qmd)). Override it per call with `group=`. Patches of different kinds go to separate outputs; that is never an error. A missing value counts as a value, so patches that never recorded an attribute group together, apart from those that did. Names passed to `group=` must exist somewhere in the spool; names from config are used where present.
 
-[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) read this same partition: a `get_coverage` row is one cell of criteria 1-3, and a `get_gaps` row is a boundary criterion 4 declines to close (with `fill_value`; without one a hole always ends an output, whatever the tolerance). So on a spool of unplanned patches the counts tie — merging yields one patch per coverage row plus one per gap reported. The reports read the rows a spool presents rather than a plan's members, so a spool that has already been chunked reports on the patches it now holds, and re-chunking it need not reproduce those counts.
+**2. Structure.** The dimensions, the coordinate of every dimension not being chunked, and the chunked dimension's units. A metre patch never merges with a seconds patch, nor a patch with units with one without. Compatible units such as metres and feet are normalized to one unit per dimensionality before planning, so they merge, and assembly converts each member to the first member's units.
+
+**3. Sampling.** Step sizes must be within `config.sampling_group_tolerance` (default 5%) of the group's smallest absolute step, and in the same direction. Ascending never merges with descending, though contiguous descending patches merge with each other.
+
+**4. Continuity.** Patches must be within `tolerance` samples of each other, checked within each group so unrelated patches can't bridge a gap. A patch with holes is one row, which the planner cuts at its holes (the pieces [`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns) using the runs the index stores. A hole inside a patch is therefore judged like a gap between patches, and pieces landing in one output are read from their patch once.
+
+`tolerance` can also be a quantity (`1 * s`, `2 * m`) or a timedelta. This sets the allowed excess over one step, in the coordinate's units, instead of counting steps. A spacing is a gap when it exceeds `step + tolerance`, so adjacent patches stay contiguous under any tolerance, and zero excess allows exactly one step. Because it needs no step, an absolute tolerance can also find gaps between patches with unknown step (treating the step as zero). A sample-count tolerance has nothing to scale there, so it never splits them.
+
+Both forms are one object, [`GapTolerance`](`dascore.utils.gaps.GapTolerance`). Its single test is also used by coordinates' `get_discontinuities` and the waterfall's `gap_factor`, so all three agree on every spacing given the same object. Note that a bare number passed to `get_discontinuities` is an absolute excess, not a sample count.
+
+### Gap and coverage reports
+
+[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) use the same grouping. A `get_coverage` row is one group under rules 1–3. A `get_gaps` row is a boundary rule 4 won't close, given a `fill_value`; without one a hole always ends an output, whatever the tolerance. On a spool of unplanned patches, merging gives one patch per coverage row plus one per gap. The reports describe the rows a spool currently shows, not a plan's members, so a chunked spool reports on its chunked patches, and re-chunking it need not reproduce those counts.
 
 ```{python}
 import numpy as np
@@ -53,11 +76,19 @@ spool = dc.spool([p1, p2, p3, p4])
 merged = spool.chunk(time=None)
 assert len(merged) == 2
 
-# The reports partition the same way, so the counts tie.
+# The reports group the same way, so the counts tie.
 assert len(merged) == len(spool.get_gaps()) + len(spool.get_coverage())
 ```
 
-Remaining (non-group, non-dimensional) attributes must hold *equal* values within a partition, policed by `conflict`: `"raise"` (default), `"drop"`, or `"keep_first"`. A missing value (null or `""`) is a value like any other — an attribute one member recorded and another did not is a conflict, since the output can only state one thing. `"keep_first"` states what the first member did, stated or not; `"drop"` leaves the attribute out. History and the ids are never policed — the output carries the first member's — but merging members whose histories differ (processed beside unprocessed data) warns.
+### Conflicting attributes
+
+All other attributes (not grouping attributes, not dimensions) must be equal within a group. `conflict` decides what happens when they aren't:
+
+- `"raise"` (default) raises an error;
+- `"drop"` leaves the attribute out;
+- `"keep_first"` uses the first member's value, set or not.
+
+A missing value (null or `""`) counts as a value, so an attribute one member set and another didn't is a conflict; the output can only state one thing. History and ids are never checked: the output carries the first member's history, and derives its ids from all its members. Merging members whose histories differ, such as processed with unprocessed data, warns.
 
 ```{python}
 import pytest
@@ -73,7 +104,9 @@ assert merged.get_contents()["data_type"].iloc[0] == "velocity"
 assert merged[0].attrs.data_type == "velocity"
 ```
 
-Chunking is defined on dimensions: a patch that lacks the chunked dimension — including one that carries the name only as a *non-dimensional coordinate*, which cannot be trimmed or merged along it — raises by default, and `on_missing_dim="drop"` excludes it instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
+### Patches missing the dimension
+
+Chunking works along dimensions. A patch without the chunked dimension raises by default, including one that has the name only as a non-dimensional coordinate, which can't be trimmed or merged along. Pass `on_missing_dim="drop"` to skip such patches; silently dropping data needs an explicit opt-in.
 
 ```{python}
 import pytest
@@ -95,24 +128,41 @@ with pytest.raises(ChunkError, match="non-dimensional coordinate"):
 
 ## Regular windows
 
-A chunk length cuts each partition into half-open windows `[start, start + length)`, each starting `length - overlap` after the one before, and a window holds exactly the samples whose labels fall inside it, judged on each source's own sample grid. Without overlap the windows partition the samples, so none is repeated; a length that is not a whole number of samples gives windows whose counts differ by one. With overlap, the windows stop at the first one to hold the partition's last sample, so the last window holds a sample the one before it does not. A window is complete when it ends no later than one sample past the partition's last sample; only complete windows are kept unless `keep_partial=True`. An output's coordinate range runs from its first sample to its last when its sources are evenly sampled and their sample positions are known; otherwise (an uneven coordinate, or a view a relative selection trimmed) it states the window's own bounds.
+A chunk length splits each group into half-open windows `[start, start + length)`, each starting `length - overlap` after the previous one. A window holds exactly the samples whose labels fall inside it, judged on each source's own sample grid.
+
+- **No overlap:** windows split the samples with no repeats. A length that isn't a whole number of samples gives windows whose sample counts differ by one.
+- **With overlap:** windows stop at the first one holding the group's last sample, so the last window always holds a sample the previous one doesn't.
+- **Partial windows:** a window is complete when it ends no more than one sample past the group's last sample. Only complete windows are kept unless `keep_partial=True`.
+
+An output's coordinate range runs from its first sample to its last when its sources are evenly sampled with known positions. Otherwise (uneven coordinates, or a view trimmed by a relative selection) it states the window's own bounds.
 
 ## Chunking by size
 
-A chunk length may be a quantity instead of a bare number: either a compatible unit (`time=10 * s`, `distance=100 * m`, converted to the partition's stated coordinate units — a spool recording no units for the coordinate raises, since there is nothing to convert to) or a quantity of information (`time=25 * megabytes`), which sizes each output by its data array. A bare length means the coordinate's own units, like every other bare number. `overlap` accepts the same forms.
+A chunk length can be a quantity instead of a bare number:
 
-A size resolves per partition, because the conversion needs that partition's sampling interval, its extent along the *other* dimensions, and its element dtype:
+- a unit compatible with the coordinate (`time=10 * s`, `distance=100 * m`), converted to the group's coordinate units; a spool with no units for that coordinate raises, since there's nothing to convert to;
+- an amount of data (`time=25 * megabytes`), which sizes each output by its data array.
+
+A bare number means the coordinate's own units, like everywhere else. `overlap` accepts the same forms.
+
+A data size is resolved per group, since it depends on the group's step, its size along the other dimensions, and its dtype:
 
 ```
 bytes_per_sample = itemsize * (product of the other dimensions' sample counts)
 n_samples        = floor(requested_bytes / bytes_per_sample)
 ```
 
-The count is floored, so an output's data array never exceeds the request.
+Rounding down means an output's data array never exceeds the request.
 
-What actually enforces that bound is the **packing factor**, which the length is divided by. An output holds the sum of its members' sample counts, and that equals `span/step + 1` only when the partition sits on one grid: members separated by *less* than one sample each contribute their own trailing sample, so a near-contiguous set of files whose boundaries miss the grid packs more samples into a span than the grid would. The factor is the partition's maximum local sample density measured in units of its step — exactly 1.0 when members tile the grid, and reported in `params["size"]`. (Because it is measured in step units, it also cancels the choice of *which* step the length is expressed in; the smallest is used only to make the flooring granularity as fine as the partition allows.) Overlapping members are excluded from the measurement, since `_remove_overlaps` deduplicates them and they add no samples.
+### Packing factor
 
-Element dtype is resolved per *output* rather than per partition — dtype is deliberately **not** a partition key (making it one would change which patches merge), so a partition may mix dtypes, but an output drawing only from its float32 members really is float32; claiming the partition-wide `np.result_type` would over-size a later chunk and make the plan row disagree with the patch it assembles, which spool equality compares. An output that does span members of differing dtypes gets the upcast, matching what assembly produces. A patch relation with no dtype (a hand-built dataframe, or an index predating the column) raises `ChunkError` rather than guessing an itemsize.
+The length is also divided by a **packing factor**, which is what actually guarantees that bound. An output holds the sum of its members' sample counts, which equals `span / step + 1` only when the group sits on one grid. Members separated by less than one sample each add their own trailing sample, so near-contiguous files whose boundaries miss the grid pack more samples into a span than the grid predicts.
+
+The factor is the group's highest local sample density, in units of its step: exactly 1.0 when members tile the grid. It is reported in `params["size"]`. Measuring in step units also makes the choice of step irrelevant; the smallest is used only to make rounding as fine as possible. Overlapping members are left out of the measurement because they are deduplicated and add no samples.
+
+### Dtype
+
+Dtype is resolved per output, not per group. It is deliberately not a grouping rule, since that would change which patches merge, so a group can mix dtypes. An output drawn only from float32 members really is float32; using the whole group's `np.result_type` would over-size later chunks and make the plan row disagree with the patch it builds, which spool equality compares. An output that spans members of different dtypes gets the upcast type, matching what assembly produces. A metadata table without dtype (a hand-built dataframe, or an index from before the column existed) raises `ChunkError` rather than guessing.
 
 ```{python}
 from dascore.units import megabytes
@@ -133,11 +183,13 @@ chained = dc.get_example_spool("random_das").chunk(distance=100).chunk(time=targ
 assert max(p.data.nbytes for p in chained) <= 1e6
 ```
 
-A size measures the data array alone; coordinates, attrs, and copies made by later processing are extra. When a single sample along the chunked dimension is already larger than the request, the outputs hold one sample each and a warning says so — the request cannot be honored below one sample.
+A size counts only the data array; coordinates, attributes, and copies made by later processing are extra. If one sample along the chunked dimension is already bigger than the request, each output holds one sample and a warning says so.
 
 ## Merged coordinates
 
-Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then fused with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units — and never at the cost of the sampling step. Fusing therefore absorbs the sub-sample jitter of labels rounded on their way to a file, but a gap the tolerance was wide enough to merge across stays a run boundary: its samples are missing, which is not the same as a slower sampling rate. `fill_value` is what writes those samples, and its output is one evenly sampled run.
+Assembly joins the chunked dimension's coordinates exactly. Contiguous members become one evenly sampled range, and every real seam is recorded.
+
+With `snap_coords=True` (default), the result is then smoothed with bounded error. No value moves more than `tolerance * step`, or more than the tolerance itself when it is in the coordinate's units, and the sampling step never changes. This absorbs the sub-sample jitter of labels rounded when written to a file. A gap the tolerance merged across still stays a run boundary, though: its samples are missing, which is not the same as a slower sampling rate. `fill_value` writes those samples, and then the output is one evenly sampled run.
 
 ```{python}
 # Contiguous members: exact fuse to one evenly sampled run.
@@ -152,8 +204,7 @@ assert len(dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)) == 2
 
 # fill_value writes the missing samples, so a tolerance spanning the hole
 # merges the patches into one evenly sampled output. An absolute
-# tolerance -- a quantity, or a timedelta -- says the same in the
-# coordinate's units.
+# tolerance (a quantity or timedelta) says the same in the coordinate's units.
 filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
 assert filled.get_coord("time").evenly_sampled
 assert np.isnan(filled.data).any()
@@ -163,16 +214,16 @@ absolute = dc.spool([p1, p_gap]).chunk(
 assert absolute.get_coord("time") == filled.get_coord("time")
 ```
 
-## Union spools
+## Combined spools
 
-`spool + spool` produces a lazy spool over the union of both spools' metadata; chunking works across the seam, so contiguous patches from different spools (even file-backed and in-memory mixed) merge into one.
+`spool + spool` makes a lazy spool over both spools' metadata. Chunking works across the join, so contiguous patches from different spools, even a mix of file-backed and in-memory, merge into one.
 
 ```{python}
 combined = dc.spool([p1]) + dc.spool([p2])
 assert len(combined.chunk(time=None)) == 1
 
-# Spools have set semantics by patch instance: the same patch (or a copy
-# of it) appears once; operations mint distinct instances.
+# Spools are sets of patch instances: the same patch (or a copy) appears
+# once; operations make new instances.
 assert len(dc.spool([p1, p1])) == 1
 assert len(dc.spool([p1, p1.new()])) == 2
 assert len(dc.spool([p1]) + dc.spool([p1])) == 1
@@ -180,13 +231,35 @@ assert len(dc.spool([p1]) + dc.spool([p1])) == 1
 
 ## Explicit output windows
 
-Pass a rectangular `(n, 2)` array as the chunked dimension to request absolute coordinate windows. Each row is independent and inclusive. Input order is preserved, including overlapping and duplicate rows; compatible source groups within a row follow deterministic group order. `chunk_plan` accepts the same form and retains original request-row numbers in private `_request_row` plan metadata. One selected range may yield several source pieces while the same chunk window assembles them into one patch.
+Pass an `(n, 2)` array for the chunked dimension to request specific absolute windows.
 
-An explicit request is complete when its inward-aligned first and last sampled positions are supplied by one compatible output under the existing continuity and tolerance rules. A hole ends an output unless `fill_value` fills it, even when a window is entirely inside it. Filling does not extend an acquisition beyond its overall envelope. Unknown or uneven sample steps use the source coordinates where available. `overlap` cannot be combined with explicit windows. Bare numeric bounds use the planner's normalized coordinate units, while quantity bounds convert as absolute points. An empty `(0, 2)` array returns an empty plan or spool.
+- Each row is independent and inclusive at both ends.
+- Input order is kept, including overlapping and duplicate rows. Within a row, compatible groups come out in a fixed group order.
+- `chunk_plan` accepts the same form and records each output's original row number in the private `_request_row` column.
+- One row may draw several source pieces; compatible, connected pieces assemble into one patch, while different groups (or disconnected pieces kept by `keep_partial`) give separate outputs.
+- An empty `(0, 2)` array returns an empty plan or spool.
+- `overlap` can't be combined with explicit windows.
+- Bare numbers use the planner's normalized coordinate units; quantities convert as absolute points.
 
-By default, an unmet request raises `ChunkError`. Set `on_incomplete="warn"` to report and skip unmet request/group outputs, or `"ignore"` to skip them silently. With `keep_partial=True`, nonempty available pieces within a request are retained first; the policy then handles requests still wholly absent. These rules apply to each applicable compatibility group whose overall envelope intersects a window. The `conflict` setting remains the separate policy for attributes of members that actually contribute to an accepted output. Planning uses coordinate metadata and keeps measurement-array loading deferred; source changes and unrelated read failures remain runtime errors.
+### When a window counts as filled
 
-Several dimensions can take window arrays at once if they have equal row counts; row `i` of every array is one rectangular window. The first dimension is chunked as above and the others trim each output under the same completeness, `keep_partial` and `on_incomplete` rules, so a trimmed dimension holding no samples is an unmet request; trimmed dimensions never merge, so put the dimension to merge across patches first. A group of patches the box misses on any dimension is passed by and needs no coverage. `None`, `...`, NaN, NaT or a signed infinity leaves a bound open at the data's edge. A row open at both ends spans its dimension: on the chunked dimension it yields each contiguous segment whole, as `chunk(time=None)` would, and otherwise it keeps patches lacking that dimension. `select` takes the same form. Restrictions: a coordinate that is non-dimensional on any patch cannot share a call with another array; every other keyword must also be an array, not a chunk size or merge; and `fill_value` is refused.
+A window is complete when a single compatible output, under the usual continuity and tolerance rules, supplies its first and last sample positions (rounded inward to the grid). A hole ends an output unless `fill_value` fills it, even when the window lies entirely inside the hole. Filling never extends past the acquisition's overall range. When steps are unknown or uneven, the source coordinates are used where available.
+
+An unfilled window raises `ChunkError` by default. `on_incomplete="warn"` reports and skips it; `"ignore"` skips it silently. With `keep_partial=True`, whatever pieces exist inside a window are kept first, and the policy only handles windows with no data at all. These rules apply to each compatibility group whose overall range touches the window. `conflict` still separately governs attributes of the members that actually contribute.
+
+Planning uses only coordinate metadata and doesn't load data; source changes and unrelated read errors still surface when patches load.
+
+### Boxes across several dimensions
+
+Several dimensions can take window arrays with the same number of rows; row `i` of every array forms one box.
+
+- The first dimension is chunked as above; the others trim each output under the same completeness, `keep_partial`, and `on_incomplete` rules. A trimmed dimension holding no samples is an unfilled window.
+- Trimmed dimensions never merge, so put the dimension you want merged across patches first.
+- A group of patches the box misses on any dimension is skipped and needs no coverage.
+- `None`, `...`, NaN, NaT, or a signed infinity leaves a bound open at the edge of the data. A row open at both ends spans its whole dimension: on the chunked dimension it gives each contiguous segment whole, like `chunk(time=None)`; on others it keeps patches lacking that dimension.
+- `select` accepts the same form.
+
+Restrictions: a coordinate that is non-dimensional on any patch can't share a call with another array; every other keyword must also be an array, not a chunk size or a merge (`None`); and `fill_value` is refused.
 
 ```{python}
 import numpy as np

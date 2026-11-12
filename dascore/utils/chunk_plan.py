@@ -77,6 +77,7 @@ from dascore.utils.time import (
     to_int,
     to_timedelta64,
 )
+from dascore.warnings import DASCoreWarning
 
 # Columns which never participate in conflict policing and never carry to
 # outputs: source bookkeeping (outputs are not file rows) and the two
@@ -2365,6 +2366,17 @@ def build_concat_plan(
         )
         raise ParameterError(msg)
     has_envelope = min_name in df.columns and max_name in df.columns
+    if has_envelope and along.all() and df[[min_name, max_name]].isna().all(axis=None):
+        # every member carries the dimension and none states a value for
+        # it, as after reducing it with the default dim_reduce: the join
+        # is an all-missing coordinate, which is rarely what was meant
+        msg = (
+            f"Concatenating along {name!r}, for which no patch holds values: "
+            "the result's coordinate is all missing. This follows reducing "
+            "the dimension with the default dim_reduce='empty'; reduce with "
+            "dim_reduce='min' (or another reducer) to keep a label per patch."
+        )
+        warnings.warn(msg, DASCoreWarning, stacklevel=_user_stacklevel())
     if has_envelope:
         # one spelling per dimensionality, as a chunk plan: metres and
         # centimetres plan together and members convert on loading; only

@@ -202,9 +202,9 @@ def _combine_state(values, label):
     return present[0]
 
 
-def combine_inventories(first, second) -> tuple:
+def combine_inventories(*members) -> tuple:
     """
-    Return the (inventory, enrich kwargs) a union of two spools carries.
+    Return the (inventory, enrich kwargs) a union of spools carries.
 
     An inventory and its enrichment are spool-wide state, so the union
     carries whichever either operand has and applies it to every patch
@@ -217,10 +217,10 @@ def combine_inventories(first, second) -> tuple:
     from dascore.core.spool import Spool  # noqa: PLC0415
 
     inventory = _combine_state(
-        [getattr(x, "_inventory", None) for x in (first, second)], "inventories"
+        [getattr(x, "_inventory", None) for x in members], "inventories"
     )
     enrichment = _combine_state(
-        [x._enrichment() if isinstance(x, Spool) else None for x in (first, second)],
+        [x._enrichment() if isinstance(x, Spool) else None for x in members],
         "enrich arguments",
     )
     # Enrichment is only reachable through an inventory, so it cannot
@@ -689,7 +689,7 @@ def _as_patch_value(value):
 # under the explicit name, which is why it wins over plain distance.
 AXIS_COORDS = {
     "channel": ("channel",),
-    "instrument_distance": ("instrument_distance", "distance"),
+    "acquisition_distance": ("acquisition_distance", "distance"),
 }
 # A map axis with no patch coordinate could never be read.
 assert set(AXIS_COORDS) == set(DISTANCE_MAP_AXES)
@@ -716,17 +716,35 @@ def map_axis_coords(dist_map, names) -> list[tuple[str, str]]:
     return out
 
 
+def former_axis_coord(dist_map, names) -> str | None:
+    """
+    Return why carrying `instrument_distance`, the map's former axis, is refused.
+
+    Only refused, never read: a patch which still carries it would otherwise
+    be read on plain `distance`, which on an enriched patch is the optical
+    distance, and every channel would move by the map's offset, silently.
+    """
+    if "instrument_distance" in names and "acquisition_distance" in dist_map.axes:
+        return (
+            "carries 'instrument_distance', the former name of "
+            "'acquisition_distance'; rename it (patch.rename_coords("
+            "instrument_distance='acquisition_distance')) so the distance_map "
+            "can read it"
+        )
+    return None
+
+
 def readable_on(dist_map) -> list[str]:
     """The names a map could be read on, whichever axis answers."""
     return sorted({x for axis in dist_map.axes for x in AXIS_COORDS[axis]})
 
 
 # The units each map axis states its control points in. A channel number
-# counts channels and states no unit, while an instrument distance is the
+# counts channels and states no unit, while an acquisition distance is the
 # interrogator's own meters, so a patch which carries feet must be
 # converted before the map can read it. Reading raw magnitudes instead
 # would place the channels somewhere else on the fiber, silently.
-AXIS_UNITS = {"channel": None, "instrument_distance": "m"}
+AXIS_UNITS = {"channel": None, "acquisition_distance": "m"}
 assert set(AXIS_UNITS) == set(DISTANCE_MAP_AXES)
 
 
@@ -1195,6 +1213,8 @@ def _channel_placement(dims: set[str], context) -> tuple:
             f"{key!r} defines no distance_map, so its channels "
             "cannot be placed on the optical path"
         )
+    if (reason := former_axis_coord(dist_map, dims)) is not None:
+        return None, reason
     found = map_axis_coords(dist_map, dims)
     if not found:
         return None, (

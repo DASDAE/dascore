@@ -338,8 +338,15 @@ def _spool_input_message(data) -> str:
             "A spool holds patches, and a PatchMeta holds no data for one to "
             "read; give each one its data with to_patch(data) first."
         )
+    if any(isinstance(x, path_types) for x in members):
+        return (
+            "A sequence given to a spool must hold only patches, or only "
+            "paths to files or directories (dc.spool([path1, path2]) opens "
+            f"and combines them); got {[type(x).__name__ for x in members]}."
+        )
     return (
-        f"Spool accepts a Patch, a sequence of patches, or a spool; got {type(data)}."
+        "Spool accepts a Patch, a sequence of patches, a sequence of paths, "
+        f"or a spool; got {type(data)}."
     )
 
 
@@ -701,15 +708,19 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         if not isinstance(other, Spool):
             return NotImplemented
+        return Spool._union([self, other])
+
+    @staticmethod
+    def _union(spools: Sequence[Spool]) -> Spool:
+        """Combine spools as `+` does, in a single catalog union."""
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        members = [self._as_union_member(), other._as_union_member()]
-        union = PatchCatalog.union(members)
+        union = PatchCatalog.union([x._as_union_member() for x in spools])
         new = Spool()
         new._catalog = union
         # An attached inventory is part of what a spool yields, so it must
         # survive the union; two different ones have no combined answer.
-        new._inventory, enrichment = combine_inventories(self, other)
+        new._inventory, enrichment = combine_inventories(*spools)
         if enrichment is not None:
             new._enrich_kwargs, new._on_unresolved = enrichment
         return new
@@ -3403,7 +3414,12 @@ BaseSpool = Spool
 
 
 def spool(
-    obj: path_types | Spool | PatchType | Sequence[PatchType] | None = None,
+    obj: path_types
+    | Spool
+    | PatchType
+    | Sequence[PatchType]
+    | Sequence[path_types]
+    | None = None,
     *,
     index: path_types | None = None,
     **kwargs,
@@ -3416,7 +3432,8 @@ def spool(
     Parameters
     ----------
     obj
-        An object from which a spool can be derived: a path, a patch, a
+        An object from which a spool can be derived: a path, a sequence of
+        paths (each opened as a path is, then combined), a patch, a
         sequence of patches, or a spool. With `index`, the data root of
         the index's relative paths (default: the index's parent).
     index
@@ -3454,6 +3471,11 @@ def spool(
     >>> # get a spool from a single patch
     >>> patch = dc.get_example_patch()
     >>> spool = dc.spool(patch)
+    >>>
+    >>> # get a spool spanning several files
+    >>> paths = sorted(directory_path.glob("*.hdf5"))
+    >>> several = dc.spool(paths)
+    >>> assert len(several) == len(directory_spool)
     """
     if "index_path" in kwargs:
         # index_path still passes through to the directory spool.
@@ -3539,9 +3561,20 @@ def _spool_from_spool(spool, **kwargs):
 
 @_spool_from_obj.register(list)
 @_spool_from_obj.register(tuple)
-def _spool_from_patch_list(patch_list, **kwargs):
-    """Return a spool from a sequence of patches."""
-    return Spool(patch_list)
+def _spool_from_sequence(items, **kwargs):
+    """
+    Return a spool from a sequence of patches, or of paths.
+
+    Paths are opened one by one as `dc.spool(path)` opens them (a file
+    reads lazily, a local directory is indexed) and the spools are
+    combined, so the result spans every path.
+    """
+    if items and all(isinstance(x, path_types) for x in items):
+        spools = [_spool_from_str(x, **kwargs) for x in items]
+        # One union of every catalog, not N-1 pairwise ones, each of which
+        # would copy all the records gathered so far.
+        return Spool._union(spools)
+    return Spool(items)
 
 
 @_spool_from_obj.register(dc.Patch)

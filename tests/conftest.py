@@ -23,7 +23,7 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
-from dascore.core.coords import concat_coords
+from dascore.core.coords import NumericCoord, concat_coords
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -259,6 +259,14 @@ def swap_index_map_path(tmp_path_factory):
     """For all tests cases, use a temporary index-map directory."""
     tmp_map_dir = tmp_path_factory.mktemp("cache_paths") / "path_map"
     with _permanent_config(directory_index_map_dir=tmp_map_dir):
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def swap_remote_cache_dir(tmp_path_factory):
+    """Give each test process its own remote cache, which tests clear freely."""
+    remote_cache = tmp_path_factory.mktemp("remote_cache")
+    with _permanent_config(remote_cache_dir=remote_cache):
         yield
 
 
@@ -573,6 +581,18 @@ def holed_patch():
 def stepless_seam_patch():
     """The same labels as holed_patch with no declared step (irregular)."""
     return _seam_patch(step=None)
+
+
+@pytest.fixture(scope="session")
+def jittered_patch():
+    """A patch whose time labels keep a step but sit off its grid."""
+    labels = np.arange(120.0)
+    labels[1:-1:7] += 0.1
+    time = NumericCoord.from_labels(labels, step=1.0)
+    assert time.jittered and not time.gapped
+    data = np.ones((1, 120))
+    coords = {"distance": np.array([0]), "time": time}
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)

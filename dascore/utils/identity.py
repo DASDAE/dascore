@@ -99,6 +99,12 @@ _UNIT = "$unit"
 # are combined: the result's are worked out from its members'.
 _ID_FIELDS = ("origin_id", "data_id")
 
+# The modules a script or notebook runs as: `__main__`, and `__mp_main__`
+# in a worker `multiprocessing` spawns to re-run it. Nothing outside the
+# process can import what they define, so a path into one names nothing
+# on its own.
+SCRIPT_MODULES = ("__main__", "__mp_main__")
+
 
 @dataclass(frozen=True, slots=True)
 class PatchMarker:
@@ -776,6 +782,10 @@ def _to_datetime64(value: datetime.datetime | datetime.date) -> np.datetime64:
     # converting one directly is deprecated and then dropped.
     if isinstance(value, datetime.datetime) and value.tzinfo is not None:
         value = value.astimezone(datetime.UTC).replace(tzinfo=None)
+    # A pandas Timestamp holds nanoseconds, which np.datetime64 reads as a
+    # datetime and floors to microseconds; its own conversion keeps them.
+    if isinstance(value, pd.Timestamp):
+        return value.to_datetime64()
     return np.datetime64(value)
 
 
@@ -916,17 +926,19 @@ def callable_name(func: Any) -> str:
     Return a name which says which function or class this is.
 
     Its import path, when the path leads back to it. Otherwise -- defined
-    inside a call -- the path, a digest of its source and its encoded
-    defaults. Anything holding state that leaves out is refused: closure
-    cells, a bound instance, a callable object, or a lambda, which shares
-    its source line with its neighbours.
+    inside a call, or in a script (`SCRIPT_MODULES`) -- the path, a digest of
+    its source and its encoded defaults. Anything holding state that leaves
+    out is refused: closure cells, a bound instance, a callable object, or a
+    lambda, which shares its source line with its neighbours.
     """
     module = getattr(func, "__module__", None) or "<unknown>"
     qualname = getattr(func, "__qualname__", None)
     if not isinstance(qualname, str):
         _refuse(func, "is a callable object, whose state is not its name")
-    path = f"{module}:{qualname}"
-    if _resolves(func, module, qualname):
+    # Script paths name nothing outside the process; workers spell them `__main__`.
+    script = module in SCRIPT_MODULES
+    path = f"{SCRIPT_MODULES[0] if script else module}:{qualname}"
+    if not script and _resolves(func, module, qualname):
         return path
     # A builtin's `__self__` is its module. Anything else it is bound to --
     # an instance, or the class an inherited classmethod reads -- is state.

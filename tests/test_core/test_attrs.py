@@ -28,6 +28,38 @@ def random_attrs(random_patch) -> PatchAttrs:
     return random_patch.attrs
 
 
+class TestCoordinateFieldHints:
+    """A miss on a 0.1.x coordinate-derived attr name says where it went."""
+
+    @pytest.mark.parametrize(
+        "name, match",
+        [
+            ("time_min", r"get_coord\('time'\).min\(\)"),
+            ("distance_step", r"get_coord\('distance'\).step"),
+            ("time_units", r"get_coord\('time'\).units"),
+        ],
+    )
+    def test_envelope_names_point_to_the_coordinate(self, random_patch, name, match):
+        """time_min, distance_step and friends name get_coord."""
+        with pytest.raises(AttributeError, match=match):
+            _ = random_patch.attrs[name]
+
+    def test_coords_and_dims_point_to_the_patch(self, random_patch):
+        """attrs.coords and attrs.dims moved onto the patch."""
+        with pytest.raises(AttributeError, match=r"patch\.coords"):
+            _ = random_patch.attrs.coords
+
+    def test_other_misses_are_plain(self, random_patch):
+        """A name with no history gets the ordinary error, and get works."""
+        with pytest.raises(AttributeError, match=r"nonsense'$"):
+            _ = random_patch.attrs.nonsense
+        assert random_patch.attrs.get("time_min") is None
+        assert not hasattr(random_patch.attrs, "time_min")
+        # a stated extra attr of such a name is still served
+        attrs = random_patch.attrs.update(time_units="odd")
+        assert attrs.time_units == "odd"
+
+
 class TestPatchAttrs:
     """Basic tests on patch attributes."""
 

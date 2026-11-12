@@ -30,7 +30,9 @@ def path():
 @pytest.fixture(scope="module")
 def patch(path):
     """The patch read from the file."""
-    return dc.read(path)[0]
+    # the stored thing itself: a snapped label would make the read an
+    # operation on the array rather than the array
+    return dc.read(path, snap=False)[0]
 
 
 @pytest.fixture(scope="module")

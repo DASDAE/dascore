@@ -7,6 +7,7 @@ import functools
 import shutil
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
 from unittest import mock
 
 import numpy as np
@@ -33,6 +34,7 @@ from dascore.exceptions import (
     UnknownExampleError,
     UnknownFiberFormatError,
 )
+from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
 from dascore.lazy.recipe import Recipe
@@ -43,6 +45,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
+from dascore.warnings import DASCoreWarning
 
 
 def _gigo(garbage):
@@ -69,6 +72,22 @@ class _SerialClient:
 def random_spool_len_10():
     """Return a spool of length 10."""
     return dc.examples.get_example_spool(length=10)
+
+
+class TestMovedAttrQueryHint:
+    """Selecting on a 0.1.x attr that moved into acquisition_key says so."""
+
+    def test_station_points_to_acquisition_key(self, random_spool):
+        """The error names acquisition_key for station, network, instrument_id."""
+        for name in ("station", "network", "instrument_id"):
+            with pytest.raises(InvalidSpoolQueryError, match="acquisition_key"):
+                random_spool.select(**{name: "x"})
+
+    def test_other_unknown_names_get_no_hint(self, random_spool):
+        """An unrelated unknown name keeps the plain message."""
+        with pytest.raises(InvalidSpoolQueryError) as info:
+            random_spool.select(nonsense="x")
+        assert "acquisition_key" not in str(info.value)
 
 
 class TestSpoolBasics:
@@ -2377,6 +2396,105 @@ class TestEmptyConcatenate:
         out = dc.spool([]).concatenate(**kwargs)
         assert len(out) == 0
         assert list(out) == []
+
+
+class TestSpoolFromPaths:
+    """dc.spool accepts a sequence of paths and spans them all."""
+
+    @pytest.fixture(scope="class")
+    def file_paths(self, tmp_path_factory):
+        """Three single-patch DASDAE files."""
+        path = tmp_path_factory.mktemp("spool_from_paths")
+        out = []
+        for index, patch in enumerate(dc.get_example_spool("random_das")):
+            file_path = path / f"patch_{index}.h5"
+            patch.io.write(file_path, "dasdae")
+            out.append(file_path)
+        return out
+
+    def test_list_of_files(self, file_paths):
+        """Each file's patches are in the spool, with their source paths."""
+        spool = dc.spool(file_paths)
+        assert len(spool) == len(file_paths)
+        sources = set(spool.get_contents()["source_path"])
+        assert {Path(x) for x in sources} == set(file_paths)
+        assert isinstance(spool[0], dc.Patch)
+
+    def test_one_catalog_union(self, file_paths):
+        """The paths' catalogs combine in one union, not one per path."""
+        with mock.patch.object(
+            PatchCatalog, "union", wraps=PatchCatalog.union
+        ) as union:
+            spool = dc.spool(file_paths)
+        assert union.call_count == 1
+        assert len(spool) == len(file_paths)
+
+    def test_strings_and_tuple(self, file_paths):
+        """Paths may be strings, and the sequence a tuple."""
+        spool = dc.spool(tuple(str(x) for x in file_paths[:2]))
+        assert len(spool) == 2
+
+    def test_directory_and_file(self, file_paths, tmp_path):
+        """A directory in the sequence is indexed and combined with files."""
+        extra = tmp_path / "extra.h5"
+        dc.get_example_patch().io.write(extra, "dasdae")
+        spool = dc.spool([file_paths[0].parent, extra])
+        assert len(spool) == len(file_paths) + 1
+
+    def test_mixed_sequence_names_paths(self, file_paths):
+        """A sequence mixing paths and patches says what it accepts."""
+        with pytest.raises(InvalidSpoolError, match="only paths"):
+            dc.spool([file_paths[0], dc.get_example_patch()])
+
+    def test_missing_file_raises(self, tmp_path):
+        """A path which does not exist is reported as such."""
+        with pytest.raises(InvalidSpoolError, match="may not exist"):
+            dc.spool([tmp_path / "nope.h5"])
+
+
+class TestAllBlankConcatenate:
+    """Joining a dimension no patch holds values for warns, naming dim_reduce."""
+
+    @pytest.fixture(scope="class")
+    def reduced_spool(self):
+        """Each patch's time reduced away with the default dim_reduce."""
+        spool = dc.get_example_spool()
+        return dc.spool(spool.map(lambda p: p.mean("time"), progress=None))
+
+    def test_all_blank_members_warn_at_plan_time(self, reduced_spool):
+        """The plan warns, naming dim_reduce, and the join still happens."""
+        with pytest.warns(DASCoreWarning, match="dim_reduce") as record:
+            out = reduced_spool.concatenate(time=None)
+        # The warning points at the user's call, not at dascore internals.
+        assert record[0].filename == __file__
+        time = out[0].get_array("time")
+        assert len(time) == len(reduced_spool)
+        assert np.all(pd.isnull(time))
+
+    @pytest.mark.parametrize("blanks", [(), (1,)])
+    def test_stated_labels_are_quiet(self, blanks):
+        """
+        dim_reduce='min' leaves a label per patch, which join silently; a
+        blank member beside stated ones takes their null, as before.
+        """
+        spool = dc.get_example_spool()
+        patches = [p.mean("time", dim_reduce="min") for p in spool]
+        for index in blanks:
+            patches[index] = spool[index].mean("time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            out = dc.spool(patches).concatenate(time=None)[0]
+        time = out.get_array("time")
+        assert len(time) == len(spool)
+        assert pd.isnull(time).sum() == len(blanks)
+
+    def test_new_dimension_is_quiet(self, reduced_spool):
+        """Stacking along a new dimension states that dimension itself."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            out = reduced_spool.concatenate(stack=None)[0]
+        assert "stack" in out.dims
+        assert len(out.get_coord("stack")) == len(reduced_spool)
 
 
 class TestSpoolRepr:

@@ -34,9 +34,6 @@ env:
   # Where the test-data cache is restored; pooch reads files from here.
   # Must match the path used in .github/actions/prime-test-data-cache.
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
-  # Keep the GIL off even if an extension module asks for it back, so a
-  # dependency cannot quietly turn this job into an ordinary one.
-  PYTHON_GIL: '0'
 
 jobs:
   free_thread:
@@ -62,7 +59,7 @@ jobs:
       - name: install dascore
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test_base]"
+          pip install -e ".[test_base]" "gilguard>=0.2.0"
 
       - name: confirm the GIL is disabled
         run: |
@@ -72,8 +69,17 @@ jobs:
           assert not sys._is_gil_enabled(), 'the GIL is enabled; this job proves nothing'
           "
 
+      # Import every installed package in its own interpreter; fails if any
+      # turns the GIL back on.
+      - name: check no dependency re-enables the GIL
+        run: python -m gilguard
+
       - name: prepare test data cache
         uses: ./.github/actions/prime-test-data-cache
 
+      # gilguard, loaded first in each worker, fails any test whose import
+      # turns the GIL back on, catching extensions the scan above misses.
+      # Erroring on unhandled thread exceptions makes a flip in a bare
+      # thread fail the job too.
       - name: run test suite without the GIL
-        run: python -m pytest tests -m "not network" -q --timeout=900 -n logical --dist loadfile
+        run: python -m pytest -p gilguard -W error::pytest.PytestUnhandledThreadExceptionWarning tests -m "not network" -q --timeout=900 -n logical --dist loadfile

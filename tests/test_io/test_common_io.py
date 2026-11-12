@@ -48,6 +48,7 @@ from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
+from dascore.io.rsf import RSFV1
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2
@@ -160,6 +161,7 @@ COMMON_IO_READ_TESTS = {
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
     ),
+    RSFV1(): ("example_dascore.rsf",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     SegyV1_0(): ("conoco_segy_1.sgy",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
@@ -188,6 +190,7 @@ COMMON_IO_WRITE_TESTS = (
     PickleIO(),
     DASDAEV1(),
     DASDAEV2(),
+    RSFV1(),
     *_ZARR_IOS,
 )
 
@@ -205,9 +208,9 @@ SKIP_DATA_FILES = {
 # of the inventory's facts under a vendor spelling, in which case it belongs
 # under the canonical name, and whether it states units the reader should
 # have converted away at the parse boundary.
-# Formats which hand back the attrs stored in the file rather than building
-# them from a header, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR"})
+# Formats which hand back the attrs stored in the file rather than mapping
+# vendor fields to attrs, so the file, not the reader, chooses the names.
+_PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR", "rsf"})
 
 VENDOR_ATTRS = frozenset(
     {
@@ -283,6 +286,7 @@ VENDOR_ATTRS = frozenset(
         "sample_spacing_usec",
         "sampling_resolution",
         "schema_version",
+        "segy_text_header",
         "service_company_name",
         "signal_size",
         "start_channel",
@@ -934,7 +938,7 @@ class TestScan:
                 assert inspect.unwrap(getattr(type(reader), name)) is getattr(
                     FiberIO, name
                 )
-            if reader.name in {"WAV", "rsf"}:
+            if reader.name == "WAV":
                 continue  # Write-only formats cannot describe or load a resource.
             for name in ("get_version", "get_metadata", "read_array"):
                 assert inspect.unwrap(getattr(type(reader), name)) is not getattr(
@@ -1205,8 +1209,10 @@ class TestWrite:
 
     def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
         """If the writer can read, ensure round-tripping patch is equal."""
-        if fiber_io_writer.name in {"WAV", "rsf"}:
+        if fiber_io_writer.name == "WAV":
             pytest.skip("FiberIO doesn't implement read")
+        if fiber_io_writer.name == "rsf":
+            pytest.skip("RSF stores float32 samples; the random patch is float64")
         new = fiber_io_writer.read(written_fiber_path)[0]
         assert new == random_patch
 
