@@ -301,18 +301,17 @@ class RadiansToStrain(PatchProcessor):
 
     def get_metadata(self, meta):
         """Return strain metadata and the factor for phase units."""
+        # Normalize prefixed and aliased units (mrad, Radians) to rad.
+        data_units = meta.attrs.get("data_units", None)
+        d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
         # If units doesn't contain radians just return so function is idempotent
-        quant = dc.get_quantity(meta.attrs.data_units)
-        if str(dc.get_unit("radians")) not in str(quant):
+        if str(dc.get_unit("radians")) not in str(d_units):
             msg = (
                 f"Patch {meta} has no radians in its data_units, "
                 f"skipping strain conversion."
             )
             warnings.warn(msg)
             return meta, {}
-        # Normalize prefixed units before computing the physical conversion.
-        data_units = meta.attrs.get("data_units", None)
-        d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
         units = get_unit(d_units)
         dimensions = units.dimensionality
         supported = ("rad", "rad/s", "rad/m", "rad/m/s")
