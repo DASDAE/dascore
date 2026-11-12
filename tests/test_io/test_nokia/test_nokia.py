@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import struct
 
+import h5py
 import numpy as np
 import pytest
 
@@ -77,6 +78,7 @@ class TestBinary:
             "2025-12-29T01:05:27.661054"
         )
         assert patch.attrs.data_units == dc.get_quantity("rad")
+        assert patch.attrs.gauge_length == pytest.approx(104.5817, rel=1e-5)
 
     def test_unapplied_mask_is_one_patch(self, binary_path, tmp_path):
         """A mask whose spans don't add up to the channels gives one patch."""
@@ -100,9 +102,13 @@ class TestBinary:
         shutil.copyfile(binary_path, path)
         with path.open("r+b") as fi:
             fi.truncate(path.stat().st_size - len(MAGIC))
-        assert NokiaOFDRV1().get_version(path.open("rb")) is None
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(path)
+
+    def test_empty_distance_window(self, binary_path):
+        """An empty distance window returns no rows rather than raising."""
+        out = NokiaOFDRV1().read_array(binary_path, ((10, 10), (5, 40)), key="1")
+        assert out.shape == (0, 35)
 
     def test_window_across_chunks(self, binary_path, binary_spool):
         """A window spanning a chunk boundary equals that slice of the patch."""
@@ -129,3 +135,19 @@ class TestH5:
         assert patch.shape == (500, 256)
         step = patch.get_coord("time").step / dc.to_timedelta64(1)
         assert step == pytest.approx(1 / 7.450580596923827)
+
+    def test_masked_spans(self, tmp_path):
+        """A masked file's spans read their own stored rows."""
+        source = fetch("nokia_ofdr_downsampled_1.h5")
+        path = tmp_path / "masked.h5"
+        shutil.copyfile(source, path)
+        with h5py.File(path, "r+") as h5:
+            # 105.86 m channels: spans of 300 and 200 rows.
+            masked = [[0.0, 31757.33], [52928.88, 74100.43]]
+            h5["data"].attrs["masked"] = np.array(masked)
+            stored = h5["data"][:]
+        spool = dc.spool(path)
+        assert [x.shape[0] for x in spool] == [300, 200]
+        np.testing.assert_array_equal(spool[0].data, stored[:300])
+        np.testing.assert_array_equal(spool[1].data, stored[300:])
+        assert spool[1].get_coord("distance").min() == pytest.approx(500 * 105.8577)

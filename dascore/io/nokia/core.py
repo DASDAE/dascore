@@ -56,12 +56,12 @@ class NokiaOFDRV1(FiberIO):
     version = "1"
 
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
-        """Return the version when the file starts and ends with the magic."""
+        """Return the version when the magic frames the file and the version is 1."""
         version = _get_binary_version(resource)
         return version if version == self.version else None
 
     def _infos(self, resource):
-        """Return the array info, start, chunk count and per-span info."""
+        """Return the array info, array byte offset, chunk count and span info."""
         array_info, meta, array_start, nchunks = _read_binary_header(resource)
         _, nchan, nsamp = array_info["shape"]
         step = _binary_time_step(meta)

@@ -10,10 +10,10 @@ from scipy.constants import speed_of_light
 
 from dascore.core import get_coord, get_coord_manager
 from dascore.io.utils import step_from_rate
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import get_buffer_size, optional_import
 
 MAGIC = b"OFDR1MAGIC"
-# version (uint8), header bytes, array start (uint32s), after the magic.
+# After the magic: version (uint8), then header bytes and array start (uint32).
 _PREAMBLE = struct.Struct("<BII")
 _UINT = struct.Struct("<I")
 # Each chunk holds this many time samples for every channel.
@@ -24,16 +24,10 @@ _GROUP_INDEX = 1.4677
 
 def _unpack_all(raw: bytes) -> list:
     """Decode every msgpack object in a byte string."""
-    msgpack = optional_import("msgpack")  # optional dependency
+    msgpack = optional_import("msgpack")
     unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
     unpacker.feed(raw)
     return list(unpacker)
-
-
-def _get_size(fi) -> int:
-    """Return the size of an open binary file."""
-    fi.seek(0, 2)
-    return fi.tell()
 
 
 def _get_binary_version(fi) -> str | None:
@@ -43,7 +37,7 @@ def _get_binary_version(fi) -> str | None:
     if len(head) < len(MAGIC) + _PREAMBLE.size or not head.startswith(MAGIC):
         return None
     version = head[len(MAGIC)]
-    fi.seek(_get_size(fi) - len(MAGIC))
+    fi.seek(get_buffer_size(fi) - len(MAGIC))
     # A file without the end magic is still being written; skip it.
     if fi.read(len(MAGIC)) != MAGIC:
         return None
@@ -60,15 +54,16 @@ def _read_binary_header(fi) -> tuple[dict, dict, int, int]:
     _, header_bytes, array_start = _PREAMBLE.unpack(fi.read(_PREAMBLE.size))
     array_info, _host, chunk_meta = _unpack_all(fi.read(header_bytes))[:3]
     # The trailer, framed by its length, sits before the end magic.
-    size = _get_size(fi)
+    size = get_buffer_size(fi)
     fi.seek(size - len(MAGIC) - _UINT.size)
     (trailer_len,) = _UINT.unpack(fi.read(_UINT.size))
     fi.seek(size - len(MAGIC) - _UINT.size - trailer_len)
     bytes_written = _unpack_all(fi.read(trailer_len))[0]["bytes_written"]
-    _, nchan, nsamp = array_info["shape"]
+    nstack, nchan, nsamp = array_info["shape"]
     itemsize = np.dtype(array_info["dtype"]).itemsize
     chunk_bytes = nchan * nsamp * itemsize
-    assert nsamp == SAMPLES_PER_CHUNK and not bytes_written % chunk_bytes
+    assert nstack == 1 and nsamp == SAMPLES_PER_CHUNK
+    assert not bytes_written % chunk_bytes
     return array_info, chunk_meta, array_start, bytes_written // chunk_bytes
 
 
@@ -153,6 +148,7 @@ def _read_chunked(data, rows: slice, times: slice) -> np.ndarray:
     stop = -(-times.stop // SAMPLES_PER_CHUNK)
     block = np.asarray(data[first:stop, rows, :])
     # (chunk, channel, sample) -> (channel, chunk * sample)
-    out = block.transpose(1, 0, 2).reshape(block.shape[1], -1)
+    nchunk, nrow, nsamp = block.shape
+    out = block.transpose(1, 0, 2).reshape(nrow, nchunk * nsamp)
     offset = first * SAMPLES_PER_CHUNK
     return out[:, times.start - offset : times.stop - offset]
