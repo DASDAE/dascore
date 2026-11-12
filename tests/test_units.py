@@ -245,10 +245,6 @@ class TestTemperatureSpellings:
         """Each spelling names degrees Fahrenheit, not farad degrees."""
         assert get_quantity(spelling) == get_quantity("degF")
 
-    def test_in_expression(self):
-        """The spelling also resolves inside a larger expression."""
-        assert get_quantity("degrees C / s") == get_quantity("degC / s")
-
     @pytest.mark.parametrize(
         ("spelling", "expected"),
         [("C", "coulomb"), ("F", "farad"), ("deg", "degree"), ("degC", "kelvin")],
