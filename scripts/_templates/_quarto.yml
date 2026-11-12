@@ -103,6 +103,9 @@ website:
         - text: Introduction
           href: index.qmd
 
+        - text: Installation
+          href: installation.qmd
+
         - text: Formats
           href: supported_formats.qmd
 

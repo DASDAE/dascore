@@ -10,26 +10,20 @@ execute:
 
 # DASCore
 
-A Python library for distributed fiber optic sensing.
 
-:::{.callout minimal="true"}
-Docs: [stable](https://dascore.org) · [beta and development](https://dascore.netlify.app) · [older releases](https://github.com/DASDAE/dascore/releases)
-:::
 
-# Highlights
+DASCore is a Python library that **facilitates rapid development** of fiber optic sensing **research** and **software** by providing:
 
 ::: {.hl-tiles}
-[[]{.bi .bi-file-earmark-binary} **Extensive I/O support** [Read and write the common DAS file formats.]{}](supported_formats.qmd){.hl-tile}
-[[]{.bi .bi-archive} **Archive management** [Index a source once, then select, chunk, and merge across its contents.]{}](tutorial/spool.qmd){.hl-tile}
-[[]{.bi .bi-sliders} **Data processing** [Filter, resample, and transform while keeping track of coordinates and units.]{}](tutorial/processing.qmd){.hl-tile}
-[[]{.bi .bi-geo-alt} **Metadata** [Describe your deployment in an inventory: fibers, cables, and where each channel sits.]{}](tutorial/inventory.qmd){.hl-tile}
-[[]{.bi .bi-bounding-box} **Annotations** [Mark picks, windows, and regions in coordinates that survive processing.]{}](tutorial/annotations.qmd){.hl-tile}
-[[]{.bi .bi-puzzle} **Extensibility** [Add your own methods to patches and spools, from a local namespace or a plugin package.]{}](contributing/extending_dascore.qmd){.hl-tile}
+[[]{.bi .bi-files} **I/O support** [Extensive support for reading and writing DFOS files.]{}](supported_formats.qmd){.hl-tile}
+[[]{.bi .bi-database} **Archive management** [Index, query, and load data from large DFOS archives.]{}](tutorial/spool.qmd){.hl-tile}
+[[]{.bi .bi-soundwave} **Data processing** [Filter and transform while keeping track of coordinates and units.]{}](tutorial/processing.qmd){.hl-tile}
+[[]{.bi .bi-tags} **Metadata** [Document the observation system and semantically enrich processing.]{}](tutorial/inventory.qmd){.hl-tile}
+[[]{.bi .bi-pencil-square} **Annotations** [Mark picks, windows, and shapes in data coordinates.]{}](tutorial/annotations.qmd){.hl-tile}
+[[]{.bi .bi-puzzle} **Extensibility** [Plug in your own processing, file formats, and modules.]{}](contributing/extending_dascore.qmd){.hl-tile}
 :::
 
-:::{.callout-note}
-DASCore is part of the [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org). 
-:::
+It is part of the broader [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.org).
 
 # Where to start
 

@@ -109,4 +109,4 @@ The index and inventory are companions to the archive rather than data sources t
 
 # External formats
 
-`Patch.io` also converts patches to structures used by Pandas, Xarray, and ObsPy. See the [external conversion recipe](../recipes/external_conversion.qmd).
+`Patch.io` also converts patches to structures used by pandas, xarray, and ObsPy. See the [external conversion recipe](../recipes/external_conversion.qmd).

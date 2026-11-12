@@ -22,11 +22,7 @@ Some changes break code written for 0.1.x. See the [migration guide](dascore_1.0
 
 ## Install the beta
 
-```bash
-uv pip install "dascore[all]==1.0.0b1"
-```
-
-Pinning the pre-release this way keeps the other dependencies on stable releases; `[all]` brings in the optional xarray and Parquet support used below. DASCore 1.0 also bumps minimum versions. It requires Python 3.12 or newer, NumPy 2.3.3 or newer, and pandas 3.0 or newer.
+See [installing a pre-release](../installation.qmd#pre-releases); `[extras]` brings in the optional xarray and Parquet support used below. DASCore 1.0 also raises the minimum versions of Python, NumPy, and pandas; see its [`pyproject.toml`](https://github.com/DASDAE/dascore/blob/dev/pyproject.toml).
 
 ## Highlights
 
@@ -37,7 +33,7 @@ Pinning the pre-release this way keeps the other dependencies on stable releases
 - [The `AnnotationSet`: a data structure for managing annotations, including points and basic geometries](../tutorial/annotations.qmd)
 - The [`PatchProcessor`](`dascore.PatchProcessor`): a structured class for separating metadata and data operations.
     - Chains of metadata can be processed without performing calculations
-    - Kernels with non-numpy backends (Jax, PyTorch) can be registered.
+    - Kernels with non-NumPy backends (JAX, PyTorch) can be registered.
 - [Coding agent skills and agent-friendly documentation, including a token-efficient CLI](../tutorial/agents.qmd)
 - New Patch processors including:
     - [`tile_apply`](`dascore.Patch.tile_apply`) for efficiently applying ND windowed operations.
@@ -48,8 +44,8 @@ Pinning the pre-release this way keeps the other dependencies on stable releases
     - Coordinates can hold gaps, handled by [`fill_gaps`](`dascore.Patch.fill_gaps`) and [`split_gaps`](`dascore.Patch.split_gaps`).
     - String coordinates are now supported.
 - [Greatly improved compatibility with Xarray](../tutorial/xarray.qmd)
-    - Generate Xarray data trees from DASCore `Spools`
-    - Access DASCore functions on the `dc` Xarray namespace.
+    - Generate xarray data trees from DASCore `Spools`
+    - Access DASCore functions on the `dc` xarray namespace.
 - [A simplified and more efficient FiberIO interface](../contributing/new_format.qmd)
     - Formats implement `get_version`, `get_metadata`, and `read_array`; [`dc.read_array`](`dascore.read_array`) reads part of a file without building a patch.
     - New readers: MiniSEED (v2 and v3), Sintela protobuf, AI4EPS, OptaSense ODH4, WITSML 1.4 DTS, Silixa H5 v2, and XDAS NetCDF. New writers: CF NetCDF-4 and Zarr.

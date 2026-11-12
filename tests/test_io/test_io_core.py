@@ -2075,6 +2075,16 @@ class TestGetSupportedIOTable:
         assert flags["DASDAE"] and flags["PICKLE"]
         assert not flags["TDMS"]
 
+    def test_combine_versions(self):
+        """Combining gives one row per format, versions in numeric order."""
+        table = FiberIO.get_supported_io_table()
+        combined = FiberIO.get_supported_io_table(combine_versions=True)
+        assert list(combined["name"]) == sorted(table["name"].unique())
+        rows = combined.set_index("name")
+        assert rows.loc["OPTODAS", "version"] == "8, 9, 10, 11"
+        assert rows.loc["NETCDF_CF", "write"]
+        assert not rows.loc["TDMS", "write"]
+
 
 class TestMissingInstallName:
     """Tests for guessing the package to install from a dependency error."""

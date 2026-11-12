@@ -1065,15 +1065,37 @@ class FiberIO:
         return not _is_wrapped_func(self.write, FiberIO.write)
 
     @classmethod
-    def get_supported_io_table(cls):
-        """Return the supported formats, versions, and optional write capability."""
+    def get_supported_io_table(cls, combine_versions: bool = False):
+        """
+        Return the supported formats, versions, and optional write capability.
+
+        Parameters
+        ----------
+        combine_versions
+            If True, return one row per format, sorted by name: its versions
+            joined in numeric order, and `write` True if any version writes.
+        """
         cls.manager.load_plugins()
-        return pd.DataFrame(
+        table = pd.DataFrame(
             [
                 {"name": name, "version": version, "write": io.implements_write}
                 for name, versions in cls.manager._format_version.items()
                 for version, io in versions.items()
             ]
+        )
+        if not combine_versions:
+            return table
+
+        def _join(versions):
+            def key(version):
+                return [int(x) if x.isdigit() else x for x in version.split(".")]
+
+            return ", ".join(sorted(map(str, versions), key=key))
+
+        return (
+            table.groupby("name", sort=True)
+            .agg(version=("version", _join), write=("write", "any"))
+            .reset_index()
         )
 
     def _updated_after(self, resource, timestamp):

@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-DASCore supports users who prefer to work with [xarray](https://docs.xarray.dev/). Spools become lazy `DataTree`s, patches convert to `DataArray`s and back, patch methods run directly on `DataArray`s, and patches index, compute, and write the way xarray users expect. Xarray is optional; install it with `uv pip install "dascore[all]"`.
+DASCore supports users who prefer to work with [xarray](https://docs.xarray.dev/). Spools become lazy `DataTree`s, patches convert to `DataArray`s and back, patch methods run directly on `DataArray`s, and patches index, compute, and write the way xarray users expect. Xarray is optional; install it with [DASCore's extras](../installation.qmd#optional-extras).
 
 ## Spools as lazy DataTrees
 

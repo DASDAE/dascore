@@ -133,7 +133,7 @@ assert filtered.attrs.origin_id == patch.attrs.origin_id
 assert filtered.attrs.data_id != patch.attrs.data_id
 ```
 
-The route matters. Repeating the same operations produces the same `data_id`, while changing their order does not:
+The route matters. Repeating the same operations produces the same `data_id`, while changing their order gives a different one:
 
 ```{python}
 first = patch.pass_filter(time=(1, 10)).decimate(time=2)

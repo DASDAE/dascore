@@ -1,0 +1,42 @@
+---
+title: Installation
+description: Install DASCore with uv or mamba, add optional extras, try a pre-release, or set up a development copy.
+---
+
+## With uv
+
+[uv](https://docs.astral.sh/uv/) installs into a uv project, or into any virtual environment:
+
+```bash
+uv add "dascore[extras]"         # in a uv project
+uv pip install "dascore[extras]" # in a virtual environment
+```
+
+## With mamba
+
+[mamba](https://mamba.readthedocs.io/) installs the conda-forge package:
+
+```bash
+mamba install -c conda-forge dascore
+```
+
+`pip install "dascore[extras]"` and `conda install -c conda-forge dascore` also work.
+
+## Optional extras
+
+`[extras]` adds SEG-Y, miniSEED, Zarr, and NetCDF support, plus xarray and dask (for [xarray support](tutorial/xarray.qmd)), Parquet (for saving annotations), ObsPy, and faster numerical backends. Without it, `dascore` alone is a lighter install that reads the HDF5-based formats most DAS instruments write.
+
+## Pre-releases
+
+Allow pre-releases to get the newest one (this lets dependencies resolve to pre-releases too):
+
+```bash
+uv pip install --prerelease=allow "dascore[extras]"
+```
+
+Pre-releases are published to PyPI only, not conda-forge.
+
+## Other ways to install
+
+- [Docker](recipes/docker_basic.qmd): build an image of the stable release.
+- [Development installation](contributing/dev_install.qmd): an editable copy of the repository, for work on DASCore itself.

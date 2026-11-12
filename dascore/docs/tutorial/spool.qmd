@@ -84,7 +84,7 @@ mask[1] = False
 without_second = spool[mask]
 ```
 
-Lists and Pandas Series follow the same positional rules. Slicing remains lazy: it narrows the spool plan without loading selected arrays.
+Lists and pandas Series follow the same positional rules. Slicing remains lazy: it narrows the spool plan without loading selected arrays.
 
 Rows from `get_contents()` align with spool positions, so a dataframe condition can select the same patches. Do not reuse a mask from a differently ordered spool.
 

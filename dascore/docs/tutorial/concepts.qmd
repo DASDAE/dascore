@@ -4,26 +4,7 @@ execute:
   warning: false
 ---
 
-# Installation
-
-Install DASCore with [uv](https://docs.astral.sh/uv/), into a uv project or any virtual environment:
-
-```bash
-uv add dascore          # in a uv project
-uv pip install dascore  # in a virtual environment
-```
-
-or with [mamba](https://mamba.readthedocs.io/):
-
-```bash
-mamba install -c conda-forge dascore
-```
-
-`pip install dascore` and `conda install -c conda-forge dascore` also work.
-
-See [this recipe](../recipes/docker_basic.qmd) for installation with Docker.
-
-See the [contributing docs](../contributing/contributing.qmd) for development installations.
+See [Installation](../installation.qmd) to install DASCore.
 
 # Data structures
 
