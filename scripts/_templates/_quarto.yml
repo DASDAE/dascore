@@ -295,6 +295,9 @@ website:
         - text: Keys, IDs and Rows
           href: notes/identity.qmd
 
+        - text: Lazy Operations
+          href: notes/lazy_operations.qmd
+
         - text: Spool Index
           href: notes/spool_index.qmd
 

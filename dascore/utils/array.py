@@ -33,6 +33,7 @@ from dascore.utils.array_api import (
     is_foreign,
     is_numpy,
     nan_reduce,
+    refuse_lazy,
 )
 from dascore.utils.identity import (
     DIGEST_SIZE,
@@ -46,6 +47,7 @@ from dascore.utils.identity import (
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
+    _operand_arrays,
     align_patch_coords,
     numpy_fallback,
     swap_kwargs_dim_to_axis,
@@ -1028,6 +1030,7 @@ def apply_array_func(func, *args, **kwargs):
     backends are converted to numpy and the result converted back.
     """
     _raise_on_out(kwargs)
+    refuse_lazy(getattr(func, "__name__", "operation"), _operand_arrays(args, kwargs))
     if (data := _get_foreign_data(args, kwargs)) is not None:
         name = getattr(func, "__name__", "operation")
         runner = functools.partial(_apply_array_func, func)
@@ -1231,6 +1234,8 @@ def apply_ufunc(ufunc, *args, **kwargs):
             f"supported for use with Patch. Use the patch.data array directly."
         )
         raise ParameterError(msg)
+    # Whichever operand is lazy, before any is converted or applied.
+    refuse_lazy(getattr(ufunc, "__name__", "operation"), _operand_arrays(args, kwargs))
     data = _get_foreign_data(args, kwargs)
     if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
         out = func(ufunc, *args, **kwargs)

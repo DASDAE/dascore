@@ -51,6 +51,16 @@ class IncompatiblePatchError(PatchError):
     """Raised when an operator cannot be performed on a patch."""
 
 
+class LazyOperationError(IncompatiblePatchError):
+    """
+    Raised when an operation cannot run on a patch whose data are lazy.
+
+    The lazy backend never reads the data behind the caller's back, so an
+    operation with no chunk contract is refused rather than loaded for.
+    `Patch.load` reads the data into memory first.
+    """
+
+
 class UnresolvedPatchError(PatchError):
     """
     Raised when an inventory does not describe a patch.

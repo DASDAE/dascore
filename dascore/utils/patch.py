@@ -40,6 +40,7 @@ from dascore.utils.array_api import (
     backend_name,
     is_foreign,
     is_numpy,
+    refuse_lazy,
     to_numpy,
     warn_numpy_fallback,
 )
@@ -403,6 +404,12 @@ def _to_numpy_arg(obj):
     return obj
 
 
+def _operand_arrays(args, kwargs=None):
+    """Yield every operand, a patch as its data."""
+    for value in (*args, *(kwargs or {}).values()):
+        yield value.data if isinstance(value, dc.Patch) else value
+
+
 def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
     """
     Apply a function numpy can perform but the patch's backend cannot.
@@ -426,7 +433,14 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
         Keyword arguments for func; patches and arrays are converted.
     stacklevel
         The stack level, as understood by warnings.warn, of the caller.
+
+    Raises
+    ------
+    LazyOperationError
+        If any operand is lazy: converting it would read it, which the lazy
+        backend never does behind the caller's back.
     """
+    refuse_lazy(name, (data, *_operand_arrays(args, kwargs)))
     warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
     # Crossing the backend boundary is part of the operation being applied,
     # not data replacement: the same values are the same data, and what
@@ -1878,6 +1892,10 @@ def stack_patches(
     """
     # check the dims/coords of first patch (considered to be standard for rest)
     init_patch = patches[0]
+    # Adding arrays reads them, and zeros_like reads one for its shape. Each
+    # patch is checked as the loop meets it: a spool reads its files anew
+    # on every pass, so a pass made only to check would read them twice.
+    refuse_lazy("stack", (init_patch.data,))
     stack_arr = np.zeros_like(init_patch.data)
 
     # ensure dim_vary is in dims
@@ -1887,6 +1905,7 @@ def stack_patches(
 
     kept = []
     for p in patches:
+        refuse_lazy("stack", (p.data,))
         # check kind, then dimensions and coords of patch against init_patch.
         # Kind is compared strictly: a collection is being combined, so a
         # missing value is a value.

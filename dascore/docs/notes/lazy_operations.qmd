@@ -1,0 +1,66 @@
+---
+title: Lazy Operations
+---
+
+A patch whose data are not read yet holds a [`LazyArray`](`dascore.lazy.array.LazyArray`): a [`Recipe`](`dascore.lazy.recipe.Recipe`), which says which stored samples fill which box of the array, and a chain of the operations run on it since. An operation on such a patch computes nothing. Its kernel appends the processor and its plan to the chain, and [`Patch.load`](`dascore.Patch.load`) runs the chain in memory. A later change will run the same chain a chunk at a time; the rules below are what make that possible without changing any result. The code cells execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+from dascore.core.source import ArraySource
+from dascore.lazy.recipe import Recipe
+
+recipe = Recipe.from_source(ArraySource.full((4, 3), -2.0))
+coords = {"distance": np.arange(4), "time": np.arange(3)}
+lazy = dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
+
+out = lazy.abs().update_attrs(station="here").angle()
+print(out.backend, len(out.data.chain))
+```
+
+## The rules a lazy operation keeps
+
+**Chunk size is an implementation detail.** The result is the same, within floating-point precision, whether it was computed in memory or a chunk at a time, and it has the same `data_id`. An operation states what a chunk of its output needs of its input by returning a [chunk contract](`dascore.lazy.contract`) from [`chunk_contract`](`dascore.core.processor.PatchProcessor.chunk_contract`), given the input's dtype and its plan. Two exist so far: `Pointwise`, where an output chunk needs only the input chunk at the same place, and `Unchanged`, where the kernel hands its input back for that dtype and plan. A contract is decided from the dtype and the plan, never from the values: an operation whose no-op depends on the values, such as `fillna`, cannot state one.
+
+**Metadata is never lazy.** A lazy patch always has concrete coords, attrs, shape and dtype. They come from `get_metadata`, which runs when the operation is called and knows nothing of chunks, so it must state the dtype the kernel returns as well as the shape. [`load`](`dascore.lazy.array.LazyArray.load`) checks each step's result against what its metadata stated, and refuses a mismatch naming the processor. An operation whose metadata depends on the data cannot be lazy.
+
+```{python}
+loaded = out.load()
+assert loaded.dtype == out.dtype and loaded.shape == out.shape
+```
+
+**The lazy backend never falls back.** An operation with no contract raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) before anything is read, where another backend would convert to NumPy. So do arithmetic and NumPy functions on the patch, whichever operand is lazy, and `rolling`, stacking a spool, and the waterfall and specplot figures. A patch's repr describes lazy data without reading them. The data are read in these places only:
+
+- `Patch.load` (and `Spool.load`, which calls it), `np.asarray(patch)`, and writing the patch to a file, where the caller asks for the values;
+- `Patch.equals` (and `==`), which compares them;
+- taking a merged patch from a spool, as `spool.chunk(time=None)[0]` does, since that is how a spool loads; a merge which stays lazy is a later feature.
+
+Everything else refuses.
+
+```{python}
+from dascore.exceptions import LazyOperationError
+
+try:
+    lazy.detrend("time")
+except LazyOperationError as error:
+    print(error)
+```
+
+**Each step has its own identity.** A step's `data_id` is the one [`PatchProcessor`](`dascore.core.processor.PatchProcessor`) records for an eager patch: derived from the operation's id and the previous patch's `data_id`. The node records the id the patch was given at that step, so every lazy step has the eager step's id, and an eager no-op (an `Unchanged` contract) hands back the patch itself, id and all. A metadata-only operation changes the patch's id and leaves the lazy array as it was; the patch's `attrs.data_id` is what names the patch.
+
+```{python}
+eager = lazy.load().abs().update_attrs(station="here").angle()
+assert loaded.attrs.data_id == eager.attrs.data_id == out.attrs.data_id
+assert lazy.real() is lazy  # real data: nothing to do, as eagerly
+```
+
+## Where it happens
+
+[`kernel_for`](`dascore.core.processor.PatchProcessor.kernel_for`) answers the lazy backend with a class's own registered lazy kernel, or else with [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), for the first class in the MRO which computes, whether by a kernel it writes or one registered on it; a class with none stays metadata-only. The generic kernel asks for the contract only when it describes the kernel which runs -- the class stating it is the class owning that kernel, or a subclass of it -- and refuses an operation which overrides `reconcile`, which would be handed the lazy array. It then appends a pending node, recording the contract on it. `PatchProcessor` settles that node with the output shape, dtype and `data_id` once the result's attrs are final and before the patch is built.
+
+## Why not dask
+
+Dask plans its work as a graph holding a task for every chunk of every operation. For very large arrays, building and scheduling that graph costs more than the work it describes. A chain holds one node for each operation, whatever the size of the array, and how the work is split into chunks is decided only when it runs.
+
+A dask array is still accepted as a patch's data, as any other array backend is, and its dispatch is unchanged: an operation runs on dask where its kernel can, and otherwise falls back to NumPy with a warning. None of the rules above hold for it. `Patch.load` reads a dask-backed patch into memory as well, and [`Spool.io.to_xarray`](`dascore.xarray.spool.spool_to_xarray`) builds dask arrays because that is how xarray defers a read. For data larger than memory within DASCore, the lazy backend is the one to use.

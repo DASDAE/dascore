@@ -30,7 +30,7 @@ import math
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from types import MappingProxyType, SimpleNamespace
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -76,9 +76,6 @@ from dascore.lazy.read import (
     _to_output,
 )
 from dascore.utils.identity import H
-
-# The name the array api reports for a lazy array.
-BACKEND_NAME = "lazy"
 
 
 def _check_axis(axis: int, ndim: int) -> int:
@@ -745,10 +742,6 @@ class Recipe:
         out = self.load()
         return out if dtype is None else out.astype(dtype, copy=False)
 
-    def __array_namespace__(self, api_version: str | None = None):
-        """Return the namespace which owns this array."""
-        return _NAMESPACE
-
     @property
     def data_id(self) -> str:
         """
@@ -1169,7 +1162,3 @@ def _tiles(start: np.ndarray, stop: np.ndarray, sizes: tuple[int, ...]) -> bool:
 def _chains(low: np.ndarray, high: np.ndarray, size: int) -> bool:
     """Whether spans laid in this order run from zero to size with no gap."""
     return bool(low[0] == 0 and high[-1] == size and np.array_equal(low[1:], high[:-1]))
-
-
-# The array api namespace of a lazy array, which only names itself.
-_NAMESPACE = SimpleNamespace(__name__=BACKEND_NAME)
