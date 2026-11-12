@@ -2616,10 +2616,9 @@ class Spool(NodeRepr, NamespaceOwner):
         else the stretch's span spread evenly over its samples. So every
         output is one evenly sampled run, and chunk outputs rejoin exactly,
         except from a stretch holding a patch with no step, which keeps
-        its labels as recorded. So does a stretch whose even spread cannot
-        be stated on its coordinate's own ticks: a fractional step under
-        100 ticks, or a grid whose last label int64 ticks cannot place
-        within a tick of the recorded one.
+        its labels as recorded. So does a stretch needing a fractional step
+        under 100 ticks, the only one kept for want of a grid: time
+        stretches of any practical length get a grid.
 
         Data-size chunks measure only the data array and round sample counts down.
         Mixed dtypes are sized after promotion.

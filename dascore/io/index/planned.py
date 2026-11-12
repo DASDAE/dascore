@@ -682,7 +682,7 @@ class PlanResolver(PatchResolver):
                     return False
         return self._array_read_info(row) is not None
 
-    def _sources_unchanged(self, rows: pd.DataFrame) -> bool:
+    def _sources_unchanged(self, rows: pd.DataFrame, strict=True) -> bool:
         """
         Whether every member source still is what the index recorded.
 
@@ -691,9 +691,10 @@ class PlanResolver(PatchResolver):
         back the shape its row predicted and go unnoticed. Only a source
         measured now and found to be what was recorded keeps the recipe:
         a source `changed_sources` cannot measure refuses it too, and sends
-        the merge down the patch path.
+        the merge down the patch path. Unless ``strict``, only a source
+        measured and found changed counts.
         """
-        return self.changed_sources(rows) == []
+        return self.changed_sources(rows, skip_unmeasured=not strict) == []
 
     def changed_sources(self, rows: pd.DataFrame, skip_unmeasured=False):
         """

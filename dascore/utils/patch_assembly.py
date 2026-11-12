@@ -768,8 +768,9 @@ class PatchAssembler:
     # recipe reads the window the index promised rather than the whole
     # array, so a file rewritten since would otherwise pass unnoticed.
     # Takes the joined member frame; the caller keeps what was recorded.
-    # Only a source measured now and found unchanged keeps the recipe.
-    sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
+    # Only a source measured now and found unchanged keeps the recipe;
+    # with strict=False, only one measured and found changed fails.
+    sources_unchanged: Callable[..., bool] | None = None
     trim_dims: tuple[str, ...] = ()
     # Whether members carry coordinates the rows cannot rebuild, so the
     # index cannot stand for their patches (it can still size them).
@@ -798,7 +799,7 @@ class PatchAssembler:
                 patch = self._merge_patches_streaming(
                     joined, df_dict_list, merge_dim, samples, units
                 )
-                return [_on_stretch_grid(patch, self.plan_dim, df_dict_list[0])]
+                return [patch]
         out = []
         target_units = None
         for patch_kwargs in df_dict_list:
@@ -814,8 +815,19 @@ class PatchAssembler:
             out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs, fuse=fuse)
         patches = [x["patch"] for x in out]
         if len(patches) == 1 and df_dict_list:
-            patches = [_on_stretch_grid(patches[0], self.plan_dim, df_dict_list[0])]
+            patches = [self._on_grid(patches[0], joined, df_dict_list[0])]
         return patches
+
+    def _on_grid(self, patch, joined, row) -> dc.Patch:
+        """The patch on its stretch's grid, unless a source changed since planning."""
+        unchanged, spec = self.sources_unchanged, row.get(f"_{self.plan_dim}_stretch")
+        if (
+            isinstance(spec, tuple)
+            and unchanged
+            and not unchanged(joined, strict=False)
+        ):
+            return patch  # its samples are not the ones the plan numbered
+        return _on_stretch_grid(patch, self.plan_dim, row)
 
     def _load_trimmed_patch(self, patch_kwargs, joined, units=None) -> dc.Patch:
         """Load a single patch and trim it to its instruction range."""
@@ -856,9 +868,10 @@ class PatchAssembler:
         metas = self._member_meta_from_index(df_dict_list)
         if metas is not None:
             out = self._merge_from_index(joined, df_dict_list, merge_dim, metas)
-            if out is not None:
-                return out
-        return self._stream(joined, df_dict_list, merge_dim, samples, units)
+            if out is not None:  # its sources were found unchanged
+                return _on_stretch_grid(out, self.plan_dim, df_dict_list[0])
+        out = self._stream(joined, df_dict_list, merge_dim, samples, units)
+        return self._on_grid(out, joined, df_dict_list[0])
 
     def _merge_from_index(self, joined, df_dict_list, merge_dim, metas):
         """

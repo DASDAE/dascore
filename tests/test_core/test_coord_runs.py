@@ -169,6 +169,26 @@ class TestDeclaredStep:
         assert coord.step is None and coord.missing().complete
 
 
+class TestLongExactGrid:
+    """An exact grid whose count times numerator passes int64 still labels."""
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_labels_index_and_slice(self, sign):
+        """Labels match Python ints; index_of and slices agree with them."""
+        count, num, den, phase = 10**7, sign * (10**12 + 7), 10**6, 999_999
+        origin = 0 if sign > 0 else 2 * 10**13
+        assert abs(count * num) >= 2**63 > count * den
+        grid = Grid(origin, num, den, count, phase=phase)
+        index = [0, count // 2 + 1, count - 1]
+        expected = [origin + (phase + i * num) // den for i in index]
+        assert grid.labels(np.array(index, dtype=np.int64), "i8").tolist() == expected
+        assert [int(grid.index_of(x, True)) for x in expected] == index
+        piece = grid.sliced(index[1], 1, count - index[1])
+        assert piece.labels([0, count - index[1] - 1], "i8").tolist() == expected[1:]
+        coord = get_coord(runs=(grid,), dtype="int64")
+        assert int(coord.values[-1]) == expected[-1]
+
+
 class TestFusion:
     """Array segments fuse only when nothing says they should not."""
 

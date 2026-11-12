@@ -4673,7 +4673,7 @@ class TestStoredDatetimeUnit:
         length = to_timedelta64(8)
         fast = list(spool.chunk(time=length))
         monkeypatch.setattr(
-            planned.PlanResolver, "_sources_unchanged", lambda self, rows: False
+            planned.PlanResolver, "_sources_unchanged", lambda self, rows, **_: False
         )
         stale = list(spool.chunk(time=length))
         for one, other in zip(fast, stale, strict=True):
@@ -5048,7 +5048,7 @@ class TestTrimmedRecipeMerge:
         _rewrite_dasdae(path, flat)
         # the stat check would catch this first; the fallback is what is tested
         monkeypatch.setattr(
-            planned.PlanResolver, "_sources_unchanged", lambda self, rows: True
+            planned.PlanResolver, "_sources_unchanged", lambda self, rows, **_: True
         )
         with pytest.raises(ValueError, match="axes"):
             spool.chunk(time=None)[0]

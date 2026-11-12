@@ -306,8 +306,8 @@ class TestStretchGrid:
         (rejoined,) = windows.chunk(time=None)
         assert rejoined.get_coord("time") == coord
 
-    def test_spread_past_a_tick_keeps_labels(self):
-        """A month of drifting files int64 cannot number within a tick."""
+    def test_month_long_spread_is_one_grid(self):
+        """A month of drifting files gets a grid ending within a tick."""
         _, frame = dc.spool([_at(0, 60_000)])._plan_frames("time")
         count, step = 43_200, 60_000 * STEP + 15 * STEP // 100
         frame = pd.concat([frame] * count, ignore_index=True)
@@ -315,10 +315,9 @@ class TestStretchGrid:
         frame["time_max"] = frame["time_min"] + 59_999 * STEP
         frame["_patch_row"] = np.arange(count)
         plan = build_chunk_plan(frame, time=None)
-        assert plan.outputs["_time_stretch"].tolist() == ["labels"]
-        # a day of the same files does get a grid
-        plan = build_chunk_plan(frame.iloc[:1440], time=None)
         assert isinstance(plan.outputs["_time_stretch"].iloc[0], tuple)
+        end = plan.outputs["time_max"].iloc[0] - frame["time_max"].iloc[-1]
+        assert abs(end) <= np.timedelta64(1, "ns")
 
     @pytest.mark.parametrize("step", [10, 1000])
     def test_integer_spread_rejoins(self, step):
@@ -336,9 +335,10 @@ class TestStretchGrid:
         coord = whole.get_coord("x")
         recorded = np.concatenate([x.get_array("x") for x in spool])
         assert coord.dtype == np.int64 and len(coord.runs) == 1
-        if step == 10:
+        if step == 10:  # recorded labels state no step, in the plan too
             assert np.array_equal(coord.values, recorded)
-            assert not coord.evenly_sampled
+            assert coord.step is None
+            assert spool.chunk(x=None).get_contents()["x_step"].isna().all()
         else:
             assert coord.step_exact == Fraction(100_800, 99)
             assert np.array_equal(coord.values, np.arange(100) * 100_800 // 99)
@@ -551,6 +551,24 @@ class TestRejoin:
             assert np.array_equal(values, labels[start : start + len(values)])
             expected = whole.data[:, start : start + len(values)]
             assert np.array_equal(patch.data, expected)
+
+    def test_changed_source_keeps_its_labels(self, tmp_path):
+        """A member rewritten after planning loads its new labels, not the grid."""
+        starts = [i * 10.15 for i in range(3)]
+        for num, start in enumerate(starts):
+            _at(start).io.write(tmp_path / f"{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        chunked, windows = spool.chunk(time=None), spool.chunk(time=4 * STEP)
+        assert len(chunked[0].get_coord("time")) == 30
+        planned = [x.get_array("time") for x in windows]
+        moved = _at(starts[1] + 2)
+        moved.io.write(tmp_path / "1.h5", "dasdae")
+        labels = chunked[0].get_array("time")
+        assert np.isin(moved.get_array("time"), labels).all()
+        # a window trimming the changed member keeps its loaded labels too
+        loaded = [x.get_array("time") for x in windows]
+        changed = [y for x, y in zip(planned, loaded) if not np.array_equal(x, y)]
+        assert changed and changed[0][0] in moved.get_array("time")
 
     def test_float_coordinates(self):
         """Float labels rejoin bit for bit too."""

@@ -972,10 +972,7 @@ def _counts_ticks(dtype) -> bool:
 def _as_values(numbers, like: np.dtype) -> np.ndarray:
     """Numbers back as values of the dtype ``like`` (see `_numbers`)."""
     if like.kind in "Mmiu":
-        ticks = np.asarray(numbers)
-        if ticks.dtype.kind not in "iu":  # a float is never an exact tick count
-            ticks = np.rint(ticks.astype(np.float64))
-        ticks = ticks.astype(np.int64)
+        ticks = np.asarray(numbers).astype(np.int64)  # ticks are whole
         return (
             ticks.view(f"{like.kind}8[ns]") if like.kind in "Mm" else ticks.astype(like)
         )
@@ -1238,10 +1235,9 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
     last label lies within ``max_shift`` of its numbered position; failing
     that it spreads the stretch evenly between its end labels. A stretch
     holding a row with no step has no grid, nor has one whose step cannot
-    be stated on its own ticks: a fraction under `_MIN_FRACTION_TICKS`, a
-    step int64 cannot number unless approximated, and the approximation
-    moves the last label over a tick, or integers a float frame holds
-    inexactly. Returns
+    be stated on its own ticks: a fraction under `_MIN_FRACTION_TICKS`, or
+    integers a float frame holds inexactly. A spread too fine for int64
+    to number takes the closest step it can, its move recorded. Returns
     each partition's `Grid` (None without one), whether it relabels its
     rows, and each row's largest move, in steps.
     """
@@ -1300,12 +1296,10 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
             grids[part] = Grid(sign[part] * begin[part], sign[part] * step, 0, size)
             continue
         terms = (num[pick], den[pick]) if pick >= 0 else (spread, max(size - 1, 1))
-        step = exact = Fraction(*(int(x) for x in terms))
-        if step.numerator * size >= 2**62:  # the closest step int64 can number
-            step = exact.limit_denominator(2**62 // (size * (int(exact) + 1)) or 1)
-        moved = abs((size - 1) * step // 1 - (size - 1) * exact // 1)
-        fine = step.denominator > 1 and step < _MIN_FRACTION_TICKS
-        if fine or moved > 1 or step.numerator * size >= 2**62:
+        step = Fraction(*(int(x) for x in terms))
+        if step.denominator * size >= 2**62:  # the closest step int64 can number
+            step = step.limit_denominator(2**62 // size)
+        if step.denominator > 1 and step < _MIN_FRACTION_TICKS:
             continue  # no grid states it on its ticks: the labels stay
         origin = int(sign[part] * begin[part])
         grid = Grid(origin, int(sign[part] * step.numerator), step.denominator, size)
@@ -3439,9 +3433,14 @@ def _lattice_label(x, lattice, before=False):
     base, stride, den, phase, *_ = lattice
     if x.dtype.kind == "f":
         return base + (np.ceil((x - base) / stride - _GRID_SNAP_RTOL) - before) * stride
-    return (
+    # in Python ints: a long fractional grid's terms overflow int64 products
+    x, base, stride, den, phase = (
+        np.asarray(v, dtype=object) for v in (x, *lattice[:4])
+    )
+    found = (
         base + (phase - ((phase - (x - base) * den) // stride + before) * stride) // den
     )
+    return found.astype(np.int64)
 
 
 def _member_samples(firsts, lasts, starts, ends, lattice):
@@ -3711,6 +3710,7 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
         terms = (grid.origin, grid.step_num, grid.step_den, len(grid), grid.phase)
         specs[out] = (*terms, first, size, str(dtype))
     stretch_col = f"_{name}_stretch"
+    steps = _published(steps, np.array([x == "labels" for x in specs], dtype=bool))
     outputs = outputs.assign(**{step_col: steps, grid_col: exact, stretch_col: specs})
     ids = outputs["output_id"].to_numpy()
     by_id = dict(zip(ids, range(len(ids))))
