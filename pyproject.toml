@@ -82,8 +82,9 @@ extras = [
     "pyarrow",
     "netCDF4",
     "h5netcdf",
-    # The ZARR format; zarr 3 reads and writes both zarr formats 2 and 3.
-    "zarr>=3",
+    # The ZARR format, both zarr formats 2 and 3; older zarr 3 releases
+    # cannot open a UPath store.
+    "zarr>=3.4",
     "findiff",
     "obspy",
     "numba",

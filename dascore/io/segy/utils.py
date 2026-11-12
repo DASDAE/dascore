@@ -24,10 +24,19 @@ _SAMPLE_BYTES |= {9: 8, 10: 4, 11: 2, 12: 8, 15: 3, 16: 1}
 # Silixa's textual header line stating the start below the second, eg
 # "C13 UTC File Time stamp: 2019/04/24 22:24:24.846233 (UTC)" (#1311) or
 # "C11 UTC Time stamp: 2019/07/07 12:14:03.902170 (UTC)" (Booth et al., 2020,
-# doi:10.6084/m9.figshare.12410390).
+# doi:10.6084/m9.figshare.12410390) or
+# "C13 GPS Time stamp: 2017/07/28 18:05:57.734000 (UTC)" (conoco_segy_1.sgy).
 _TEXT_START = re.compile(
-    rb"UTC (?:File )?Time stamp: *(\d{4}/\d{2}/\d{2}) +"
+    rb"(?:UTC|GPS) (?:File )?Time stamp: *(\d{4}/\d{2}/\d{2}) +"
     rb"(\d{2}:\d{2}:\d{2}\.\d{1,9})"
+)
+
+# Silixa's textual header line stating the data type, and maybe the scale, eg
+# "C14 AMPLITUDE VALUES PROPORTIONAL TO STRAINRATE; SC= X11600 TO NM/M/S" or
+# "C9 Amplitude values are proportional to strainrate." (conoco_segy_1.sgy).
+_TEXT_STRAIN_RATE = re.compile(
+    r"PROPORTIONAL TO STRAINRATE(?:; *SC= *X *(\d+(?:\.\d+)?) TO NM/M/S)?",
+    re.IGNORECASE,
 )
 
 
@@ -213,9 +222,10 @@ def _get_time_from_text(text, start):
     """
     Return the textual header's sub-second start, else the trace header start.
 
-    Only Silixa's "UTC (File) Time stamp" line is read, and only where it falls
-    in the second the trace header gives, so a stamp from another clock or
-    event never moves the start. The header may be ASCII or EBCDIC.
+    Only Silixa's "UTC (File) Time stamp" or "GPS Time stamp" line is read,
+    and only where it falls in the second the trace header gives, so a stamp
+    from another clock or event never moves the start. The header may be
+    ASCII or EBCDIC.
     """
     match = _TEXT_START.search(text + text.decode("cp037").encode("latin-1"))
     if match is None or not np.issubdtype(start.dtype, np.datetime64):
@@ -226,6 +236,35 @@ def _get_time_from_text(text, start):
     except ValueError:
         return start
     return stamp if stamp.astype("datetime64[s]") == start else start
+
+
+def _decode_text(text):
+    """Return the textual header as lines, decoded as EBCDIC or ASCII."""
+    # The decoding giving more ASCII letters and digits is the file's; a tie
+    # (eg a blank header) is EBCDIC, as the standard says.
+    decoded = max(
+        (text.decode("cp037"), text.decode("latin-1")),
+        key=lambda x: sum(char.isascii() and char.isalnum() for char in x),
+    )
+    lines = (decoded[i : i + 80] for i in range(0, len(decoded), 80))
+    return "\n".join(x.replace("\x00", " ").rstrip() for x in lines).rstrip()
+
+
+def _get_text_attrs(text):
+    """
+    Return the textual header, and the data type and units it states.
+
+    Only Silixa's "PROPORTIONAL TO STRAINRATE" line is read. Its scale, eg
+    "SC= X11600 TO NM/M/S", means a value times 11600 is in nm/m/s, so the
+    data units are "11600 nm/m/s".
+    """
+    header = _decode_text(text)
+    out = {"segy_text_header": header} if header else {}
+    if match := _TEXT_STRAIN_RATE.search(header):
+        out["data_type"] = "strain_rate"
+        if match[1]:
+            out["data_units"] = f"{match[1]} nm/m/s"
+    return out
 
 
 def _get_patch_with_channel_coord(patch):
