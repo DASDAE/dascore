@@ -1,5 +1,7 @@
 ---
 title: Coordinate Internals
+execute:
+  warning: false
 ---
 
 This note explains the current internal coordinate model in DASCore, with particular attention to exact values, runs, summaries, and scan payloads.
@@ -86,6 +88,84 @@ DASDAE stores coordinates separately from patch data. Format version 2, the defa
 Full reads rebuild those descriptions into a `CoordManager` exactly as written; DASDAE snaps no dimension unless asked. Scans also construct a real `CoordManager`, but avoid loading the data array itself; explicit stored start/step metadata remains a range fast path.
 
 String-array serialization is separate from coordinate semantics. HDF5 backends cannot all store NumPy unicode arrays directly, so DASDAE encodes only arrays that are actually string-like and restores them before coordinate construction.
+
+## Coordinate managers
+
+A [`CoordManager`](`dascore.core.coordmanager.CoordManager`) groups a patch's coordinates and keeps their associated arrays aligned. Most code uses it through `Patch` methods; this section shows it directly.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+from dascore.core import get_coord, get_coord_manager
+```
+
+### Creation and association
+
+[`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) creates a manager from coordinates and ordered dimensions. Tuple values specify `(associated_dimensions, coordinate)`; use `None` for an independent coordinate.
+
+```{python}
+distance = get_coord(start=0, stop=10, step=1)
+time = get_coord(start=0, stop=1, step=0.1)
+latitude = get_coord(data=np.linspace(41.5, 41.6, len(distance)))
+
+manager = get_coord_manager(
+    coords={
+        "distance": distance,
+        "time": time,
+        "latitude": ("distance", latitude),
+        "deployment": (None, get_coord(data=np.array(["A"]))),
+    },
+    dims=("distance", "time"),
+)
+```
+
+`manager.dims` stores dimension order, `coord_map` maps names to coordinates, and `dim_map` records dimensional associations.
+
+```{python}
+print(manager.dims)
+print(dict(manager.dim_map))
+```
+
+### Updating
+
+`CoordManager.update` replaces, adds, disassociates, or drops coordinates:
+
+```{python}
+new_distance = distance.update(data=distance.values + 10)
+updated = manager.update(distance=new_distance)
+detached = updated.update(latitude=(None, latitude))
+without_latitude = detached.update(latitude=None)
+```
+
+New coordinates use the same update form:
+
+```{python}
+quality = get_coord(data=np.linspace(0, 1, len(distance)))
+with_quality = manager.update(quality=("distance", quality))
+independent = manager.update(run=(None, get_coord(data=np.array([1]))))
+```
+
+Setting a dimension coordinate to `None` drops that dimension and every coordinate depending on it. Dropping a missing non-dimensional coordinate is a no-op.
+
+### Methods with data
+
+Operations that change array alignment accept the array and return an updated manager and array. Coordinate names are keyword arguments, as on `Patch`.
+
+```{python}
+patch = dc.get_example_patch()
+patch_manager, data = patch.coords, patch.data
+
+selected_manager, selected_data = patch_manager.select(data=data, distance=(..., 100))
+sorted_manager, sorted_data = patch_manager.sort("time", "distance", array=data, reverse=True)
+renamed = patch_manager.rename_coord(time="elapsed_time")
+```
+
+When several dimensions are sorted together, the returned data reflects each permutation in dimension order. Renaming a dimension also updates every coordinate association that refers to it.
+
+`select`, `order`, `sort`, and `snap` accept an associated array and return `(manager, array)`. Methods that do not change alignment, such as unit conversion, return only a manager.
+
+Prefer the corresponding Patch methods when operating on a patch; they keep data, coordinates, metadata, and provenance together.
 
 ## Practical guidance
 

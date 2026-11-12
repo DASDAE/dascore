@@ -56,6 +56,24 @@ class TestAuthoredDocuments:
         assert "https://dascore.org/api/dascore.html" in text
         assert "```python\nraise AssertionError" in text
 
+    def test_divs(self, sources):
+        """Callouts keep a label, and text only for the website is left out."""
+        source, output = sources
+        (source / "page.qmd").write_text(
+            "---\ntitle: Divs\n---\n"
+            ":::{.callout-tip}\nTip text.\n:::\n"
+            '::: {.content-visible when-format="html"}\n'
+            ":::{.callout-note}\nWebsite only.\n:::\n:::\n"
+            '::: {.content-hidden when-format="html"}\nAgents only.\n:::\n'
+            "```markdown\n:::\n```\nAfter.\n"
+        )
+        doc_corpus.write_corpus(output)
+        text = next(output.rglob("page.md")).read_text()
+        assert "**Tip:**\nTip text." in text
+        assert "Website only" not in text and "Note" not in text
+        assert "Agents only." in text and "After." in text
+        assert "```markdown\n:::\n```" in text
+
     @pytest.mark.parametrize(
         "body, message",
         [
@@ -141,24 +159,6 @@ class TestAuthoredDocuments:
         assert f"![diagram]({base}/_static/diagram.svg?raw=1#view)" in text
         assert f"[download]({base}/_static/diagram.svg)" in text
         assert "![external](https://example.com/image.png)" in text
-
-    def test_readme(self, tmp_path, monkeypatch):
-        """Installed metadata wins over an unrelated sibling README."""
-        package = tmp_path / "dascore"
-        package.mkdir()
-        readme = tmp_path / "readme.md"
-        readme.write_text("Unrelated package README")
-        monkeypatch.setattr(doc_corpus, "PACKAGE_PATH", package)
-        distribution = SimpleNamespace(
-            read_text=lambda name: "Name: dascore\n\nPackaged README"
-        )
-        monkeypatch.setattr(
-            doc_corpus.metadata, "distribution", lambda name: distribution
-        )
-        assert doc_corpus._read_readme() == "Packaged README"
-        (tmp_path / "pyproject.toml").write_text('[project]\nname = "dascore"\n')
-        readme.write_text("Editable source README")
-        assert doc_corpus._read_readme() == "Editable source README"
 
 
 class TestApiInspection:

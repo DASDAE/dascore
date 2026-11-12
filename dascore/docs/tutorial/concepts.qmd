@@ -4,6 +4,26 @@ execute:
   warning: false
 ---
 
+# Installation
+
+Install DASCore with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv add dascore
+```
+
+or with [mamba](https://mamba.readthedocs.io/):
+
+```bash
+mamba install -c conda-forge dascore
+```
+
+`uv pip install dascore`, `pip install dascore`, and `conda install -c conda-forge dascore` also work.
+
+See [this recipe](../recipes/docker_basic.qmd) for installation with Docker.
+
+See the [contributing docs](../contributing/contributing.qmd) for development installations.
+
 # Data structures
 
 Most DASCore work uses two objects: a [Patch](patch.qmd), which holds one n-dimensional array with coordinates and metadata, and a [Spool](spool.qmd), which manages patches in memory, on disk, or remotely.

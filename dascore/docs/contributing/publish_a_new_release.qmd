@@ -12,7 +12,7 @@ DASCore's version comes from git tags; do not edit a version file.
 4. Assemble notes from merged PR `## Changelog` sections. Use **Breaking Changes**, **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed**, and **Security**, omitting empty sections. Repeat breaking entries in **Breaking Changes** and end each entry with its PR number.
 5. Publish the release to create the tag. GitHub Actions publishes PyPI distributions and builds the docs from that tag.
 
-GitHub can generate a draft, and the repository's `draft-release` agent skill can collect entries, but maintainers must verify the version, target, categories, and wording.
+GitHub can generate a draft, and the repository's `dascore-draft-release` agent skill can collect entries, but maintainers must verify the version, target, categories, and wording.
 
 ## Pre-releases
 

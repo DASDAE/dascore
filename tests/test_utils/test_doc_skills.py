@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -37,23 +38,27 @@ class TestSkills:
             yield
 
     def test_skill_files(self):
-        """Each shipped skill is a named file, and catalogued pages include theirs."""
+        """Each shipped skill is a named file, served by the page including it."""
         shipped = {}
         for path in sorted(SKILL_PATH.glob("*/SKILL.md")):
             front = yaml.safe_load(path.read_text(encoding="utf-8").split("---", 2)[1])
             assert front["name"] == path.parent.name and front["description"]
             shipped[front["name"]] = front["description"]
-        assert set(doc_skills.get_skills()) == set(shipped)
-        for name, info in doc_skills.get_skills().items():
-            # The entry point's page is its routing recipe, not the bootstrap file.
-            if name == "dascore":
-                continue
+        skills = doc_skills.get_skills()
+        assert list(skills) == sorted(shipped)
+        assert skills["dascore"]["target"] == "recipes/dascore"
+        for name, info in skills.items():
             assert info["description"] == shipped[name]
-            # A blank line before the include makes Quarto print the skill's
-            # front matter on pages whose code cells it executes.
+            # The entry point's page is its routing recipe, not the bootstrap file.
+            if name == "dascore" or info["target"] is None:
+                continue
             page = (DOC_PATH / f"{info['target']}.qmd").read_text(encoding="utf-8")
             include = f"{{{{< include ../../.agents/skills/{name}/SKILL.md >}}}}"
-            assert page.endswith(f"\n---\n{include}\n")
+            assert page.count(include) == 1
+            # A blank line before the include makes Quarto print the skill's
+            # front matter on pages whose code cells it executes.
+            if "engine: jupyter" in page:
+                assert f"\n---\n{include}\n" in page
 
     @pytest.mark.skipif(not _SCRIPTS.exists(), reason="needs a repository checkout")
     def test_build_tools_read_skill_files(self):
@@ -62,7 +67,7 @@ class TestSkills:
         page = DOC_PATH / "recipes" / "tunnel_inventory.qmd"
         assert generator.extract_qmd_file(page).chunks
         validator = _load_script("_validate_links")
-        skill = SKILL_PATH / "make-inventory" / "SKILL.md"
+        skill = SKILL_PATH / "dascore-make-inventory" / "SKILL.md"
         assert skill in set(validator.get_qmd_files())
 
     def test_cli(self, cache, capsys):
@@ -75,14 +80,14 @@ class TestSkills:
             assert main(["skill", name]) == 0
             printed = capsys.readouterr().out
             assert printed == doc_skills.read_skill(name)
-            assert f"\n# {info['title']}\n" in printed
+            assert re.search(rf"^# {re.escape(info['title'])}$", printed, re.M)
             # The skill file's own front matter stays out of the printed page.
             assert f"name: {name}" not in printed
 
     def test_install(self, tmp_path, capsys, monkeypatch):
         """One command installs an entry for every skill, replacing older ones."""
         target = tmp_path / "agent" / "skills"
-        for name in ("dascore", "make-inventory"):
+        for name in ("dascore", "dascore-make-inventory"):
             stale = target / name / "SKILL.md"
             stale.parent.mkdir(parents=True)
             stale.write_text("An older copy.")
@@ -96,9 +101,9 @@ class TestSkills:
         # Each of these serves a project whose DASCore may have no command line.
         assert doc_skills._STANDALONE == {
             "dascore",
-            "migrate-to-v1",
-            "start-task",
-            "test-beta",
+            "dascore-migrate-to-v1",
+            "dascore-start-task",
+            "dascore-test-beta",
         }
         descriptions = {k: v["description"] for k, v in doc_skills.get_skills().items()}
         for source in sources:
@@ -122,19 +127,19 @@ class TestSkills:
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
     def test_install_over_links(self, tmp_path):
         """A linked or dangling skill folder is replaced, not written through."""
-        other = tmp_path / "other-environment" / "make-inventory"
+        other = tmp_path / "other-environment" / "dascore-make-inventory"
         other.mkdir(parents=True)
         procedure = other / "SKILL.md"
         procedure.write_text("Another installation's procedure.")
         target = tmp_path / "skills"
         target.mkdir()
-        (target / "make-inventory").symlink_to(other, target_is_directory=True)
-        (target / "add-format").symlink_to(
+        (target / "dascore-make-inventory").symlink_to(other, target_is_directory=True)
+        (target / "dascore-add-format").symlink_to(
             tmp_path / "deleted", target_is_directory=True
         )
         doc_skills.install_skills(target)
         assert procedure.read_text() == "Another installation's procedure."
-        for name in ("make-inventory", "add-format"):
+        for name in ("dascore-make-inventory", "dascore-add-format"):
             entry = target / name / "SKILL.md"
             assert not entry.parent.is_symlink()
             assert f"-m dascore skill {name}`" in entry.read_text(encoding="utf-8")
@@ -142,15 +147,19 @@ class TestSkills:
     def test_install_into_package(self, tmp_path, monkeypatch):
         """Installing into a directory that is the shipped skills changes nothing."""
         shipped = tmp_path / "skills"
-        for name in ("dascore", "make-inventory"):
+        for name in ("dascore", "dascore-make-inventory"):
             source = SKILL_PATH / name / "SKILL.md"
             copy = shipped / name / "SKILL.md"
             copy.parent.mkdir(parents=True)
             copy.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         monkeypatch.setattr(doc_skills, "SKILL_PATH", shipped)
-        before = (shipped / "make-inventory" / "SKILL.md").read_text(encoding="utf-8")
+        before = (shipped / "dascore-make-inventory" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
         doc_skills.install_skills(shipped)
-        after = (shipped / "make-inventory" / "SKILL.md").read_text(encoding="utf-8")
+        after = (shipped / "dascore-make-inventory" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
         assert before == after
 
     @pytest.mark.parametrize(
@@ -160,7 +169,7 @@ class TestSkills:
             (
                 ["skill", "unknown"],
                 1,
-                "Available skills: dascore, make-inventory",
+                "Available skills: dascore, dascore-add-format",
             ),
             (["skill", "dascore", "--bootstrap"], 2, "Use a skill name"),
         ],
@@ -185,59 +194,106 @@ class TestSkills:
 
 
 class TestCatalogValidation:
-    """Catch catalog mistakes without executing any recipe."""
+    """Catch mistakes in how pages and skill files pair, without running recipes."""
 
     @pytest.fixture
     def sources(self, tmp_path, monkeypatch):
-        """Use a tiny real YAML catalog and QMD document."""
-        recipe = tmp_path / "recipe.qmd"
-        recipe.write_text(
-            "---\ntitle: Recipe\ndescription: First description\n---\nProcedure."
+        """Use one tiny skill file and the page including it."""
+        skill = tmp_path / ".agents" / "skills" / "example" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            "---\nname: example\ndescription: First description\n---\n\n"
+            "# Example title\n\nProcedure.\n"
         )
-        catalog = tmp_path / "skills.yml"
-        catalog.write_text("example: recipe\n")
-        monkeypatch.setattr(doc_skills, "DOC_PATH", tmp_path)
-        monkeypatch.setattr(doc_skills, "source_paths", lambda: [recipe])
-        return catalog, recipe
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        recipe = docs / "recipe.qmd"
+        recipe.write_text(
+            "---\ntitle: Recipe\n---\n"
+            "{{< include ../.agents/skills/example/SKILL.md >}}\n"
+        )
+        pages = [recipe]
+        monkeypatch.setattr(doc_skills, "DOC_PATH", docs)
+        monkeypatch.setattr(doc_skills, "SKILL_PATH", skill.parent.parent)
+        monkeypatch.setattr(doc_skills, "source_paths", lambda: list(pages))
+        return skill, recipe, pages
 
-    def test_source_metadata(self, sources):
-        """Edits to the canonical recipe immediately update discovery metadata."""
-        _, recipe = sources
-        assert doc_skills.get_skills()["example"]["description"] == "First description"
-        recipe.write_text(
-            recipe.read_text().replace("First description", "Updated description")
-        )
+    def test_including_page(self, sources):
+        """The including page gives the title; the file gives the description."""
+        skill, _, _ = sources
+        info = doc_skills.get_skills()["example"]
+        assert info == {
+            "target": "recipe",
+            "title": "Recipe",
+            "description": "First description",
+        }
+        skill.write_text(skill.read_text().replace("First", "Updated"))
         assert (
             doc_skills.get_skills()["example"]["description"] == "Updated description"
         )
 
+    def test_named_in_front_matter(self, sources):
+        """A page holding a skill's procedure itself names it in its front matter."""
+        _, recipe, _ = sources
+        recipe.write_text("---\ntitle: Own text\nskill: example\n---\nProcedure.\n")
+        assert doc_skills.get_skills()["example"]["target"] == "recipe"
+
+    def test_page_less_skill(self, sources):
+        """A skill no page includes serves its file, titled by its heading."""
+        _, _, pages = sources
+        pages.clear()
+        info = doc_skills.get_skills()["example"]
+        assert info == {
+            "target": None,
+            "title": "Example title",
+            "description": "First description",
+        }
+        assert doc_skills.read_skill("example") == "# Example title\n\nProcedure.\n"
+
     @pytest.mark.parametrize(
         "text",
         [
-            "[]",
-            "Bad_Name: recipe",
-            "example: missing",
-            "example: ../private",
-            "example: 123",
+            "---\nname: example\ndescription: No heading\n---\nProcedure.\n",
+            "---\nname: example\n---\n# Title\n",
         ],
     )
-    def test_bad_catalog(self, sources, text):
-        """Catalog entries must name known documentation pages with valid aliases."""
-        catalog, _ = sources
-        catalog.write_text(text)
-        with pytest.raises(DocumentationError):
+    def test_bad_page_less_skill(self, sources, text):
+        """A page-less skill needs a file with a heading and a description."""
+        skill, _, pages = sources
+        pages.clear()
+        skill.write_text(text)
+        with pytest.raises(DocumentationError, match="needs a title and description"):
             doc_skills.get_skills()
 
-    @pytest.mark.parametrize("field", ["title", "description"])
-    def test_missing_metadata(self, sources, field):
-        """Each skill requires human-readable discovery metadata in its recipe."""
-        _, recipe = sources
-        recipe.write_text(
-            "\n".join(
-                x
-                for x in recipe.read_text().splitlines()
-                if not x.startswith(field + ":")
-            )
-        )
+    def test_untitled_page(self, sources):
+        """The page serving a skill needs a title."""
+        _, recipe, _ = sources
+        recipe.write_text(recipe.read_text().replace("title: Recipe\n", ""))
         with pytest.raises(DocumentationError, match="needs a title and description"):
+            doc_skills.get_skills()
+
+    def test_two_pages(self, sources):
+        """A skill is served by one page."""
+        _, recipe, pages = sources
+        copy = recipe.with_name("copy.qmd")
+        copy.write_text(recipe.read_text())
+        pages.append(copy)
+        with pytest.raises(DocumentationError, match="served by both"):
+            doc_skills.get_skills()
+
+    def test_unknown_skill(self, sources):
+        """A page cannot serve a skill that does not ship."""
+        _, recipe, _ = sources
+        recipe.write_text("---\ntitle: Recipe\nskill: missing\n---\n")
+        with pytest.raises(DocumentationError, match="unknown skills"):
+            doc_skills.get_skills()
+
+    def test_bad_name(self, sources):
+        """Skill folders need lowercase, hyphenated names."""
+        skill, _, pages = sources
+        pages.clear()
+        bad = skill.parent.with_name("Bad_Name") / "SKILL.md"
+        bad.parent.mkdir()
+        bad.write_text(skill.read_text())
+        with pytest.raises(DocumentationError, match="Invalid skill name"):
             doc_skills.get_skills()

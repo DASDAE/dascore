@@ -1,9 +1,11 @@
 ---
-name: test-beta
+name: dascore-test-beta
 description: Try the newest DASCore pre-release on an existing project's code and data in an isolated environment, compare it with the project's current version, and draft reports of what breaks.
 ---
 
-This procedure tries the newest DASCore pre-release on a real project without changing the project's environment, code, or data, and turns what breaks into reports the DASCore developers can act on. An agent can follow it directly from this page; the project does not need the pre-release installed first.
+# Test the latest DASCore pre-release
+
+This procedure tries the newest DASCore pre-release on a real project without changing the project's environment, code, or data, and turns what breaks into reports the DASCore developers can act on. An agent can follow it directly from this file; the project does not need the pre-release installed first.
 
 Throughout, `<project-python>` is the project's existing interpreter and `<beta-python>` is the absolute path of the new environment's interpreter. Use each interpreter where a step names it, even if other instructions say to use the project's interpreter for every command, and never run an install command with `<project-python>` during this procedure.
 
@@ -20,7 +22,7 @@ Throughout, `<project-python>` is the project's existing interpreter and `<beta-
 
    For a uv environment, use `uv pip install --python <beta-python> ...` with the same arguments. If the resolver refuses because of the project's own pins, report that conflict rather than relaxing them.
 5. **Confirm the install.** Run `<beta-python> -c "import dascore; print(dascore.__version__, dascore.__file__)"` and check that it reports the version from step 3 from inside the new environment. Use `<beta-python>` for everything that follows.
-6. **Migrate the copy.** Run `<beta-python> -m dascore skills` and read any migration skill covering the move from the project's version, such as `migrate-to-v1`. Apply only its code changes, to the copy. Do not upgrade environments, and do not delete, rewrite, or re-index the user's data or index files. Keep the changes minimal and separate from unrelated edits.
+6. **Migrate the copy.** Run `<beta-python> -m dascore skills` and read any migration skill covering the move from the project's version, such as `dascore-migrate-to-v1`. Apply only its code changes, to the copy. Do not upgrade environments, and do not delete, rewrite, or re-index the user's data or index files. Keep the changes minimal and separate from unrelated edits.
 7. **Run the tests.** Run the project's tests with `<beta-python>`, asking the user before running slow or network-dependent suites. Sort each failure into the project's own code needing migration, a change a migration guide covers, or a likely DASCore problem.
 8. **Compare results.** Run the representative operations with `<beta-python>` on the second data copy and compare them with the baseline from step 2: shapes, coordinates, units, attributes, and data values. A difference no migration guide explains is a finding even if nothing raised.
 9. **Reduce each finding.** For each likely DASCore problem, write the smallest script that reproduces it, preferably on an example from `dc.get_example_patch()` or `dc.get_example_spool()`. Search both open and closed [issues](https://github.com/DASDAE/dascore/issues) for an existing report.

@@ -1,5 +1,12 @@
 ---
 title: Migrate to DASCore 1.0
-keywords: [migration, upgrade, deprecation, breaking changes, "1.0"]
+description: The changes to check when moving code written for DASCore 0.1.x to 1.0.
 ---
-{{< include ../../.agents/skills/migrate-to-v1/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+:::{.callout-tip}
+The easiest way to migrate code written for DASCore 0.1.x is the [`dascore-migrate-to-v1` agent skill](https://github.com/DASDAE/dascore/blob/dev/dascore/.agents/skills/dascore-migrate-to-v1/SKILL.md), which holds this guide plus the steps an agent follows. Your agent can use it directly, without DASCore 1.0 installed first; see [agent onboarding](../tutorial/agents.qmd).
+:::
+:::
+
+{{< include ../../.agents/skills/dascore-migrate-to-v1/SKILL.md >}}

@@ -1,5 +1,4 @@
 ---
-keywords: [filtering, low pass, low frequency, downsampling]
 title: "Low-Frequency Processing"
 ---
 

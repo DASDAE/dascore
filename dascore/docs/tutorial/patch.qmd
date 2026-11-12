@@ -74,24 +74,13 @@ distance_max = patch.coords.max("distance")
 time_step = patch.coords.step("time")
 ```
 
-A coordinate may be associated with one or more dimensions, such as latitude along `distance`, or be independent of the data. See the advanced [coordinates tutorial](coords.qmd) for direct `BaseCoord` and `CoordManager` use.
+A coordinate may be associated with one or more dimensions, such as latitude along `distance`, or be independent of the data. See the [coordinates tutorial](coords.qmd) for working with coordinates directly.
 
 Dimension coordinates usually share a dimension's name, but that is not required. Auxiliary coordinates such as latitude commonly depend on `distance`; a quality grid may depend on both `distance` and `time`; deployment metadata can be independent of every dimension.
 
 String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting, but not units or numeric ranges. See [String coordinates](coords.qmd#string-coordinates) for examples and literal-label caveats.
 
-## Metadata without data
-
-[`PatchMeta`](`dascore.PatchMeta`) is everything a patch is apart from its data: coordinates, attrs and dtype. Scanning a file returns these, so a patch's shape and extents can be read without loading samples.
-
-```{python}
-meta = patch.drop_data()
-print(meta.shape, meta.dtype)
-
-patch_again = meta.to_patch(patch.data)
-```
-
-`drop_data` and `to_patch` are inverses. Operations which only describe data, such as `rename_coords`, run on a `PatchMeta`; those which compute samples need a `Patch`.
+To read a patch's shape and extents without its data, see [Metadata without data](large_archives.qmd#metadata-without-data).
 
 ## Attributes and summaries
 
@@ -177,7 +166,7 @@ assert tagged.attrs.data_id == patch.update_attrs(tag="cleaned").attrs.data_id
 assert tagged.attrs.data_id != patch.attrs.data_id
 ```
 
-A call which changes nothing returns the patch's own IDs, and stating `origin_id` or `data_id` in the call keeps what was stated — which is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
+A call which changes nothing returns the patch's own IDs, and stating `origin_id` or `data_id` in the call keeps what was stated — which is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](large_archives.qmd#finding-a-patch-by-id) for lookup.
 
 Those IDs are derived without reading anything. [`pin_id`](`dascore.Patch.pin_id`) reads the array instead and states a `data_id` hashed from the patch's content, so patches which arrived by different routes share one ID and everything derived afterwards builds on data checked here:
 
@@ -210,7 +199,7 @@ print(patch.get_patch_name())
 
 ## Select
 
-[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound. For xarray-compatible label or positional indexing, use [`Patch.sel`](`dascore.Patch.sel`) or [`Patch.isel`](`dascore.Patch.isel`), respectively; see [Xarray-style indexing](#xarray-style-indexing).
+[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound. For xarray-compatible label or positional indexing, use [`Patch.sel`](`dascore.Patch.sel`) or [`Patch.isel`](`dascore.Patch.isel`), respectively; see [Xarray-style indexing](xarray.qmd#xarray-style-indexing).
 
 ```{python}
 time = patch.get_coord("time")
@@ -266,39 +255,6 @@ window = patch.select(
 ```
 
 `select` and `order` accept slices as range shorthand; sample slices still require `samples=True`. Processing functions such as `pass_filter` and `taper` require tuples.
-
-## Xarray-style indexing
-
-[`Patch.sel`](`dascore.Patch.sel`) selects coordinate labels, and [`Patch.isel`](`dascore.Patch.isel`) selects sample positions. These methods were added for compatibility with xarray's `DataArray.sel` and `DataArray.isel`, respectively. Both accept a dictionary or keyword indexers and return a Patch. The supported subset is described below and tested directly against xarray.
-
-```{python}
-label_window = patch.sel(distance=slice(10, 20))
-sample_window = patch.isel(time=slice(0, 100, 2))
-repeated_channels = patch.isel(distance=[20, 10, 20])
-nearest_channel = patch.sel(distance=10.2, method="nearest", tolerance=0.5)
-```
-
-Label slices include both endpoints; positional slices exclude the stop and support negative indices and strides. Array indexers preserve the requested order and repetitions. Arrays on different dimensions select every combination: three distance indices and two time indices produce three channels with two samples each. Missing scalar or array labels and out-of-bounds scalar or array positions raise; positional slices clip to the available samples.
-
-A scalar indexer removes its dimension and retains the selected coordinate as a scalar. Use `drop=True` to remove coordinates made scalar by the selection, or a one-element list to retain a length-one dimension:
-
-```{python}
-channel = patch.isel(distance=3)
-assert "distance" not in channel.dims
-assert channel.get_array("distance").shape == ()
-channel_without_label = patch.isel(distance=3, drop=True)
-assert "distance" not in channel_without_label.coords
-one_channel_patch = patch.isel(distance=[3])
-assert one_channel_patch.shape[0] == 1
-point = patch.isel(distance=3, time=0)
-assert point.shape == ()
-```
-
-Associated coordinates follow the same indexing: a latitude coordinate along distance becomes scalar after selecting one channel, while a coordinate spanning distance and time retains its time axis. Selecting every dimension with scalar indexers produces a scalar Patch. Existing scalar coordinates are retained even with `drop=True`.
-
-`sel` supports exact matches and `method="nearest"`, with an optional tolerance. Quantities convert to the coordinate's units, including unit-bearing tolerances. Datetime strings use pandas' partial-date rules, and datetime tolerances are durations. Slices follow coordinate order, so a descending coordinate requires descending bounds. `isel` accepts 1D boolean masks and supports `missing_dims="raise"`, `"warn"`, or `"ignore"`.
-
-The supported subset covers dimension names and scalar, slice, and unlabelled 1D array indexers. Labelled xarray indexers, multidimensional indexer arrays, MultiIndexes, auxiliary-coordinate lookup, and forward/backward filling are not supported. Dimensions without coordinate labels use positional indexing. Use [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation, relative selections, and filtering that preserves dimensions and source order.
 
 ## Unselect and order
 

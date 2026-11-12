@@ -1,5 +1,5 @@
 ---
-name: make-namespace
+name: dascore-make-namespace
 description: Add methods to DASCore's Patch, Spool, Inventory, or AnnotationSet from a local namespace or a plugin package, and define patch processors and backend kernels.
 ---
 

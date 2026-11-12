@@ -81,7 +81,7 @@ Free-threaded CPython turns the GIL back on, for the rest of the process, when i
 Install [mpi4py](https://pypi.org/project/mpi4py/) and an MPI implementation:
 
 ```bash
-conda install -c conda-forge mpi4py openmpi
+mamba install -c conda-forge mpi4py openmpi
 ```
 
 Distribute spool indices by rank:

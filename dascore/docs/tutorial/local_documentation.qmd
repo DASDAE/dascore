@@ -1,6 +1,5 @@
 ---
 title: Local documentation
-keywords: [documentation, cli, agents, offline]
 ---
 
 Use the documentation that ships with the DASCore installed in your project's Python environment:
@@ -46,16 +45,7 @@ The first command shows matching lines with surrounding context; the second list
 
 ## Author keyword tags
 
-Keep subject keywords with their source document. Authored pages use Quarto frontmatter:
-
-```yaml
----
-title: Filtering data
-keywords: [filtering, bandpass, low pass]
----
-```
-
-API docstrings use a `Keywords` section containing comma-separated terms:
+Keep subject keywords with their source document. API docstrings use a `Keywords` section containing comma-separated terms:
 
 ```text
 Keywords

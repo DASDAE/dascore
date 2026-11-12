@@ -1,5 +1,4 @@
 ---
 title: Draft a release
-keywords: [release, changelog, version, tag]
 ---
-{{< include ../../.agents/skills/draft-release/SKILL.md >}}
+{{< include ../../.agents/skills/dascore-draft-release/SKILL.md >}}

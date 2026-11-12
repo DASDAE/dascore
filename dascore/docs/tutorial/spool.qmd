@@ -1,5 +1,4 @@
 ---
-keywords: [spool, chunking, overlapping chunks, gaps, archive]
 title: Spool
 execute:
   warning: false
@@ -60,24 +59,7 @@ read_only = dc.spool(index=directory / ".dascore_index.sqlite3")
 # dc.spool(index="https://example.com/data/.dascore_index.sqlite3")
 ```
 
-## Path attributes
-
-Directory names written as `key=value` become string attributes on index rows and loaded patches. Multiple pairs in one segment use `__`; path values override attributes stored in the file.
-
-```{python}
-root = Path(tempfile.mkdtemp())
-data_path = root / "experiment=demo" / "cable=north"
-data_path.mkdir(parents=True)
-dc.get_example_patch().io.write(data_path / "patch.h5", "DASDAE")
-
-partitioned = dc.spool(root).update()
-assert partitioned.get_contents()["experiment"].iloc[0] == "demo"
-assert partitioned[0].attrs["cable"] == "north"
-```
-
-Renaming a partition directory and calling `update()` refreshes path attributes without rereading file contents. Removing a path attribute may require rescanning the affected file so its stored value can be restored.
-
-Only directories below the spool root are parsed; the root and source filename are not. Values remain strings and support the normal attribute selectors. When a path key matches a coordinate, bare `select` targets the attribute; use `_coords` for the coordinate. See the [directory index note](../notes/spool_index.qmd) for update and indexing details.
+Directory names written as `key=value` become attributes of the patches beneath them; see [Path attributes](large_archives.qmd#path-attributes).
 
 # Accessing patches
 
@@ -116,7 +98,7 @@ tagged = diverse[rows["tag"] == "some_tag"]
 
 Displaying a spool shows its patch count, coordinate extents, and tracks for distinct patch kinds. Large spools omit the expensive summary according to [`display_max_patches`](configuration.qmd).
 
-A track groups patches with the same configured kind attributes and measures their span along time, or another available dimension. Single-kind spools omit redundant tracks because their overall extent already carries the same information. Tracks describe extents, not coverage; use `get_coverage` for missing-data statistics.
+A track groups patches with the same configured kind attributes and measures their span along time, or another available dimension. Single-kind spools omit redundant tracks because their overall extent already carries the same information. Tracks describe extents, not coverage; use [`get_coverage`](large_archives.qmd#gaps-and-coverage) for missing-data statistics.
 
 ```{python}
 dc.get_example_spool("diverse_das")
@@ -146,20 +128,6 @@ import re
 
 regex_tags = diverse.select(tag=re.compile(r"^some"))
 ```
-
-## Finding a patch by ID
-
-File-backed `origin_id` values are indexed, so a recorded ID can locate its source without loading every patch:
-
-```{python}
-wanted = spool.get_contents()["origin_id"].iloc[0]
-found = spool.select(origin_id=wanted)
-assert found[0].attrs.origin_id == wanted
-```
-
-`data_id` is also indexed. Attribute queries match the stored source ID. A value trim clears the ID in presented contents because the loaded patch names the window it read and so carries a different value; sample selections defer it until loading. Built or chunked spools may have no `origin_id`, and moving a source invalidates its derived IDs until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
-
-An empty ID after a file move is intentional: retaining the path-derived value would point at a source which no longer exists. Calling `update()` rebuilds the row from its new location.
 
 ## Unselect
 
@@ -208,41 +176,7 @@ assert len(source_pieces) == len(requested_chunks) == len(requested_plan.outputs
 
 Eligible whole-file merges read arrays directly and reconstruct coordinates and scalar attributes from the index. Members requiring trims, associated coordinates, or metadata the index cannot reproduce use the patch reader. Index-built results retain patch and processing identities and omit stored history. To retain stored history, load the members first, as in `dc.spool(list(file_spool)).chunk(time=None)`.
 
-Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
-
-## Filling bridged holes
-
-A chunk never yields a patch holding a hole: without `fill_value` a hole ends an output however wide the `tolerance`. With `fill_value`, a `tolerance` wide enough to span a hole merges the patches on either side and writes the missing samples, so the output is an ordinary evenly sampled patch.
-
-```{python}
-from dascore.examples import random_spool
-
-with_gaps = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
-filled = with_gaps.chunk(time=None, tolerance=300, fill_value=np.nan)
-```
-
-`tolerance` alone decides which holes are bridged: a hole it does not span separates patches as before, and nothing is filled across it. When a chunk length is given as well, the windows cover the whole bridged span, so one lying entirely inside a hole comes back as an all-fill patch and one the sources only partly feed is padded rather than left short. The fill value has to survive a cast to the data's own dtype, so `np.nan` needs float data; fill integer data with an integer, or cast it first. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) does the same to a patch you already hold.
-
-## Gaps and coverage
-
-[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports boundaries that `chunk` will not merge. [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same compatible groups.
-
-```{python}
-gaps = with_gaps.get_gaps()
-coverage = with_gaps.get_coverage()
-```
-
-```{python}
-second_scale_gaps = with_gaps.get_gaps(tolerance=1 * s)
-```
-
-`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; a patch with holes is one row, and the runs its index stores make its holes gaps like any other. `group_id` links coverage rows to their gaps.
-
-At the default tolerance of 1.5 samples, one missing sample counts as a gap. A quantity or timedelta bounds the excess over one step in coordinate units instead: a spacing is a gap when it exceeds `step + tolerance`. Coordinates judge their own gaps by the same rule (see [coordinates](coords.qmd#declaring-a-grid-and-finding-missing-samples)). Overlaps are not gaps; coverage calculates the union of available spans.
-
-Coverage groups use patch kind, dimensions, sampling rate, and coordinate structure. One metadata tag can therefore produce several rows when its patches cannot be combined safely.
-
-Use [`Spool.viz.coverage`](`dascore.viz.spool.coverage`) or [`Spool.viz.calendar`](`dascore.viz.spool.calendar`) to plot these summaries.
+Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary. To bridge holes while merging, or to report gaps and coverage, see [Large archives](large_archives.qmd#filling-bridged-holes).
 
 ## Concatenate
 
@@ -268,37 +202,7 @@ Patches that cannot concatenate remain in separate output groups. Values are ord
 loaded = spool.select(distance=(0, 100)).load()
 ```
 
-# Loading ahead
-
-Use [`Spool.iterate`](`dascore.core.spool.Spool.iterate`) to load upcoming patches in a background thread while processing the current patch:
-
-```{python}
-from contextlib import closing
-
-with closing(spool.iterate(max_in_flight=2)) as patches:
-    for current in patches:
-        processed = current.detrend("time")
-```
-
-A positive window requires thread support; use ordinary iteration or `max_in_flight=0` in WebAssembly. The limit counts upcoming patches; the current patch and any retained results are additional. Closing the iterator releases its loading thread even if the loop exits early. Ordinary iteration stays synchronous. The [parallel processing recipe](../recipes/parallelization.qmd) also shows how to scan directory updates with a reusable process executor.
-
-# Mapping
-
-[`Spool.map`](`dascore.core.spool.Spool.map`) eagerly applies a function to every patch. Chunk first to control work size.
-
-```{python}
-def distance_max(patch):
-    """Return each channel's maximum."""
-    return patch.aggregate("time", "max")
-
-
-mapped = spool.chunk(time=5, overlap=1).map(distance_max)
-result = dc.spool(mapped).concatenate(time=None)[0]
-```
-
-`map` returns a list by default. Wrap it with `dc.spool(...)` to continue using spool operations, as above. Active runtime configuration is propagated to thread and process workers.
-
-See the [parallel processing recipe](../recipes/parallelization.qmd) for executors and larger workflows.
+To load upcoming patches in the background, or apply a function to every patch, see [Large archives](large_archives.qmd#loading-ahead).
 
 # Inventory
 

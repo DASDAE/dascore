@@ -1,5 +1,5 @@
 ---
-name: draft-release
+name: dascore-draft-release
 description: DASCore development. Draft the next release by proposing the next v* tag and a categorized changelog from the PRs merged into the release branch (usually dev) since the last release.
 ---
 

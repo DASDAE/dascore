@@ -174,3 +174,19 @@ banner in the project's teal, the same in light and dark themes. */
         font-size: 0.95rem;
     }
 }
+
+/* Front page: highlight tiles and where-to-start cards. Each tile is one link. */
+.hl-tiles > p, .start-cards > p { display: contents; }
+.hl-tiles, .start-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0 1.5rem; }
+.hl-tile, .start-card { display: flex; flex-direction: column; align-items: center; gap: .3rem; padding: 1rem; text-align: center; border-radius: .6rem; background: rgba(var(--bs-primary-rgb), .06); color: inherit; text-decoration: none; transition: transform .15s, background .15s; }
+.hl-tile:hover, .start-card:hover { color: inherit; transform: translateY(-2px); background: rgba(var(--bs-primary-rgb), .1); }
+.hl-tile .bi { font-size: 1.6rem; line-height: 1; color: var(--bs-primary); }
+.hl-tile strong { font-size: 1rem; }
+.hl-tile > span:last-child, .start-card > span:last-child { font-size: .9rem; opacity: .85; }
+.start-cards { gap: 1rem; }
+.start-card { min-height: 16rem; justify-content: center; gap: .5rem; padding: 1.25rem; border-radius: .75rem; }
+.start-card .bi { font-size: 3.75rem; line-height: 1; color: var(--bs-primary); }
+.start-card .start-logo { width: 3.75rem; height: 3.75rem; margin: 0; }
+.start-card strong { font-size: 1.15rem; }
+@media (max-width: 800px) { .hl-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .hl-tiles, .start-cards { grid-template-columns: 1fr; } .start-card { min-height: 0; } }

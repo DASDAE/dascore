@@ -842,8 +842,14 @@ class Isel(PatchProcessor):
     Evenly sampled slice results stay compact; floating coordinate values can
     differ from xarray by rounding relative to the original range, as with `select`.
     Arrays preserve order and repetitions; arrays on multiple dimensions select
-    every combination of positions. Out-of-bounds scalar and array indices raise.
+    every combination of positions. Out-of-bounds scalar and array indices raise;
+    slices clip to the available samples. Boolean masks must be 1D.
     Labelled xarray indexers and multidimensional indexer arrays are not supported.
+
+    Associated coordinates follow the indexing: one along the indexed dimension
+    becomes scalar, and one spanning other dimensions keeps those axes. Scalar
+    indexers on every dimension give a scalar patch. Coordinates that were
+    already scalar are kept even with ``drop=True``.
 
     Examples
     --------
@@ -934,6 +940,9 @@ class Sel(PatchProcessor):
     This supports dimension coordinates, not arbitrary auxiliary coordinates or
     MultiIndexes. Labelled xarray indexers and multidimensional indexer arrays
     are not supported. Dimensions without labels use positional indexing.
+
+    Associated and scalar coordinates are handled as in
+    [`Patch.isel`](`dascore.Patch.isel`).
 
     Examples
     --------

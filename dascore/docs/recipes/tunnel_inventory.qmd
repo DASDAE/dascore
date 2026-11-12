@@ -1,8 +1,7 @@
 ---
-keywords: [inventory, geometry, deployment, validation]
 title: Create an inventory
 execute:
   warning: false
 engine: jupyter
 ---
-{{< include ../../.agents/skills/make-inventory/SKILL.md >}}
+{{< include ../../.agents/skills/dascore-make-inventory/SKILL.md >}}

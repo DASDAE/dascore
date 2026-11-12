@@ -1,5 +1,4 @@
 ---
 title: Start a task
-keywords: [contributing, worktree, environment, setup]
 ---
-{{< include ../../.agents/skills/start-task/SKILL.md >}}
+{{< include ../../.agents/skills/dascore-start-task/SKILL.md >}}
