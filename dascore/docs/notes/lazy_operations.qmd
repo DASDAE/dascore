@@ -2,7 +2,7 @@
 title: Lazy Operations
 ---
 
-A patch whose data are not read yet holds a [`LazyArray`](`dascore.lazy.array.LazyArray`): a [`Recipe`](`dascore.lazy.recipe.Recipe`), which says which stored samples fill which box of the array, and a chain of the operations run on it since. An operation on such a patch computes nothing. Its kernel appends the processor and its plan to the chain, and [`Patch.load`](`dascore.Patch.load`) runs the chain in memory. A later change will run the same chain a chunk at a time; the rules below are what make that possible without changing any result. The code cells execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
+A patch whose data are not read yet holds a [`LazyArray`](`dascore.lazy.array.LazyArray`): a [`Recipe`](`dascore.lazy.recipe.Recipe`), which says which stored samples fill which box of the array, and a chain of the operations run on it since. An operation on such a patch computes nothing. Its kernel appends the processor and its plan to the chain, and [`Patch.load`](`dascore.Patch.load`) runs the chain: on the whole array when that is small, and a chunk at a time when it is not. The rules below are what let the work be split without changing any result. The code cells execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
 
 ```{python}
 import numpy as np
@@ -21,7 +21,7 @@ print(out.backend, len(out.data.chain))
 
 ## The rules a lazy operation keeps
 
-**Chunk size is an implementation detail.** The result is the same, within floating-point precision, whether it was computed in memory or a chunk at a time, and it has the same `data_id`. An operation states what a chunk of its output needs of its input by returning a [chunk contract](`dascore.lazy.contract`) from [`chunk_contract`](`dascore.core.processor.PatchProcessor.chunk_contract`), given the input's dtype and its plan. Two exist so far: `Pointwise`, where an output chunk needs only the input chunk at the same place, and `Unchanged`, where the kernel hands its input back for that dtype and plan. A contract is decided from the dtype and the plan, never from the values: an operation whose no-op depends on the values, such as `fillna`, cannot state one.
+**Chunk size is an implementation detail.** The result is the same, within floating-point precision, whether it was computed in memory or a chunk at a time, and it has the same `data_id`. An operation states what a chunk of its output needs of its input by returning a [chunk contract](`dascore.lazy.contract`) from [`chunk_contract`](`dascore.core.processor.PatchProcessor.chunk_contract`), given the input's dtype and its plan. The contracts are listed [below](#the-contracts). A contract is decided from the dtype and the plan, never from the values: an operation whose no-op depends on the values, such as `fillna`, cannot state one.
 
 **Metadata is never lazy.** A lazy patch always has concrete coords, attrs, shape and dtype. They come from `get_metadata`, which runs when the operation is called and knows nothing of chunks, so it must state the dtype the kernel returns as well as the shape. [`load`](`dascore.lazy.array.LazyArray.load`) checks each step's result against what its metadata stated, and refuses a mismatch naming the processor. An operation whose metadata depends on the data cannot be lazy.
 
@@ -55,12 +55,52 @@ assert loaded.attrs.data_id == eager.attrs.data_id == out.attrs.data_id
 assert lazy.real() is lazy  # real data: nothing to do, as eagerly
 ```
 
+## The contracts
+
+A chunk is a box of the array: one slice for each axis. A contract says which box of its input a box of its output is computed from, and nothing else about chunks; no operation chooses a chunk size or loops over chunks.
+
+| Contract | A box of the output needs | Stated by |
+|---|---|---|
+| `Pointwise` | the same box of the input | `abs`, `real`, `imag`, `angle`, `conj` |
+| `Halo` | the same box and a fixed number of samples around it, stopping at the ends of the array | `median_filter`, `savgol_filter`, `gaussian_filter` |
+| `WholeAxis` | the whole of some axes, and the same place along the others | `pass_filter`, and the three above when their edge mode wraps |
+| `Window` | the same box moved by where a selection starts | `select` with ranges |
+| `Unchanged` | nothing: the kernel hands its input back | `real` and `conj` of real data, a `select` which keeps everything |
+
+The filters state a contract for `float32` and `float64` data only, the dtypes their kernels hand back unchanged. A query which does not resolve to one range for each dimension is no window and is refused: a `select` by an array of values or a mask, and what `unselect` and `order` build.
+
+A `Halo` kernel sees the true ends of the array in the chunks which hold them, so it treats them as it does eagerly, and what it makes of a cut end is trimmed off. A halo never reaches past an earlier selection: to a filter after a `select`, the window's ends are the array's.
+
+## How a chain runs
+
+[`dascore.lazy.execute`](`dascore.lazy.execute`) does the work in three separate steps.
+
+1. **Cut the result into boxes.** If no array the result needs is larger than the `lazy_block_size` setting, there is one box. Otherwise the box is halved along the first axis worth cutting until they fit. An axis an operation needs whole is not worth cutting, and nor is one already short beside its halo, so the block size is aimed for rather than promised.
+2. **Work out what each box reads.** Each step's contract is asked, last to first, which box of its input it needs. Nothing is read to answer, so every read is known before the first one happens.
+3. **Read and compute each box.** The recipe reads only the box needed, and each step's NumPy kernel runs on it, first to last.
+
+A selection therefore narrows what is read wherever it sits in the chain.
+
+```{python}
+from dascore.lazy.execute import chunk_boxes, read_schedule
+
+recipe = Recipe.from_source(ArraySource.full((8, 1_000), 1.0))
+coords = {"distance": np.arange(8), "time": np.arange(1_000)}
+big = dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
+
+chain = big.median_filter(time=5, samples=True).select(time=(100, 200), samples=True)
+boxes = chunk_boxes(chain.data)
+print(boxes, read_schedule(chain.data, boxes))
+```
+
+The whole result is still put together in memory; writing each box out as it is made is a later change.
+
 ## Where it happens
 
-[`kernel_for`](`dascore.core.processor.PatchProcessor.kernel_for`) answers the lazy backend with a class's own registered lazy kernel, or else with [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), for the first class in the MRO which computes, whether by a kernel it writes or one registered on it; a class with none stays metadata-only. The generic kernel asks for the contract only when it describes the kernel which runs -- the class stating it is the class owning that kernel, or a subclass of it -- and refuses an operation which overrides `reconcile`, which would be handed the lazy array. It then appends a pending node, recording the contract on it. `PatchProcessor` settles that node with the output shape, dtype and `data_id` once the result's attrs are final and before the patch is built.
+[`kernel_for`](`dascore.core.processor.PatchProcessor.kernel_for`) answers the lazy backend with a class's own registered lazy kernel, or else with [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), for the first class in the MRO which computes, whether by a kernel it writes or one registered on it; a class with none stays metadata-only. The generic kernel asks for the contract only when it describes the kernel which runs -- the class stating it is the class owning that kernel, or a subclass of it -- and refuses an operation which overrides `reconcile`, which would be handed the lazy array. For any contract but `Unchanged` it then appends a pending node, recording the contract on it. `PatchProcessor` settles that node with the output shape, dtype and `data_id` once the result's attrs are final and before the patch is built.
 
 ## Why not dask
 
-Dask plans its work as a graph holding a task for every chunk of every operation. For very large arrays, building and scheduling that graph costs more than the work it describes. A chain holds one node for each operation, whatever the size of the array, and how the work is split into chunks is decided only when it runs.
+Dask plans its work as a graph holding a task for every chunk of every operation. For very large arrays, building and scheduling that graph costs more than the work it describes. A chain holds one node for each operation, whatever the size of the array, and how the work is split into boxes is decided only when it runs.
 
 A dask array is still accepted as a patch's data, as any other array backend is, and its dispatch is unchanged: an operation runs on dask where its kernel can, and otherwise falls back to NumPy with a warning. None of the rules above hold for it. `Patch.load` reads a dask-backed patch into memory as well, and [`Spool.io.to_xarray`](`dascore.xarray.spool.spool_to_xarray`) builds dask arrays because that is how xarray defers a read. For data larger than memory within DASCore, the lazy backend is the one to use.

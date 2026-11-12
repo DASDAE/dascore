@@ -233,6 +233,17 @@ class DascoreConfig(BaseModel):
             "patch one block."
         ),
     )
+    lazy_block_size: int = Field(
+        default=268_435_456,  # 256 MiB
+        ge=0,
+        description=(
+            "Most any one array should hold, in bytes, while the operations "
+            "pending on lazy patch data are run. Data which would need a "
+            "larger one are computed a chunk at a time. It is aimed for "
+            "rather than promised: an operation which needs a whole axis "
+            "is given it. Zero computes everything in one piece."
+        ),
+    )
     remote_hdf5_max_blocks: int = Field(
         default=8,
         gt=0,
