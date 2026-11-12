@@ -341,9 +341,12 @@ class TestSegyTracePositions:
         }
         for name, values in expected.items():
             assert patch.coords.dim_map[name] == ("channel",)
-            assert np.allclose(patch.get_array(name), values, equal_nan=True)
+            assert np.allclose(
+                patch.get_array(name), values, rtol=0, atol=1e-6, equal_nan=True
+            )
         sub = dc.spool(path).select(channel=(1, 2))[0]
-        assert np.allclose(sub.get_array("x"), expected["x"][1:], equal_nan=True)
+        sub_x = sub.get_array("x")
+        assert np.allclose(sub_x, expected["x"][1:], rtol=0, atol=1e-6, equal_nan=True)
 
     def test_cdp_positions(self, tmp_path):
         """
