@@ -221,6 +221,8 @@ class TestSegyCompatibility:
             (13, "UTC File Time stamp: 2019/04/24 22:24:24.846233 (UTC)"),
             # As in Booth et al. (2020), doi:10.6084/m9.figshare.12410390.
             (11, "UTC Time stamp: 2019/04/24 22:24:24.846233 (UTC)"),
+            # As in conoco_segy_1.sgy.
+            (13, "GPS Time stamp: 2019/04/24 22:24:24.846233 (UTC)"),
         ],
     )
     @pytest.mark.parametrize("ascii_text", [False, True])
@@ -236,6 +238,12 @@ class TestSegyCompatibility:
         time = dc.spool(path)[0].get_coord("time")
         assert time.min() == np.datetime64("2019-04-24T22:24:24.846233")
         assert time.step == np.timedelta64(1, "ms")
+
+    def test_gps_time_stamp_file(self):
+        """A Silixa file stating a GPS time stamp starts at that stamp."""
+        pytest.importorskip("segyio")
+        time = dc.spool(fetch("conoco_segy_1.sgy"))[0].get_coord("time")
+        assert time.min() == np.datetime64("2017-07-28T18:05:57.734")
 
     @pytest.mark.parametrize(
         "stamp", ["2019/04/24 22:24:25.846233", "2019/13/24 22:24:24.846233"]
