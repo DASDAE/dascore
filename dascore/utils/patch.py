@@ -881,8 +881,7 @@ def get_patch_names(
     # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
     fields = list(attrs) + [field for pair in coord_fields for field in pair]
-    sub = df.reindex(columns=fields).pipe(_format_time_columns)
-    sub = sub.astype(object).fillna("").astype(str)
+    sub = df.reindex(columns=fields).pipe(_format_time_columns).astype(str).fillna("")
     out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
     return out
 
