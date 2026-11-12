@@ -13,6 +13,7 @@ from dascore.utils.misc import optional_import
 
 from .utils import (
     _get_coords,
+    _get_text_attrs,
     _open_segy,
     _parse_binary_header,
     _write_segy,
@@ -66,12 +67,18 @@ class SegyV1_0(FiberIO):  # noqa
         -----
         Trace headers store the start in whole seconds; a Silixa textual
         header time stamp within that second refines it.
+
+        The textual header is kept, one line per row, as the
+        `segy_text_header` attr. Where it says the values are proportional to
+        strain rate (Silixa), `data_type` is "strain_rate", and a stated scale
+        to nm/m/s sets `data_units` (eg "11600 nm/m/s" for "SC= X11600 TO
+        NM/M/S"), so `patch.convert_units("nm/m/s")` applies it.
         """
         segyio = optional_import(self._package_name)
         fi, text = _open_segy(resource, segyio)
         with fi:
             coords = _get_coords(fi, text)
-            attrs = dc.PatchAttrs()
+            attrs = dc.PatchAttrs(**_get_text_attrs(text))
             dtype = str(fi.dtype)
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype)]
 
