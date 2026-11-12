@@ -342,24 +342,28 @@ class TestH5Simple:
         assert read_names == scan_names
 
     @pytest.mark.parametrize(
-        ("root", "expected"),
+        ("root", "expected", "left"),
         [
-            ({"units": "microns"}, "microns"),
-            ({"units": "microns", "data_units": "m/s"}, "m/s"),
-            ({"units": "same as input"}, None),
+            ({"units": "microns"}, "microns", None),
+            ({"units": "microns", "data_units": "m/s"}, "m/s", "microns"),
+            ({"units": "same as input"}, None, "same as input"),
+            ({"units": 2.5}, None, 2.5),
         ],
     )
-    def test_root_units(self, h5simple_path, tmp_path, root, expected):
-        """A root units attr which parses is the data units, unless data_units is."""
+    def test_root_units(self, h5simple_path, tmp_path, root, expected, left):
+        """
+        A root units attr which parses is the data units, unless data_units is
+        present; otherwise it stays a plain units attr.
+        """
         path = tmp_path / "units.h5"
         shutil.copy(h5simple_path, path)
         with h5py.File(path, "r+") as h5:
             h5.attrs.update(root)
         units = None if expected is None else dc.get_quantity(expected)
-        for patch in (dc.read(path)[0], dc.scan(path)[0]):
+        read, scanned = dc.read(path)[0], dc.scan(path)[0]
+        for patch in (read, scanned):
             assert patch.attrs.data_units == units
-        if expected is None:  # prose is left as it was stored
-            assert dc.read(path)[0].attrs.get("units") == "same as input"
+        assert read.attrs.get("units") == left
 
     @pytest.mark.parametrize("name", ["__format__", "format", "file_format"])
     @pytest.mark.parametrize("value", ["h5simple", np.bytes_(b"h5simple")])

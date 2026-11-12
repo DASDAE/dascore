@@ -11,10 +11,11 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
-from dascore.io.utils import parse_units, resolve_keyed_source
+from dascore.io.utils import resolve_keyed_source
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import optional_import, suppress_warnings
+from dascore.xarray.patch import _cf_units
 
 from .utils import (
     dataset_to_patch_meta,
@@ -96,11 +97,17 @@ def _int_for_bool(attrs: dict) -> dict:
 
 
 def _take_file_units(dataset):
-    """Give a payload with no units the file's own, if they parse, in place."""
-    attrs = dataset[get_xarray_data_var_name(dataset)].attrs
-    units = dataset.attrs.get("units")
-    if not {"units", "data_units"} & set(attrs) and parse_units(units):
-        attrs["units"] = units
+    """
+    Copy the root ``units`` onto a payload with neither ``units`` nor
+    ``data_units``, in place, when they read as CF units (``m s-1``).
+    """
+    name = get_xarray_data_var_name(dataset)
+    attrs, units = dataset[name].attrs, dataset.attrs.get("units")
+    if {"units", "data_units"} & set(attrs) or not isinstance(units, str):
+        return
+    with suppress_warnings(UserWarning):  # text which is not units stays out
+        if _cf_units(units, name) is not None:
+            attrs["units"] = units
 
 
 def _takes_cf(resource: H5Reader) -> bool:
@@ -119,7 +126,8 @@ def _takes_cf(resource: H5Reader) -> bool:
 class _NetCDFReader:
     """Read NetCDF-4 through xarray, one patch per payload variable."""
 
-    # Whether a payload with no units takes the file's root ``units``.
+    # Whether a payload with no units takes the file's root ``units`` when
+    # they parse.
     _file_units = False
 
     def read_array(

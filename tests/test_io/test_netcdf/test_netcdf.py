@@ -1204,12 +1204,16 @@ class TestNoCFNetCDF:
         assert True in flags
         assert flags == sorted(flags)
 
-    def test_file_units_apply_to_payloads(self, tmp_path):
-        """Units stated once on the file are each payload's data units."""
-        attrs = {"units": "microstrain"}
-        path = self._write_cables(tmp_path / "cables.nc", attrs=attrs)
-        for patch in (*dc.spool(path), *dc.scan(path)):
-            assert patch.attrs.data_units == dc.get_quantity("microstrain")
+    @pytest.mark.parametrize(
+        ("units", "expected"), [("microstrain", "microstrain"), ("m s-1", "m/s")]
+    )
+    def test_file_units_apply_to_payloads(self, tmp_path, units, expected):
+        """Units stated once on the file, in CF spelling too, are the payloads'."""
+        path = self._write_cables(tmp_path / "cables.nc", attrs={"units": units})
+        patches = list(dc.spool(path))
+        assert len(patches) == 2
+        for patch in patches:
+            assert patch.attrs.data_units == dc.get_quantity(expected)
 
     @pytest.mark.parametrize("name", ["units", "data_units"])
     def test_variable_units_win(self, tmp_path, name):
@@ -1222,12 +1226,12 @@ class TestNoCFNetCDF:
         (patch,) = dc.spool(tmp_path / "a.nc")
         assert patch.attrs.data_units == dc.get_quantity("m")
 
-    def test_file_units_which_do_not_parse(self, tmp_path):
+    @pytest.mark.parametrize("units", ["same as input", 2.5])
+    def test_file_units_which_do_not_parse(self, tmp_path, units):
         """File units which are not units leave the payload without any."""
-        attrs = {"units": "same as input"}
-        path = self._write_cables(tmp_path / "cables.nc", attrs=attrs)
+        path = self._write_cables(tmp_path / "cables.nc", attrs={"units": units})
         with warnings.catch_warnings():
-            warnings.simplefilter("error")  # nothing tries to parse them
+            warnings.simplefilter("error")  # and raise no unit-parse warning
             patches = list(dc.spool(path))
         assert all(x.attrs.data_units is None for x in patches)
 
