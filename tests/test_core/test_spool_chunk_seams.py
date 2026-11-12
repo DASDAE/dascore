@@ -579,6 +579,7 @@ class TestWriters:
 
     def test_zarr_round_trip(self, drifting, tmp_path):
         """Zarr keeps the recorded labels exactly."""
+        pytest.importorskip("zarr")
         drifting.io.write(tmp_path / "out.zarr", "zarr")
         (back,) = dc.spool(tmp_path / "out.zarr")
         assert np.array_equal(
