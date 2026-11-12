@@ -17,7 +17,7 @@ A python library for distributed fiber optic sensing.
 
 [Code](https://github.com/DASDAE/dascore)
 
-Documentation [[stable](https://dascore.org), [development](https://dascore.netlify.app/)]
+Documentation [[stable](https://dascore.org), [pre-release](https://dascore.netlify.app/)]
 
 [Citation](https://seismica.library.mcgill.ca/article/view/1184)
 
