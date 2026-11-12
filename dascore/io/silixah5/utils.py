@@ -108,10 +108,10 @@ def _get_coords(attrs_dict, shape):
     return cm
 
 
-def _get_attr_dict(resource):
+def _get_attr_dict(resource, data_name="Acoustic", attr_map=_ATTR_MAP):
     """Get the attribute map."""
-    ds = resource["Acoustic"]
-    attrs_dict = maybe_get_items(ds.attrs, _ATTR_MAP)
+    ds = resource[data_name]
+    attrs_dict = maybe_get_items(ds.attrs, attr_map)
     drop_blank_attrs(attrs_dict, _BLANKABLE_ATTRS)
     convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     coords = _get_coords(attrs_dict, ds.shape)
@@ -241,4 +241,45 @@ def _get_carina_attrs_and_coords(resource, snap=()):
 def _get_carina_attr(resource, attr_cls, snap=()):
     """Get the attribute class and coordinates for a Carina-variant file."""
     attrs, coords = _get_carina_attrs_and_coords(resource, snap)
+    return _validate_attrs(attrs, attr_cls), coords
+
+
+# --- iDAS v2 (raw_das_data) variant helpers.
+# Older iDAS software (das_version 2.x) writes one int16 "raw_das_data"
+# dataset of shape (time, channel) whose attrs are all snake_case strings.
+# They map onto the V1 names, so the V1 coordinate rules apply: the file's
+# endtime is starttime + (samples - 1) / sampling_frequency_Hz.
+
+_IDAS2_DATA_NAME = "raw_das_data"
+_IDAS2_ATTR_MAP = {
+    "gauge_length_m": "gauge_length",
+    "sampling_frequency_Hz": "sampling_frequency",
+    "fibre_length_multiplier": "fiber_length_multiplier",
+    "start_distance_m": "start_distance",
+    "gps_time_stamp": "gps_timestamp",
+    "cpu_time_stamp": "cpu_timestamp",
+    "pulse_width_ns": "pulse_width",
+    "spatial_resolution_m": "spatial_resolution",
+    "host_name": "interrogator.name",
+}
+_IDAS2_EXPECTED_ATTRS = (frozenset(_IDAS2_ATTR_MAP) - {"host_name"}) | {
+    "das_version",
+    "samples",
+    "channels",
+}
+
+
+def _get_idas2_version_string(resource, version):
+    """Return version string if iDAS v2-variant Silixa h5, else False."""
+    dataset = resource.get(_IDAS2_DATA_NAME)
+    if len(getattr(dataset, "shape", None) or ()) != 2:
+        return False
+    if not _IDAS2_EXPECTED_ATTRS.issubset(dataset.attrs):
+        return False
+    return version
+
+
+def _get_idas2_attr(resource, attr_cls, snap=()):
+    """Get the attribute class and coordinates for an iDAS v2-variant file."""
+    attrs, coords = _get_attr_dict(resource, _IDAS2_DATA_NAME, _IDAS2_ATTR_MAP)
     return _validate_attrs(attrs, attr_cls), coords
