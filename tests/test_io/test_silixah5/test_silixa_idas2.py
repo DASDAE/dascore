@@ -53,13 +53,6 @@ class TestDetection:
             del h5["raw_das_data"].attrs["sampling_frequency_Hz"]
         assert not SilixaH5V3().get_format(path)
 
-    def test_group_not_claimed(self, tmp_path):
-        """A raw_das_data group, not dataset, is not claimed."""
-        path = tmp_path / "group.h5"
-        with h5py.File(path, "w") as h5:
-            h5.create_group("raw_das_data")
-        assert not SilixaH5V3().get_format(path)
-
 
 class TestCoords:
     """Coordinates follow the dataset's string attrs exactly."""

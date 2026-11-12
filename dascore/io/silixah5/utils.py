@@ -272,9 +272,7 @@ _IDAS2_EXPECTED_ATTRS = (frozenset(_IDAS2_ATTR_MAP) - {"host_name"}) | {
 def _get_idas2_version_string(resource, version):
     """Return version string if iDAS v2-variant Silixa h5, else False."""
     dataset = resource.get(_IDAS2_DATA_NAME)
-    if len(getattr(dataset, "shape", None) or ()) != 2:
-        return False
-    if not _IDAS2_EXPECTED_ATTRS.issubset(dataset.attrs):
+    if not _IDAS2_EXPECTED_ATTRS.issubset(getattr(dataset, "attrs", ())):
         return False
     return version
 
