@@ -55,7 +55,7 @@ Patches merge only when they agree on all four of these.
 
 A later patch which starts sooner than that overlaps: each sample is kept once and the earlier patch wins. It continues from the first of its own samples at least one step less `max_shift` past the earlier end, if that sample passes the test, and its earlier samples are dropped; otherwise its samples past the earlier end start a new stretch, and a patch with none is dropped. An overlap on the earlier patch's grid therefore joins, and one half a step off it splits.
 
-`tolerance`, off by default, widens the test: a number `t` also joins seams up to `t` steps wide, and a quantity (`1 * s`, `2 * m`) or a timedelta joins seams up to that width in the coordinate's units. Patches with no step have none to judge a seam against, so they join only under that form. A seam wider than 1.5 steps joined because of `tolerance` warns, as `chunk`'s default did in DASCore 0.1.24. Both forms are parsed by [`GapTolerance`](`dascore.utils.gaps.GapTolerance`), whose own test (used by coordinates' `get_discontinuities` and the waterfall's `gap_factor`) reads an absolute value as the excess over one step instead.
+`tolerance`, off by default, widens the test: a number `t` also joins seams up to `t` steps wide, and a quantity (`1 * s`, `2 * m`) or a timedelta joins seams up to that width in the coordinate's units. Patches with no step have none to judge a seam against, so they join where they overlap or touch, and otherwise only under that form. A seam wider than 1.5 steps joined because of `tolerance` warns, as `chunk`'s default did in DASCore 0.1.24, unless `fill_value` fills it, since then no labels are spread. A [`GapTolerance`](`dascore.utils.gaps.GapTolerance`) passed as `tolerance` keeps its own meaning, an absolute value being the excess over one step, as coordinates' `get_discontinuities` and the waterfall's `gap_factor` read it.
 
 ### Gap and coverage reports
 
@@ -155,7 +155,7 @@ assert rejoined[0].get_coord("time") == joined.get_coord("time")
 
 ## Regular windows
 
-A chunk length splits each stretch into half-open windows `[start, start + length)`, the first starting at the stretch's first label and each `length - overlap` after the previous one. A window holds exactly the samples whose positions on the stretch's grid fall inside it.
+A chunk length splits each stretch into half-open windows `[start, start + length)`, the first starting at the stretch's first label and each `length - overlap` after the previous one. A window holds exactly the samples whose labels on the stretch's grid fall inside it.
 
 - **No overlap:** windows split the samples with no repeats. A length that isn't a whole number of samples gives windows whose sample counts differ by one.
 - **With overlap:** windows stop at the first one holding the group's last sample, so the last window always holds a sample the previous one doesn't.

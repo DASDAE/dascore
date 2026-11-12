@@ -1537,7 +1537,7 @@ class FillGaps(PatchProcessor):
 
     Places runs of samples on one evenly sampled grid and writes `fill_value`
     where no sample sits, so a segmented coordinate (for example from
-    [`Spool.concatenate`](`dascore.Spool.concatenate`) across a gap)
+    [`Patch.select`](`dascore.Patch.select`) with a mask removing samples)
     becomes a plain range, unless a limit leaves wider holes as seams.
 
     Parameters

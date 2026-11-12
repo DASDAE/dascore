@@ -2350,9 +2350,9 @@ class Spool(NodeRepr, NamespaceOwner):
         so one on the earlier patch's grid opens no gap, while one off it
         (by half a step, say) opens one there.
 
-        Patches whose step is unknown join only under a tolerance stated
-        as a quantity or timedelta, so without one every seam between
-        them is a gap.
+        Patches whose step is unknown join where they overlap or touch,
+        and across a seam only under a tolerance stated as a quantity or
+        timedelta; without one, every such seam is a gap.
 
         See Also
         --------
@@ -2508,8 +2508,10 @@ class Spool(NodeRepr, NamespaceOwner):
             refitting the stretch's grid as v0.1.24 did (a seam wider than
             1.5 steps joined this way warns). A quantity or timedelta (eg
             `tolerance=1 * s`) is the widest seam joined, in the
-            coordinate's own units; it is the only way patches with no
-            step join.
+            coordinate's own units; patches with no step join where they
+            overlap or touch, and across a seam only under this form. A
+            `dascore.utils.gaps.GapTolerance` keeps its own meaning: its
+            excess is past one step.
         conflict
             {conflict_desc}
         group
@@ -2612,9 +2614,12 @@ class Spool(NodeRepr, NamespaceOwner):
         the roundest one its patches state which keeps every patch's first
         and last label within `max_shift` of its numbered position, or
         else the stretch's span spread evenly over its samples. So every
-        output is one evenly sampled run, and chunk outputs rejoin exactly.
-        A stretch holding a patch with no step keeps its labels as
-        recorded.
+        output is one evenly sampled run, and chunk outputs rejoin exactly,
+        except from a stretch holding a patch with no step, which keeps
+        its labels as recorded. So does a stretch whose even spread cannot
+        be stated on its coordinate's own ticks: a fractional step under
+        100 ticks, or a grid whose last label int64 ticks cannot place
+        within a tick of the recorded one.
 
         Data-size chunks measure only the data array and round sample counts down.
         Mixed dtypes are sized after promotion.
@@ -2682,10 +2687,9 @@ class Spool(NodeRepr, NamespaceOwner):
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
         every dimension, as `chunk` merges, so a gap still leaves several
-        patches. Windows join as `chunk` joins by default. A feature skips
-        any patch lacking a dimension it bounds. Selection includes both
-        ends, so the sample at a range's (half-open) maximum is kept; an
-        empty range gives nothing. A
+        patches. A feature skips any patch lacking a dimension it bounds.
+        Selection includes both ends, so the sample at a range's
+        (half-open) maximum is kept; an empty range gives nothing. A
         feature spanning a dimension keeps the spool's full extent along
         it, one holding no samples gives nothing, and overlapping features
         duplicate data. Nothing is loaded.

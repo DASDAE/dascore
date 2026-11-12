@@ -30,7 +30,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import CONFLICT, WARN_LEVELS, attr_conflict_description
-from dascore.core.coords import _GRID_RTOL, _MIN_FRACTION_TICKS
+from dascore.core.coords import _GRID_RTOL, _GRID_ULPS, _MIN_FRACTION_TICKS, Grid
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -931,11 +931,6 @@ def _inside_stated(start, stop, step, base, rows) -> pd.Series:
 
 # --- the seam test and one grid per stretch (coordinate rules 5 and 6)
 
-# A seam joined only by `tolerance` wider than this many steps warns, as
-# v0.1.24's default tolerance did.
-_TOLERANCE_WARNING = DEFAULT_TOLERANCE
-# How each piece meets the one before it, as chunk_plan's `reason` says it.
-_REASONS = {"first": "stretch", "gap": "gap", "shift": "seam", "tolerance": "tolerance"}
 # The diagnostic columns a plan's members carry and loading never sees.
 PIECE_COLUMNS = ("reason", "shift", "dropped")
 
@@ -987,38 +982,52 @@ def _as_values(numbers, like: np.dtype) -> np.ndarray:
     return np.asarray(numbers, dtype=like)
 
 
-def _step_numbers(step: pd.Series, time: bool) -> np.ndarray:
-    """Step magnitudes as float numbers (nanoseconds for time), NaN unknown."""
-    unknown = pd.isnull(step).to_numpy()
-    if time:
-        filled = pd.to_timedelta(step.where(~unknown, pd.Timedelta(0)))
-        out = filled.to_numpy().astype("m8[ns]").view(np.int64).astype(np.float64)
-    else:
-        out = pd.to_numeric(step, errors="coerce").to_numpy(dtype=np.float64)
-    return np.where(unknown, np.nan, np.abs(out))
-
-
-def _own_steps(lattice, width) -> np.ndarray:
+def _own_steps(lattice) -> np.ndarray:
     """Each row's exact spacing between its own labels, as a float."""
-    _, stride, den, *_ = lattice
-    stride = np.asarray(stride, dtype=np.float64)
+    _, stride, den, _, width, *_ = lattice
+    stride, width = (np.asarray(x, dtype=np.float64) for x in (stride, width))
     exact = np.where(den > 1, stride / den, np.where(stride > 0, stride, width))
     return np.where(np.isfinite(width) & (width > 0), exact, np.nan)
 
 
-def _precision(ticks: bool, step, *values) -> np.ndarray:
+def _precision(ticks: bool, step, narrow, *values) -> np.ndarray:
     """
-    What a label is known to: a tick, or float exactness.
+    What a label is known to: a tick, or float exactness in its stored dtype.
 
     A tick label is the floor of its grid position, so it is a tick short
     of it at most, and only on a fractional step, which is never under
     `_MIN_FRACTION_TICKS`; labels on a smaller whole step are exact.
+    ``narrow`` marks labels stored as float32.
     """
     if ticks:
         step = np.asarray(step, dtype=np.float64)
         return np.where(step >= _MIN_FRACTION_TICKS, 1.0, 0.0)
     biggest = np.max([np.abs(np.asarray(x, dtype=np.float64)) for x in values], 0)
-    return np.maximum(_GRID_RTOL * np.nan_to_num(step), 4 * np.spacing(biggest))
+    ulp = np.where(narrow, np.spacing(biggest.astype(np.float32)), np.spacing(biggest))
+    return np.maximum(_GRID_RTOL * np.nan_to_num(step), _GRID_ULPS * ulp)
+
+
+def _narrow(rows: pd.DataFrame, name: str) -> np.ndarray:
+    """Which rows store their labels as float32."""
+    stored = rows.get(f"_{name}_coord_dtype", pd.Series(None, index=rows.index))
+    return stored.astype(str).eq("float32").to_numpy()
+
+
+def _integer_ticks(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    The relation with integer labels as int64 ticks, as time is counted.
+
+    A frame holds integer labels as floats, exactly only under 2**53; past
+    that they stay floats, and `_fit_grids` fits them no grid.
+    """
+    cols = [f"{name}_min", f"{name}_max"]
+    stored = df.get(f"_{name}_coord_dtype", pd.Series(None, index=df.index))
+    values = df[cols].to_numpy()
+    if values.dtype.kind != "f" or not stored.astype(str).str.match("u?int").all():
+        return df
+    if not ((np.abs(values) < 2**53) & (values == np.rint(values))).all():
+        return df
+    return df.astype(dict.fromkeys(cols, np.int64))
 
 
 def _own_label_at(
@@ -1038,8 +1047,9 @@ def _own_label_at(
     base, stride, den, phase = (np.asarray(v)[rows] for v in lattice[:4])
     lat = (base, np.where(stride > 0, stride, 1), den, phase)
     offset = np.nan_to_num(np.asarray(offset, dtype=np.float64))
+    whole = np.ceil if after else np.floor  # the ticks on the side asked about
     if ticks:
-        x = first + np.rint(offset).astype(np.int64)
+        x = first + whole(offset).astype(np.int64)
         bump = 1
     else:
         x = first + offset
@@ -1058,7 +1068,7 @@ def _own_label_at(
             (np.ceil(k - 1e-9) if after else np.floor(k + 1e-9)) * own
         )
     steps = steps if snap else offset
-    guess = first + (np.rint(steps).astype(np.int64) if ticks else steps)
+    guess = first + (whole(steps).astype(np.int64) if ticks else steps)
     return np.where(stride > 0, found * forward, guess)
 
 
@@ -1079,23 +1089,23 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     """
     start, stop, step = get_interval_columns(sub, name)
     ticks = _counts_ticks(start.dtype)
-    width = _step_numbers(step, start.dtype.kind in "Mm")
     lattice = _sample_lattices(sub, name)
-    own = _own_steps(lattice, width)
+    own = _own_steps(lattice)
     signs = np.sign(to_float(step.to_numpy()))
     forward = -1 if np.nanmin(np.r_[signs, 1]) < 0 else 1
     low, high = _numbers(start.to_numpy()), _numbers(stop.to_numpy())
     first, last = (low, high) if forward > 0 else (-high, -low)
     order = np.lexsort((sub["_patch_row"].to_numpy(), first))
     first, last, own_o = first[order], last[order], own[order]
-    count = len(order)
-    reached = np.maximum.accumulate(last)
-    rows = np.arange(count)
-    owner = np.maximum.accumulate(np.where(last == reached, rows, 0))
-    reach = np.r_[last[:1], reached[:-1]]
+    reach = np.r_[last[:1], np.maximum.accumulate(last)[:-1]]
+    # the row ending furthest so far owns the seam; a row only reaching
+    # that end again adds nothing to it
+    extends = np.r_[True, last[1:] > reach[1:]]
+    owner = np.maximum.accumulate(np.where(extends, np.arange(len(order)), 0))
     owner = np.r_[0, owner[:-1]]
     seam_step = own_o[owner]
-    prec = _precision(ticks, seam_step, reach, first)
+    narrow = _narrow(sub, name)[order]
+    prec = _precision(ticks, seam_step, narrow | narrow[owner], reach, first)
     stepless = np.isnan(own_o)
     with np.errstate(invalid="ignore"):
         # how far past each row's first label its seam asks it to start
@@ -1133,12 +1143,12 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     with np.errstate(invalid="ignore"):
         dropped = np.where(stepless, 0, np.rint((lo - first) / own_o))
         kept = np.where(stepless, -1, np.rint((last - lo) / own_o) + 1)
-        missing = np.rint(delta / seam_step) - 1
+        missing = np.rint((lo - reach).astype(np.float64) / seam_step) - 1
     kept_count = np.where(keep, kept, 0)
     position = pd.Series(kept_count).groupby(stretch).cumsum().to_numpy() - kept_count
-    how = np.where(by_shift, "shift", "tolerance").astype(object)
+    how = np.where(by_shift, "seam", "tolerance").astype(object)
     how[opens] = "gap"
-    how[:1] = "first"
+    how[:1] = "stretch"
     lo_v, hi_v = (lo, last) if forward > 0 else (-last, -lo)
     gap_edges = (reach, lo) if forward > 0 else (-lo, -reach)
     out = pd.DataFrame(
@@ -1169,14 +1179,17 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
 
 
 def _tolerance_joins(delta, step, tolerance, prec) -> np.ndarray:
-    """Whether ``tolerance`` joins each seam: up to so many steps, or a width."""
+    """
+    Whether ``tolerance`` joins each seam: up to so many steps, a seam
+    width, or one step (counting nothing where unknown) plus an excess.
+    """
     if tolerance is None:
         return np.zeros(len(delta), dtype=bool)
     with np.errstate(invalid="ignore"):
         if tolerance.count is not None:
             return delta <= tolerance.count * step + prec
         width = _numbers(np.asarray(tolerance.excess))[()]
-        return delta <= width + prec
+        return delta <= width + (0 if tolerance.seam else np.nan_to_num(step)) + prec
 
 
 def _stretch_frame(df, name, cells, tolerance, max_shift) -> pd.DataFrame:
@@ -1198,15 +1211,15 @@ def _roundness(step: float) -> int:
     return min(len(x.replace(".", "")) for x in digits)
 
 
-def _stated_steps(rows: pd.DataFrame, name: str, lattice, ticks: bool, time: bool):
+def _stated_steps(lattice, ticks: bool):
     """
     Each row's stated step as a numerator and denominator of ticks.
 
     An exact fractional grid states its own; a whole-tick step is over
     one. A float step is its own numerator, over a denominator of zero.
     """
-    steps = _step_numbers(rows[f"{name}_step"], time)
-    _, stride, den, *_ = lattice
+    _, stride, den, _, width, *_ = lattice
+    steps = np.where(width > 0, width, np.nan).astype(np.float64)  # NaN unknown
     if not ticks:
         return steps, np.zeros(len(steps), dtype=np.int64)
     exact = (np.asarray(den) > 1) & (np.asarray(stride) > 0)
@@ -1223,10 +1236,14 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
     The grid starts at the stretch's first label. Its step is the roundest
     any row states (ties to the earliest) for which every row's first and
     last label lies within ``max_shift`` of its numbered position; failing
-    that it spreads the stretch evenly between its end labels. Returns a
-    frame with one row per partition describing its grid in value space
-    (``has`` is False for a stretch holding a row with no step, which has
-    none), and each row's largest move, in steps.
+    that it spreads the stretch evenly between its end labels. A stretch
+    holding a row with no step has no grid, nor has one whose step cannot
+    be stated on its own ticks: a fraction under `_MIN_FRACTION_TICKS`, a
+    step int64 cannot number unless approximated, and the approximation
+    moves the last label over a tick, or integers a float frame holds
+    inexactly. Returns
+    each partition's `Grid` (None without one), whether it relabels its
+    rows, and each row's largest move, in steps.
     """
     ticks, time = _counts_ticks(dtype), np.dtype(dtype).kind in "Mm"
     first, last = rows["_first"].to_numpy(), rows["_last"].to_numpy()
@@ -1243,7 +1260,7 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
     start = begin[codes]
     near = (first - start).astype(np.float64)
     far = (last - start).astype(np.float64)
-    prec = _precision(ticks, own, first, last)
+    prec = _precision(ticks, own, _narrow(rows, name), first, last)
     with np.errstate(divide="ignore", invalid="ignore"):
         lows = np.fmax(
             np.where(pos > 0, (near - prec) / (pos + max_shift), -np.inf),
@@ -1258,114 +1275,94 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
     high = grouped["high"].min().reindex(range(n_parts)).to_numpy()
     stepless = grouped["own"].apply(lambda x: x.isna().any())
     has = ~stepless.reindex(range(n_parts), fill_value=True).to_numpy(dtype=bool)
-    num, den = _stated_steps(rows, name, lattice, ticks, time)
+    has &= not ticks or first.dtype.kind != "f"
+    num, den = _stated_steps(lattice, ticks)
     stated = np.where(den > 0, num / np.maximum(den, 1), num) / (1e9 if time else 1)
     kinds, uniques = pd.factorize(stated, use_na_sentinel=False)
     rounds = np.asarray([_roundness(x) for x in uniques], dtype=np.int64)[kinds]
     fits = (own >= low[codes] * (1 - 1e-12)) & (own <= high[codes] * (1 + 1e-12))
+    fits &= (den > 0) | (not ticks)
     ranked = pd.DataFrame({"code": codes, "round": rounds, "pos": pos, "row": index})
     ranked = ranked[fits].sort_values(["code", "round", "pos"]).drop_duplicates("code")
     chosen = np.full(n_parts, -1, dtype=np.int64)
     chosen[ranked["code"].to_numpy()] = ranked["row"].to_numpy()
-    fitted = chosen >= 0
     count = pd.Series(end + 1).groupby(codes).max().reindex(range(n_parts))
     count = count.fillna(1).to_numpy(dtype=np.int64)
     finals = pd.Series(last).groupby(codes).max().reindex(range(n_parts)).to_numpy()
     sign = rows["_forward"].to_numpy()[head_rows]
-    pick = np.maximum(chosen, 0)
-    if ticks:
-        span = np.nan_to_num(finals - begin).astype(np.int64)
-        spread_num, spread_den = span, np.maximum(count - 1, 1)
-        common = np.gcd(spread_num, spread_den)
-        step_num = np.where(fitted, num[pick], spread_num // np.maximum(common, 1))
-        step_den = np.where(fitted, den[pick], spread_den // np.maximum(common, 1))
-        # labels are numbered in int64, so a step too fine for its count
-        # becomes the nearest one that is not (well under a tick off)
-        bounded = np.abs(step_num) * count.astype(np.float64) >= 2**62
-        for at in np.flatnonzero(bounded):
-            exact = Fraction(int(step_num[at]), int(step_den[at]))
-            limit = 2**62 // (int(count[at]) * (abs(int(exact)) + 1))
-            exact = exact.limit_denominator(max(limit, 1))
-            step_num[at], step_den[at] = exact.numerator, exact.denominator
-        step = step_num / np.maximum(step_den, 1)
-        origin, phase = (sign * begin).astype(np.int64), np.zeros(n_parts, np.int64)
-        # a stretch on its first row's own fractional grid keeps its phase
-        own_phase = fitted & (chosen == head_rows) & (sign > 0) & (step_den > 1)
-        own_phase &= ~bounded
-        if own_phase.any():
-            base, stride, lat_den, lat_phase = (
-                np.asarray(x)[head_rows] for x in lattice[:4]
-            )
-            at = np.where(
-                own_phase,
-                np.rint(((begin - base) * lat_den - lat_phase) / np.maximum(stride, 1)),
-                0,
-            ).astype(np.int64)
-            whole, rest = np.divmod(lat_phase + at * stride, np.maximum(lat_den, 1))
-            origin = np.where(own_phase, base + whole, origin)
-            phase = np.where(own_phase, rest, phase)
-        step_num = sign * step_num
-    else:
-        with np.errstate(divide="ignore", invalid="ignore"):
-            spread = (finals - begin) / np.maximum(count - 1, 1)
-        step = np.where(fitted, num[pick], spread)
-        origin, step_num = sign * begin, sign * step
-        step_den, phase = np.zeros(n_parts, np.int64), np.zeros(n_parts, np.int64)
+    base, stride, lat_den, lat_phase = (np.asarray(x) for x in lattice[:4])
+    grids = [None] * n_parts
+    for part in np.flatnonzero(has):
+        pick, top, size = chosen[part], head_rows[part], int(count[part])
+        spread = finals[part] - begin[part]
+        if not ticks:
+            step = num[pick] if pick >= 0 else spread / max(size - 1, 1)
+            grids[part] = Grid(sign[part] * begin[part], sign[part] * step, 0, size)
+            continue
+        terms = (num[pick], den[pick]) if pick >= 0 else (spread, max(size - 1, 1))
+        step = exact = Fraction(*(int(x) for x in terms))
+        if step.numerator * size >= 2**62:  # the closest step int64 can number
+            step = exact.limit_denominator(2**62 // (size * (int(exact) + 1)) or 1)
+        moved = abs((size - 1) * step // 1 - (size - 1) * exact // 1)
+        fine = step.denominator > 1 and step < _MIN_FRACTION_TICKS
+        if fine or moved > 1 or step.numerator * size >= 2**62:
+            continue  # no grid states it on its ticks: the labels stay
+        origin = int(sign[part] * begin[part])
+        grid = Grid(origin, int(sign[part] * step.numerator), step.denominator, size)
+        if pick == top and lat_den[top] > 1 and sign[part] > 0:
+            # a stretch on its first row's own fractional grid keeps its phase
+            args = (int(base[top]), int(stride[top]), int(lat_den[top]), size)
+            grid = Grid(*args, phase=int(lat_phase[top]))
+            grid = grid.sliced(int(grid.index_of(origin, True)), 1, size)
+        grids[part] = grid
     # one whole row on its own grid already has the stretch's labels
     sizes = np.bincount(codes, minlength=n_parts)
     dropped = rows["_dropped"].to_numpy()[head_rows]
-    alone = (sizes == 1) & fitted & (chosen == head_rows) & (dropped == 0)
-    table = pd.DataFrame(
-        {
-            "has": has,
-            "relabel": ~alone,
-            "step": step,
-            "count": count,
-            "origin": origin,
-            "num": step_num,
-            "den": step_den,
-            "phase": phase,
-        }
-    )
-    steps = step[codes]
+    relabel = (sizes > 1) | (chosen != head_rows) | (dropped != 0)
+    spacing = [np.nan if x is None else x.step_num / (x.step_den or 1) for x in grids]
+    steps = np.abs(np.asarray(spacing, dtype=np.float64))[codes]
     with np.errstate(invalid="ignore", divide="ignore"):
         shift = np.fmax(np.abs(near - pos * steps), np.abs(far - end * steps)) / steps
-    return table, np.where(has[codes], np.nan_to_num(shift), 0)  # no grid, no move
+    return grids, relabel, np.nan_to_num(shift)  # no grid, no move
 
 
-def _grid_labels(table, parts, positions, ticks):
-    """The value-space labels of positions on their stretches' grids."""
-    origin, num = table["origin"].to_numpy()[parts], table["num"].to_numpy()[parts]
-    positions = np.asarray(positions, dtype=np.int64)
-    if ticks:
-        den, phase = table["den"].to_numpy()[parts], table["phase"].to_numpy()[parts]
-        # `_fit_grids` keeps count * num, and so positions * num, in int64
-        return (origin + (phase + positions * num) // den).astype(np.int64)
-    # as `dascore.core.coords.Grid.labels` spaces a float run, bit for bit
-    count = table["count"].to_numpy()[parts]
-    final = (origin + num * count) - num
-    with np.errstate(invalid="ignore", divide="ignore"):
-        spacing = (final - origin) / (count - 1)
-    inner = np.where(count > 1, positions * spacing + origin, origin + positions * num)
-    return np.where(positions == count - 1, final, inner)
+def _grid_windows(grid, value, overlap, keep_partial):
+    """
+    The first and last position of each window on a stretch's grid.
 
-
-def _grid_windows(step, count, value, overlap, keep_partial, ticks):
-    """The first and last position of each window on a stretch's grid."""
-    span = (count - 1) * step
-    length = float(_numbers(np.asarray(value))[()])
-    hop = 0.0 if overlap is None else float(_numbers(np.asarray(overlap))[()])
-    # a time length is coerced to whole ticks, so one tick short of a
-    # fractional step still holds a sample
-    check = length if ticks and np.floor(step) <= length < step else step
-    windows = get_intervals(
-        0.0, span, length, overlap=hop, step=check, keep_partials=keep_partial
-    )
-    first = np.ceil(windows[:, 0] / step - 1e-9).astype(np.int64)
-    last = np.ceil(windows[:, 1] / step - 1e-9).astype(np.int64) - 1
-    last = np.minimum(last, count - 1)
-    keep = last >= first
-    return first[keep], last[keep]
+    Windows are measured from its first label and hold the samples whose
+    labels fall inside (rule 8); an exact grid places them on its ticks.
+    """
+    count = len(grid)
+    length = _numbers(np.asarray(value))[()]
+    hop = 0 if overlap is None else _numbers(np.asarray(overlap))[()]
+    if grid.exact:
+        one, last, after = (int(x) for x in grid.labels([0, count - 1, count], "i8"))
+        sign = 1 if grid.step_num > 0 else -1
+        step = abs(grid.step_num) // grid.step_den
+        windows = get_intervals(
+            0,
+            sign * (last - one),
+            length,
+            overlap=hop,
+            step=step,
+            keep_partials=keep_partial,
+            tail=sign * (after - last),
+        )
+        # an integer label is in a window from the first tick at or past its edge
+        whole = windows if windows.dtype.kind in "iu" else np.ceil(windows)
+        edges = one + sign * whole.astype(np.int64)
+        firsts, ends = grid.index_of(edges, True).astype(np.int64).T
+    else:
+        step = abs(grid.step_num)
+        span = (count - 1) * step
+        windows = get_intervals(
+            0.0, span, length, overlap=hop, step=step, keep_partials=keep_partial
+        )
+        firsts, ends = np.ceil(windows / step - 1e-9).astype(np.int64).T
+    lasts = np.minimum(ends - 1, count - 1)
+    keep = lasts >= firsts
+    return firsts[keep], lasts[keep]
 
 
 def _grid_members(windows, kept, kcodes, offsets, lattice, ticks):
@@ -2054,7 +2051,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance, max_shift):
     for group_id, label in enumerate(order):
         sub = df.loc[groups[label]]
         tol = _cell_tolerance(tolerance, sub, name)
-        seams = _cell_seams(sub, name, tol, max_shift)
+        seams = _cell_seams(_integer_ticks(sub, name), name, tol, max_shift)
         found = (seams["_joined"] == "gap").to_numpy() & seams["_keep"].to_numpy()
         opened = seams[found].sort_values("_gap_min")
         low, high = opened["_gap_min"].to_numpy(), opened["_gap_max"].to_numpy()
@@ -2105,7 +2102,11 @@ def build_gap_frame(
     """
     df, group_attrs, carried, names = _report_preamble(df, name, group, on_missing_dim)
     min_name, max_name, step_name = names
-    tolerance = None if tolerance is None else GapTolerance.from_user(tolerance, name)
+    tolerance = (
+        None
+        if tolerance is None
+        else GapTolerance.from_user(tolerance, name, seam=True)
+    )
     max_shift = resolve_max_shift(max_shift)
     columns = [min_name, max_name, step_name, "gap_size", "missing", "group_id"]
     columns += carried
@@ -2150,7 +2151,11 @@ def build_coverage_frame(
     """
     df, group_attrs, carried, names = _report_preamble(df, name, group, on_missing_dim)
     min_name, max_name, step_name = names
-    tolerance = None if tolerance is None else GapTolerance.from_user(tolerance, name)
+    tolerance = (
+        None
+        if tolerance is None
+        else GapTolerance.from_user(tolerance, name, seam=True)
+    )
     max_shift = resolve_max_shift(max_shift)
     columns = [
         min_name,
@@ -2259,7 +2264,7 @@ def build_chunk_plan(
         msg = "fill_value cannot be combined with explicit ranges on several dims."
         raise ParameterError(msg)
     if tolerance is not None:
-        tolerance = GapTolerance.from_user(tolerance, name)
+        tolerance = GapTolerance.from_user(tolerance, name, seam=True)
     max_shift = resolve_max_shift(max_shift)
     value = explicit if explicit is not None else (None if value is Ellipsis else value)
     # Police quantities before merge_mode is decided: a NaN magnitude is
@@ -2314,7 +2319,9 @@ def build_chunk_plan(
             )
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
-
+    frame_dtype = df[min_name].dtype
+    if explicit is None:
+        df = _integer_ticks(df, name)
     cells = _cell_labels(df, name, params["group"], params["sampling_group_tolerance"])
     df = _adopt_lone_steps(df, name, cells)
     if explicit is not None:
@@ -2345,18 +2352,18 @@ def build_chunk_plan(
     start_all = sorted_df[min_name].to_numpy()
     stop_all = sorted_df[max_name].to_numpy()
     ticks = _counts_ticks(start_all.dtype)
-    # an integer coordinate, which a frame holds as whole floats, is fitted
-    # in its own ticks
-    stored = {str(x) for x in sorted_df.get(f"_{name}_coord_dtype", ["float64"])}
+    # a grid labels in the dtype every source stores its labels in
+    stored = {str(x) for x in sorted_df.get(f"_{name}_coord_dtype", [""])}
     label_dtype = start_all.dtype
-    if len(stored) == 1 and min(stored).startswith(("int", "uint")):
-        label_dtype = start_all.dtype if np.mod(start_all, 1).any() else min(stored)
+    if len(stored) == 1 and min(stored).startswith(("int", "uint", "float")):
+        label_dtype = np.dtype(min(stored))
     mod_after = (
         sorted_df["_modified"].fillna(False).to_numpy(dtype=bool)
         if "_modified" in sorted_df.columns
         else np.zeros(len(sorted_df), dtype=bool)
     )
-    grids = None  # each stretch's grid (`_fit_grids`)
+    grids: list = []  # each stretch's grid (`_fit_grids`), if fitted
+    relabel = np.zeros(n_parts, dtype=bool)
     if explicit is not None:  # windows resolve their own overlaps
         lo_all, hi_all = start_all, stop_all
         keep_row = np.ones(len(start_all), dtype=bool)
@@ -2382,11 +2389,10 @@ def build_chunk_plan(
     if explicit is None:
         lattice = _sample_lattices(kept_df, name)
     if explicit is None and fill_value is None:  # a fill keeps source labels
-        grids, shift_all = _fit_grids(
+        grids, relabel, shift_all = _fit_grids(
             kept_df, kcodes, n_parts, name, max_shift, label_dtype, lattice
         )
-        gridded = grids["has"].to_numpy()
-        grid_steps, grid_counts = grids["step"].to_numpy(), grids["count"].to_numpy()
+        gridded = np.array([x is not None for x in grids], dtype=bool)
     regular = explicit is None and not merge_mode
     if regular:
         # a window covering a row with its own labels takes it as it is
@@ -2462,6 +2468,12 @@ def build_chunk_plan(
             # flooring granularity the finest the partition allows.
             sub = sorted_df.iloc[seg_starts[part] : seg_ends[part]]
             size_step = np.abs(step_all[seg_starts[part] : seg_ends[part]]).min()
+            if gridded[part]:  # sized on the grid's spacing, floored to a tick
+                grid = grids[part]
+                size_step = abs(grid.step_num)
+                size_step = size_step // grid.step_den if grid.exact else size_step
+                if start_all.dtype.kind in "Mm":
+                    size_step = np.timedelta64(int(size_step), "ns")
             try:
                 value_c, overlap_c, diag = _resolve_partition_length(
                     value, overlap, sub, name, size_step, df[min_name].dtype
@@ -2472,14 +2484,13 @@ def build_chunk_plan(
             if diag is not None:
                 size_diagnostics.append({"first_output_id": next_id, **diag})
         if gridded[part]:
-            step, count = grid_steps[part], int(grid_counts[part])
             if merge_mode:
-                firsts, lasts = np.array([0]), np.array([count - 1])
+                firsts, lasts = np.array([0]), np.array([len(grids[part]) - 1])
             else:
                 sub_sample[part] = value_c < abs(part_step)
                 try:
                     firsts, lasts = _grid_windows(
-                        step, count, value_c, overlap_c, keep_partial, ticks
+                        grids[part], value_c, overlap_c, keep_partial
                     )
                 except ChunkError:  # partition too short; skip (D8)
                     continue
@@ -2655,12 +2666,11 @@ def build_chunk_plan(
         if has_dtype:
             dtype_parts.append(_dtypes_of(part, m_counts, rel_src, fed))
     if pending:
-        assert grids is not None  # only a fitted stretch is pending
         # every stretch's windows at once: one search maps them onto rows
         win_parts = np.concatenate([np.full(len(x[3]), x[1]) for x in pending])
         win_first = np.concatenate([x[3] for x in pending])
         win_last = np.concatenate([x[4] for x in pending])
-        counts = np.where(gridded, grid_counts, 0)
+        counts = np.array([len(x) if x is not None else 0 for x in grids])
         # a stretch with no grid numbers no positions any window reaches
         offsets = np.where(gridded, np.r_[0, np.cumsum(counts)[:-1]], -(2**62))
         windows = (win_parts, win_first, win_last)
@@ -2671,22 +2681,18 @@ def build_chunk_plan(
         # every position belongs to a row, so every window is fed
         opens = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
         assert np.array_equal(rel_out[opens], np.arange(len(win_first)))
-        grid_ticks = _counts_ticks(label_dtype)
-        kind = np.int64 if grid_ticks else np.float64
-        ends = [
-            _grid_labels(grids, win_parts, x, grid_ticks) for x in (win_first, win_last)
+        kind = np.int64 if _counts_ticks(label_dtype) else label_dtype
+        ends = [  # a stretch's grid labels its windows' ends
+            np.concatenate([grids[x[1]].labels(x[k], kind) for x in pending])
+            for k in (3, 4)
         ]
-        relabel = grids["relabel"].to_numpy()[win_parts]
-        starts = np.where(
-            relabel,
-            _as_values(np.minimum(*ends).astype(kind), start_all.dtype),
-            np.minimum.reduceat(lo, opens),
-        )
-        stops = np.where(
-            relabel,
-            _as_values(np.maximum(*ends).astype(kind), start_all.dtype),
-            np.maximum.reduceat(hi, opens),
-        )
+        ends = [
+            _as_values(x, start_all.dtype)
+            for x in (np.minimum(*ends), np.maximum(*ends))
+        ]
+        moved = relabel[win_parts]
+        starts = np.where(moved, ends[0], np.minimum.reduceat(lo, opens))
+        stops = np.where(moved, ends[1], np.maximum.reduceat(hi, opens))
         win_edges = np.r_[0, np.cumsum([len(x[3]) for x in pending])]
         member_edges = np.searchsorted(rel_out, win_edges)
         for num, (slot, part, ids_p, firsts, lasts) in enumerate(pending):
@@ -2866,12 +2872,15 @@ def build_chunk_plan(
             skip=skip,
         )
     if explicit is None:
+        pieces = (grids, relabel, out_grids, repeats)
         outputs, members = _describe_pieces(
-            outputs, members, grids, out_grids, kept_df, src_rows, name, label_dtype
+            outputs, members, pieces, kept_df, src_rows, name, label_dtype
         )
         members["shift"] = shift_all[src_rows]
     outputs = _carry_grids(outputs, members, sorted_df, name)
-    return ChunkPlan(outputs, members, name, value, params)
+    # integers counted in ticks go back to the frame's floats
+    back = dict.fromkeys([min_name, max_name], frame_dtype)
+    return ChunkPlan(outputs.astype(back), members.astype(back), name, value, params)
 
 
 @compose_docstring(conflict_desc=attr_conflict_description)
@@ -3416,6 +3425,8 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
         base, steps = to_int(base), to_int(pd.to_timedelta(steps).to_numpy())
     width = np.abs(np.asarray(steps))
     stride = np.where(known, width, 0 * width)
+    if base.dtype.kind in "iu":  # integer labels sit on whole ticks
+        stride = np.where(stride % 1 == 0, stride, 0).astype(np.int64)
     den, phase = np.ones(len(rows), np.int64), np.zeros(len(rows), np.int64)
     codes, grids = pd.factorize(rows.get(f"_{name}_grid", blank))
     for code, grid in enumerate(grids):
@@ -3450,6 +3461,10 @@ def _member_samples(firsts, lasts, starts, ends, lattice):
     base, stride, den, phase, width, own_min, own_max = lattice
     kind, unit = firsts.dtype.kind, f"{firsts.dtype.kind}8[ns]"
     ticks = (lambda x: x.astype(unit).view(np.int64)) if kind in "Mm" else np.asarray
+    if (
+        kind in "iu"
+    ):  # an integer label is in a window from the tick at or past its edge
+        ticks = lambda x: np.ceil(x).astype(np.int64)  # noqa
     inside = np.maximum(firsts, starts)
     low, end, last = ticks(inside), ticks(ends), ticks(lasts)
     grid = (base, np.where(stride > 0, stride, 1), den, phase)
@@ -3652,75 +3667,54 @@ def _warn_tolerance_joins(seams: pd.DataFrame, name: str, tolerance) -> None:
         return
     joined = seams["_by_tolerance"].to_numpy(dtype=bool) & seams["_keep"].to_numpy()
     widths = seams["_seam"].to_numpy(dtype=np.float64)[joined]
-    if not (widths > _TOLERANCE_WARNING + 1e-9).any():
+    if not (widths > DEFAULT_TOLERANCE + 1e-9).any():
         return
     shown = f"{tolerance.count:g}" if tolerance.count is not None else tolerance.excess
     msg = (
         f"There is a gap in the patch along dimension {name} but a merge "
         f"tolerance of {shown} was used to force merging the patches. As a "
         "result, some chunked patches have their labels spread evenly across "
-        "the gap, increasing their sampling rate."
+        "the gap, lengthening their sampling step."
     )
     warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
 
 
-def _describe_pieces(outputs, members, grids, out_grids, rows, src, name, dtype):
+def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
     """
     State each output's slice of its stretch's grid, and why each piece starts.
 
     An output whose stretch has a grid it relabels states that grid's step
-    and slice (``_{name}_stretch``, which its members carry to assembly).
-    Each member says why it starts where it does (`reason`): one starting
-    where its source's kept labels do opens a stretch ("stretch" or "gap")
-    or joins the piece before it across a seam the seam test passes
-    ("seam") or only `tolerance` does ("tolerance"); any other starts a
-    window ("window").
+    and slice (``_{name}_stretch``, which its members carry to assembly);
+    one whose stretch has none says "labels", so assembly keeps its
+    labels as recorded. Each member says why it starts where it does
+    (`reason`): one starting where its source's kept labels do opens a
+    stretch ("stretch" or "gap") or joins the piece before it across a
+    seam the seam test passes ("seam") or only `tolerance` does
+    ("tolerance"); any other starts a window ("window").
     """
+    grids, relabel, out_grids, parts = pieces
     slices = [x if x is not None else (-1, 0, 0) for part in out_grids for x in part]
-    parts, firsts, sizes = (np.asarray(x, dtype=np.int64) for x in zip(*slices))
     step_col, grid_col = f"{name}_step", f"_{name}_grid"
     steps = outputs[step_col].to_numpy().copy()
     if steps.dtype.kind == "m":  # a frame may count steps more coarsely
         steps = steps.astype("m8[ns]")
     exact = list(outputs[grid_col]) if grid_col in outputs else [None] * len(outputs)
     specs = [None] * len(outputs)
-    fitted = parts >= 0
-    if grids is not None:
-        fitted &= grids["relabel"].to_numpy()[np.maximum(parts, 0)]
-    if fitted.any():
-        rows_of = parts[fitted]
-        terms = [grids[x].to_numpy()[rows_of] for x in ("origin", "num", "den")]
-        origin, num, den = terms
-        phase = grids["phase"].to_numpy()[rows_of]
-        count = grids["count"].to_numpy()[rows_of]
-        first, size = firsts[fitted], sizes[fitted]
-        if _counts_ticks(dtype):
-            ticks = np.rint(num / den).astype(np.int64)
-            time = np.dtype(dtype).kind in "Mm"
-            steps[fitted] = ticks.astype("m8[ns]") if time else ticks
-            # a slice keeps its grid exact, reduced as `Grid` reduces one
-            _, rest = np.divmod(phase + first * num, den)
-            common = np.gcd(np.gcd(np.abs(num), den), rest)
-            sliced = zip(num // common, den // common, rest // common, size)
-            fractional = den > 1
-            for out, terms_, frac in zip(np.flatnonzero(fitted), sliced, fractional):
-                exact[out] = tuple(int(x) for x in terms_) if frac else None
-            origin, num = origin.astype(np.int64), num.astype(np.int64)
-        else:
-            steps[fitted] = num
-            for out in np.flatnonzero(fitted):
-                exact[out] = None
-        found = zip(
-            origin.tolist(),
-            num.tolist(),
-            den.tolist(),
-            count.tolist(),
-            phase.tolist(),
-            first.tolist(),
-            size.tolist(),
+    for out, (part, first, size) in enumerate(slices):
+        if not grids or (part >= 0 and not relabel[part]):
+            continue
+        grid = grids[parts[out]]
+        if grid is None:
+            specs[out], exact[out] = "labels", None
+            continue
+        piece = grid.sliced(first, 1, size)
+        steps[out] = piece.step(dtype)
+        fraction = piece.step_den > 1
+        exact[out] = (
+            (piece.step_num, piece.step_den, piece.phase, size) if fraction else None
         )
-        for out, spec in zip(np.flatnonzero(fitted), found):
-            specs[out] = (*spec, str(dtype))
+        terms = (grid.origin, grid.step_num, grid.step_den, len(grid), grid.phase)
+        specs[out] = (*terms, first, size, str(dtype))
     stretch_col = f"_{name}_stretch"
     outputs = outputs.assign(**{step_col: steps, grid_col: exact, stretch_col: specs})
     ids = outputs["output_id"].to_numpy()
@@ -3730,8 +3724,7 @@ def _describe_pieces(outputs, members, grids, out_grids, rows, src, name, dtype)
     down = rows["_forward"].to_numpy()[src] < 0
     edge = np.where(down, members[f"{name}_max"], members[f"{name}_min"])
     kept = np.where(down, rows["_hi"].to_numpy()[src], rows["_lo"].to_numpy()[src])
-    joined = pd.Series(rows["_joined"].to_numpy()[src]).map(_REASONS).to_numpy()
-    reason = np.where(edge == kept, joined, "window")
+    reason = np.where(edge == kept, rows["_joined"].to_numpy()[src], "window")
     members = members.assign(
         **{
             stretch_col: [specs[x] for x in position],
@@ -3751,7 +3744,7 @@ def stretch_coordinate(spec, units=None):
     coordinate's dtype. A float slice keeps its parent grid, so its labels
     are the stretch's bit for bit.
     """
-    from dascore.core.coords import Grid, get_coord  # noqa: PLC0415
+    from dascore.core.coords import get_coord  # noqa: PLC0415
 
     origin, num, den, count, phase, first, length, dtype = spec
     run = Grid(origin, num, den, count, phase=phase).sliced(first, 1, length)

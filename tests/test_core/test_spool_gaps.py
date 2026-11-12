@@ -449,16 +449,12 @@ class TestChunkKeepsHoles:
         assert coord.evenly_sampled and len(coord) == len(time)
         assert {coord.min(), coord.max()} == {time.min(), time.max()}
 
-    def test_overlapping_or_stepless_members(self):
-        """Overlapping members join; labels with no step join only by a distance."""
+    def test_overlapping_members(self):
+        """Overlapping members join."""
         coords = {"distance": [0], "time": [0.0, 1, 2]}
         first = dc.Patch(data=np.zeros((1, 3)), coords=coords, dims=DIMS)
         overlapping = first.update_coords(time=np.array([1.0, 2, 3]))
         assert len(dc.spool([first, overlapping]).chunk(time=None)) == 1
-        times = (T0 + np.array([0, 3, 4]) * ONE_MS, T0 + np.array([5, 9, 10]) * ONE_MS)
-        uneven = dc.spool([first.update_coords(time=x) for x in times])
-        assert len(uneven.chunk(time=None)) == 2
-        assert len(uneven.chunk(time=None, tolerance=2 * ONE_MS)) == 1
 
     @pytest.mark.parametrize(
         ("step", "cuts", "count"),

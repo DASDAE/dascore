@@ -662,15 +662,21 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
 
 
 def _get_merged_coord(
-    df, merge_dim, coords, drop_conflicting=False, tolerance=DEFAULT_TOLERANCE
+    df,
+    merge_dim,
+    coords,
+    drop_conflicting=False,
+    tolerance=DEFAULT_TOLERANCE,
+    fuse=True,
 ):
     """
     Get merged coordinates for patches combined along merge_dim.
 
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
-    a plain range; recorded seams otherwise), then, unless a member holds
-    labels with no step, simplified with bounded error: no value moves
+    a plain range; recorded seams otherwise), then, if ``fuse`` (a chunk
+    plan keeping a stretch's labels says not), simplified with bounded
+    error: no value moves
     more than the tolerance allows, `tolerance` steps for a count or the
     excess itself for a quantity or timedelta (see
     `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
@@ -687,8 +693,7 @@ def _get_merged_coord(
         return merge_coord_managers(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
-    # a stretch holding labels with no step keeps every label as recorded
-    if not any(_holds_labels(cm.coord_map[merge_dim]) for cm in coords):
+    if fuse:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
@@ -699,14 +704,7 @@ def _get_merged_coord(
     )
 
 
-def _holds_labels(coord) -> bool:
-    """Whether a coordinate holds a stored array of labels, which have no step."""
-    from dascore.core.coords import Labels  # noqa: PLC0415
-
-    return any(isinstance(x, Labels) for x in getattr(coord, "runs", ()))
-
-
-def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
+def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     """
     Force a merge of the patches along a dimension.
 
@@ -737,7 +735,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     conf = attr_kwargs.get("conflict", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
     new_coord = _get_merged_coord(
-        df, merge_dim, coords, drop_conf_coords, **coord_kwargs
+        df, merge_dim, coords, drop_conf_coords, fuse=fuse, **coord_kwargs
     )
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)

@@ -361,9 +361,10 @@ class TestSpoolToXarray:
         )
         spool = dc.spool([random_patch, gap])
         tol = dc.get_quantity("10 m")
-        # the joined seam is closed by the stretch's fit (rule 6), as chunk does
+        # a spread under 100 ticks keeps the recorded labels (rule 6)
         (merged,) = spool.chunk(distance=None, tolerance=tol)
-        assert merged.get_coord("distance").evenly_sampled
+        recorded = np.concatenate([x.get_array("distance") for x in spool])
+        assert np.array_equal(merged.get_array("distance"), recorded)
         tree = spool.io.to_xarray(dim="distance", tolerance=tol)
         leaves = self._leaves(tree)
         assert len(leaves) == 1

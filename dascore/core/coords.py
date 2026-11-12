@@ -4424,9 +4424,11 @@ def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
         if is_timedelta64(excess):
             # the limit was rounded to whole nanoseconds; allow that rounding
             excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
-        return int(Fraction(excess) // abs(exact))
-    scalar = step.step(coord.dtype)
-    return math.floor(float(np.divide(excess, np.abs(scalar))) * (1 + _GRID_RTOL))
+        whole = int(Fraction(excess) // abs(exact))
+    else:
+        ratio = float(np.divide(excess, np.abs(step.step(coord.dtype))))
+        whole = math.floor(ratio * (1 + _GRID_RTOL))
+    return max(whole - tolerance.seam, 0)  # a seam's width includes its step
 
 
 def _raise_string_coord_error(operation: str) -> NoReturn:

@@ -9,13 +9,17 @@ import warnings
 from fractions import Fraction
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.coords import get_coord
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordError, ParameterError
+from dascore.units import get_quantity
 from dascore.units import s as seconds
+from dascore.utils.chunk_plan import build_chunk_plan
+from dascore.utils.gaps import GapTolerance
 
 T0 = np.datetime64("2020-01-01T00:00:00", "ns")
 STEP = np.timedelta64(1_000_000, "ns")  # 1 ms
@@ -75,7 +79,10 @@ class TestSeamTest:
         ("width", "tolerance", "count", "warns"),
         [
             (1.0, None, 1, False),
+            (1.1, None, 1, False),
             (1.3, None, 2, False),
+            (2.3, None, 2, False),
+            (2.3, 2.3, 1, True),
             (4.0, None, 2, False),
             (1.3, 1.5, 1, False),
             (4.0, 1.5, 2, False),
@@ -123,30 +130,6 @@ class TestSeamTest:
             assert (coord.min(), coord.max()) == (T0, T0 + (18 + width) * STEP)
             assert np.array_equal(out[0].data, _joined(*spool))
 
-    def test_note_example(self):
-        """After 99 s with a 1 s step, 100.1 s joins and 101.3 s does not."""
-        step = np.timedelta64(1, "s")
-
-        def patch(start):
-            return _at(start, count=100, step=step)
-
-        assert len(dc.spool([patch(0), patch(100.1)]).chunk(time=None)) == 1
-        assert len(dc.spool([patch(0), patch(101.3)]).chunk(time=None)) == 2
-        late = dc.spool([patch(0), patch(101.3)])
-        with pytest.warns(UserWarning, match="gap"):
-            assert len(late.chunk(time=None, tolerance=2.3)) == 1
-
-    def test_tolerance_join_is_spread(self):
-        """A gap closed by tolerance is refitted evenly, ends unchanged."""
-        spool = _seam_spool(4.0)
-        with pytest.warns(UserWarning, match="gap"):
-            (patch,) = spool.chunk(time=None, tolerance=10)
-        coord = patch.get_coord("time")
-        assert len(coord) == 20
-        assert coord.min() == spool[0].get_coord("time").min()
-        assert coord.max() == spool[1].get_coord("time").max()
-        assert coord.evenly_sampled
-
     def test_quantity_tolerance_is_the_seam_width(self):
         """A quantity tolerance is the widest seam joined, not an excess."""
         spool = _seam_spool(1.3)
@@ -156,6 +139,22 @@ class TestSeamTest:
         assert len(spool.chunk(time=None, tolerance=1.25 * STEP)) == 2
         # a width under one step still leaves contiguous patches joined
         assert len(_seam_spool(1.0).chunk(time=None, tolerance=0.5 * STEP)) == 1
+
+    def test_gap_tolerance_keeps_its_excess(self):
+        """A GapTolerance's excess is past one step, in the plan and the fill."""
+        spool = _seam_spool(1.3)
+        excess = GapTolerance.absolute(0.35 * STEP)
+        plan = spool.chunk_plan(time=None, tolerance=excess)
+        assert len(plan.outputs) == 1 and plan.params["tolerance"] == excess
+        assert len(spool.chunk(time=None, tolerance=0.35 * STEP)) == 2
+        width = spool.chunk_plan(time=None, tolerance=1.35 * STEP).params["tolerance"]
+        assert "seam" in str(width) and "excess" in str(excess)
+        # a seam 2.4 steps wide misses one sample, which either form fills
+        wide = dc.spool([_at(0), _at(11.4)])
+        for tolerance in (GapTolerance.absolute(1.5 * STEP), 2.5 * STEP):
+            (filled,) = wide.chunk(time=None, tolerance=tolerance, fill_value=np.nan)
+            assert len(filled.get_coord("time")) == 21
+            assert np.isnan(filled.data).all(axis=0).sum() == 1
 
     def test_stepless_pieces_join_only_by_distance(self):
         """Labels with no step join only under a distance tolerance."""
@@ -280,35 +279,66 @@ class TestStretchGrid:
         assert coord == full
 
     def test_long_spread_stretch(self):
-        """A long drifting stretch still gets one grid, and ordered windows."""
-        step = np.timedelta64(1, "s")
-        spool = dc.spool([_at(i * 40_000.15, 40_000, step) for i in range(3)])
-        (patch,) = spool.chunk(time=None)
-        coord = patch.get_coord("time")
-        first, last = spool[0].get_coord("time").min(), spool[2].get_coord("time").max()
-        assert len(coord) == 120_000 and coord.evenly_sampled
-        assert coord.min() == first
-        assert abs(coord.max() - last) < np.timedelta64(1, "us")
-        starts = spool.chunk_plan(time=1000 * step).outputs["time_min"].to_numpy()
-        assert (np.diff(starts) > np.timedelta64(0, "ns")).all()
-        assert first <= starts.min() and starts.max() <= last
+        """An hour of drifting 1 kHz files is one grid, ending within a tick."""
 
-    def test_integer_spread_is_one_exact_grid(self):
-        """Integers spread evenly hold the exact fractional grid, as planned."""
+        def patch(num):
+            start = T0 + num * (60_000 * STEP + 15 * STEP // 100)
+            coords = {"time": get_coord(start=start, step=STEP, shape=(60_000,))}
+            data = np.zeros((1, 60_000), dtype=np.float32)
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        spool = dc.spool([patch(x) for x in range(60)])
+        (whole,) = spool.chunk(time=None)
+        coord = whole.get_coord("time")
+        assert len(coord.runs) == 1 and coord.evenly_sampled
+        assert coord.min() == spool[0].get_coord("time").min()
+        end = spool[-1].get_coord("time").max()
+        assert abs(coord.max() - end) <= np.timedelta64(1, "ns")
+        windows = spool.chunk(time=np.timedelta64(600, "s"), keep_partial=True)
+        (rejoined,) = windows.chunk(time=None)
+        assert rejoined.get_coord("time") == coord
+
+    def test_spread_past_a_tick_keeps_labels(self):
+        """A month of drifting files int64 cannot number within a tick."""
+        _, frame = dc.spool([_at(0, 60_000)])._plan_frames("time")
+        count, step = 43_200, 60_000 * STEP + 15 * STEP // 100
+        frame = pd.concat([frame] * count, ignore_index=True)
+        frame["time_min"] = T0 + np.arange(count) * step
+        frame["time_max"] = frame["time_min"] + 59_999 * STEP
+        frame["_patch_row"] = np.arange(count)
+        plan = build_chunk_plan(frame, time=None)
+        assert plan.outputs["_time_stretch"].tolist() == ["labels"]
+        # a day of the same files does get a grid
+        plan = build_chunk_plan(frame.iloc[:1440], time=None)
+        assert isinstance(plan.outputs["_time_stretch"].iloc[0], tuple)
+
+    @pytest.mark.parametrize("step", [10, 1000])
+    def test_integer_spread_rejoins(self, step):
+        """
+        Integers spread over 100 ticks or more hold the exact fractional
+        grid; a finer spread keeps its labels. Either way windows rejoin.
+        """
 
         def patch(start):
-            coord = get_coord(data=start + np.arange(10) * 10)
+            coord = get_coord(data=start + np.arange(10) * step)
             return dc.Patch(data=np.ones((1, 10)), coords={"x": coord}, dims=("y", "x"))
 
-        spool = dc.spool([patch(i * 102) for i in range(10)])
+        spool = dc.spool([patch(i * 102 * step // 10) for i in range(10)])
         (whole,) = spool.chunk(x=None)
         coord = whole.get_coord("x")
+        recorded = np.concatenate([x.get_array("x") for x in spool])
         assert coord.dtype == np.int64 and len(coord.runs) == 1
-        assert coord.step_exact == Fraction(1008, 99)
-        assert np.array_equal(coord.values, np.arange(100) * 1008 // 99)
-        windows = spool.chunk(x=250, keep_partial=True)
+        if step == 10:
+            assert np.array_equal(coord.values, recorded)
+            assert not coord.evenly_sampled
+        else:
+            assert coord.step_exact == Fraction(100_800, 99)
+            assert np.array_equal(coord.values, np.arange(100) * 100_800 // 99)
+        windows = spool.chunk(x=25 * step, keep_partial=True)
         labels = np.concatenate([x.get_array("x") for x in windows])
         assert np.array_equal(labels, coord.values)
+        (rejoined,) = windows.chunk(x=None)
+        assert rejoined.get_coord("x") == coord
         contents = windows.get_contents()
         assert contents["x_min"].tolist() == [x.get_coord("x").min() for x in windows]
         assert contents["x_max"].tolist() == [x.get_coord("x").max() for x in windows]
@@ -334,15 +364,84 @@ class TestStretchGrid:
 
     def test_windows_start_from_first_label(self):
         """Windows start at start + k * (length - overlap) on the stretch."""
-        spool = dc.spool([_at(i * 10 + 0.05 * i) for i in range(3)])
+        # the first label is off any epoch multiple of the 2 ms stride
+        spool = dc.spool([_at(i * 10 + 0.05 * i + 1.3) for i in range(3)])
         length, overlap = 2.5 * STEP, 0.5 * STEP
         out = spool.chunk(time=length, overlap=overlap)
         starts = [x.get_coord("time").min() for x in out]
         whole = spool.chunk(time=None)[0].get_coord("time")
-        for num, start in enumerate(starts):
-            window = whole.min() + num * (length - overlap)
-            expected = whole.values[whole.values >= window][0]
-            assert start == expected
+        windows = whole.min() + np.arange(15) * (length - overlap)
+        # a window is full when it ends no later than a step past the end
+        full = windows[windows + length <= whole.max() + STEP]
+        assert len(starts) == len(full) == 14
+        for start, window in zip(starts, full):
+            assert start == whole.values[whole.values >= window][0]
+
+    def test_drift_only_in_a_last_label(self):
+        """A patch whose own step pulls its end off a grid rules that grid out."""
+        slow = 1001 * STEP // 1000
+        late = get_coord(start=T0 + 1000 * STEP, step=slow, shape=(1000,))
+        spool = dc.spool([_at(0, 1000), _patch(late)])
+        coord = spool.chunk(time=None)[0].get_coord("time")
+        assert coord.step_exact not in (Fraction(1, 1000), Fraction(1001, 10**6))
+        assert coord.max() == late.max()
+
+    def test_drift_only_in_a_first_label(self):
+        """A patch starting off a grid it ends on rules that grid out too."""
+        start, fast = T0 + 2_000_300 * STEP // 1000, 9997 * STEP // 10_000
+        short = get_coord(start=start, step=fast, shape=(1000,))
+        spool = dc.spool([_at(0, 1000), _at(1000.15, 1000), _patch(short)])
+        (patch,) = spool.chunk(time=None)
+        step = patch.get_coord("time").step_exact
+        assert step not in (Fraction(1, 1000), Fraction(9997, 10**7))
+
+    def test_fractional_window_holds_the_labels_inside(self):
+        """A 1024 Hz grid missing its first sample keeps windows half open."""
+        full = get_coord(start=T0, step=Fraction(1, 1024), shape=(4096,))
+        patch = _patch(full).select(time=(1, None), samples=True)
+        labels = patch.get_coord("time").values
+        length = labels[1] - labels[0]  # one tick over the mean step
+        windows = dc.spool([patch]).chunk(time=length)
+        assert len(windows[0].get_coord("time")) == 1
+        for num, window in enumerate(windows):
+            start = labels[0] + num * length
+            inside = labels[(labels >= start) & (labels < start + length)]
+            assert np.array_equal(window.get_array("time"), inside)
+
+    def test_float32_envelope_is_the_last_label(self):
+        """A float32 stretch states the labels its patch holds."""
+
+        def patch(i):
+            values = np.arange(10) * 0.01 + i * 0.1005
+            coord = get_coord(data=values.astype(np.float32))
+            return dc.Patch(data=np.ones((1, 10)), coords={"x": coord}, dims=("y", "x"))
+
+        chunked = dc.spool([patch(i) for i in range(3)]).chunk(x=None)
+        last = chunked[0].get_coord("x").max()
+        assert chunked.get_contents()["x_max"].iloc[0] == last
+        assert len(chunked.select(x=(last, last))) == 1
+
+    def test_large_integer_labels_stay_exact(self):
+        """int64 labels past 2**53, which a float frame rounds, are kept."""
+        big = 1_600_000_000_000_000_001
+        coords = [get_coord(start=big + x, step=1000, shape=(10,)) for x in (0, 10**4)]
+        (patch,) = dc.spool([_patch(x) for x in coords]).chunk(time=None)
+        recorded = np.concatenate([x.values for x in coords])
+        assert np.array_equal(patch.get_array("time"), recorded)
+
+    def test_size_bound_on_the_fitted_step(self):
+        """A data size is resolved on the fitted grid's step, not the sources'."""
+        one = get_coord(start=0, step=1, shape=(1,))
+
+        def patch(start):
+            coords = {"y": one, "x": get_coord(start=start, step=1.0, shape=(10,))}
+            return dc.Patch(data=np.ones((1, 10)), coords=coords, dims=("y", "x"))
+
+        spool = dc.spool([patch(x) for x in (0.0, 9.85, 19.7)])
+        assert spool.chunk(x=None)[0].get_coord("x").step < 1
+        for size in (8, 40):
+            out = spool.chunk(x=get_quantity(f"{size} bytes"))
+            assert max(x.data.nbytes for x in out) <= size
 
 
 class TestOverlap:
@@ -381,6 +480,40 @@ class TestOverlap:
         outer = _at(0, 20)
         (patch,) = dc.spool([outer, _at(5, 5)]).chunk(time=None)
         _same(patch, outer.get_coord("time"), outer.data)
+
+    def test_nested_patch_never_owns_the_seam(self):
+        """A dropped patch ending where the earlier one does states no step."""
+        us = STEP // 1000
+        outer = _patch(get_coord(start=T0, step=us, shape=(101,)))
+        start = T0 + 94_800 * us // 1000
+        nested = _patch(get_coord(start=start, step=1040 * us // 1000, shape=(6,)))
+        later = _patch(get_coord(start=T0 + 101_230 * us // 1000, step=us, shape=(10,)))
+        assert nested.get_coord("time").max() == outer.get_coord("time").max()
+        assert len(dc.spool([outer, later]).chunk(time=None)) == 2
+        assert len(dc.spool([outer, nested, later]).chunk(time=None)) == 2
+
+    def test_overlap_gap_misses_nothing(self):
+        """A gap left by an overlap half a step off the grid misses no sample."""
+        gaps = dc.spool([_at(0), _at(5.5)]).get_gaps()
+        assert gaps["missing"].tolist() == [0]
+        assert (gaps["time_max"] - gaps["time_min"]).tolist() == [STEP / 2]
+
+    def test_fill_joins_labels_stating_a_step(self):
+        """Labels whose index states a step fill as the plan joined them."""
+
+        def patch(values):
+            coords = {"distance": [0], "time": get_coord(data=values)}
+            return dc.Patch(data=values[None, :], coords=coords, dims=DIMS)
+
+        spool = dc.spool([patch(np.arange(0.0, 10)), patch(np.arange(10.1, 20.1))])
+        (filled,) = spool.chunk(time=None, fill_value=-1.0)
+        assert len(filled.get_coord("time")) == 21
+
+    def test_float32_seam_within_stored_precision(self):
+        """A float32 seam is judged to float32 precision, as rule 5 says."""
+        values = [(x + np.arange(10)).astype(np.float32) for x in (1e6, 1e6 + 10.25)]
+        spool = dc.spool([_patch(get_coord(data=x)) for x in values])
+        assert len(spool.chunk(time=None)) == 1
 
 
 @pytest.fixture(scope="module")
@@ -423,6 +556,36 @@ class TestRejoin:
         _same(rejoined[0], whole.get_coord("time"), whole.data)
 
 
+class TestWriters:
+    """A chunked drifting integer coordinate is written exactly, or refused."""
+
+    @pytest.fixture(scope="class")
+    def drifting(self):
+        """Distances on a 10 step whose seams drift past max_shift in total."""
+        time = get_coord(start=T0, step=STEP, shape=(3,))
+        patches = []
+        for start in (0, 1001, 2003):
+            distance = get_coord(data=np.arange(start, start + 1000, 10))
+            coords = {"distance": distance, "time": time}
+            data = np.ones((len(distance), 3))
+            patches.append(dc.Patch(data=data, coords=coords, dims=DIMS))
+        (patch,) = dc.spool(patches).chunk(distance=None)
+        return patch
+
+    def test_prodml_refuses(self, drifting, tmp_path):
+        """PRODML states distance as a grid, so it refuses the labels."""
+        with pytest.raises(CoordError, match="evenly sampled"):
+            drifting.io.write(tmp_path / "out.h5", "prodml")
+
+    def test_zarr_round_trip(self, drifting, tmp_path):
+        """Zarr keeps the recorded labels exactly."""
+        drifting.io.write(tmp_path / "out.zarr", "zarr")
+        (back,) = dc.spool(tmp_path / "out.zarr")
+        assert np.array_equal(
+            back.get_array("distance"), drifting.get_array("distance")
+        )
+
+
 class TestPlanRecords:
     """chunk_plan says why each output starts, and what the fit did."""
 
@@ -447,18 +610,11 @@ class TestSnapCoordsDeprecated:
     """chunk always fits one grid per stretch; snap_coords is ignored."""
 
     @pytest.mark.parametrize("value", [True, False])
-    def test_warns(self, value):
-        """Passing snap_coords at all warns."""
-        spool = _seam_spool(1.1)
-        with pytest.warns(DeprecationWarning, match="snap_coords"):
-            spool.chunk(time=None, snap_coords=value)
+    def test_changes_nothing(self, value):
+        """Either value warns and gives the default, on files old snaps moved."""
+        spool = dc.spool([_at(i * 10 + 0.15 * i) for i in range(3)])
         with pytest.warns(DeprecationWarning, match="snap_coords"):
             spool.chunk_plan(time=None, snap_coords=value)
-
-    @pytest.mark.parametrize("value", [True, False])
-    def test_changes_nothing(self, value):
-        """Either value gives what the default gives, on files old snaps moved."""
-        spool = dc.spool([_at(i * 10 + 0.15 * i) for i in range(3)])
         with pytest.warns(DeprecationWarning, match="snap_coords"):
             given = spool.chunk(time=None, snap_coords=value)
         assert list(given) == list(spool.chunk(time=None))

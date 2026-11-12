@@ -583,9 +583,14 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
     the samples the plan numbered keeps the labels it was assembled with.
     """
     spec = row.get(f"_{dim}_stretch")
-    if not isinstance(spec, tuple) or dim not in coords.coord_map:
+    if dim not in coords.coord_map:
         return coords
     current = coords.coord_map[dim]
+    if spec == "labels" and len(getattr(current, "runs", ())) > 1:  # one list
+        labels = get_coord(data=current.values, units=current.units)
+        return coords._update_grid(dim, **{dim: labels})
+    if not isinstance(spec, tuple):
+        return coords
     dtype, (origin, num, den, *rest, stated) = np.dtype(current.dtype), spec
     spec = (origin, num, den, *rest, str(dtype))
     if dtype.kind in "Mm" and dtype != stated:  # the plan's ticks are nanoseconds
@@ -601,6 +606,15 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
         # the ones the plan numbered; they keep the labels they came with
         return coords
     return coords._update_grid(dim, **{dim: coord})
+
+
+def _fuses(rows: Sequence[Mapping], dim: str) -> bool:
+    """
+    Whether a merge may fuse its members' labels: as the plan judged them,
+    every member states a step and the plan keeps no stretch's labels.
+    """
+    keeps = (x.get(f"_{dim}_stretch") == "labels" for x in rows)
+    return not any(keeps) and not any(pd.isnull(x.get(f"{dim}_step")) for x in rows)
 
 
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
@@ -796,7 +810,8 @@ class PatchAssembler:
             info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
-            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
+            fuse = _fuses(df_dict_list, self.plan_dim)
+            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs, fuse=fuse)
         patches = [x["patch"] for x in out]
         if len(patches) == 1 and df_dict_list:
             patches = [_on_stretch_grid(patches[0], self.plan_dim, df_dict_list[0])]
@@ -874,7 +889,9 @@ class PatchAssembler:
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])
-        return self._assemble(data, dims, merge_dim, coords, attrs, defaults)
+        return self._assemble(
+            data, dims, merge_dim, coords, attrs, df_dict_list, defaults
+        )
 
     def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
@@ -961,7 +978,10 @@ class PatchAssembler:
         coords, attrs = metas[0].coords, metas[0].attrs
         if len(metas) > 1:
             coords, attrs = self._merged_meta(
-                self.plan_dim, [x.coords for x in metas], [x.attrs for x in metas]
+                self.plan_dim,
+                [x.coords for x in metas],
+                [x.attrs for x in metas],
+                rows,
             )
         coords = on_stretch_grid(coords, self.plan_dim, rows[0])
         if not all(known):
@@ -1027,11 +1047,11 @@ class PatchAssembler:
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
-        return self._assemble(buffer, dims, merge_dim, coords, attrs)
+        return self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
 
-    def _assemble(self, data, dims, merge_dim, coords, attrs, defaults=None):
+    def _assemble(self, data, dims, merge_dim, coords, attrs, rows, defaults=None):
         """Build the merged patch from the members' data, coords and attrs."""
-        coords, attrs = self._merged_meta(merge_dim, coords, attrs)
+        coords, attrs = self._merged_meta(merge_dim, coords, attrs, rows)
         # The merge drops empty and conflicting attrs, which the first
         # member's vendor model fills with its defaults; rows rebuild base
         # attrs, so restate them.
@@ -1044,7 +1064,7 @@ class PatchAssembler:
         with operation_context():
             return dc.Patch(data=data, coords=coords, attrs=attrs, dims=list(dims))
 
-    def _merged_meta(self, merge_dim, coords, attrs):
+    def _merged_meta(self, merge_dim, coords, attrs, rows):
         """The coordinates and attrs members merged along ``merge_dim`` have."""
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
@@ -1059,8 +1079,9 @@ class PatchAssembler:
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
         conf = attr_kwargs.get("conflict", None)
         drop_conflicting = conf in {"drop", "keep_first"}
+        fuse = _fuses(rows, merge_dim)
         new_coord = _get_merged_coord(
-            summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
+            summary_df, merge_dim, coords, drop_conflicting, fuse=fuse, **coord_kwargs
         )
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(

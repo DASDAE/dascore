@@ -1744,10 +1744,6 @@ class TestQuantityTolerance:
         assert len(coord) == sum(len(x.get_coord("time")) for x in spool)
         assert coord.min() == min(x.get_coord("time").min() for x in spool)
         assert coord.max() == max(x.get_coord("time").max() for x in spool)
-        # snap_coords is ignored, with a warning
-        with pytest.warns(DeprecationWarning, match="snap_coords"):
-            exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)
-        assert exact[0].get_coord("time") == coord
 
     def test_snapping_still_absorbs_sub_sample_jitter(self, random_patch):
         """Labels a fraction of a step off the grid do collapse to a range."""
@@ -1763,10 +1759,6 @@ class TestQuantityTolerance:
         snapped = spool.chunk(time=None, max_shift=0.4)[0].get_coord("time")
         assert snapped.evenly_sampled
         assert snapped.step == coord.step
-        # snap_coords=False is ignored, with a warning
-        with pytest.warns(DeprecationWarning, match="snap_coords"):
-            (exact,) = spool.chunk(time=None, max_shift=0.4, snap_coords=False)
-        assert exact.get_coord("time") == snapped
         values = np.concatenate([x.get_array("time") for x in spool])
         # no sample moved far enough to land on another grid position
         deviation = abs(snapped.values - values).max()
@@ -1775,7 +1767,8 @@ class TestQuantityTolerance:
     def test_plan_records_normalized_tolerance(self, random_spool):
         """The plan records the tolerance it actually used."""
         plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2 s"))
-        assert plan.params["tolerance"] == GapTolerance.absolute(get_quantity("2 s"))
+        width = GapTolerance(excess=get_quantity("2 s"), seam=True)
+        assert plan.params["tolerance"] == width
         plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2"))
         assert plan.params["tolerance"] == GapTolerance.samples(2.0)
 
@@ -3856,15 +3849,22 @@ class TestChunkFillWindows:
             assert coord.min() == row.time_min
             assert coord.max() == row.time_max
 
-    def test_windows_are_dropped_without_a_fill_value(self, spool_and_tolerance):
-        """The plan only publishes an output no source feeds when it can fill it."""
+    def test_every_window_has_a_source_without_a_fill_value(self, spool_and_tolerance):
+        """
+        Without a fill value no window is published that no source feeds:
+        the hole splits the stretch, or tolerance spreads labels over it.
+        """
         spool, tolerance = spool_and_tolerance
-        assert len(spool.chunk(time=1)) == 4
+        plan = spool.chunk_plan(time=1)
+        assert len(plan.outputs) == 4
+        assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
         # a tolerance alone spreads the two over the hole, 1001 samples over
         # 7.996 s, so every window has a source to draw from
         with pytest.warns(UserWarning, match="was used to force merging"):
+            plan = spool.chunk_plan(time=1, tolerance=tolerance)
             plain = spool.chunk(time=1, tolerance=tolerance)
-        assert len(plain) == 8
+        assert len(plan.outputs) == len(plain) == 8
+        assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
         assert {x.get_coord("time").step for x in plain} == {np.timedelta64(7996, "us")}
 
     def test_streaming_merge_fills(self, random_patch, tmp_path_factory):
