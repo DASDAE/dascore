@@ -328,7 +328,7 @@ class TestStretchGrid:
         """
 
         def patch(start):
-            coord = get_coord(data=start + np.arange(10) * step)
+            coord = get_coord(data=start + np.arange(10, dtype=np.int64) * step)
             return dc.Patch(data=np.ones((1, 10)), coords={"x": coord}, dims=("y", "x"))
 
         spool = dc.spool([patch(i * 102 * step // 10) for i in range(10)])
