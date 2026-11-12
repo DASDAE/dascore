@@ -110,6 +110,12 @@ class TestBinary:
         out = NokiaOFDRV1().read_array(binary_path, ((10, 10), (5, 40)), key="1")
         assert out.shape == (0, 35)
 
+    def test_scan_without_range_requests(self, to_http_path):
+        """A server ignoring Range headers scans through a local copy."""
+        with dc.config_context(allow_remote_cache_for_metadata=True):
+            spool = dc.spool(to_http_path("nokia_ofdr_1"))
+        assert [x.shape[0] for x in spool] == [1039, 284, 236]
+
     def test_window_across_chunks(self, binary_path, binary_spool):
         """A window spanning a chunk boundary equals that slice of the patch."""
         part = NokiaOFDRV1().read(

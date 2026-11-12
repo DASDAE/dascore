@@ -11,7 +11,7 @@ from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, step_from_rate, windows_to_slices
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.io import BinaryReader, LocalBinaryReader
+from dascore.utils.io import LocalBinaryReader, StreamBinaryReader
 
 from .utils import (
     _binary_time_step,
@@ -55,7 +55,7 @@ class NokiaOFDRV1(FiberIO):
     name = "NokiaOFDR"
     version = "1"
 
-    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+    def get_version(self, resource: StreamBinaryReader, **kwargs) -> str | None:
         """Return the version when the magic frames the file and the version is 1."""
         version = _get_binary_version(resource)
         return version if version == self.version else None
@@ -69,7 +69,7 @@ class NokiaOFDRV1(FiberIO):
         return array_info, array_start, nchunks, infos
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = ()
+        self, resource: StreamBinaryReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Describe one patch per stored span of the file."""
         array_info, *_, infos = self._infos(resource)
