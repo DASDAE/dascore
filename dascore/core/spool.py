@@ -18,7 +18,16 @@ from dataclasses import replace
 from datetime import timedelta
 from functools import partial, singledispatch
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    Self,
+    TypeVar,
+    overload,
+)
 
 import numpy as np
 import pandas as pd
@@ -192,6 +201,23 @@ class _InventoryQuery(NamedTuple):
 # neither end carries; every other dimension states its own magnitude
 # in its own units.
 _TIMES = _TIME_TYPES
+
+
+# Stands in for an argument the caller did not pass.
+_UNSET: Any = object()
+
+
+def _warn_snap_coords(snap_coords) -> None:
+    """Warn that chunk's `snap_coords`, if passed at all, has no effect."""
+    if snap_coords is _UNSET:
+        return
+    msg = (
+        "chunk's snap_coords is deprecated and has no effect from DASCore 1.0, "
+        "because chunk fits one grid to each stretch of joined patches. Use "
+        "Spool.concatenate to join patches keeping their recorded labels, and "
+        "Patch.snap_coords to regularize labels. Drop the argument."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
 
 
 def _stamp_key(feature, label) -> tuple:
@@ -2183,13 +2209,14 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
-        snap_coords: bool = True,
-        tolerance: float | Quantity | np.timedelta64 = 1.5,
+        snap_coords: Any = _UNSET,
+        tolerance: float | Quantity | np.timedelta64 | None = None,
         conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
         on_incomplete: WARN_LEVELS = "raise",
+        max_shift: float | None = None,
         **kwargs,
     ):
         """
@@ -2200,7 +2227,14 @@ class Spool(NodeRepr, NamespaceOwner):
         chunked spool would contain (envelopes, step, carried attributes),
         its `members` table shows exactly which slice of which source patch
         feeds each output, and `params` records every resolved parameter
-        (including the group attributes and sampling tolerance in effect).
+        (including the group attributes, sampling tolerance and `max_shift`
+        in effect). Each member also says why it starts where it does
+        (`reason`: "stretch" or "gap" where it opens a stretch of joined
+        patches, "window" where a window starts inside it, "seam" or
+        "tolerance" for the test which joined it to the piece before), how
+        far fitting its stretch's grid moved its labels (`shift`, in steps)
+        and how many of its samples an earlier patch's overlap dropped
+        (`dropped`).
         Accepts the same arguments as
         [`chunk`](`dascore.Spool.chunk`). A dimension can be an ``(n, 2)``
         array of absolute inclusive windows. Each requested window is checked
@@ -2217,13 +2251,16 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> # See which sources contribute to the first output patch.
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
+        >>> # and why each piece starts, and how far the grid moved it
+        >>> reasons = members[["reason", "shift", "dropped"]]
         """
+        _warn_snap_coords(snap_coords)
         _, plan = self._build_chunk_plan(
             kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
-            snap_coords=snap_coords,
             tolerance=tolerance,
+            max_shift=max_shift,
             conflict=conflict,
             group=group,
             on_missing_dim=on_missing_dim,
@@ -2252,28 +2289,33 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         dim: str = "time",
         *,
-        tolerance: float | Quantity | np.timedelta64 = 1.5,
+        tolerance: float | Quantity | np.timedelta64 | None = None,
+        max_shift: float | None = None,
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
         """
         Return a dataframe with one row per gap along a dimension.
 
-        Each row is a boundary that ``chunk`` would refuse to fill under the
-        same grouping and tolerance rules. A patch with holes enters a spool
-        as its contiguous pieces, so its holes are gaps like any other. A gap
-        a larger tolerance hides is still a chunk break unless ``fill_value``
-        is given.
+        Each row is a seam where ``chunk`` with the same arguments starts a
+        new patch: the later patch does not start one step after the
+        earlier one ends, give or take ``max_shift`` (nor within
+        ``tolerance``). A patch with holes enters a spool as its contiguous
+        pieces, so its holes are gaps like any other.
 
         Parameters
         ----------
         dim
             The dimension to look for gaps along.
         tolerance
-            The maximum number of samples patches can be spaced and still
-            count as contiguous, or a quantity or timedelta bounding the
-            excess over one sample in the coordinate's own units (eg
-            `1 * s`). Same meaning as chunk's `tolerance`.
+            Off by default. A number joins seams up to that many steps
+            wide; a quantity or timedelta (eg `1 * s`) joins seams up to
+            that width in the coordinate's own units. Same meaning as
+            chunk's `tolerance`.
+        max_shift
+            How far, as a fraction of a step, a seam may be from one step
+            wide and still join; None means `dascore.config.max_shift`.
+            Same meaning as chunk's `max_shift`.
         group
             Attributes which separate patches into unrelated groups; a gap
             is never reported between two groups. Defaults to the config
@@ -2294,19 +2336,23 @@ class Spool(NodeRepr, NamespaceOwner):
         step wider than the missing extent. Subtract the magnitude of
         the returned `{dim}_step` for the extent itself; the step keeps
         the coordinate's sign, which is negative for a descending one.
+        `missing` counts the samples the gap is missing, on the earlier
+        patch's step (NaN where it has none): a seam 1.3 steps wide is a
+        gap missing none.
 
         `group_id` names the group each gap belongs to, and is the
         column to join against
         [`get_coverage`](`dascore.core.spool.Spool.get_coverage`).
 
-        Overlapping and fully-nested patches never open a gap: each
-        boundary is measured against the furthest point reached so far,
-        not the previous row.
+        Each boundary is measured against the furthest point reached so
+        far, not the previous row. An overlapping patch continues from its
+        first sample at least one step less `max_shift` past that point,
+        so one on the earlier patch's grid opens no gap, while one off it
+        (by half a step, say) opens one there.
 
-        A sample-count tolerance scales the step, so patches whose step
-        is unknown report no gaps. An absolute tolerance needs no step
-        (an unknown one counts as nothing), so it reports their gaps like
-        any other patch's.
+        Patches whose step is unknown join only under a tolerance stated
+        as a quantity or timedelta, so without one every seam between
+        them is a gap.
 
         See Also
         --------
@@ -2326,11 +2372,17 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert len(gaps) == 2
         >>> # A contiguous spool has none.
         >>> assert random_spool().get_gaps().empty
+        >>> # A seam 1.3 steps wide is a gap missing no sample, unless a
+        >>> # tolerance spans it.
+        >>> late = random_spool(time_gap=np.timedelta64(1_200_000, "ns"), length=2)
+        >>> assert late.get_gaps()["missing"].tolist() == [0]
+        >>> assert late.get_gaps(tolerance=1.5).empty
         """
         out = build_gap_frame(
             self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
+            max_shift=max_shift,
             group=group,
             on_missing_dim=on_missing_dim,
         )
@@ -2340,7 +2392,8 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         dim: str = "time",
         *,
-        tolerance: float | Quantity | np.timedelta64 = 1.5,
+        tolerance: float | Quantity | np.timedelta64 | None = None,
+        max_shift: float | None = None,
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
@@ -2355,10 +2408,13 @@ class Spool(NodeRepr, NamespaceOwner):
         dim
             The dimension to measure along.
         tolerance
-            The maximum number of samples patches can be spaced and still
-            count as contiguous, or a quantity or timedelta bounding the
-            excess over one sample in the coordinate's own units (eg
-            `1 * s`). Same meaning as chunk's `tolerance`.
+            Off by default. A number joins seams up to that many steps
+            wide; a quantity or timedelta (eg `1 * s`) joins seams up to
+            that width in the coordinate's own units. Same meaning as
+            chunk's `tolerance`.
+        max_shift
+            How far, as a fraction of a step, a seam may be from one step
+            wide and still join; None means `dascore.config.max_shift`.
         group
             Attributes which separate patches into unrelated groups.
             Defaults to the config option `patch_kind_attrs`; sampling
@@ -2376,16 +2432,15 @@ class Spool(NodeRepr, NamespaceOwner):
         group's gaps as
         [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports them,
         `covered` is the rest, and `coverage` is `covered / span` (1.0
-        when the span is zero, meaning a single sample). `group_id`
-        matches the gap frame's, so the two join on it.
+        when the span is zero, meaning a single sample). `missing` sums
+        the samples the group's gaps miss (NaN where a gap's step is
+        unknown). `group_id` matches the gap frame's, so the two join on
+        it.
 
         Coverage is measured from the envelopes the index records for each
-        row. A hole is not visible in a group whose step is unknown: a
-        sample-count tolerance has nothing to scale there, so the group
-        reports no gaps and counts as fully covered. An absolute tolerance
-        does measure it. Gaps and coverage alike are what `chunk` would make
-        of the data with a `fill_value`, so a `coverage` of 1.0 says "nothing
-        chunk would refuse to fill", not "nothing missing".
+        row, at the seams `chunk` with the same arguments splits at, so a
+        `coverage` of 1.0 says "chunk joins all of it", not "nothing
+        missing".
 
         See Also
         --------
@@ -2409,6 +2464,7 @@ class Spool(NodeRepr, NamespaceOwner):
             self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
+            max_shift=max_shift,
             group=group,
             on_missing_dim=on_missing_dim,
         )
@@ -2419,13 +2475,14 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         overlap: numeric_types | timeable_types | None = None,
         keep_partial: bool = False,
-        snap_coords: bool = True,
-        tolerance: float | Quantity | np.timedelta64 = 1.5,
+        snap_coords: Any = _UNSET,
+        tolerance: float | Quantity | np.timedelta64 | None = None,
         conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
         on_incomplete: WARN_LEVELS = "raise",
+        max_shift: float | None = None,
         **kwargs,
     ) -> Self:
         """
@@ -2440,20 +2497,19 @@ class Spool(NodeRepr, NamespaceOwner):
             If True, keep the segments which are smaller than chunk size.
             This often occurs because of data gaps or at end of chunks.
         snap_coords
-            If True (default), simplify the coordinates of joined patches to
-            an evenly sampled range, absorbing the sub-sample jitter of
-            labels rounded on their way to a file. If False, joined
-            coordinates keep their exact labels.
+            Deprecated and ignored from DASCore 1.0, with a warning: `chunk`
+            always fits one grid to each stretch of joined patches. Use
+            [`Spool.concatenate`](`dascore.Spool.concatenate`) to join
+            patches keeping their recorded labels, and `Patch.snap_coords`
+            to regularize labels.
         tolerance
-            The maximum number of samples a block of data can be spaced (gap)
-            and still be considered contiguous. A quantity or timedelta
-            instead bounds the excess over one sample in the coordinate's
-            own units (eg `tolerance=1 * s` admits a spacing of one step
-            plus a second), which also works for patches whose sampling
-            interval is unknown. Either way a boundary of one sample is
-            contiguous. Without `fill_value` a missing sample always ends an
-            output, so a looser tolerance only matters with one. See
-            `dascore.utils.gaps.GapTolerance`.
+            Off by default. A number joins seams up to that many steps wide
+            as well as those `max_shift` joins, closing each gap by
+            refitting the stretch's grid as v0.1.24 did (a seam wider than
+            1.5 steps joined this way warns). A quantity or timedelta (eg
+            `tolerance=1 * s`) is the widest seam joined, in the
+            coordinate's own units; it is the only way patches with no
+            step join.
         conflict
             {conflict_desc}
         group
@@ -2477,18 +2533,27 @@ class Spool(NodeRepr, NamespaceOwner):
             applied; wholly absent requests still follow it. Other chunk
             modes retain their existing behavior.
         fill_value
-            If given, the value written into the samples missing from a
-            merge, so an output may span a hole `tolerance` spans. Without
-            it no output holds a hole. The value has to
-            survive a cast to the data's own dtype, so `np.nan` needs
-            float data; fill integer data with an integer, or cast it
-            first.
+            If given, a seam `tolerance` joins is filled with this value
+            rather than refitted, and every source keeps its labels. The
+            value has to survive a cast to the data's own dtype, so
+            `np.nan` needs float data; fill integer data with an integer,
+            or cast it first.
+        max_shift
+            How far, as a fraction of a step, a seam may be from one step
+            wide and still join: two patches join when the later starts one
+            step (the earlier patch's) after the earlier ends, give or take
+            this and the precision labels are stored in. A plain number,
+            0 <= max_shift < 0.5; None means `dascore.config.max_shift`
+            (0.2). It bounds each seam, not how far labels move in total.
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
-            Each window is half-open, ``[start, start + length)``, so
-            windows without overlap share no sample; only a final partial
-            window is dropped, unless ``keep_partial=True``.
+            Windows start at ``start + k * (length - overlap)`` from each
+            stretch's first label and are half-open, ``[start, start +
+            length)``, holding the samples whose labels on the stretch's
+            grid fall inside, so windows without overlap share no sample;
+            only a final partial window is dropped, unless
+            ``keep_partial=True``.
             The value may also be a quantity: one of the coordinate's own
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.
@@ -2517,6 +2582,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> size_chunked = spool.chunk(time=1 * megabytes)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
+        >>> # also join seams up to 1.5 steps wide, as v0.1.24 did by default
+        >>> released = spool.chunk(time=..., tolerance=1.5)
         >>> # merge across holes of up to 9 missing samples, filling them
         >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
         >>> # Request two independent absolute windows and inspect the plan.
@@ -2535,6 +2602,20 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Notes
         -----
+        Patches join into stretches across seams the seam test passes (see
+        `max_shift` and `tolerance`). Where patches overlap, each sample is
+        kept once and the earlier patch wins: a later patch continues from
+        its first sample at least one step less `max_shift` past the
+        earlier one's end, if that sample passes the seam test, and starts
+        a new stretch otherwise. Each stretch gets one grid before windows
+        are cut: it starts at the stretch's first label, and its step is
+        the roundest one its patches state which keeps every patch's first
+        and last label within `max_shift` of its numbered position, or
+        else the stretch's span spread evenly over its samples. So every
+        output is one evenly sampled run, and chunk outputs rejoin exactly.
+        A stretch holding a patch with no step keeps its labels as
+        recorded.
+
         Data-size chunks measure only the data array and round sample counts down.
         Mixed dtypes are sized after promotion.
 
@@ -2552,12 +2633,13 @@ class Spool(NodeRepr, NamespaceOwner):
         --------
         spool, chunking, overlapping chunks, gaps, archive
         """
+        _warn_snap_coords(snap_coords)
         source_rows, plan = self._build_chunk_plan(
             kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
-            snap_coords=snap_coords,
             tolerance=tolerance,
+            max_shift=max_shift,
             conflict=conflict,
             group=group,
             on_missing_dim=on_missing_dim,
@@ -2577,7 +2659,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         # read from the plan: its values are normalized (eg a dimensionless
         # tolerance is a plain multiple)
-        names = ("conflict", "snap_coords", "fill_value", "tolerance")
+        names = ("conflict", "fill_value", "tolerance")
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=replace(plan, outputs=plan.outputs.assign(**(stamp or {}))),

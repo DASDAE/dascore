@@ -1227,11 +1227,12 @@ class TestCombinations:
         backwards = derive([x.attrs.data_id for x in members[::-1]], merge_operation())
         assert merged.attrs.data_id != backwards
 
-    def test_merge_options_are_part_of_it(self, members):
-        """`snap_coords` changes the merged coordinate, so it changes the id."""
+    def test_ignored_merge_options_are_not_part_of_it(self, members):
+        """`snap_coords` no longer changes the merge, so it keeps the id."""
         snapped = dc.spool(members).chunk(time=None)[0]
-        exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
-        assert snapped.attrs.data_id != exact.attrs.data_id
+        with pytest.warns(DeprecationWarning, match="snap_coords"):
+            exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
+        assert snapped.attrs.data_id == exact.attrs.data_id
 
     def test_unencodable_merge_options(self, members):
         """The merge still happens; its id is nobody else's."""

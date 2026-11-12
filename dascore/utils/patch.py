@@ -51,7 +51,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -652,10 +652,8 @@ def _get_merge_dim(df) -> str | None:
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
-    coord_kwargs = {
-        "snap_coords": merge_kwargs.pop("snap_coords", True),
-        "tolerance": merge_kwargs.pop("tolerance", 1.5),
-    }
+    tolerance = merge_kwargs.pop("tolerance", None)
+    coord_kwargs = {"tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance}
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
@@ -663,20 +661,20 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
 
 
 def _get_merged_coord(
-    df, merge_dim, coords, drop_conflicting=False, snap_coords=True, tolerance=1.5
+    df, merge_dim, coords, drop_conflicting=False, tolerance=DEFAULT_TOLERANCE
 ):
     """
     Get merged coordinates for patches combined along merge_dim.
 
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
-    a plain range; recorded seams otherwise), then — when `snap_coords` —
-    simplified with bounded error: no value moves more than the tolerance
-    allows, `tolerance` steps for a count or the excess itself for a
-    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
-    members' own step is kept, so a merge across a hole (only where a
-    caller bridges holes, as `to_xarray` does) stays segmented rather than
-    being relabeled at a slower rate.
+    a plain range; recorded seams otherwise), then, unless a member holds
+    labels with no step, simplified with bounded error: no value moves
+    more than the tolerance allows, `tolerance` steps for a count or the
+    excess itself for a quantity or timedelta (see
+    `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
+    A chunk output whose stretch has a grid then takes its labels from
+    that grid (see `dascore.utils.patch_assembly.on_stretch_grid`).
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -688,7 +686,8 @@ def _get_merged_coord(
         return merge_coord_managers(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
-    if snap_coords:
+    # a stretch holding labels with no step keeps every label as recorded
+    if not any(_holds_labels(cm.coord_map[merge_dim]) for cm in coords):
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
@@ -697,6 +696,13 @@ def _get_merged_coord(
     return merge_coord_managers(
         coords, dim=merge_dim, drop_conflicting=drop_conflicting, dim_coord=merged
     )
+
+
+def _holds_labels(coord) -> bool:
+    """Whether a coordinate holds a stored array of labels, which have no step."""
+    from dascore.core.coords import Labels  # noqa: PLC0415
+
+    return any(isinstance(x, Labels) for x in getattr(coord, "runs", ()))
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):

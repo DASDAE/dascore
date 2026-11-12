@@ -1537,8 +1537,8 @@ class FillGaps(PatchProcessor):
 
     Places runs of samples on one evenly sampled grid and writes `fill_value`
     where no sample sits, so a segmented coordinate (for example from
-    [`Spool.chunk`](`dascore.Spool.chunk`) with `snap_coords=False` across a
-    gap) becomes a plain range, unless a limit leaves wider holes as seams.
+    [`Spool.concatenate`](`dascore.Spool.concatenate`) across a gap)
+    becomes a plain range, unless a limit leaves wider holes as seams.
 
     Parameters
     ----------

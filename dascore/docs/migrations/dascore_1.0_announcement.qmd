@@ -61,7 +61,7 @@ Pinning the pre-release this way keeps the other dependencies on stable releases
 There is now just one [`Spool`](`dascore.Spool`) class. Directory spools keep their index in SQLite, which supports concurrent readers, records every coordinate rather than only time, and scales to archives of a million patches. Selecting and chunking only plan against the index; no data are read until a patch is extracted.
 
 - [`Spool.get_gaps`](`dascore.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.Spool.get_coverage`) report what a spool holds and where it is missing; `Spool.viz.coverage` and `Spool.viz.calendar` draw it.
-- [`Spool.chunk`](`dascore.Spool.chunk`) now also accepts a `tolerance` in the coordinate's own units, a `fill_value` to bridge holes, and explicit arrays of windows.
+- [`Spool.chunk`](`dascore.Spool.chunk`) joins a patch to the one before when it starts one step after it ends, give or take `max_shift` (a fifth of a step by default), and fits one evenly sampled grid to each stretch it joins, so its windows rejoin exactly. `tolerance`, now off by default, widens that test as 0.1.x's default `tolerance=1.5` did, also in the coordinate's own units as a seam width; `fill_value` fills the holes it bridges; and `chunk` takes explicit arrays of windows. Its `snap_coords` argument is deprecated and ignored.
 - [`Spool.unselect`](`dascore.Spool.unselect`), [`Spool.load`](`dascore.Spool.load`), [`Spool.cut`](`dascore.Spool.cut`), and `Spool.iterate(max_in_flight=...)` round out selection and loading.
 - Hive-style `key=value` directory names become selectable attributes.
 

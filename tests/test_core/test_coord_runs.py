@@ -300,8 +300,11 @@ class TestFractionalGaps:
             full = full[2:-2]
         assert spool.get_gaps(tolerance=2).empty
         assert spool.get_gaps(tolerance=np.inf).empty
-        absolute = GapTolerance.absolute(float(full.step_exact))
+        # a distance tolerance is the seam's width, here two steps
+        absolute = GapTolerance.absolute(float(2 * full.step_exact))
         assert spool.get_gaps(tolerance=absolute).empty
+        narrow = GapTolerance.absolute(float(1.5 * full.step_exact))
+        assert len(spool.get_gaps(tolerance=narrow)) == 1
         assert len(spool.get_gaps(tolerance=1.5)) == 1
         assert len(spool.chunk(time=None, tolerance=1.5)) == 2
         out = spool.chunk(time=None, tolerance=2, fill_value=np.nan)
@@ -488,8 +491,10 @@ class TestOneVerdict:
         return base, second, third
 
     def test_chunk_and_coordinate_agree(self, patches):
-        """The default tolerance splits at 1.6 steps and merges 1.4."""
-        merged = dc.spool(patches).chunk(time=None)
+        """A tolerance of 1.5 splits at 1.6 steps and merges 1.4."""
+        # by default both seams are wider than max_shift allows
+        assert len(dc.spool(patches).chunk(time=None)) == 3
+        merged = dc.spool(patches).chunk(time=None, tolerance=1.5)
         assert len(merged) == 2
         values = np.concatenate([p.get_coord("time").values for p in patches])
         coord = get_coord(data=values, snap=False)
@@ -501,10 +506,10 @@ class TestOneVerdict:
         assert np.flatnonzero(mask)[0] + 1 == gaps["index"].iloc[0]
 
     def test_absolute_tolerance_agrees(self, patches):
-        """An absolute excess reads the same at both sites."""
+        """A chunk's seam width is a coordinate's excess plus one step."""
         step = patches[0].get_coord("time").step
         excess = 0.5 * step
-        merged = dc.spool(patches).chunk(time=None, tolerance=excess)
+        merged = dc.spool(patches).chunk(time=None, tolerance=step + excess)
         assert len(merged) == 2
         values = np.concatenate([p.get_coord("time").values for p in patches])
         coord = get_coord(data=values, snap=False)
@@ -554,15 +559,15 @@ class TestReviewFindings:
         assert converted.missing().count == 1
 
     def test_bare_absolute_excess_in_chunk(self):
-        """An excess stated as a bare number is in the coordinate's units."""
+        """A seam width stated as a bare number is in the coordinate's units."""
         first = dc.get_example_patch()
         first = first.update_coords(distance=first.get_coord("distance").values * 1.0)
         dist = first.get_coord("distance")
         second = first.update_coords(distance_min=dist.max() + 2.4 * dist.step)
         spool = dc.spool([first, second])
         kwargs = {"distance": None, "fill_value": np.nan}
-        assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 1
-        assert len(spool.chunk(tolerance=GapTolerance.absolute(1), **kwargs)) == 2
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(3), **kwargs)) == 1
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 2
 
     @pytest.fixture()
     def dense_patch(self):
@@ -610,15 +615,15 @@ class TestReviewFindings:
         assert declared.data_id == as_float.data_id
 
     def test_bare_absolute_excess_on_time(self):
-        """A bare excess on a time dimension is seconds, as coordinates read it."""
+        """A bare width on a time dimension is seconds, as coordinates read it."""
         first = dc.get_example_patch()
         time = first.get_coord("time")
         second = first.update_coords(time_min=time.max() + 2.4 * time.step)
         spool = dc.spool([first, second])
         kwargs = {"time": None, "fill_value": np.nan}
-        wide = float(2 * time.step / np.timedelta64(1, "s"))
+        wide = float(3 * time.step / np.timedelta64(1, "s"))
         assert len(spool.chunk(tolerance=GapTolerance.absolute(wide), **kwargs)) == 1
-        narrow = float(time.step / np.timedelta64(1, "s"))
+        narrow = float(2 * time.step / np.timedelta64(1, "s"))
         assert len(spool.chunk(tolerance=GapTolerance.absolute(narrow), **kwargs)) == 2
 
     def test_seam_after_an_undeclared_singleton(self):

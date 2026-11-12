@@ -58,7 +58,7 @@ def combine_patch_attrs(
     drop_attrs
         If provided, attributes which should be dropped.
     merge_params
-        The merge options which decide the result, such as `snap_coords`;
+        The merge options which decide the result, such as `tolerance`;
         they are part of the operation the result's `data_id` records.
     """
     validate_conflict(conflict)

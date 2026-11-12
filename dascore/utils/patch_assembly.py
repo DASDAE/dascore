@@ -46,7 +46,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.chunk import _READ_PAD
-from dascore.utils.chunk_plan import _SOURCE_COLUMNS
+from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
 from dascore.utils.identity import (
     ids_enabled,
     operation_context,
@@ -570,6 +570,52 @@ def patch_from_fill(
     return dc.Patch(data=data, coords=coords, dims=coords.dims, attrs=attrs)
 
 
+def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManager:
+    """
+    The coordinates with ``dim`` labelled by the stretch grid ``row`` names.
+
+    A chunk plan fits one grid to each stretch of joined patches and gives
+    each output's members its slice (``_{dim}_stretch``); an output whose
+    stretch keeps its one patch's own labels names none and is returned
+    as it is. A coordinate the grid cannot be stated in (a time counted in
+    other units than nanoseconds, integers on a fractional step) keeps
+    the labels it was assembled with, as does one which did not load the
+    samples the plan numbered.
+    """
+    spec = row.get(f"_{dim}_stretch")
+    if not isinstance(spec, tuple) or dim not in coords.coord_map:
+        return coords
+    current = coords.coord_map[dim]
+    dtype, stated = np.dtype(current.dtype), np.dtype(spec[-1])
+    origin, num, _, *rest = spec
+    if dtype.kind in "iu" and stated.kind == "f":
+        if not (float(origin).is_integer() and float(num).is_integer()):
+            return coords
+        spec = (int(origin), int(num), 1, *rest[:-1], str(dtype))
+    elif dtype != stated and (dtype.kind in "Mm" or stated.kind in "Mm"):
+        return coords
+    else:
+        spec = (*spec[:-1], str(dtype))
+    coord = stretch_coordinate(spec, current.units)
+    if len(coord) != len(current):
+        # a source changed since it was planned, so its samples are not
+        # the ones the plan numbered; they keep the labels they came with
+        return coords
+    return coords._update_grid(dim, **{dim: coord})
+
+
+def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
+    """The patch with its ``dim`` labels on its stretch's grid (see above)."""
+    coords = on_stretch_grid(patch.coords, dim, row)
+    if coords is patch.coords:
+        return patch
+    # relabelling is part of the merge the plan named, not another operation
+    with operation_context():
+        return dc.Patch(
+            data=patch.data, coords=coords, attrs=patch.attrs, dims=patch.dims
+        )
+
+
 def _whole_steps(ratio) -> int:
     """How many whole steps fit in a ratio, forgiving float error at the edge."""
     return int(np.floor(float(ratio) + _STEP_SNAP_RTOL))
@@ -583,6 +629,8 @@ def _fill_limit(tolerance) -> tuple:
     is missing one fewer sample than it spans. An infinite count sets no
     limit, which is the one way to ask for every hole to be filled.
     """
+    if tolerance is None:  # without a tolerance no hole is joined to fill
+        return 0, True
     if (count := tolerance.count) is not None:
         if not np.isfinite(count):
             return None, False
@@ -737,7 +785,7 @@ class PatchAssembler:
                 patch = self._merge_patches_streaming(
                     joined, df_dict_list, merge_dim, samples, units
                 )
-                return [patch]
+                return [_on_stretch_grid(patch, self.plan_dim, df_dict_list[0])]
         out = []
         target_units = None
         for patch_kwargs in df_dict_list:
@@ -750,7 +798,10 @@ class PatchAssembler:
             out.append(info)
         if len(out) > expected_len:
             out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
-        return [x["patch"] for x in out]
+        patches = [x["patch"] for x in out]
+        if len(patches) == 1 and df_dict_list:
+            patches = [_on_stretch_grid(patches[0], self.plan_dim, df_dict_list[0])]
+        return patches
 
     def _load_trimmed_patch(self, patch_kwargs, joined, units=None) -> dc.Patch:
         """Load a single patch and trim it to its instruction range."""
@@ -913,6 +964,7 @@ class PatchAssembler:
             coords, attrs = self._merged_meta(
                 self.plan_dim, [x.coords for x in metas], [x.attrs for x in metas]
             )
+        coords = on_stretch_grid(coords, self.plan_dim, rows[0])
         if not all(known):
             attrs = attrs.update(data_id="")
         return OutputMeta(dims, coords, attrs, chain[-1], metas)

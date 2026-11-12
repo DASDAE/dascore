@@ -54,6 +54,7 @@ from dascore.units import get_quantity
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
+    PIECE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
     grid_fits,
@@ -1133,9 +1134,11 @@ def derived_catalog(
     # a plan over stamped rows keeps stating the stamps
     stamps = dict(parent._stamps) if parent is not None else {}
     stamps |= stamped if isinstance(stamped, Mapping) else {}
-    trims = plan.members
+    # a plan's diagnostics describe it; loading never reads them
+    trims = plan.members.drop(columns=list(PIECE_COLUMNS), errors="ignore")
     trim_cols = [c for c in trims.columns if c not in ("_patch_row",)]
-    sources = source_rows.copy(deep=False)
+    # rows re-planned from an earlier chunk's members carry its grid slices
+    sources = source_rows.drop(columns=[f"_{name}_stretch"], errors="ignore")
     if "_patch_row" not in sources.columns:
         sources = _ensure_patch_row(sources)
     # Trim magnitudes are in the plan's (partition-normalized) unit; the
