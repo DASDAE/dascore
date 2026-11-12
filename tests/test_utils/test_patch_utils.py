@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
@@ -1129,6 +1130,12 @@ class TestGetPatchName:
         """Ensure names can be generated from a spool as well."""
         out = get_patch_names(random_spool)
         assert len(out) == len(random_spool)
+
+    def test_absent_fields_no_warning(self, random_patch, tmp_path):
+        """Naming a written patch whose fields are absent raises no warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            random_patch.io.write(tmp_path / "patch.h5", "dasdae")
 
     def test_empty(self):
         """Ensure an empty thing returns a series of the right type."""
