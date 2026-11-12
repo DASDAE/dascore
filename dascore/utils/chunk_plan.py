@@ -22,7 +22,7 @@ import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -517,9 +517,6 @@ def _trim_shared_dims(source, before, after, names) -> pd.DataFrame:
     `_held_coord`), the samples its new envelope keeps trim the other's
     envelope too; elsewhere the other stays a candidacy superset.
     """
-    # Circular import: patch assembly imports the index and its plan utilities.
-    from dascore.utils.patch_assembly import _as_numpy  # noqa: PLC0415
-
     held = {
         str(c)[1 : -len("_dims")]
         for c in after.columns
@@ -527,59 +524,76 @@ def _trim_shared_dims(source, before, after, names) -> pd.DataFrame:
     }
     held = {x for x in held if {f"{x}_min", f"{x}_max"}.issubset(after.columns)}
     shared = after.index.intersection(before.index)
-    for name in [x for x in names if x in held and len(held) > 1]:
+    was, now = before.index.get_indexer(shared), after.index.get_indexer(shared)
+    for name in [x for x in names if x in held]:
         cols = [f"{name}_min", f"{name}_max"]
-        old, new = before.loc[shared, cols], after.loc[shared, cols]
-        cut = shared[((old != new).any(axis=1) & new.notna().all(axis=1)).to_numpy()]
-        if not len(cut):
+        old = [before[c].to_numpy()[was] for c in cols]
+        new = [after[c].to_numpy()[now] for c in cols]
+        cut = (old[0] != new[0]) | (old[1] != new[1])
+        cut &= ~(pd.isnull(new[0]) | pd.isnull(new[1]))
+        if not cut.any():
             continue
         # only the coordinates on this one's dimension in a row are trimmed
-        dims = before.loc[cut, f"_{name}_dims"].to_numpy()
-        coords = {
-            x: _held_coords(
-                source,
-                before,
-                x,
-                cut[(before.loc[cut, f"_{x}_dims"] == dims).to_numpy()],
-            )
-            for x in sorted(held)
+        dims = before[f"_{name}_dims"].to_numpy()[was[cut]]
+        riders = {
+            x: before[f"_{x}_dims"].to_numpy()[was[cut]] == dims
+            for x in sorted(held - {name})
         }
-        picks, trims, changed = {}, {}, {}
-        bounds = new.loc[cut].itertuples(index=False, name=None)
-        for index, (low, high) in zip(cut, bounds, strict=True):
-            coord, key = coords[name][index]
-            if coord is None or not len(coord):
+        riders = {x: rides for x, rides in riders.items() if rides.any()}
+        if not riders:  # nothing else on the dimension, as on most spools
+            continue
+        ridden = np.logical_or.reduce(list(riders.values()))
+        bounds = [x[cut][ridden] for x in new]
+        mine = _held_coords(source, before, name, shared[cut][ridden], bounds)
+        picks = [
+            None
+            if coord is None or not len(coord)
+            else coord.select((bounds[0][first], bounds[1][first]))[1]
+            for coord, first in zip(mine.coords, mine.firsts, strict=True)
+        ]
+        # each cut row's place among the ridden ones
+        place = np.cumsum(ridden) - 1
+        for other, rides in riders.items():
+            rows = shared[cut][rides]
+            theirs = _held_coords(source, before, other, rows)
+            # rows alike in both coordinates keep the same samples of the rider
+            pairs = mine.codes[place[rides]] * len(theirs.coords) + theirs.codes
+            pairs, codes = np.unique(pairs, return_inverse=True)
+            kept = {}
+            for code, pair in enumerate(pairs):
+                my_code, their_code = divmod(pair, len(theirs.coords))
+                pick, rider = picks[my_code], theirs.coords[their_code]
+                if pick is None or rider is None:
+                    continue
+                if len(rider) != len(mine.coords[my_code]):
+                    continue
+                if len(trimmed := rider[pick]):
+                    kept[code] = trimmed
+            if not kept:
                 continue
-            key = (key, _hashable(low), _hashable(high))
-            if key not in picks:
-                picks[key] = coord.select((_as_numpy(low), _as_numpy(high)))[1]
-            for other in sorted(held - {name}):
-                rider, rider_key = coords[other].get(index, (None, None))
-                if rider is None or len(rider) != len(coord):
-                    continue
-                if (key, rider_key) not in trims:
-                    trims[key, rider_key] = rider[picks[key]]
-                if not len(kept := trims[key, rider_key]):
-                    continue
-                values = {f"{other}_min": kept.min(), f"{other}_max": kept.max()}
-                if isinstance(before.get(f"_{other}_grid", {}).get(index), tuple):
-                    values[f"_{other}_grid"] = _grid_terms(kept)
-                for column, value in values.items():
-                    changed.setdefault(column, {})[index] = value
-        for column, values in changed.items():
-            if column.endswith("_grid"):
-                old_grids = zip(after.index, after[column], strict=True)
-                after[column] = [values.get(i, g) for i, g in old_grids]
-            else:
-                after.loc[list(values), column] = pd.Series(values)
+            trimmed = np.isin(codes, list(kept))
+            rows, codes = rows[trimmed], codes[trimmed]
+            for end in ("min", "max"):
+                ends = {code: getattr(coord, end)() for code, coord in kept.items()}
+                ends = np.array([ends[x] for x in codes])
+                if theirs.shift is not None:
+                    ends = ends + theirs.shift[trimmed]
+                after.loc[rows, f"{other}_{end}"] = ends
+            if (col := f"_{other}_grid") in before:
+                grids = before[col].to_numpy()[before.index.get_indexer(rows)]
+                exact = np.array([isinstance(x, tuple) for x in grids])
+                rows, codes = rows[exact], codes[exact]
+                terms = {code: _grid_terms(kept[code]) for code in set(codes)}
+                _set_cells(after, col, rows, [terms[x] for x in codes])
     return after
 
 
-def _hashable(value):
-    """A cache key part for one relation cell; nulls compare equal."""
-    if isinstance(value, tuple):
-        return value
-    return None if pd.isnull(value) else value
+def _set_cells(frame, column, rows, values) -> None:
+    """Set an object column's cells in ``rows``, which may hold tuples."""
+    cells = frame[column].to_numpy(dtype=object, copy=True)
+    for position, value in zip(frame.index.get_indexer(rows), values, strict=True):
+        cells[position] = value
+    frame[column] = cells
 
 
 def _grid_terms(coord) -> tuple:
@@ -616,27 +630,62 @@ def _held_coord(origin: Mapping, low, high, name: str):
     return coord.select((_as_numpy(low), _as_numpy(high)))[0]
 
 
-def _held_coords(source, frame, name, index) -> dict:
-    """
-    `_held_coord` and a cache key for each row of ``frame`` in ``index``.
+class _Held(NamedTuple):
+    """The samples the rows of a relation hold of one coordinate."""
 
-    Rows alike in their origin and bounds share one coordinate, so an
-    archive of identical layouts rebuilds it once.
+    # each row's group; rows alike in their origin and bounds share one
+    codes: np.ndarray
+    # each group's coordinate, None where it cannot be told
+    coords: list
+    # where each group's first row is, the one its coordinate is rebuilt from
+    firsts: np.ndarray
+    # how far each row's labels sit past its group's, None if nowhere
+    shift: np.ndarray | None
+
+
+def _held_coords(source, frame, name, index, bounds=None) -> _Held:
     """
-    suffixes = ("min", "max", "step")
+    `_held_coord` for the rows of ``frame`` in ``index``, one per group.
+
+    Rows alike in their origin and bounds share one coordinate. On a time
+    coordinate alike means alike from the origin's start, so an archive
+    of files that differ only in when they start rebuilds it once, and
+    each row's labels are its group's shifted by the difference in start.
+    ``bounds`` holds a further low and high per row to tell rows apart by.
+    """
+    low, high = f"{name}_min", f"{name}_max"
     private = ("grid", "coord_dtype", "units", "units_source", "src_low")
     private += ("src_high", "src_step")
-    columns = [f"{name}_{x}" for x in suffixes] + [f"_{name}_{x}" for x in private]
-    origins = source.loc[index, [c for c in columns if c in source]]
-    bounds = frame.loc[index, [f"{name}_min", f"{name}_max"]]
-    cache, out = {}, {}
-    rows = zip(index, origins.to_dict("records"), bounds.itertuples(index=False))
-    for row_index, origin, (low, high) in rows:
-        key = (*map(_hashable, origin.values()), _hashable(low), _hashable(high))
-        if key not in cache:
-            cache[key] = _held_coord(origin, low, high, name)
-        out[row_index] = (cache[key], key)
-    return out
+    columns = [low, high, f"{name}_step", *(f"_{name}_{x}" for x in private)]
+    columns = [c for c in columns if c in source]
+    # Plain arrays by position: label lookups cost more than the grouping.
+    origin_at, held_at = (x.index.get_indexer(index) for x in (source, frame))
+    keys = {c: source[c].to_numpy()[origin_at] for c in columns}
+    keys["low"], keys["high"] = (frame[c].to_numpy()[held_at] for c in (low, high))
+    if bounds is not None:
+        keys["new_low"], keys["new_high"] = bounds
+    labels = (low, high, f"_{name}_src_low", f"_{name}_src_high")
+    labels = [c for c in keys if c in labels or c not in columns]
+    start, shift = keys.get(low), None
+    if start is not None and start.dtype.kind in "mM":
+        if all(keys[c].dtype == start.dtype for c in labels):
+            keys.update({c: keys[c] - start for c in labels})
+            shift = start
+    # groups are numbered in the order their first rows appear
+    codes = np.zeros(len(index), dtype=np.int64)
+    for values in keys.values():
+        part, found = pd.factorize(values, use_na_sentinel=False)
+        codes = pd.factorize(codes * len(found) + part)[0]
+    firsts = np.unique(codes, return_index=True)[1]
+    if shift is not None:
+        shift = shift - shift[firsts][codes]
+    origins = [source[c].iloc[origin_at[firsts]].tolist() for c in columns]
+    ends = [frame[c].iloc[held_at[firsts]].tolist() for c in (low, high)]
+    coords = [
+        _held_coord(dict(zip(columns, origin, strict=True)), first, last, name)
+        for origin, (first, last) in zip(zip(*origins), zip(*ends), strict=True)
+    ]
+    return _Held(codes, coords, firsts, shift)
 
 
 def patch_local_adjusted_envelopes(
@@ -724,21 +773,26 @@ def patch_local_adjusted_envelopes(
             if col in df:
                 gridded = df[col].map(lambda x: isinstance(x, tuple)).to_numpy()
                 gridded = gridded & mins.notna().to_numpy()
-                held = _held_coords(source, df, name, df.index[gridded])
-                lows, highs, grids, picks = {}, {}, {}, {}
-                for index, (coord, key) in held.items():
-                    if coord is None or not len(coord):
-                        continue
-                    if key not in picks:
-                        picks[key] = coord.select(value, samples=True)[0]
-                    if not len(picked := picks[key]):
-                        continue
-                    lows[index], highs[index] = picked.min(), picked.max()
-                    grids[index] = _grid_terms(picked)
-                if grids:
-                    new_min.loc[list(lows)] = pd.Series(lows)
-                    new_max.loc[list(highs)] = pd.Series(highs)
-                    df[col] = [grids.get(i, g) for i, g in zip(df.index, df[col])]
+                rows = df.index[gridded]
+                held = _held_coords(source, df, name, rows)
+                picks = {
+                    code: picked
+                    for code, coord in enumerate(held.coords)
+                    if coord is not None
+                    and len(coord)
+                    and len(picked := coord.select(value, samples=True)[0])
+                }
+                if picks:
+                    picked = np.isin(held.codes, list(picks))
+                    rows, codes = rows[picked], held.codes[picked]
+                    for series, end in ((new_min, "min"), (new_max, "max")):
+                        ends = {x: getattr(coord, end)() for x, coord in picks.items()}
+                        ends = np.array([ends[x] for x in codes])
+                        if held.shift is not None:
+                            ends = ends + held.shift[picked]
+                        series.loc[rows] = ends
+                    terms = {code: _grid_terms(coord) for code, coord in picks.items()}
+                    _set_cells(df, col, rows, [terms[x] for x in codes])
             # rows whose window is empty or lies entirely outside the
             # patch contribute nothing; test before clipping so such
             # windows are not resurrected as one-sample envelopes

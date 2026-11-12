@@ -135,6 +135,41 @@ class TestSelectionBenchmarks:
         spool.select(tag="wayou?")
 
 
+class TestSelectContentsBenchmarks:
+    """Benchmarks for the contents of a selection over many patches."""
+
+    @pytest.fixture(scope="class")
+    def rider_spool(self):
+        """Many contiguous patches with a coordinate riding each dimension."""
+        patches = _make_contiguous_patches(500)
+        sensor = 1000.0 + 2 * np.arange(len(patches[0].get_coord("distance")))
+        out = []
+        for patch in patches:
+            utc = patch.get_array("time") + np.timedelta64(5, "s")
+            out.append(
+                patch.update_coords(sensor=("distance", sensor), utc=("time", utc))
+            )
+        return dc.spool(out)
+
+    @pytest.mark.benchmark
+    def test_relative_time_contents(self, rider_spool):
+        """Time a relative selection, which trims every patch."""
+        out = rider_spool.select(time=(0.1, -0.1), relative=True)
+        assert len(out.get_contents()) == len(rider_spool)
+
+    @pytest.mark.benchmark
+    def test_sample_time_contents(self, rider_spool):
+        """Time a sample selection, which trims every patch."""
+        out = rider_spool.select(time=(10, 50), samples=True)
+        assert len(out.get_contents()) == len(rider_spool)
+
+    @pytest.mark.benchmark
+    def test_distance_contents(self, rider_spool):
+        """Time a selection on a dimension every patch shares."""
+        out = rider_spool.select(distance=(10, 20))
+        assert len(out.get_contents()) == len(rider_spool)
+
+
 class TestManyFileDirectoryBenchmarks:
     """Benchmarks for working with a directory of many files."""
 

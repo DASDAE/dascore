@@ -998,6 +998,59 @@ class TestSelectAfterTrimOnExactGrid:
             assert not len(out[0].get_coord("time"))
 
 
+class TestSelectSharedDimensionManyPatches:
+    """Rows alike but for when they start are each trimmed from their own start."""
+
+    start = np.datetime64("2020-01-01")
+
+    @pytest.fixture(scope="class")
+    def staggered_spool(self):
+        """Patches on a 1024 Hz grid, 20 s apart, one of them shorter."""
+        base = dc.get_example_patch()
+        shape = (base.shape[base.get_axis("time")],)
+        sensor = 1000.0 + 2 * np.arange(base.shape[base.get_axis("distance")])
+        patches = []
+        for num in range(4):
+            start = self.start + np.timedelta64(20 * num, "s")
+            time = get_coord(start=start, step=(1, 1024), shape=shape)
+            utc = get_coord(
+                start=start + np.timedelta64(5, "s"), step=(1, 1024), shape=shape
+            )
+            patch = base.update_coords(time=time).update_coords(
+                utc=("time", utc), sensor=("distance", sensor)
+            )
+            patches.append(patch)
+        patches[2] = patches[2].select(time=(0, 600), samples=True)
+        return dc.spool(patches)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"time": (10, 300), "samples": True},
+            {"utc": (10, -20), "samples": True},
+            {"time": (0.25, -0.125), "relative": True},
+            {"utc": (0.25, 0.5), "relative": True},
+            {"distance": (10, 20)},
+            {"sensor": (10, 21), "samples": True},
+        ],
+    )
+    def test_contents_match_patches(self, staggered_spool, kwargs):
+        """Each row is trimmed from its own start, not its group's."""
+        out = staggered_spool.select(**kwargs)
+        assert len(out) == len(staggered_spool)
+        _assert_contents_match_patches(out, ["time", "utc", "distance", "sensor"])
+
+    def test_value_select_across_patches(self, staggered_spool):
+        """Rows cut at different places are trimmed apart."""
+        low = self.start + np.timedelta64(500, "ms")
+        high = self.start + np.timedelta64(20_250, "ms")
+        out = staggered_spool.select(time=(low, high))
+        assert len(out) == 2
+        _assert_contents_match_patches(out, ["utc"])
+        again = out.select(utc=(5, 100), samples=True)
+        _assert_contents_match_patches(again, ["time", "utc"])
+
+
 class TestUnselect:
     """Tests for removing the patches a selection would keep."""
 
