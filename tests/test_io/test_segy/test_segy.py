@@ -165,11 +165,12 @@ def _write_segy_file(
     date=(2016, 22, 1, 23, 59),
     text=None,
     ascii_text=False,
+    fields=None,
 ):
     """
-    Write a 3-trace SEG-Y file with the given byte order, revision bytes, date
-    and textual header lines (a dict of line number to content), stored as
-    EBCDIC or ASCII.
+    Write a 3-trace SEG-Y file with the given byte order, revision bytes, date,
+    textual header lines (a dict of line number to content), stored as EBCDIC
+    or ASCII, and trace header fields (a dict of name to per-trace values).
     """
     segyio = pytest.importorskip("segyio")
     data = np.arange(3 * 20, dtype=np.float32).reshape(3, 20)
@@ -186,7 +187,8 @@ def _write_segy_file(
         if text:
             fi.text[0] = segyio.tools.create_text_header(text)
         for num, trace in enumerate(data):
-            fi.header[num] = header
+            extra = {getattr(field, k): v[num] for k, v in (fields or {}).items()}
+            fi.header[num] = header | extra
             fi.trace[num] = trace
     with path.open("r+b") as fi:
         if ascii_text:
@@ -313,6 +315,59 @@ class TestSegyCompatibility:
             time=patch.get_coord("time") + dc.to_datetime64(start)
         )
         assert new.get_coord("time").min() == np.datetime64(start)
+
+
+class TestSegyTracePositions:
+    """Tests for reading trace header positions as coordinates."""
+
+    def test_group_positions(self, tmp_path):
+        """
+        GroupX, GroupY and elevation become scaled x, y and z along channel,
+        NaN on an unlocated trace, and follow channel selection.
+        """
+        fields = {
+            "GroupX": (59907290, 59907170, 0),
+            "GroupY": (596656370, 596656280, 0),
+            "SourceGroupScalar": (-100, -100, -100),
+            "ReceiverGroupElevation": (3432375, 3424807, 0),
+            "ElevationScalar": (-1000, -1000, -1000),
+        }
+        path, _ = _write_segy_file(tmp_path / "geo.sgy", fields=fields)
+        patch = dc.spool(path)[0]
+        expected = {
+            "x": [599072.9, 599071.7, np.nan],
+            "y": [5966563.7, 5966562.8, np.nan],
+            "z": [3432.375, 3424.807, np.nan],
+        }
+        for name, values in expected.items():
+            assert patch.coords.dim_map[name] == ("channel",)
+            assert np.allclose(
+                patch.get_array(name), values, rtol=0, atol=1e-6, equal_nan=True
+            )
+        sub = dc.spool(path).select(channel=(1, 2))[0]
+        sub_x = sub.get_array("x")
+        assert np.allclose(sub_x, expected["x"][1:], rtol=0, atol=1e-6, equal_nan=True)
+
+    def test_cdp_positions(self, tmp_path):
+        """
+        Without group positions, CDP_X and CDP_Y give x and y, a positive
+        scalar multiplies, and zero elevations give no z.
+        """
+        fields = {
+            "CDP_X": (1, 2, 3),
+            "CDP_Y": (4, 5, 6),
+            "SourceGroupScalar": (10, 10, 10),
+        }
+        path, _ = _write_segy_file(tmp_path / "cdp.sgy", fields=fields)
+        patch = dc.spool(path)[0]
+        assert np.array_equal(patch.get_array("x"), [10.0, 20.0, 30.0])
+        assert np.array_equal(patch.get_array("y"), [40.0, 50.0, 60.0])
+        assert "z" not in patch.coords.coord_map
+
+    def test_no_positions(self, tmp_path):
+        """A file with no trace positions has only time and channel."""
+        path, _ = _write_segy_file(tmp_path / "plain.sgy")
+        assert set(dc.spool(path)[0].coords.coord_map) == {"time", "channel"}
 
 
 class TestSegyTextHeader:

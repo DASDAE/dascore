@@ -127,6 +127,9 @@ def _get_coords(fi, text):
 
     If a user knows the dx, change from channel to distance using
     patch.update_coords after reading
+
+    Trace header positions, where stated, become x, y and z coordinates
+    along channel.
     """
     segyio = optional_import("segyio")
     trace_field = segyio.TraceField
@@ -142,9 +145,46 @@ def _get_coords(fi, text):
     channel = np.arange(len(fi.header))
 
     coords = get_coord_manager(
-        {"time": time_array, "channel": channel}, dims=("time", "channel")
+        {"time": time_array, "channel": channel, **_get_trace_positions(fi)},
+        dims=("time", "channel"),
     )
     return coords
+
+
+def _scaled_field(fi, field, scalar):
+    """Return a trace header field over all traces, with its scalar applied."""
+    segyio = optional_import("segyio")
+    values = fi.attributes(getattr(segyio.TraceField, field))[:].astype(np.float64)
+    scale = fi.attributes(getattr(segyio.TraceField, scalar))[:].astype(np.float64)
+    # A scalar of 0 means 1, and a negative one divides.
+    scale[scale == 0] = 1
+    return np.where(scale > 0, values * scale, values / np.abs(scale))
+
+
+def _get_trace_positions(fi):
+    """
+    Return x, y and z coordinates along channel from the trace headers.
+
+    x and y come from GroupX and GroupY, else CDP_X and CDP_Y, and z from
+    ReceiverGroupElevation. Traces with x and y both zero are unlocated and
+    get NaN. Nothing is returned when no trace is located.
+    """
+    for x_field, y_field in (("GroupX", "GroupY"), ("CDP_X", "CDP_Y")):
+        x = _scaled_field(fi, x_field, "SourceGroupScalar")
+        y = _scaled_field(fi, y_field, "SourceGroupScalar")
+        located = (x != 0) | (y != 0)
+        if located.any():
+            break
+    else:
+        return {}
+    out = {"x": x, "y": y}
+    z = _scaled_field(fi, "ReceiverGroupElevation", "ElevationScalar")
+    if z.any():
+        out["z"] = z
+    return {
+        name: (("channel",), np.where(located, value, np.nan))
+        for name, value in out.items()
+    }
 
 
 def _get_time_from_header(header):
