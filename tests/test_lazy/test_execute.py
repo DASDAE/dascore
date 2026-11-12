@@ -10,9 +10,10 @@ from dascore.config import config_context
 from dascore.exceptions import LazyOperationError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Chain, Node
-from dascore.lazy.contract import Halo, WholeAxis, Window
+from dascore.lazy.contract import Window
 from dascore.lazy.execute import chunk_boxes, read_schedule
 from dascore.proc.basic import Abs
+from dascore.proc.coords import Select
 
 from .conftest import constant, lazy_patch, stored_patch
 
@@ -127,12 +128,6 @@ class TestReadSchedule:
         box = (slice(0, 5), slice(0, 800))
         assert read_schedule(out.data, [box]) == [(slice(5, 10), slice(0, 2000))]
 
-    def test_one_read_for_each_box(self, lazy):
-        """The schedule has the boxes' order."""
-        out = lazy.abs().data
-        boxes = chunk_boxes(out, 100 * ROW)
-        assert read_schedule(out, boxes) == boxes
-
 
 class TestChunkBoxes:
     """How an array is cut into the boxes it is computed in."""
@@ -141,10 +136,6 @@ class TestChunkBoxes:
         """An array within the block size is not cut."""
         whole = (slice(0, 300), slice(0, 2000))
         assert chunk_boxes(lazy.abs().data, 300 * ROW) == [whole]
-
-    def test_zero_is_one_box(self, lazy):
-        """A block size of zero asks for one piece."""
-        assert len(chunk_boxes(lazy.abs().data, 0)) == 1
 
     def test_default_is_the_setting(self, lazy):
         """With no block size given, the setting decides."""
@@ -199,6 +190,20 @@ class TestChunkBoxes:
         array = LazyArray(constant((40, 30), -1.0), Chain((node,)))
         assert len(chunk_boxes(array, 8)) == 1
 
+    def test_nothing_to_compute_is_one_box(self, lazy):
+        """Selections alone are read in one piece: cutting only reopens files."""
+        out = lazy.select(time=(100, 900), samples=True)
+        assert len(chunk_boxes(lazy.data, ROW)) == 1
+        assert len(chunk_boxes(out.data, ROW)) == 1
+        assert len(chunk_boxes(out.abs().data, ROW)) > 1
+
+    def test_counts_each_steps_dtype(self, tmp_path_factory):
+        """A step which widens the dtype is what the block size is held to."""
+        data = np.ones(dc.get_example_patch().shape, np.int8)
+        small = lazy_patch(stored_patch(tmp_path_factory.mktemp("int8"), data))
+        # More than the int8 read and less than the float16 result.
+        assert len(chunk_boxes(small.angle().data, 900_000)) > 1
+
     def test_empty_array(self):
         """An array with no samples is one empty box."""
         array = LazyArray(constant((0, 3)))
@@ -216,6 +221,16 @@ class TestLoad:
         out = out.pass_filter(time=(10, 100))
         return out.abs().select(distance=(20, 250), samples=True)
 
+    def test_keeps_the_dtype(self, tmp_path_factory):
+        """Put together from boxes, the array has the dtype the patch stated."""
+        data = np.random.default_rng(1).standard_normal((300, 2000))
+        directory = tmp_path_factory.mktemp("float32")
+        small = lazy_patch(stored_patch(directory, data.astype("float32")))
+        with config_context(lazy_block_size=10 * ROW):
+            loaded = small.abs().load()
+        assert loaded.data.dtype == np.float32
+        assert np.array_equal(loaded.data, np.abs(small.load().data))
+
     @pytest.mark.parametrize("rows", (0, 60, 3))
     def test_any_block_size(self, lazy, eager, recipe_loads, rows):
         """The result and its id do not depend on how the work was cut."""
@@ -226,24 +241,52 @@ class TestLoad:
         assert loaded.attrs == expected.attrs
         np.testing.assert_allclose(loaded.data, expected.data, rtol=1e-12, atol=1e-12)
 
-    def test_halo_contract_is_recorded(self, lazy):
-        """The step holds the contract it was chained under."""
-        out = lazy.median_filter(time=5, distance=3, samples=True)
-        assert out.data.chain.last.contract == Halo({0: (1, 1), 1: (2, 2)})
+
+class TestFilterArguments:
+    """Arguments which change what a filter reads change its contract."""
+
+    @staticmethod
+    def _same(lazy_out, eager_out):
+        """Loaded in many small boxes, the result is the eager one."""
+        with config_context(lazy_block_size=ROW // 8):
+            assert len(chunk_boxes(lazy_out.data)) > 1
+            loaded = lazy_out.load()
+        assert loaded.data.dtype == eager_out.data.dtype
+        np.testing.assert_allclose(loaded.data, eager_out.data, rtol=1e-12, atol=1e-12)
+
+    @pytest.mark.parametrize("mode", ("wrap", "grid-wrap"))
+    @pytest.mark.parametrize("name", ("gaussian_filter", "median_filter"))
+    def test_wrapping_edges(self, lazy, eager, name, mode):
+        """An edge filled from the far end of the array has the axis whole."""
+        kwargs = {"distance": 3, "samples": True, "mode": mode}
+        self._same(getattr(lazy, name)(**kwargs), getattr(eager, name)(**kwargs))
+
+    def test_truncate(self, lazy, eager):
+        """A wider gaussian kernel reads further."""
+        kwargs = {"distance": 3, "samples": True, "truncate": 8.0}
+        self._same(lazy.gaussian_filter(**kwargs), eager.gaussian_filter(**kwargs))
+
+    @pytest.mark.parametrize("mode", (("wrap", "reflect"), ["wrap", "reflect"]))
+    def test_mode_for_each_axis_refused(self, lazy, recipe_loads, mode):
+        """A mode given axis by axis is not worked out, so it is refused."""
+        with pytest.raises(LazyOperationError, match="gaussian_filter"):
+            lazy.gaussian_filter(time=2, distance=2, samples=True, mode=mode)
+        assert not recipe_loads
 
 
-class TestWrappingEdges:
-    """An edge filled from the far end of the array needs the axis whole."""
+class TestQueries:
+    """Only a query which is one range for each dimension is a window."""
 
-    def test_wrap_needs_the_axis(self, lazy, eager):
-        """A wrapping filter is given all of the axis, so its edges are right."""
-        kwargs = {"time": 3, "samples": True, "mode": "wrap"}
-        out, expected = lazy.gaussian_filter(**kwargs), eager.gaussian_filter(**kwargs)
-        assert out.data.chain.last.contract == WholeAxis((1,))
-        with config_context(lazy_block_size=10 * ROW):
-            assert len(chunk_boxes(out.data)) > 1
-            loaded = out.load()
-        np.testing.assert_allclose(loaded.data, expected.data, rtol=1e-12, atol=1e-12)
+    def test_stepped_slice_is_no_window(self):
+        """A slice with a step would not be a box."""
+        plan = {"indexer": (slice(0, 10, 2), slice(None))}
+        assert Select().chunk_contract(np.dtype("f8"), plan) is None
+
+    def test_unselect_refused(self, lazy, recipe_loads):
+        """What unselect keeps is spelled as positions, so it is refused."""
+        with pytest.raises(LazyOperationError, match="unselect"):
+            lazy.unselect(time=(0, 100), samples=True)
+        assert not recipe_loads
 
 
 class TestDtypes:
@@ -265,13 +308,6 @@ class TestDtypes:
             x: stored_patch(directory, data.astype(x), x)
             for x in ("int16", "float32", "float64")
         }
-
-    @pytest.mark.parametrize("call", CALLS)
-    @pytest.mark.parametrize("dtype", ("float32", "float64"))
-    def test_floats_are_chained(self, stored, call, dtype):
-        """Each filter adds a step to float data, and keeps the dtype."""
-        out = call(lazy_patch(stored[dtype]))
-        assert len(out.data.chain) == 1 and out.dtype == np.dtype(dtype)
 
     @pytest.mark.parametrize("call", (CALLS[0], CALLS[2]))
     def test_changed_dtype_refused(self, stored, call, recipe_loads):

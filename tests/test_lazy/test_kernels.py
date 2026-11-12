@@ -209,7 +209,9 @@ class TestContractsHold:
         try:
             lazy = call(lazy_in)
         except LazyOperationError:
-            return  # no contract is stated for this dtype
+            # No contract for this dtype; every one states one for these.
+            assert dtype not in ("float32", "float64")
+            return
         eager = call(eager_in)
         if lazy is lazy_in:
             assert eager is eager_in  # Unchanged: a no-op eagerly too

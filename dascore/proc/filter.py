@@ -74,7 +74,8 @@ _WRAPPING = frozenset({"wrap", "grid-wrap"})
 
 def _reach(mode, widths: dict[int, int], dtype):
     """Return the contract of a filter reading `widths` samples either side."""
-    if dtype not in _KEPT_DTYPES:
+    # A mode for each axis is refused rather than worked out axis by axis.
+    if dtype not in _KEPT_DTYPES or not isinstance(mode, str):
         return None
     reach = {axis: (width, width) for axis, width in widths.items() if width}
     # A wrapping edge is filled from the other end, so no halo holds it.

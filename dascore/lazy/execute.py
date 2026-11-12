@@ -1,22 +1,13 @@
 """
 Running a lazy array: which chunks, what each one reads, and computing it.
 
-The operations of a [`LazyArray`](`dascore.lazy.array.LazyArray`) never
-choose a chunk size or loop over chunks. A chunk is a box of the final
-array, and the work is done here, in three separate steps:
-
-- [`chunk_boxes`](`dascore.lazy.execute.chunk_boxes`) cuts the final array
-  into boxes, small enough that no array a box needs is larger than a
-  block size;
-- [`read_schedule`](`dascore.lazy.execute.read_schedule`) says which box of
-  the stored array each of those needs, by asking each step's
-  [chunk contract](`dascore.lazy.contract`) in turn, last to first. It
-  reads nothing, so every read is known before the first one happens;
-- [`compute`](`dascore.lazy.execute.compute`) reads that box and runs each
-  step's NumPy kernel on it, first to last.
-
-[`load`](`dascore.lazy.execute.load`) does all three and puts the boxes
-together in memory.
+A chunk is a box of the final array, and the work is three separate steps:
+[`chunk_boxes`](`dascore.lazy.execute.chunk_boxes`) cuts the array into
+boxes, [`read_schedule`](`dascore.lazy.execute.read_schedule`) says which
+box of the stored array each one needs, and
+[`compute`](`dascore.lazy.execute.compute`) reads that box and runs each
+step on it. [`load`](`dascore.lazy.execute.load`) does all three and puts
+the boxes together in memory.
 
 Examples
 --------
@@ -50,7 +41,7 @@ import numpy as np
 
 from dascore.config import get_config
 from dascore.exceptions import PatchError
-from dascore.lazy.contract import Box, ChunkContract
+from dascore.lazy.contract import Box, ChunkContract, Window
 
 if TYPE_CHECKING:
     from dascore.lazy.array import LazyArray
@@ -58,9 +49,8 @@ if TYPE_CHECKING:
 # A step with no contract recorded is run as one which needs its own box.
 _SAME_PLACE = ChunkContract()
 # The least a halving must save for an axis to be worth cutting again. Half
-# is what cutting an axis saves when nothing else is needed of it; an axis
-# an operation needs whole saves nothing, and one read with a halo saves
-# less the shorter its chunks get.
+# is what it saves when nothing else is needed of the axis; an axis needed
+# whole saves nothing, and one read with a halo less the shorter its pieces.
 _WORTH_CUTTING = 0.75
 
 
@@ -100,13 +90,10 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     Cut a lazy array into the boxes it is computed in.
 
     The whole array is one box if no array computing it needs is larger
-    than the block size. Otherwise the box is halved along one axis at a
-    time until they fit: the first axis worth cutting, so the pieces are
-    slabs of the leading axis where they can be. An axis an operation needs
-    whole is not worth cutting, since every piece would still need all of
-    it, and nor is one whose pieces are already short beside the samples
-    read around them. The block size is therefore aimed for rather than
-    promised.
+    than the block size, or if no step computes anything: reading in
+    pieces would only open each file again. Otherwise the box is halved
+    along the first axis worth cutting until they fit, so the block size
+    is aimed for rather than promised.
 
     Parameters
     ----------
@@ -119,10 +106,12 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     shape = array.shape
     block_size = get_config().lazy_block_size if block_size is None else block_size
     sizes = list(shape)
-    cost = _largest(array, _middle(shape, sizes)) if array.size else 0
-    # A step with no contract says nothing of what a part of it needs.
-    known = all(x.contract is not None for x in array.chain)
-    while known and block_size and cost > block_size:
+    cost = _largest(array, _middle(shape, sizes))
+    contracts = [x.contract for x in array.chain]
+    # A step with no contract says nothing of what a part of it needs, and
+    # with nothing but windows there is nothing to compute in parts.
+    cut = None not in contracts and not all(isinstance(x, Window) for x in contracts)
+    while cut and block_size and cost > block_size:
         for axis, size in enumerate(sizes):
             trial = [*sizes[:axis], math.ceil(size / 2), *sizes[axis + 1 :]]
             halved = _largest(array, _middle(shape, trial))

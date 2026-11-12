@@ -67,7 +67,7 @@ A chunk is a box of the array: one slice for each axis. A contract says which bo
 | `Window` | the same box moved by where a selection starts | `select` with ranges |
 | `Unchanged` | nothing: the kernel hands its input back | `real` and `conj` of real data, a `select` which keeps everything |
 
-The filters state a contract for `float32` and `float64` data only, the dtypes their kernels hand back unchanged. A query which does not resolve to one range for each dimension is no window and is refused: a `select` by an array of values or a mask, and what `unselect` and `order` build.
+The filters state a contract for `float32` and `float64` data only, the dtypes their kernels hand back unchanged, and `gaussian_filter` states none when its edge mode is given axis by axis. A query which does not resolve to one range for each dimension is no window and is refused: a `select` by an array of values or a mask, and what `unselect` and `order` build.
 
 A `Halo` kernel sees the true ends of the array in the chunks which hold them, so it treats them as it does eagerly, and what it makes of a cut end is trimmed off. A halo never reaches past an earlier selection: to a filter after a `select`, the window's ends are the array's.
 
@@ -75,7 +75,7 @@ A `Halo` kernel sees the true ends of the array in the chunks which hold them, s
 
 [`dascore.lazy.execute`](`dascore.lazy.execute`) does the work in three separate steps.
 
-1. **Cut the result into boxes.** If no array the result needs is larger than the `lazy_block_size` setting, there is one box. Otherwise the box is halved along the first axis worth cutting until they fit. An axis an operation needs whole is not worth cutting, and nor is one already short beside its halo, so the block size is aimed for rather than promised.
+1. **Cut the result into boxes.** If no array the result needs is larger than the `lazy_block_size` setting, there is one box. There is also one box when no step computes anything, since reading in pieces would only open each file again. Otherwise the box is halved along the first axis worth cutting until they fit. An axis an operation needs whole is not worth cutting, and nor is one already short beside its halo, so the block size is aimed for rather than promised.
 2. **Work out what each box reads.** Each step's contract is asked, last to first, which box of its input it needs. Nothing is read to answer, so every read is known before the first one happens.
 3. **Read and compute each box.** The recipe reads only the box needed, and each step's NumPy kernel runs on it, first to last.
 

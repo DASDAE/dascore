@@ -239,9 +239,8 @@ class DascoreConfig(BaseModel):
         description=(
             "Most any one array should hold, in bytes, while the operations "
             "pending on lazy patch data are run. Data which would need a "
-            "larger one are computed a chunk at a time. It is aimed for "
-            "rather than promised: an operation which needs a whole axis "
-            "is given it. Zero computes everything in one piece."
+            "larger one are computed a chunk at a time, where the operations "
+            "allow it. Zero computes everything in one piece."
         ),
     )
     remote_hdf5_max_blocks: int = Field(

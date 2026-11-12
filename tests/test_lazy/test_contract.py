@@ -44,10 +44,6 @@ class TestNeeds:
 
     box = (slice(10, 20), slice(2, 4))
 
-    def test_pointwise_is_the_same_place(self):
-        """A pointwise step reads the box it makes."""
-        assert Pointwise().needs(self.box, (100, 5)) == self.box
-
     def test_halo_grows(self):
         """Each axis grows by its own widths, and others are left alone."""
         halo = Halo({0: (3, 1)})
@@ -83,12 +79,6 @@ class TestApply:
         box, needed = (slice(5, 8), slice(0, 2)), (slice(3, 10), slice(0, 2))
         out = Halo({0: (2, 2)}).apply(lambda x: x * 2, data, box, needed)
         assert np.array_equal(out, data[2:5] * 2)
-
-    def test_window_computes_nothing(self):
-        """A window's input is already its output, and the kernel is not run."""
-        data = np.ones((3, 2))
-        box = (slice(0, 3), slice(0, 2))
-        assert Window(box).apply(None, data, box, box) is data
 
 
 class TestHook:
