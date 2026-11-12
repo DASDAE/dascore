@@ -10,11 +10,11 @@ These rules govern DASCore's coordinates. If code disagrees with them, fix the c
 - windows leaving `chunk` for `Spool.cut`, and `on_incomplete` going (rules 8, 9);
 - independent segments from `concatenate` and sample removal, equality by labels, the multi-segment refusal, `fill_gaps`' half-step move, `Spool.fill_gaps`, and `fill_value` leaving `chunk` (rules 1, 4, 7, 10);
 - removing the `gapped` and `jittered` flags, hole positions, `Missing`, `fuse` and the run table's `position` column (rules 2, 3, 11, 12, 13);
-- predating 2026-11-12: `Spool.snap_coords` and `snap_coords(max_shift=)` (rule 10).
+- predating 2026-11-12: `Spool.snap_coords`, `snap_coords(max_shift=)` and `snap_coords(step=)` (rule 10).
 
 ## The model
 
-A coordinate is one evenly sampled grid, one list of labels, or several of those in order. Gaps are stored as the boundaries between those pieces, and nothing is moved across a gap. `chunk` joins patches that continue one another and splits at gaps, so every output is gap-free on one grid; `concatenate` joins patches in order into one, keeping its gaps; `fill_gaps` and `split_gaps` remove gaps, only when asked. `time` below is only an example; no dimension name is special.
+A coordinate is one evenly sampled grid, one list of labels, or several of those in order, called segments. Nothing is moved across the boundary between two segments. `chunk` joins patches that continue one another and splits where they don't, so every output is one segment; `concatenate` joins patches in order into one, keeping the boundaries; `fill_gaps` makes segments one grid and `split_gaps` returns each as its own patch, only when asked. `time` below is only an example; no dimension name is special.
 
 ```python
 whole = spool.concatenate(time=None)  # one patch; gaps kept
@@ -35,8 +35,8 @@ The sampling rules apply to one-dimensional, monotonic, numeric or time-like (da
 - **Labels**: a stored array of values, with no step.
 - **Segment**: one grid or one list of labels; a coordinate is one segment, or several in order.
 - **Seam**: where one patch, or segment, ends and the next begins. Its width is the distance from the last label before it to the first after it, in steps; contiguous samples meet at a seam one step wide.
-- **Gap**: a seam wider than the seam test allows (rule 5). A coordinate stores its gaps as boundaries between segments.
-- **Stretch**: patches joined across seams with no gap between them, which `chunk` puts on one grid.
+- **Gap**: a seam wider than the seam test allows (rule 5), so samples are missing.
+- **Stretch**: patches joined across seams that pass the seam test, which `chunk` returns as one segment.
 
 `coord.step` is set, and `coord.evenly_sampled` is true, only for a coordinate of one grid. A coordinate of one list of labels is irregular.
 
@@ -44,7 +44,7 @@ The sampling rules apply to one-dimensional, monotonic, numeric or time-like (da
 
 ### Labels
 
-1. **Labels are what was recorded.** Only `snap_coords`, `fill_gaps`, a reader's `snap` (rule 3) and `chunk`'s grid for a stretch (rule 6) change them; storing a label as a grid value within float precision doesn't count. Equal labels mean equal coordinates, however they are split into segments; segments are how gaps are stored, not a second kind of coordinate, so segments that continue one grid exactly are one grid. Segments arise only from `concatenate` (rule 7) and from removing samples from the middle of a coordinate (a mask, an index array), which leaves each remaining piece as its own segment with its own step; only an explicit stride gives a coarser step.
+1. **Labels are what was recorded.** Only `snap_coords`, `fill_gaps`, a reader's `snap` (rule 3) and `chunk`'s grid for a stretch (rule 6) change them; storing a label as a grid value within float precision doesn't count. Equal labels mean equal coordinates, however they are split into segments, so segments that continue one grid exactly are one grid. Segments arise only from `concatenate` (rule 7) and from removing samples from the middle of a coordinate (a mask, an index array), which leaves each remaining piece as its own segment with its own step; only an explicit stride gives a coarser step.
 
 2. **Inference finds a grid or labels.** `get_coord(data=...)` checks every label against a fitted grid, not just the spacings, so drift can't hide: labels all on the grid at consecutive positions are that grid; anything else is labels, with no step. Inference never makes segments. With a stated step, labels on its grid at consecutive positions are that grid. Integer and datetime grids are found exactly in their own tick unit; floats are judged in their stored dtype.
 
@@ -60,39 +60,39 @@ The sampling rules apply to one-dimensional, monotonic, numeric or time-like (da
 
 ### Joining
 
-5. **`max_shift` is the seam test.** Two patches join when the later starts one step after the earlier ends, give or take `max_shift`; the step is the earlier patch's. Any wider seam is a gap. `max_shift` bounds each seam, not how far labels move in total. `tolerance`, off by default, opts in to the released test instead: any seam up to `tolerance` steps wide joins, or, as a quantity or timedelta, up to that distance. Pieces with no step join only under a distance `tolerance`.
+5. **`max_shift` is the seam test.** Two patches join when the later starts one step after the earlier ends, give or take `max_shift`; the step is the earlier patch's. A wider seam is a gap, and a narrower one an overlap (rule 6). `max_shift` bounds each seam, not how far labels move in total. `tolerance`, off by default, widens the test as released: a seam up to `tolerance` steps wide also joins, however narrow. As a quantity or timedelta, which v0.1.24 did not take, it is that width as a distance; pieces with no step join only this way.
 
 6. **`chunk` joins and splits.** It never fills and never returns a patch with a gap inside.
-   - It joins compatible patches (`notes/patch_compatibility.qmd`) along the coordinate's direction, judging each seam, including those between a patch's segments, from the recorded labels on either side. A gap starts a new stretch. A single sample takes its neighbours' step; pieces with no step keep their labels.
-   - **Overlaps.** Each sample is kept once and the earlier patch wins: the later patch continues from its first sample past the earlier one's end that passes the seam test. If none does, the rest of the later patch starts a new stretch.
-   - **Grid.** Each stretch gets one grid, fitted before windows are cut, so chunk outputs rejoin exactly. It starts at the first patch's first label. Its step is the roundest step a patch states (fewest significant digits in the rate or the step; ties go to the step covering the most samples) for which every patch's first and last label lies within `max_shift` of the grid; failing that, the step spreads the stretch evenly from its first label to its last, as v0.1.24 does. Only steps the patches state are candidates for the roundest. A seam joined because of `tolerance` is closed by the same fit, and one wider than 1.5 steps warns, as released.
+   - It joins compatible patches (`notes/patch_compatibility.qmd`, which also bounds how far their steps may differ) along the coordinate's direction, judging each seam, including those between a patch's segments, from the recorded labels on either side. A gap starts a new stretch. A single sample takes its neighbours' step. A stretch holding a piece with no step keeps every label as recorded and has no grid.
+   - **Overlaps.** Where the later patch starts sooner than the seam test allows, each sample is kept once and the earlier patch wins: the later patch continues from its first sample past the earlier one's end that passes the seam test. If none does, its samples past the earlier one's end start a new stretch.
+   - **Grid.** Each stretch gets one grid, fitted before windows are cut, so chunk outputs rejoin exactly. It starts at the first patch's first label. Its step is the roundest step a patch states (fewest significant digits in the rate or the step) for which every patch's first and last label lies within `max_shift` of its own position on the grid, counting the stretch's samples consecutively; failing that, the step spreads the stretch evenly from its first label to its last, as v0.1.24 does. A seam joined because of `tolerance` is closed by the same fit, and one wider than 1.5 steps warns, as released.
    - After a file ending at 99 s with a 1 s step, one starting at 100.1 s joins it, and one starting at 101.3 s starts a new stretch unless `tolerance` is at least 2.3.
    - `chunk_plan` records per piece why each output starts and how many samples were dropped.
 
-7. **`concatenate` joins exactly**, in order, into one patch, keeping every label; it never moves, splits or fills. Each patch it joins stays its own segment, so gaps are kept as segment boundaries. Overlapping labels give an unordered coordinate and a warning.
+7. **`concatenate` joins exactly**, in order, into one patch, keeping every label; it never moves, splits or fills. Each patch it joins stays its own segment unless it continues the one before exactly (rule 1), so every gap is kept as a boundary. Overlapping labels give an unordered coordinate and a warning.
 
 ### Selecting and windows
 
 8. **Ranges and windows.**
    - Picking by value (`select`, `sel`, ranges, annotations) includes both ends; positions (`isel`, `samples=True`) and windows exclude the end, as in xarray. Reversed bounds are swapped; on a descending coordinate, start and end mean the lower and upper values.
    - `chunk` takes lengths only: a number, a quantity in the coordinate's units, or a data size such as `time=25 * megabytes`; `None` keeps each stretch whole. `chunk(dim=length, overlap=o)` starts windows at `start + k * (length - o)` exactly on the stretch's grid, so counts may differ by one; negative overlap skips; `samples=True` counts samples.
-   - `Spool.select` accepts ranges, `(n, 2)` arrays of ranges, or annotation sets, and returns each source's matching part, unjoined. `Spool.cut` owns explicit windows, joining each as `chunk` joins. On `Patch.select` an array still lists values to pick, as released.
+   - `Spool.select` accepts ranges, `(n, 2)` arrays of ranges, or annotation sets, and returns each source's matching part, unjoined; arrays on several dimensions pair row by row. `Spool.cut` owns explicit windows, joining each as `chunk` joins, into one output or labelled fragments if it splits. On `Patch.select` an array still lists values to pick, as released.
 
-9. **Completeness applies to `chunk` windows only.** A window is complete when its stretch holds samples at both of its edge positions; `keep_partial=True` keeps the others, as released. `select` just clips.
+9. **Completeness applies to `chunk` windows only.** A window running past the end of its stretch is dropped unless `keep_partial=True`, as released; windows of a stretch with no step are kept. `select` just clips.
 
 ### Gaps
 
 10. **`fill_gaps`, `split_gaps` and `snap_coords`.**
-    - `fill_gaps(**{dim: size})` inserts `fill_value` (NaN) samples into gaps up to that size (all, if none given), so each filled gap leaves one grid on the earlier segment's step. A segment after a gap may move up to half a step onto that grid, and the move is reported; a larger move, a segment with no step, or a `fill_value` the dtype can't hold raises. `Spool.fill_gaps` also fills the gaps between its patches, so a later `chunk` joins across them.
+    - `fill_gaps(**{dim: size})` makes segments one grid, on the earlier segment's step: it inserts `fill_value` (NaN) samples into gaps up to that size (all, if none given) and moves the later segment up to half a step onto the grid, reporting the move. A larger move, a segment with no step, or a `fill_value` the dtype can't hold raises. `Spool.fill_gaps` also fills the gaps between its patches, so a later `chunk` joins across them.
     - `split_gaps()` returns one patch per segment.
-    - `snap_coords(*dims)` works as released: sort, keep the end labels and the count, spread samples evenly; evenly sampled coordinates are left alone. `max_shift=` raises on larger moves, and moves over one step warn, since a gap is being spread.
+    - `snap_coords(*dims)` works as released: sort, keep the end labels and the count, spread samples evenly; evenly sampled coordinates are left alone. `max_shift=` raises on larger moves, and moves over one step warn, since a gap is being spread. `step=` places labels on that grid instead.
     - Without names they apply to every eligible dimension. On spools they are lazy, using the index where possible and otherwise reading only the coordinate; `snap_coords` acts on each patch alone.
 
 ### Reports and storage
 
 11. **Reports match `chunk`.** `get_gaps` lists where `chunk` with the same arguments splits, with span and missing-sample count. `get_coverage` counts missing samples (unknown without a step). `get_contents` gives `{dim}_step` only for a coordinate of one grid.
 
-12. **The index mirrors the coordinate**: one row per patch, a coordinate table (step, envelope, segment count) and a run table holding the segments of each coordinate with gaps, and only of those. Runs have no grid position, since segments share no grid. Gap logic is written once over runs, so memory and index agree. Undecidable cases read the coordinate lazily. Beyond `max_index_runs`, a coordinate is stored as an envelope with a warning naming the file and the fix.
+12. **The index mirrors the coordinate**: one row per patch, a coordinate table (step, envelope, segment count) and a run table holding the segments of each coordinate with more than one, and only of those. Gap logic is written once over runs, so memory and index agree. Undecidable cases read the coordinate lazily. Beyond `max_index_runs`, a coordinate is stored as an envelope with a warning naming the file and the fix.
 
 13. **Writers keep steps and segments, or refuse**, saying to fill or split first. They never silently split, stretch, fill or drop a step.
 
@@ -102,7 +102,8 @@ These are the only thresholds.
 
 | Name | Value | Use |
 |---|---|---|
-| `dascore.config.max_shift` | 0.2 steps | The seam test (rule 5) and the reader check (rule 3): above measured jitter (0.17), well short of a missing sample; always under 0.5. `snap_coords` has no default limit. |
+| `dascore.config.max_shift` | 0.2 steps | The seam test and grid fit (rules 5, 6) and the reader check (rule 3): above measured jitter (0.17), well short of a missing sample; always under 0.5. `snap_coords` has no default limit. |
+| `tolerance` warning | 1.5 steps | The released default: a wider seam joined by `tolerance` warns (rule 6). |
 | `dascore.config.max_index_runs` | 256 | Runs stored per coordinate in the index. |
 | Float exactness | max(`_GRID_RTOL` × \|step\|, 4 ulp) | In the stored dtype; float64 holding float32 values counts as float32. |
 | Fractional steps | ≥ 100 ticks | So an integer array missing one value isn't read as a fractional grid. |
@@ -129,8 +130,8 @@ Released behaviour is deprecated with a warning for at least one release rather 
 
 | In v0.1.24 | Deprecation |
 |---|---|
-| `chunk` joining seams up to `tolerance=1.5` steps by default and spreading joined labels evenly | Switched in 1.0: seams join by `max_shift` (rule 5), so a later patch more than `max_shift` off the earlier one's grid, such as one across a seam 1.2 to 1.5 steps wide, no longer joins unless `tolerance` is given; a stretch with no fitting stated step is still spread evenly (rule 6) |
-| `chunk(snap_coords=...)` | Undecided (see open questions) |
+| `chunk` joining any seam up to `tolerance=1.5` steps wide by default and spreading joined labels evenly | Kept one release, warning where rules 5 and 6 differ; then a later patch more than `max_shift` off the earlier one's grid, such as one across a seam 1.2 to 1.5 steps wide, joins only under `tolerance`, and a stretch keeps a stated step that fits |
+| `chunk(snap_coords=...)` | Warns; what it means under rule 6 is undecided (see open questions) |
 | `get_coord(data=...)` snapping within 0.1% | Switched in 1.0: labels without a stated step are read by rule 2; `snap=True` keeps the released snap |
 | `taper`, `sobel_filter`, filtered `decimate`, `differentiate` and `integrate` on coordinates which are not evenly sampled | Raise `CoordError` from 1.0 for more than one segment; one list of labels is an irregular axis and still computes by its labels |
 | `order` dropping missing values | Raises `CoordError` from 1.0 |
@@ -147,7 +148,7 @@ Coordinates will hold a mapping of keys to any array-like, real or virtual, carr
 
 ## Open questions
 
-Not yet decided: whether released `chunk(snap_coords=False)` is kept or deprecated; whether `group` stays in `chunk`'s public signature; whether `max_shift` also takes a unit form (it is a fraction of a step for now); whether a stated step whose labels skip grid positions gives segments or raises (rule 2); and whether `chunk` looks for gaps inside one list of labels, so that labels stored as one array and as segments, which rule 1 makes equal, chunk alike.
+Not yet decided: what `chunk(snap_coords=...)` means under rule 6, and whether `False` is kept; whether `group` stays in `chunk`'s public signature; whether `max_shift` also takes a unit form (it is a fraction of a step for now); whether a stated step whose labels skip grid positions gives segments or raises (rules 2, 10); and whether one list of labels and the same labels as segments, which rule 1 makes equal, should chunk and compute alike (rules 4, 6).
 
 ## Decisions log
 
@@ -170,4 +171,4 @@ Not yet decided: whether released `chunk(snap_coords=False)` is kept or deprecat
 - 2026-10-11: `Spool.stack` relabelled `dim_vary` to start at zero (1970 for times) in v0.1.24, which rule 1 forbids and the methods table did not record; it warns for one release, then keeps the first patch's labels.
 - 2026-11-06: 1.0 is the release after v0.1.24, so the switches promised for the next release take effect in 1.0 rather than after a release of warnings, as pre-v1.0 review findings s01-F3 and s09-F2 asked: `order` and the operations needing even sampling raise, `coords_from_df` refuses to overwrite, `stack` keeps the first patch's labels, and `concatenate_patches` and `merge_patches` are removed. `get_coord(data=...)` reads labels without a stated step exactly by default; a stated step still absorbs float rounding and a zero-dimensional array still makes a scalar coordinate, since reading those exactly broke selection and coordinate construction well beyond the warning.
 - 2026-11-10: The 1.0 switch for the operations needing even sampling (`taper`, `sobel_filter`, filtered `decimate`, `differentiate`, `integrate`) refuses only holes and jitter, as the check refused only holes before #1427. A coordinate with no step, such as irregular sensor positions, stays an irregular axis they compute on by its labels, as in 0.1.x, so the 2026-11-06 switch does not remove that released support.
-- 2026-11-12: Coordinates and `chunk` are simplified, after two rounds of review found the design too complex to maintain. Reversed: holes on a shared grid (2026-10-04) and the `jittered` and `gapped` flags (2026-10-07) give way to independent segments, with no hole positions, `Missing` or `fuse`, and the run table loses its `position` column; `max_shift` becomes the seam test rather than a bound on shifting a piece (2026-10-06), and `max_shift=0` (2026-10-07) goes with jitter; `chunk` again fits one grid per stretch, and an explicit `tolerance` closes a gap by refitting, as released, rather than keeping holes (2026-10-04). Windows move to `Spool.cut` and `fill_value` to `Spool.fill_gaps`; `on_incomplete` and `snap_coords(step=)`, which kept holes, are dropped. Measured on `dev`: ten 1,000-sample files each 0.15 step late joined into one patch with labels moved 1.35 steps; a two-grid coordinate and the same labels as one array compared unequal, and `chunk(time=None)` split one ([2000, 2000]) but not the other ([4000]); `Spool.concatenate` returned labels, across whose hour-long gap filtered `decimate` ran silently; and mask and index-array `select` already returned two grids. A bound on total label movement was rejected, since it would split a day of drifting one-minute files into hundreds of patches. Not deprecated first, as 1.0 is the switch (2026-11-06): the default seam slack falls from 0.5 step (`tolerance=1.5`) to 0.2 (`max_shift`), so seams 1.2 to 1.5 steps wide stop joining unless `tolerance` is given. The other removals were unreleased.
+- 2026-11-12: Coordinates and `chunk` are simplified, after two rounds of review found the design too complex to maintain. Reversed: holes on a shared grid (2026-10-04) and the `jittered` and `gapped` flags (2026-10-07) give way to independent segments, with no hole positions, `Missing` or `fuse`, and the run table loses its `position` column; DASDAE's default snap is judged by `max_shift` rather than a stored flag (2026-10-09); `max_shift` becomes the seam test rather than a bound on shifting a piece (2026-10-06); `chunk` again fits one grid per stretch, and an explicit `tolerance` closes a gap by refitting, as released, rather than keeping holes (2026-10-04). Windows move to `Spool.cut` and `fill_value` to `Spool.fill_gaps`; `on_incomplete` and `join_dim` go with `chunk`'s windows. Measured on `dev`: ten 1,000-sample files each 0.15 step late joined into one patch with labels moved 1.35 steps; a two-grid coordinate and the same labels as one array compared unequal, and `chunk(time=None)` split one ([2000, 2000]) but not the other ([4000]); `Spool.concatenate` returned labels, across whose hour-long gap filtered `decimate` ran silently; and mask and index-array `select` already returned two grids. A bound on total label movement was rejected, since it would split a day of drifting one-minute files into hundreds of patches. The default seam slack falls from 0.5 step (`tolerance=1.5`) to 0.2 (`max_shift`), so a later patch more than 0.2 step off the earlier one's grid, as across a seam 1.2 to 1.5 steps wide, stops joining unless `tolerance` is given; the released joining keeps its one release of warnings. The other removals were unreleased.
