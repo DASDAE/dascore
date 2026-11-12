@@ -577,25 +577,24 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
     A chunk plan fits one grid to each stretch of joined patches and gives
     each output's members its slice (``_{dim}_stretch``); an output whose
     stretch keeps its one patch's own labels names none and is returned
-    as it is. A coordinate the grid cannot be stated in (a time counted in
-    other units than nanoseconds, integers on a fractional step) keeps
-    the labels it was assembled with, as does one which did not load the
-    samples the plan numbered.
+    as it is. The grid is in the plan's dtype; a time counted in another
+    unit keeps it where every label is whole in that unit, and otherwise
+    takes nanoseconds, as the plan does. A coordinate which did not load
+    the samples the plan numbered keeps the labels it was assembled with.
     """
     spec = row.get(f"_{dim}_stretch")
     if not isinstance(spec, tuple) or dim not in coords.coord_map:
         return coords
     current = coords.coord_map[dim]
-    dtype, stated = np.dtype(current.dtype), np.dtype(spec[-1])
-    origin, num, _, *rest = spec
-    if dtype.kind in "iu" and stated.kind == "f":
-        if not (float(origin).is_integer() and float(num).is_integer()):
-            return coords
-        spec = (int(origin), int(num), 1, *rest[:-1], str(dtype))
-    elif dtype != stated and (dtype.kind in "Mm" or stated.kind in "Mm"):
-        return coords
-    else:
-        spec = (*spec[:-1], str(dtype))
+    dtype, (origin, num, den, *rest, stated) = np.dtype(current.dtype), spec
+    spec = (origin, num, den, *rest, str(dtype))
+    if dtype.kind in "Mm" and dtype != stated:  # the plan's ticks are nanoseconds
+        per = int(np.array(1, dtype).astype(stated).view(np.int64))
+        start, step = np.int64(origin).view(stated), np.int64(num).view("m8[ns]")
+        steps = np.dtype(dtype.str.replace("M", "m"))  # a timedelta in the unit
+        own = (start.astype(dtype), step.astype(steps), 0, *rest, str(dtype))
+        whole = den == 1 and not origin % per and not num % per
+        spec = own if whole else (origin, num, den, *rest, stated)
     coord = stretch_coordinate(spec, current.units)
     if len(coord) != len(current):
         # a source changed since it was planned, so its samples are not

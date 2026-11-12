@@ -22,7 +22,6 @@ from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity_str
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.xarray.patch import _cf_unit_str
-from tests.conftest import join_patches
 
 
 @pytest.fixture
@@ -362,7 +361,9 @@ class TestSpoolToXarray:
         )
         spool = dc.spool([random_patch, gap])
         tol = dc.get_quantity("10 m")
-        merged = join_patches([random_patch, gap], "distance")
+        # the joined seam is closed by the stretch's fit (rule 6), as chunk does
+        (merged,) = spool.chunk(distance=None, tolerance=tol)
+        assert merged.get_coord("distance").evenly_sampled
         tree = spool.io.to_xarray(dim="distance", tolerance=tol)
         leaves = self._leaves(tree)
         assert len(leaves) == 1

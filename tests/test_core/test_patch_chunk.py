@@ -841,11 +841,13 @@ class TestChunkMerge:
             out = dc.spool((base, patch_w_gap)).chunk(time=None)
         assert len(out) == 2
 
-        # Case 3: a tolerance spans the hole, refitting it or filling it.
+        # Case 3: a tolerance spans the hole, refitting it (which warns) or
+        # filling it (which spreads no labels, so does not).
         spool = dc.spool((base, patch_w_gap))
         with pytest.warns(UserWarning, match="gap"):
             assert len(spool.chunk(time=None, tolerance=10)) == 1
-        with pytest.warns(UserWarning, match="gap"):
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
             assert len(spool.chunk(time=None, tolerance=10, fill_value=np.nan)) == 1
 
 
@@ -3586,8 +3588,7 @@ class TestRecipeMerge:
         second = self._patch(start, 8, seed=2)
         spool = self._write(tmp_path, [first, second])
         assert len(spool.chunk(time=None)) == 2
-        with pytest.warns(UserWarning, match="gap"):
-            merged = spool.chunk(time=None, tolerance=10, fill_value=fill)
+        merged = spool.chunk(time=None, tolerance=10, fill_value=fill)
         assert len(merged) == 1
         out = merged[0]
         assert route.counts == {"patch": 0, "array": 2}
@@ -3859,11 +3860,12 @@ class TestChunkFillWindows:
         """The plan only publishes an output no source feeds when it can fill it."""
         spool, tolerance = spool_and_tolerance
         assert len(spool.chunk(time=1)) == 4
-        # a tolerance alone spreads the two over the hole, so every window
-        # has a source to draw from
-        with suppress_warnings(UserWarning):
-            plan = spool.chunk_plan(time=1, tolerance=tolerance)
-        assert set(plan.outputs["output_id"]) == set(plan.members["output_id"])
+        # a tolerance alone spreads the two over the hole, 1001 samples over
+        # 7.996 s, so every window has a source to draw from
+        with pytest.warns(UserWarning, match="was used to force merging"):
+            plain = spool.chunk(time=1, tolerance=tolerance)
+        assert len(plain) == 8
+        assert {x.get_coord("time").step for x in plain} == {np.timedelta64(7996, "us")}
 
     def test_streaming_merge_fills(self, random_patch, tmp_path_factory):
         """The index-backed merge streams into a buffer; it fills too."""

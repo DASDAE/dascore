@@ -1234,6 +1234,21 @@ class TestCombinations:
             exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
         assert snapped.attrs.data_id == exact.attrs.data_id
 
+    @pytest.mark.parametrize("kwargs", [{"max_shift": 0.4}, {"tolerance": 1.5}])
+    def test_joining_options_are_part_of_it(self, members, kwargs):
+        """`max_shift` and `tolerance` can change the labels, so the id too."""
+        step = members[0].get_coord("time").step
+        late = [  # each seam 1.15 steps: no stated step fits under 0.2
+            x.update_coords(time_min=x.coords.min("time") + num * (step * 15) // 100)
+            for num, x in enumerate(members)
+        ]
+        default = dc.spool(late).chunk(time=None)[0]
+        other = dc.spool(late).chunk(time=None, **kwargs)[0]
+        assert default.attrs.data_id != other.attrs.data_id
+        if "max_shift" in kwargs:  # a wider slack keeps the stated step
+            assert other.get_coord("time").step == step
+            assert default.get_coord("time") != other.get_coord("time")
+
     def test_unencodable_merge_options(self, members):
         """The merge still happens; its id is nobody else's."""
         attrs = [x.attrs for x in members]

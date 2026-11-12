@@ -2659,7 +2659,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         # read from the plan: its values are normalized (eg a dimensionless
         # tolerance is a plain multiple)
-        names = ("conflict", "fill_value", "tolerance")
+        names = ("conflict", "fill_value", "tolerance", "max_shift")
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=replace(plan, outputs=plan.outputs.assign(**(stamp or {}))),
@@ -2682,9 +2682,10 @@ class Spool(NodeRepr, NamespaceOwner):
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
         every dimension, as `chunk` merges, so a gap still leaves several
-        patches. A feature skips any patch lacking a dimension it bounds.
-        Selection includes both ends, so the sample at a range's
-        (half-open) maximum is kept; an empty range gives nothing. A
+        patches. Windows join as `chunk` joins by default. A feature skips
+        any patch lacking a dimension it bounds. Selection includes both
+        ends, so the sample at a range's (half-open) maximum is kept; an
+        empty range gives nothing. A
         feature spanning a dimension keeps the spool's full extent along
         it, one holding no samples gives nothing, and overlapping features
         duplicate data. Nothing is loaded.

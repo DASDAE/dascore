@@ -242,8 +242,11 @@ gaps = with_gaps.get_gaps()
 coverage = with_gaps.get_coverage()
 ```
 
+A `tolerance` given in seconds joins every seam up to that width, so these seams, 1.004 s wide, are no longer gaps:
+
 ```{python}
-second_scale_gaps = with_gaps.get_gaps(tolerance=1 * s)
+second_scale_gaps = with_gaps.get_gaps(tolerance=2 * s)
+assert len(gaps) == 2 and second_scale_gaps.empty
 ```
 
 `gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent; `missing` counts the samples missing from it. The `tolerance` and `max_shift` arguments, shared with `chunk`, control which seams count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; a patch with holes is one row, and the runs its index stores make its holes gaps like any other. `group_id` links coverage rows to their gaps.

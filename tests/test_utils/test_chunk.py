@@ -441,7 +441,8 @@ class TestChunkPlanToMerge:
         assert len(refit) == 1
         span = (df["time_max"].max() - df["time_min"].min()).value
         assert refit["time_step"].iloc[0].value == round(span / 21)
-        with pytest.warns(UserWarning, match="gap"):
+        with warnings.catch_warnings():  # a fill spreads no labels, so no warning
+            warnings.simplefilter("error")
             plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
         assert len(plan.outputs) == 1
         assert plan.outputs["time_step"].iloc[0] == step

@@ -419,7 +419,8 @@ class TestChunkKeepsHoles:
         assert joined[0].get_coord("time").evenly_sampled
         assert len(joined[0].get_coord("time")) == 200
         assert joined.get_gaps().empty
-        with pytest.warns(UserWarning, match="gap"):
+        with warnings.catch_warnings():  # a fill spreads no labels, so no warning
+            warnings.simplefilter("error")
             filled = spool.chunk(time=None, tolerance=100_000, fill_value=np.nan)
         assert len(filled) == 1 and filled.get_gaps().empty
         assert filled[0].get_coord("time").evenly_sampled

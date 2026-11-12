@@ -498,7 +498,8 @@ def spool_to_xarray(
         source_rows=source_rows,
         plan=plan,
         parent=spool._catalog,
-        merge_kwargs={"conflict": conflict, "tolerance": plan.params["tolerance"]},
+        merge_kwargs={"conflict": conflict}
+        | {x: plan.params[x] for x in ("tolerance", "max_shift")},
         mode="chunk",
         origin_path=spool.spool_path,
     )

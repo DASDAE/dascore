@@ -657,6 +657,7 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
+    merge_kwargs.pop("max_shift", None)  # the plan's, which names the merge
     return merge_kwargs, coord_kwargs
 
 
