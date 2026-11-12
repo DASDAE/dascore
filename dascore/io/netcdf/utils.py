@@ -66,6 +66,26 @@ def get_shared_payload_names(dataset) -> list[str]:
     return [name for name, var in variables.items() if set(var.dims) == dims]
 
 
+def payload_datasets(dataset) -> dict:
+    """Map each payload's name to a dataset holding it as the only payload."""
+    try:
+        return {get_xarray_data_var_name(dataset): dataset}
+    except ValueError:
+        names = get_shared_payload_names(dataset)
+    # Siblings differ only by name, so it tags them unless their own tags
+    # already tell them apart; otherwise chunking would merge them.
+    tags = {x: dataset[x].attrs.get("tag") or x for x in names}
+    if len(set(tags.values())) < len(tags):
+        tags = {x: x for x in names}
+    out = {}
+    for name in names:
+        sub = dataset[[name]]
+        if len(names) > 1:
+            sub[name] = sub[name].assign_attrs(tag=tags[name])
+        out[name] = sub
+    return out
+
+
 def parse_cf_version(cf_version: str) -> tuple[int, int]:
     """Parse a CF version string into comparable major/minor integers."""
     parts = cf_version.split(".")

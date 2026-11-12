@@ -19,10 +19,9 @@ from dascore.utils.misc import optional_import
 from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
-    get_shared_payload_names,
-    get_xarray_data_var_name,
     is_netcdf4_file,
     parse_cf_version,
+    payload_datasets,
     read_dataset_array,
     spool_to_cf_dataset,
 )
@@ -95,26 +94,6 @@ def _int_for_bool(attrs: dict) -> dict:
     return {i: convert(v) for i, v in attrs.items()}
 
 
-def _payload_datasets(dataset) -> dict:
-    """Map each payload's name to a dataset holding it as the only payload."""
-    try:
-        return {get_xarray_data_var_name(dataset): dataset}
-    except ValueError:
-        names = get_shared_payload_names(dataset)
-    # Siblings differ only by name, so it tags them unless their own tags
-    # already tell them apart; otherwise chunking would merge them.
-    tags = {x: dataset[x].attrs.get("tag") or x for x in names}
-    if len(set(tags.values())) < len(tags):
-        tags = {x: x for x in names}
-    out = {}
-    for name in names:
-        sub = dataset[[name]]
-        if len(names) > 1:
-            sub[name] = sub[name].assign_attrs(tag=tags[name])
-        out[name] = sub
-    return out
-
-
 def _takes_cf(resource: H5Reader) -> bool:
     """Return True for a non-XDAS netCDF-4 file stating CF 1.6 or later."""
     if not is_netcdf4_file(resource) or is_xdas_file(resource):
@@ -143,7 +122,7 @@ class _NetCDFReader:
         """
         with _open_xarray_dataset(resource) as dataset:
             where = str(getattr(resource, "filename", "the resource"))
-            payloads = _payload_datasets(dataset)
+            payloads = payload_datasets(dataset)
             if len(payloads) > 1:
                 dataset = resolve_keyed_source(payloads, key, where)
             else:
@@ -162,7 +141,7 @@ class _NetCDFReader:
         with _open_xarray_dataset(resource) as dataset:
             return [
                 meta
-                for payload in _payload_datasets(dataset).values()
+                for payload in payload_datasets(dataset).values()
                 for meta in dataset_to_patch_meta(payload, snap)
             ]
 

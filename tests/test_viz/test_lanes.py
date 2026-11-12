@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
-from matplotlib.backends.backend_pdf import FigureCanvasPdf
+from matplotlib.backends.backend_svg import FigureCanvasSVG
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import to_rgba, to_rgba_array
 from matplotlib.figure import Figure
@@ -733,10 +733,10 @@ class TestColors:
         """Not every canvas hands out a renderer when asked for one.
 
         A vector backend has none until it draws, so a figure bound for
-        a pdf must be laid out without asking the canvas for one.
+        an svg must be laid out without asking the canvas for one.
         """
         figure = Figure(figsize=(4, 3), layout="constrained")
-        FigureCanvasPdf(figure)
+        FigureCanvasSVG(figure)
         ax = figure.subplots()
         names, frame = _many_values()
         plot_lanes(frame, ax=ax, value="v")

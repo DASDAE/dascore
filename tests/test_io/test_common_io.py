@@ -286,6 +286,7 @@ VENDOR_ATTRS = frozenset(
         "sample_spacing_usec",
         "sampling_resolution",
         "schema_version",
+        "segy_text_header",
         "service_company_name",
         "signal_size",
         "start_channel",
