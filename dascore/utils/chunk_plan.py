@@ -1327,7 +1327,7 @@ def _grid_windows(grid, value, overlap, keep_partial):
     Windows are measured from its first label and hold the samples whose
     labels fall inside (rule 8); an exact grid places them on its ticks.
     """
-    count = len(grid)
+    count = grid.count
     length = _numbers(np.asarray(value))[()]
     hop = 0 if overlap is None else _numbers(np.asarray(overlap))[()]
     if grid.exact:
@@ -2475,7 +2475,7 @@ def build_chunk_plan(
         if gridded[part]:
             if merge_mode:
                 firsts = np.array([0], dtype=np.int64)
-                lasts = np.array([len(grids[part]) - 1], dtype=np.int64)
+                lasts = np.array([grids[part].count - 1], dtype=np.int64)
             else:
                 sub_sample[part] = value_c < abs(part_step)
                 try:
@@ -2658,7 +2658,7 @@ def build_chunk_plan(
         win_parts = np.concatenate([np.full(len(x[3]), x[1]) for x in pending])
         win_first = np.concatenate([x[3] for x in pending])
         win_last = np.concatenate([x[4] for x in pending])
-        counts = np.array([0 if x is None else len(x) for x in grids], np.int64)
+        counts = np.array([0 if x is None else x.count for x in grids], np.int64)
         # a stretch with no grid numbers no positions any window reaches
         offsets = np.where(gridded, np.r_[0, np.cumsum(counts)[:-1]], -(2**62))
         windows = (win_parts, win_first, win_last)
@@ -3707,7 +3707,7 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
         exact[out] = (
             (piece.step_num, piece.step_den, piece.phase, size) if fraction else None
         )
-        terms = (grid.origin, grid.step_num, grid.step_den, len(grid), grid.phase)
+        terms = (grid.origin, grid.step_num, grid.step_den, grid.count, grid.phase)
         specs[out] = (*terms, first, size, str(dtype))
     stretch_col = f"_{name}_stretch"
     steps = _published(steps, np.array([x == "labels" for x in specs], dtype=bool))
