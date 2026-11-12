@@ -1,4 +1,9 @@
 ---
+title: DASCore
+header-includes: |
+    <style>
+    #title-block-header { display: none; }
+    </style>
 execute:
     warning: false
 ---
