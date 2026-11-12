@@ -619,7 +619,8 @@ def _held_coord(origin: Mapping, low, high, name: str):
 
     coord = source_coord_from_row(origin, name)
     if coord is None:
-        start, stop = origin.get(f"{name}_min"), origin.get(f"{name}_max")
+        # a frame hands times back as pandas scalars, which `grid_fits` refuses
+        start, stop = (_as_numpy(origin.get(f"{name}_{x}")) for x in ("min", "max"))
         grid = origin.get(f"_{name}_grid")
         ticks = _value_family(start) not in ("number", "text")
         if isinstance(grid, tuple) and ticks and not grid_fits(grid, start, stop):

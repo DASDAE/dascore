@@ -922,6 +922,18 @@ class TestSelectSharedDimension:
         again = out.select(utc=(start + np.timedelta64(5100, "ms"), None))
         _assert_contents_match_patches(again, ["time"])
 
+    def test_timedelta_rider(self):
+        """A timedelta coordinate on an exact grid is trimmed like any other."""
+        patch = dc.get_example_patch()
+        shape = (patch.shape[patch.get_axis("time")],)
+        time = get_coord(start=np.datetime64("2020-01-01"), step=(1, 1024), shape=shape)
+        patch = patch.update_coords(time=time)
+        lag = patch.get_array("time") - patch.get_array("time")[0]
+        spool = dc.spool([patch.update_coords(lag=("time", lag))])
+        for kwargs in ({"time": (10, 300)}, {"lag": (10, 300)}):
+            out = spool.select(**kwargs, samples=True)
+            _assert_contents_match_patches(out, ["time", "lag"])
+
     def test_irregular_rider_keeps_envelope(self, sensor_patch):
         """A rider the row cannot rebuild keeps its whole envelope."""
         rng = np.random.default_rng(0)
