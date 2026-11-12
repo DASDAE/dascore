@@ -34,10 +34,10 @@ _PAREN_NUMBER = re.compile(
     r"[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[\d⁰¹²³⁴⁵⁶⁷⁸⁹⁻\s.,eE+\-*/^]*[)\]]"
 )
 _EXPONENT_END = re.compile(r"(\^|\*\*)\s*$")
-# Temperature spellings found in files, e.g. "degrees C", "degreesC",
+# Temperature spellings found in files, e.g. "degrees C", "degreesC", "° C",
 # "degrees_Celsius"; pint reads the spaced ones as degree * coulomb (or farad).
 _DEGREE_TEMPERATURE = re.compile(
-    r"\b[Dd]eg(?:ree)?s?\.?[\s_]*(?:(C)(?:elsius)?|F(?:ahrenheit)?)\b"
+    r"(?:\b[Dd]eg(?:ree)?s?\.?|°)[\s_]*(?:(C)(?:elsius)?|F(?:ahrenheit)?)\b"
 )
 
 

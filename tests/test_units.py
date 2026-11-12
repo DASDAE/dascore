@@ -231,8 +231,9 @@ class TestTemperatureSpellings:
         "degree Celsius",
         "degrees Celsius",
         "Degrees C",
+        "° C",
     )
-    fahrenheit = ("degrees F", "deg F", "degreesF", "degrees_Fahrenheit")
+    fahrenheit = ("degrees F", "deg F", "degreesF", "degrees_Fahrenheit", "° F")
 
     @pytest.mark.parametrize("spelling", celsius)
     def test_celsius(self, spelling):
