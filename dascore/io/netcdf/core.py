@@ -11,7 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
-from dascore.io.utils import resolve_keyed_source
+from dascore.io.utils import parse_units, resolve_keyed_source
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import
@@ -19,6 +19,7 @@ from dascore.utils.misc import optional_import
 from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
+    get_xarray_data_var_name,
     is_netcdf4_file,
     parse_cf_version,
     payload_datasets,
@@ -94,6 +95,14 @@ def _int_for_bool(attrs: dict) -> dict:
     return {i: convert(v) for i, v in attrs.items()}
 
 
+def _take_file_units(dataset):
+    """Give a payload with no units the file's own, if they parse, in place."""
+    attrs = dataset[get_xarray_data_var_name(dataset)].attrs
+    units = dataset.attrs.get("units")
+    if not {"units", "data_units"} & set(attrs) and parse_units(units):
+        attrs["units"] = units
+
+
 def _takes_cf(resource: H5Reader) -> bool:
     """Return True for a non-XDAS netCDF-4 file stating CF 1.6 or later."""
     if not is_netcdf4_file(resource) or is_xdas_file(resource):
@@ -109,6 +118,9 @@ def _takes_cf(resource: H5Reader) -> bool:
 
 class _NetCDFReader:
     """Read NetCDF-4 through xarray, one patch per payload variable."""
+
+    # Whether a payload with no units takes the file's root ``units``.
+    _file_units = False
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
@@ -138,12 +150,13 @@ class _NetCDFReader:
         existing ``h5py`` handle, so only metadata bytes are fetched and the
         file is not downloaded.
         """
+        out = []
         with _open_xarray_dataset(resource) as dataset:
-            return [
-                meta
-                for payload in payload_datasets(dataset).values()
-                for meta in dataset_to_patch_meta(payload, snap)
-            ]
+            for payload in payload_datasets(dataset).values():
+                if self._file_units:
+                    _take_file_units(payload)
+                out.extend(dataset_to_patch_meta(payload, snap))
+        return out
 
 
 class NetCDFCFV18(_NetCDFReader, FiberIO):
@@ -184,13 +197,16 @@ class NetCDFNoCF(_NetCDFReader, FiberIO):
     These state no CF version, or one older than 1.6. Version 0 is a
     fallback, tried after every other format, and claims only a file
     written through netCDF (``_NCProperties``) with a dimensioned root
-    variable. It reads like version 1.8 and infers nothing more; it does
-    not write.
+    variable. It reads like version 1.8, except that a payload with no
+    units takes the file's root ``units`` when they parse; it does not
+    write.
     """
 
     name = "NETCDF_CF"
     version = "0"
     fallback = True
+    # Files outside CF may state their payloads' units once, on the file.
+    _file_units = True
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return "0" for a netCDF-4 file that version 1.8 does not take."""
