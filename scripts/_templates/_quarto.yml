@@ -35,6 +35,18 @@ website:
   repo-actions: [edit]
   page-navigation: true
 
+  # Site-wide banner above the navbar. The 1.0 pages exist only in the
+  # pre-release docs, so the links are absolute rather than project paths.
+  announcement:
+    icon: megaphone-fill
+    dismissable: true
+    position: above-navbar
+    type: primary
+    content: >-
+      **DASCore 1.0 beta is coming!**
+      Read the [announcement](https://dascore.netlify.app/migrations/dascore_1.0_announcement.html)
+      and check the [migration guide](https://dascore.netlify.app/migrations/dascore_1.0_migration.html).
+
   navbar:
     logo: _static/logo.png
     logo-alt: "DASCore logo."

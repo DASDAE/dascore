@@ -19,7 +19,7 @@ env:
   DFS_DATA_DIR: ${{ github.workspace }}/.test_data_cache
 
 # Allow one concurrent deployment. Only runs which can deploy need to
-# serialize, so they share the "pages" group with the master docs workflow.
+# serialize, so they share the "pages" group.
 # A pre-release never deploys; it is grouped per tag so that publishing one
 # pre-release cannot cancel another's build before it attaches docs.zip.
 concurrency:
