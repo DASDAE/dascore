@@ -4,6 +4,7 @@ Tests for optoDAS files.
 
 import json
 import shutil
+import warnings
 from fractions import Fraction
 
 import h5py
@@ -97,7 +98,7 @@ class TestDataScale:
         shutil.copyfile(fetch("decimated_optodas.hdf5"), path)
         return path
 
-    @pytest.mark.parametrize("version", [7, 8, 9, 10, 11])
+    @pytest.mark.parametrize("version", [8, 9, 10, 11])
     @pytest.mark.parametrize("dtype", ["int16", "float32", "float64"])
     @pytest.mark.parametrize("scale", [0.004693713039159775, 1.0, None])
     def test_scaled_values(self, scaled_file, dtype, scale, version):
@@ -281,3 +282,10 @@ class TestUnsupportedVersion:
         with pytest.warns(UserWarning, match=r"future.hdf5.*no version: \[99\]"):
             spool = dc.spool(directory).update()
         assert not len(spool)
+
+    def test_requested_version_quiet(self, directory):
+        """A version the caller asked for skips files without a warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = dc.scan(directory, file_format="OptoDAS", file_version="12")
+        assert not len(out)

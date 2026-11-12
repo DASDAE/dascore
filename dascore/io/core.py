@@ -2161,8 +2161,14 @@ def _iter_scan_results(
                             file_version=version,
                             fiber_io_hint=fiber_io_hint,
                         )
-                    except (PickleFormatDisabledError, UnknownFiberVersionError) as exc:
+                    except PickleFormatDisabledError as exc:
                         warnings.warn(f"Skipping {patch_source}: {exc}", UserWarning)
+                        continue
+                    except UnknownFiberVersionError as exc:
+                        # Only a version read from the file is news to the caller.
+                        if file_version is None:
+                            msg = f"Skipping {patch_source}: {exc}"
+                            warnings.warn(msg, UserWarning)
                         continue
                     except UnknownFiberFormatError:  # skip bad entities
                         continue
