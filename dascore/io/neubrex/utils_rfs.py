@@ -2,7 +2,7 @@
 
 import dascore as dc
 from dascore.io.utils import parse_units, stored_coord
-from dascore.utils.misc import maybe_get_items, unbyte
+from dascore.utils.misc import maybe_get_items
 
 
 def _is_neubrex(h5fi):
@@ -28,7 +28,7 @@ def _get_coord_manager(h5fi, snap=True):
         decode=lambda x: dc.to_datetime64(x / 1_000_000),
     )
     depth = h5fi["depth"]
-    units = parse_units(unbyte(depth.attrs.get("unit")))
+    units = parse_units(depth.attrs.get("unit"))
     distance = stored_coord(depth, snap, name="distance", where=h5fi, units=units)
     coords = {"time": time, "distance": distance}
     return dc.get_coord_manager(coords=coords, dims=("time", "distance"))
