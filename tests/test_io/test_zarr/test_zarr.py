@@ -21,6 +21,7 @@ from upath.implementations.memory import MemoryPath
 
 import dascore as dc
 from dascore.exceptions import (
+    InvalidFiberFileError,
     MissingOptionalDependencyError,
     ParameterError,
     PatchAttributeError,
@@ -730,6 +731,22 @@ class TestMultiPatch:
         assert len(dc.read(path)) == len(zarr_spool)
         with pytest.raises(PatchAttributeError, match="No patch named"):
             ZarrV3().read_array(path, key="raw")
+
+    def test_mixed_group_raises(self, zarr_patch, tmp_path):
+        """A payload beside an array with no dimension names is not dropped."""
+        path = tmp_path / "mixed.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        group = zarr.open_group(path, mode="a", use_consolidated=False)
+        group.create_array("helper", data=np.arange(3))
+        zarr.consolidate_metadata(path)
+        with pytest.raises(InvalidFiberFileError, match="with and without dims"):
+            ZarrV3().read(path)
+
+    def test_dimensionless_patch_raises(self, tmp_path):
+        """A patch with no dimensions would read back as nothing."""
+        patch = dc.Patch(data=np.array(1.0), coords={}, dims=())
+        with pytest.raises(ParameterError, match="no dimensions"):
+            dc.write(patch, tmp_path / "scalar.zarr", "zarr")
 
     def test_streams(self, zarr_spool, tmp_path, monkeypatch):
         """Each patch is converted and written before the next is converted."""

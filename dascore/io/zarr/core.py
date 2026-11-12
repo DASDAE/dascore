@@ -10,6 +10,7 @@ from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
 from dascore.exceptions import (
     CoordError,
+    InvalidFiberFileError,
     MissingOptionalDependencyError,
     ParameterError,
     PatchAttributeError,
@@ -124,6 +125,8 @@ def _cf_dataset(spool, encoding: dict | None):
     scaling) is not described, so its stored labels are read.
     """
     patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
+    if not patches[0].dims:  # it would read back as nothing
+        raise ParameterError("A patch with no dimensions cannot be written to zarr.")
     dataset = spool_to_cf_dataset(patches)
     for name, coord in patches[0].coords.coord_map.items():
         if set((encoding or {}).get(name, ())) - _LAYOUT_KEYS:
@@ -179,8 +182,17 @@ def _open_payload_group(path: UPath, zarr_format: int | None, node):
         return None  # e.g. a group of groups, never opened by xarray
     try:
         return _open_zarr(path, zarr_format, node.path, node)
-    except KeyError:  # raw zarr arrays with no dimension names
+    except KeyError as exc:  # raw zarr arrays with no dimension names
+        if any(_dimension_names(x) for _, x in node.arrays()):
+            msg = f"{path} group {node.path!r} mixes arrays with and without dims."
+            raise InvalidFiberFileError(msg) from exc
         return None
+
+
+def _dimension_names(array) -> list | None:
+    """Return the dimension names a zarr array states (format 3 or 2)."""
+    names = getattr(array.metadata, "dimension_names", None)
+    return names or array.attrs.get("_ARRAY_DIMENSIONS")
 
 
 def _patches(path: UPath, zarr_format: int | None):
