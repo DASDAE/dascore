@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.index import planned
 from dascore.io.optodas import OptoDASV8
 from dascore.utils.downloader import fetch
@@ -96,7 +97,7 @@ class TestDataScale:
         shutil.copyfile(fetch("decimated_optodas.hdf5"), path)
         return path
 
-    @pytest.mark.parametrize("version", [8, 9, 10, 11])
+    @pytest.mark.parametrize("version", [7, 8, 9, 10, 11])
     @pytest.mark.parametrize("dtype", ["int16", "float32", "float64"])
     @pytest.mark.parametrize("scale", [0.004693713039159775, 1.0, None])
     def test_scaled_values(self, scaled_file, dtype, scale, version):
@@ -189,3 +190,94 @@ class TestIndexedMerge:
         assert row["_attrs_complete"]
         defaults = {"gauge_length": None, "schema_version": ""}
         assert json.loads(row["_attr_defaults"]) == defaults
+
+
+class TestVersion7:
+    """Version 7 files state their axes with dt, dx and nSamples only."""
+
+    @pytest.fixture(scope="class")
+    def path(self):
+        """The trimmed version 7 fixture."""
+        return fetch("opto_das_v7_1.hdf5")
+
+    @pytest.fixture(scope="class")
+    def patch(self, path):
+        """The fixture read as one patch."""
+        return dc.read(path)[0]
+
+    def test_get_format(self, path):
+        """Detection names version 7 without a hint."""
+        assert dc.get_format(path) == ("OptoDAS", "7")
+
+    def test_time(self, patch, path):
+        """Time starts at header/time and steps by header/dt for nSamples."""
+        time = patch.get_coord("time")
+        with h5py.File(path, "r") as h5:
+            start = dc.to_datetime64(h5["header/time"][()])
+        # a float epoch near 1.6e9 s resolves to a few hundred ns
+        stated = np.datetime64("2021-11-11T02:10:40.693")
+        assert abs(start - stated) < np.timedelta64(1, "us")
+        assert time.min() == start
+        assert time.step == np.timedelta64(8, "ms")
+        assert time.max() == start + 9 * np.timedelta64(8, "ms")
+        assert time.units == dc.get_quantity("s")
+
+    def test_distance(self, patch, path):
+        """Distance is channels times dx, which the cable spec restates."""
+        distance = patch.get_coord("distance")
+        with h5py.File(path, "r") as h5:
+            expected = h5["cableSpec/sensorDistances"][:]
+        np.testing.assert_allclose(distance.values, expected)
+        assert distance.min() == 0
+        assert distance.step == pytest.approx(4 * 1.0213001907746815)
+        assert distance.max() == pytest.approx(76 * 1.0213001907746815)
+        assert distance.units == dc.get_quantity("m")
+
+    def test_data_and_attrs(self, patch, path):
+        """Values are the stored data times dataScale, in the header's unit."""
+        with h5py.File(path, "r") as h5:
+            stored = h5["data"][:] * h5["header/dataScale"][()]
+        assert patch.dims == ("time", "distance")
+        np.testing.assert_array_equal(patch.data, stored)
+        assert patch.data.dtype == np.float32
+        assert patch.attrs.data_units == dc.get_quantity("rad/m/s")
+        assert patch.attrs.experiment == "concon001"
+        assert patch.attrs.gauge_length == pytest.approx(8.170401526197452)
+
+    def test_scan_matches_read(self, patch, path):
+        """Scan reports the coordinates and attrs read returns."""
+        summary = dc.scan(path)[0]
+        for dim in patch.dims:
+            coord, stated = patch.get_coord(dim), summary.coords[dim]
+            assert (stated.min, stated.max, stated.step, stated.len) == (
+                coord.min(),
+                coord.max(),
+                coord.step,
+                len(coord),
+            )
+        assert summary.attrs.experiment == patch.attrs.experiment
+
+
+class TestUnsupportedVersion:
+    """A detected version with no reader is reported, not dropped silently."""
+
+    @pytest.fixture(scope="class")
+    def directory(self, tmp_path_factory):
+        """A folder holding one OptoDAS file of an unknown version."""
+        path = tmp_path_factory.mktemp("optodas_unsupported")
+        out = path / "future.hdf5"
+        shutil.copyfile(fetch("opto_das_v7_1.hdf5"), out)
+        with h5py.File(out, "r+") as h5:
+            h5["fileVersion"][()] = 99
+        return path
+
+    def test_read_raises(self, directory):
+        """Reading names the format and the missing version."""
+        with pytest.raises(UnknownFiberFormatError, match=r"no version: \[99\]"):
+            dc.read(directory / "future.hdf5")
+
+    def test_spool_warns(self, directory):
+        """A folder spool warns for the file it skips."""
+        with pytest.warns(UserWarning, match=r"future.hdf5.*no version: \[99\]"):
+            spool = dc.spool(directory).update()
+        assert not len(spool)

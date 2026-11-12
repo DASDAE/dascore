@@ -45,7 +45,7 @@ from dascore.io.mseed.core import MSeedV2
 from dascore.io.netcdf import NetCDFCFV18, NetCDFNoCF
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.odh4 import ODH4V1
-from dascore.io.optodas import OptoDASV8
+from dascore.io.optodas import OptoDASV7, OptoDASV8
 from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
 from dascore.io.puniu import PuniuV1
@@ -168,6 +168,7 @@ COMMON_IO_READ_TESTS = {
     # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
     # so every contract runs over it, not only a read.
     OptoDASV8(): ("opto_das_1.hdf5", "decimated_optodas.hdf5"),
+    OptoDASV7(): ("opto_das_v7_1.hdf5",),
     SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (

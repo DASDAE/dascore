@@ -53,3 +53,4 @@ ai4eps_1.h5 2dd3d8bd16a9d775b69601f3683dad807caa51953488f495def70388e031e731 htt
 optasense_odh4_1.h5 50becf9a3f83492c35f29ddfa1969338d3cfff165b1a7b4d199ed2e9d40c5822 https://raw.githubusercontent.com/dasdae/test_data/master/das/optasense_odh4_1.h5
 uptech_as1000_1.hdf5 57e88373acef5f5d1c6054169e347c642ff6a50ef0b7e05b8fdfd5c9b1478ee7 https://raw.githubusercontent.com/dasdae/test_data/master/das/uptech_as1000_1.hdf5
 example_dascore.rsf 955af394dc08b950957e2eb3a5478f54b36e94f7a471eb013cf707301a02c42b https://raw.githubusercontent.com/dasdae/test_data/master/das/example_dascore.rsf
+opto_das_v7_1.hdf5 fb2e167a5fe2048f44594356ce2f9c4ed520528c0f8982bce090bf765bfc972c https://raw.githubusercontent.com/dasdae/test_data/master/das/opto_das_v7_1.hdf5
