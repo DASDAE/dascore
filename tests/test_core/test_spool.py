@@ -855,6 +855,46 @@ class TestSelect:
         assert list(out) == [expected]
 
 
+class TestSelectSourcePath:
+    """Tests for selecting on the stored source path."""
+
+    @pytest.fixture(scope="class")
+    def path_spool(self, tmp_path_factory):
+        """A directory spool of two adjacent single-patch files."""
+        path = tmp_path_factory.mktemp("select_source_path")
+        patches = list(dc.get_example_spool("random_das"))[:2]
+        for name, patch in zip(("first_1.h5", "second_2.h5"), patches):
+            patch.io.write(path / name, "dasdae")
+        return dc.spool(path).update()
+
+    def test_glob(self, path_spool):
+        """A glob keeps only the matching file's patch."""
+        out = path_spool.select(source_path="*_2*")
+        assert list(out.get_contents()["source_path"]) == ["second_2.h5"]
+
+    def test_exact(self, path_spool):
+        """An exact path matches only that file."""
+        out = path_spool.select(source_path="first_1.h5")
+        assert list(out.get_contents()["source_path"]) == ["first_1.h5"]
+
+    def test_no_match_is_empty(self, path_spool):
+        """A pattern matching no file gives an empty spool."""
+        assert len(path_spool.select(source_path="nothing*")) == 0
+
+    def test_with_time(self, path_spool):
+        """A source path and a time range must both match."""
+        time = (path_spool.get_contents()["time_min"].max(), None)
+        assert len(path_spool.select(source_path="first*"))
+        assert len(path_spool.select(time=time))
+        assert not len(path_spool.select(source_path="first*", time=time))
+
+    def test_persists_through_chunk(self, path_spool):
+        """Chunking a source path selection joins only the selected file."""
+        out = path_spool.select(source_path="first*").chunk(time=None)
+        assert len(out) == 1
+        assert out[0] == path_spool.select(source_path="first*")[0]
+
+
 def _assert_contents_match_patches(spool, names):
     """
     Each row advertises the extent of each named coordinate it loads.
