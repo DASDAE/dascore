@@ -13,8 +13,8 @@ counts are returned as separate patches. When sources split across multiple
 patches, DASCore keeps stable integer ``channel`` coordinate values so
 selections still refer to the same source.
 
-Legacy MiniSEED 2 channel codes may be right-padded with spaces. Detection
-accepts those codes without accepting blank or internally spaced codes.
+Legacy MiniSEED 2 channel codes may be right-padded with spaces or blank.
+Detection accepts those codes without accepting internally spaced codes.
 
 The MiniSEED ``channel`` coordinate is an integer source index, not optical
 distance. Optical distance is usually stored in companion DAS metadata rather
