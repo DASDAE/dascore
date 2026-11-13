@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from importlib.metadata import entry_points
 from typing import ClassVar
 
 import pandas as pd
@@ -318,6 +319,26 @@ class TestRegisteredHosts:
         _, group = self.hosts[host]
         stem = group.split(".")[-1].replace("_namespace", "")
         assert (ns_module._PLUGIN_REGISTRY_DIR / f"{stem}.csv").exists()
+
+    @pytest.mark.parametrize("host", list(hosts))
+    def test_registry_rows_are_valid(self, host):
+        """Each shipped registry row names a unique, reachable namespace."""
+        _, group = self.hosts[host]
+        stem = group.split(".")[-1].replace("_namespace", "")
+        df = pd.read_csv(ns_module._PLUGIN_REGISTRY_DIR / f"{stem}.csv")
+        assert not df.isna().any().any()
+        assert df["namespace"].is_unique
+        # DASCore's own namespaces load first, so a row naming one is dead.
+        own = {
+            ep.name
+            for ep in entry_points(group=group)
+            if ep.dist is not None and ep.dist.name == "dascore"
+        }
+        for name in df["namespace"]:
+            ns_module._check_namespace_name(name)
+            assert name not in own
+            assert not hasattr(host, name)
+        assert df["package_url"].str.startswith("https://").all()
 
 
 class TestPluginRegistry:

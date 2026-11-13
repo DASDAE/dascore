@@ -42,14 +42,26 @@ def _time_offset(index: int, step) -> np.timedelta64:
     return np.timedelta64(round(index * step * 10**9), "ns")
 
 
+def _get_dimensions(header):
+    """Return the stored dims, their units and their dimensionRanges."""
+    if "dimensionNames" not in header:
+        # Version 7 has no dimension table: data is (nSamples, nChannels),
+        # stepped by dt and dx in the s and m its processing chain states.
+        last = np.int64(_scalar(header["nSamples"]) - 1)
+        time = {"unitScale": header["dt"], "min": np.int64(0), "max": last}
+        return ("time", "distance"), ("s", "m"), (time, {"unitScale": header["dx"]})
+    dims = tuple(unbyte(x) for x in header["dimensionNames"])
+    units = tuple(unbyte(x) for x in header["dimensionUnits"])
+    ranges = tuple(header["dimensionRanges"][f"dimension{i}"] for i in range(len(dims)))
+    return dims, units, ranges
+
+
 def _get_coord_manager(fi, snap=True):
     """Get the distance ranges and spacing."""
     header = fi["header"]
-    dims = tuple(unbyte(x) for x in header["dimensionNames"])
-    units = tuple(unbyte(x) for x in header["dimensionUnits"])
+    dims, units, ranges = _get_dimensions(header)
     coords = {}
-    for index, (dim, unit) in enumerate(zip(dims, units)):
-        crange = header["dimensionRanges"][f"dimension{index}"]
+    for dim, unit, crange in zip(dims, units, ranges):
         step = _scalar(crange["unitScale"])
 
         # Special case for time.
@@ -81,7 +93,8 @@ def _get_attr_dict(header):
         "gaugeLength": "gauge_length",
         "unit": "data_units",
         "instrument": "interrogator.name",
-        "experiment": "experiment",
+        # Version 7 calls the experiment "exp".
+        "experiment" if "experiment" in header else "exp": "experiment",
     }
     out = {"data_category": "DAS"}
     for head_name, attr_name in attr_map.items():

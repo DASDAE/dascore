@@ -8,7 +8,8 @@ says which stored samples fill which box of the array, and the
 none of which has computed anything. Its shape, dtype and `data_id` are the
 last step's, or the recipe's when nothing is pending, so they are known
 without reading. [`load`](`dascore.lazy.array.LazyArray.load`) reads the
-recipe and runs each step's NumPy kernel in order, in memory.
+recipe and runs each step's NumPy kernel in order, a chunk at a time when
+the whole would be large; see [`dascore.lazy.execute`](`dascore.lazy.execute`).
 
 Examples
 --------
@@ -31,7 +32,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from dascore.exceptions import PatchError
+from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.recipe import Recipe
 from dascore.utils.array_api import LAZY_BACKEND
@@ -51,8 +52,9 @@ class LazyArray:
 
     Notes
     -----
-    No slicing or transposing: a patch whose data are lazy runs only the
-    operations which state a chunk contract, and metadata-only ones.
+    It cannot be indexed or transposed itself: a patch whose data are lazy
+    runs only the operations which state a chunk contract, `select` among
+    them, and metadata-only ones.
     """
 
     __slots__ = ("_chain", "_recipe")
@@ -139,11 +141,13 @@ class LazyArray:
 
     def load(self) -> np.ndarray:
         """
-        Read the recipe and run every pending step, in memory.
+        Read the recipe and run every pending step, returning the array.
 
-        Each step runs its processor's NumPy kernel. The result of each is
-        checked against the shape and dtype its metadata stated, which is
-        what the patch said it held all along.
+        Each step runs its processor's NumPy kernel, on the whole array or,
+        when that would hold an array larger than the `lazy_block_size`
+        setting, a chunk at a time; only the samples the result needs are
+        read. What each step makes is checked against the shape and dtype
+        its metadata stated, which is what the patch said it held all along.
 
         Raises
         ------
@@ -151,23 +155,7 @@ class LazyArray:
             If a step is still pending, or computed an array other than the
             one its metadata stated.
         """
-        out = self._recipe.load()
-        for node in self._chain:
-            stated_shape, stated_dtype, _ = node.made()
-            processor = node.processor
-            kernel = type(processor).kernel_for("numpy")
-            out = kernel(processor, out, **node.plan)
-            shape, dtype = tuple(out.shape), np.dtype(out.dtype)
-            if shape != stated_shape or dtype != stated_dtype:
-                name = type(processor).__name__
-                msg = (
-                    f"{name} computed an array of shape {shape} and dtype "
-                    f"{dtype}, but its metadata stated {stated_shape} and "
-                    f"{stated_dtype}. Its get_metadata must state what its "
-                    "kernel returns."
-                )
-                raise PatchError(msg)
-        return out
+        return execute.load(self)
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
         """Load the array for numpy; each call reads and computes it again."""

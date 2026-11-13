@@ -23,6 +23,7 @@ from dascore.exceptions import (
     PatchError,
     UnknownCoordinateError,
 )
+from dascore.lazy.contract import Unchanged, Window
 from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import contiguous_windows
@@ -718,6 +719,14 @@ with warnings.catch_warnings():
         def kernel(self, data, *, indexer=None):
             """Return the samples the query picks out."""
             return _selected(data, indexer, self.copy)
+
+        def chunk_contract(self, dtype, plan):
+            """Return a window for one range per axis, and none for anything else."""
+            if (index := plan.get("indexer")) is None:
+                return Unchanged()
+            if all(isinstance(x, slice) and x.step in (None, 1) for x in index):
+                return Window(tuple(index))
+            return None
 
 
 @compose_docstring(select_params=select_values_description)
@@ -1546,8 +1555,8 @@ class FillGaps(PatchProcessor):
 
     Places runs of samples on one evenly sampled grid and writes `fill_value`
     where no sample sits, so a segmented coordinate (for example from
-    [`Spool.chunk`](`dascore.Spool.chunk`) with `snap_coords=False` across a
-    gap) becomes a plain range, unless a limit leaves wider holes as seams.
+    [`Patch.select`](`dascore.Patch.select`) with a mask removing samples)
+    becomes a plain range, unless a limit leaves wider holes as seams.
 
     Parameters
     ----------

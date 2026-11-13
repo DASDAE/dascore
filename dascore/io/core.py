@@ -65,6 +65,7 @@ from dascore.exceptions import (
     PickleFormatDisabledError,
     RemoteCacheError,
     UnknownFiberFormatError,
+    UnknownFiberVersionError,
 )
 from dascore.io.utils import (
     _DASCORE_DIR,
@@ -500,7 +501,7 @@ class _FiberIOManager:
                     f"Format {format} has no version: [{version}] "
                     f"known versions of this format are: {list(fiber_ios)}"
                 )
-                raise UnknownFiberFormatError(msg)
+                raise UnknownFiberVersionError(msg)
             yield fiber_io
             return
         # reverse sort fiber_ios and yield latest version first.
@@ -2187,6 +2188,12 @@ def _iter_scan_results(
                         )
                     except PickleFormatDisabledError as exc:
                         warnings.warn(f"Skipping {patch_source}: {exc}", UserWarning)
+                        continue
+                    except UnknownFiberVersionError as exc:
+                        # Only a version read from the file is news to the caller.
+                        if file_version is None:
+                            msg = f"Skipping {patch_source}: {exc}"
+                            warnings.warn(msg, UserWarning)
                         continue
                     except UnknownFiberFormatError:  # skip bad entities
                         continue

@@ -176,7 +176,21 @@ assert len(source_pieces) == len(requested_chunks) == len(requested_plan.outputs
 
 Eligible whole-file merges read arrays directly and reconstruct coordinates and scalar attributes from the index. Members requiring trims, associated coordinates, or metadata the index cannot reproduce use the patch reader. Index-built results retain patch and processing identities and omit stored history. To retain stored history, load the members first, as in `dc.spool(list(file_spool)).chunk(time=None)`.
 
-Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary. To bridge holes while merging, or to report gaps and coverage, see [Large archives](large_archives.qmd#filling-bridged-holes).
+Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
+
+## Joining across seams
+
+`chunk` joins two patches when the later starts one step after the earlier ends, give or take `dascore.config.max_shift` (a fifth of a step) or the `max_shift` argument, and then fits one evenly sampled grid to each stretch of joined patches. A wider seam is a gap, and starts a new output. `tolerance`, off by default, also joins seams up to that many steps wide (or that width, given as a quantity or timedelta) and closes them by spreading the stretch's labels evenly, as DASCore 0.1.24 did by default with `tolerance=1.5`; it warns when a joined seam is wider than 1.5 steps.
+
+```{python}
+from dascore.examples import random_spool
+
+late = random_spool(time_gap=np.timedelta64(1_200_000, "ns"), length=2)
+assert len(late.chunk(time=None)) == 2  # a seam 1.3 steps wide is a gap
+assert len(late.chunk(time=None, tolerance=1.5)) == 1
+```
+
+To fill the holes `tolerance` bridges, or to report gaps and coverage, see [Large archives](large_archives.qmd#filling-bridged-holes).
 
 ## Concatenate
 

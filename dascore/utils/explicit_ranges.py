@@ -246,8 +246,8 @@ def _planned_manager(plan, row, files=None, projection=None):
     key = str(row.get("source_patch_key") or "")
     assert key.isdigit(), "plan source key is not an output ordinal"
     members = plan.member_rows[plan.member_rows["output_id"] == int(key)]
-    recovered = []
-    for member in members.to_dict("records"):
+    rows, recovered = members.to_dict("records"), []
+    for member in rows:
         coords = _source_manager(plan.loader, member, files, projection=projection)
         if coords is None:
             return None
@@ -269,6 +269,9 @@ def _planned_manager(plan, row, files=None, projection=None):
                 if str(native) != str(unit):
                     coords = coords.convert_units(**{dim: unit})
         recovered.append(coords)
+    # Patch utilities import spool/chunk planning; defer until plans are read.
+    from dascore.utils import patch_assembly as pa  # noqa: PLC0415
+
     if not recovered:
         if projected:
             raise ChunkError("plan output has no members or reconstructable grid")
@@ -284,17 +287,21 @@ def _planned_manager(plan, row, files=None, projection=None):
     elif len(recovered) == 1:
         coords = recovered[0]
     else:
-        # Patch utilities import spool/chunk planning; defer until plans are read.
-        from dascore.utils.patch import _get_merged_coord  # noqa: PLC0415
+        from dascore.utils.patch import (  # noqa: PLC0415
+            _get_merged_coord,
+            _split_coord_merge_kwargs,
+        )
 
         merge_dim = recovered[0].dim_map[plan.dim][0]
         coords = _get_merged_coord(
             pd.DataFrame(),
             merge_dim,
             recovered,
-            snap_coords=plan.merge_kwargs.get("snap_coords", True),
-            tolerance=plan.merge_kwargs.get("tolerance", 1.5),
+            fuse=pa._fuses(rows, plan.dim),
+            **_split_coord_merge_kwargs(plan.merge_kwargs)[1],
         )
+    if coords is not None and len(members):
+        coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
     if coords is None:
         return None
     if projected:

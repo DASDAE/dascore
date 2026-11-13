@@ -51,7 +51,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -652,31 +652,36 @@ def _get_merge_dim(df) -> str | None:
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
-    coord_kwargs = {
-        "snap_coords": merge_kwargs.pop("snap_coords", True),
-        "tolerance": merge_kwargs.pop("tolerance", 1.5),
-    }
+    tolerance = merge_kwargs.pop("tolerance", None)
+    coord_kwargs = {"tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance}
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
+    merge_kwargs.pop("max_shift", None)  # the plan's, which names the merge
     return merge_kwargs, coord_kwargs
 
 
 def _get_merged_coord(
-    df, merge_dim, coords, drop_conflicting=False, snap_coords=True, tolerance=1.5
+    df,
+    merge_dim,
+    coords,
+    drop_conflicting=False,
+    tolerance=DEFAULT_TOLERANCE,
+    fuse=True,
 ):
     """
     Get merged coordinates for patches combined along merge_dim.
 
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
-    a plain range; recorded seams otherwise), then — when `snap_coords` —
-    simplified with bounded error: no value moves more than the tolerance
-    allows, `tolerance` steps for a count or the excess itself for a
-    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
-    members' own step is kept, so a merge across a hole (only where a
-    caller bridges holes, as `to_xarray` does) stays segmented rather than
-    being relabeled at a slower rate.
+    a plain range; recorded seams otherwise), then, if ``fuse`` (a chunk
+    plan keeping a stretch's labels says not), simplified with bounded
+    error: no value moves
+    more than the tolerance allows, `tolerance` steps for a count or the
+    excess itself for a quantity or timedelta (see
+    `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
+    A chunk output whose stretch has a grid then takes its labels from
+    that grid (see `dascore.utils.patch_assembly.on_stretch_grid`).
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -688,7 +693,7 @@ def _get_merged_coord(
         return merge_coord_managers(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
-    if snap_coords:
+    if fuse:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
@@ -699,7 +704,7 @@ def _get_merged_coord(
     )
 
 
-def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
+def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     """
     Force a merge of the patches along a dimension.
 
@@ -730,7 +735,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     conf = attr_kwargs.get("conflict", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False
     new_coord = _get_merged_coord(
-        df, merge_dim, coords, drop_conf_coords, **coord_kwargs
+        df, merge_dim, coords, drop_conf_coords, fuse=fuse, **coord_kwargs
     )
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
@@ -881,7 +886,7 @@ def get_patch_names(
     # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
     fields = list(attrs) + [field for pair in coord_fields for field in pair]
-    sub = df.reindex(columns=fields).pipe(_format_time_columns).fillna("").astype(str)
+    sub = df.reindex(columns=fields).pipe(_format_time_columns).astype(str).fillna("")
     out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
     return out
 

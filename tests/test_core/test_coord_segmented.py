@@ -1310,9 +1310,7 @@ class TestPlannedSpoolWrite:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             planned = (
-                dc.spool(src)
-                .update(progress=None)
-                .chunk(time=None, tolerance=5, snap_coords=False, conflict="drop")
+                dc.spool(src).update(progress=None).chunk(time=None, conflict="drop")
             )
         # without fill_value the hole ends an output
         assert len(planned) == 2

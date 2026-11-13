@@ -2082,7 +2082,9 @@ class TestGetSupportedIOTable:
         combined = FiberIO.get_supported_io_table(combine_versions=True)
         assert list(combined["name"]) == sorted(table["name"].unique())
         rows = combined.set_index("name")
-        assert rows.loc["OPTODAS", "version"] == "8, 9, 10, 11"
+        versions = rows.loc["OPTODAS", "version"].split(", ")
+        assert versions == sorted(versions, key=_version_sort_key)
+        assert versions.index("9") < versions.index("10")
         assert rows.loc["NETCDF_CF", "write"]
         assert not rows.loc["TDMS", "write"]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
@@ -1129,6 +1130,24 @@ class TestGetPatchName:
         """Ensure names can be generated from a spool as well."""
         out = get_patch_names(random_spool)
         assert len(out) == len(random_spool)
+
+    def test_absent_fields_no_warning(self, random_patch, tmp_path):
+        """Naming a written patch whose fields are absent raises no warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            random_patch.io.write(tmp_path / "patch.h5", "dasdae")
+
+    def test_float32_bounds(self):
+        """Single-precision bounds keep their short form; absent ones are blank."""
+        df = pd.DataFrame(
+            {
+                "tag": ["survey"],
+                "distance_min": np.array([0.1], dtype="float32"),
+                "distance_max": [np.nan],
+            }
+        )
+        out = get_patch_names(df, attrs=("tag",), coords=("distance",))
+        assert out.iloc[0].endswith("survey__0.1__")
 
     def test_empty(self):
         """Ensure an empty thing returns a series of the right type."""
