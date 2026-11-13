@@ -1641,17 +1641,63 @@ class OpticalPath(TimeRangedModel):
                 )
         return errors
 
-    def select(self, *, distance: tuple[float | None, float | None]) -> Self:
+    def select(
+        self,
+        *,
+        distance: tuple[float | None, float | None] = (None, None),
+        **labels: LabelValue | bool,
+    ) -> Self:
         """
         Return a new path clipped to a distance interval.
 
         Absolute optical distances are preserved: every track keeps the
         distances it had, clipped to the piece rather than rebased on it.
+
+        Parameters
+        ----------
+        distance
+            The (start, stop) optical distances to keep; None leaves an
+            end open.
+        **labels
+            A label group and the value to keep the stretch of, such as
+            ``section="coil"``; True selects a membership group. The
+            stretch must be contiguous within ``distance``, since a path
+            is one range; a value stated in several places raises and
+            names them, to be chosen between by ``distance``.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> inventory = dc.get_example_inventory("tunnel")
+        >>> path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        >>> coil = path.select(section="coil")
+        >>> assert (coil.distance_min, coil.distance_max) == (1527.5, 1537.5)
+        >>> # The trench lies on both sides of the coil; distance picks one.
+        >>> near = path.select(section="trench", distance=(None, 1527.5))
+        >>> assert (near.distance_min, near.distance_max) == (1500.0, 1527.5)
         """
         lo = self.distance_min if distance[0] is None else float(distance[0])
         hi = self.distance_max if distance[1] is None else float(distance[1])
         lo = max(lo, self.distance_min)
         hi = min(hi, self.distance_max)
+        # Intersect every label first: only the final stretch must be one range.
+        spans = [(lo, hi)]
+        for group, value in labels.items():
+            stated = self._label_spans(group, value)
+            spans = [
+                (max(a, c), min(b, d))
+                for a, b in spans
+                for c, d in stated
+                if min(b, d) > max(a, c)
+            ]
+        if len(spans) > 1:
+            names = ", ".join(f"{k}={v!r}" for k, v in labels.items())
+            msg = (
+                f"{names} covers {len(spans)} separate intervals {spans}, "
+                "but a path is one range; select one by distance=."
+            )
+            raise ParameterError(msg)
+        lo, hi = spans[0] if spans else (lo, lo)
         if hi <= lo:
             msg = f"Empty distance selection ({distance})."
             raise ParameterError(msg)
@@ -1677,15 +1723,40 @@ class OpticalPath(TimeRangedModel):
                 seg.new(optical_distance=tuple(new_dist), columns=new_columns)
             )
         coupling = clip_intervals(self.coupling, lo, hi, outer)
-        labels = clip_intervals(self.labels, lo, hi, outer)
+        clipped = clip_intervals(self.labels, lo, hi, outer)
         return self.model_copy(
             update={
                 "optical_components": tuple(components),
                 "geometry": tuple(geometry),
                 "coupling": tuple(coupling),
-                "labels": tuple(labels),
+                "labels": tuple(clipped),
             }
         )
+
+    def _label_spans(self, group, value) -> list[tuple[float, float]]:
+        """Return the sorted, merged intervals where a label group has a value."""
+        stated: dict = {}
+        for label in self.labels:
+            if label.group == group:
+                key = True if label.value is None else label.value
+                stated.setdefault(key, []).append(label.interval)
+        if not stated:
+            groups = sorted({x.group for x in self.labels})
+            msg = f"{group!r} is not a label group of this path; it has {groups}."
+            raise ParameterError(msg)
+        if value not in stated:
+            msg = (
+                f"Label group {group!r} never takes {value!r}; it takes {list(stated)}."
+            )
+            raise ParameterError(msg)
+        spans: list[tuple[float, float]] = []
+        for start, stop in sorted(stated[value]):
+            # Touching or overlapping intervals are one stretch of fiber.
+            if spans and start <= spans[-1][1]:
+                spans[-1] = (spans[-1][0], max(stop, spans[-1][1]))
+            else:
+                spans.append((start, stop))
+        return spans
 
     def split_at(self, distance: float) -> tuple[Self, Self]:
         """Split the optical path into two pieces at a distance."""

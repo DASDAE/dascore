@@ -90,6 +90,8 @@ Tracks use three shapes:
 
 Every label names its `group`, the coordinate it becomes. A label with an empty `value` states membership; one with a value defines an interval coordinate. Literal `true` and `false` values are refused, since an empty value already means membership. A group holds only text, only numbers, or only membership. Numeric groups use `NaN` outside coverage, so they project as floating-point coordinates.
 
+`OpticalPath.select` takes a label group as a keyword, so `path.select(section="coil")` returns the part of the path where `section` is `coil`, with all its tracks; pass `True` for a membership group. A path is one contiguous range, so a value stated in several separate places raises an error naming them, and adding `distance=` narrows the selection to one.
+
 Intervals are half-open, `[start, end)`, so adjacent rows tile without overlap; projection still includes the final channel of a covered run.
 
 Geometry columns, label groups, and typed tracks become coordinates. Label group names cannot use structural names, track names, recognized coordinate labels, or a track field's short name such as `buffer_type`; see `RESERVED_GROUP_NAMES` in `dascore.core.inventory`. Geometry columns may use coordinate labels—that is how a segment states an axis—but cannot use the other reserved names or share a name with a label group.
