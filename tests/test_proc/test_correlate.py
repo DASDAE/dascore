@@ -290,6 +290,70 @@ class TestCorrelateErrors:
             patch_1d.correlate(time=0, samples=True)
 
 
+class TestCorrelateND:
+    """Patches with more than 2 dims correlate each batch separately."""
+
+    @pytest.fixture()
+    def patch_3d(self):
+        """A (source, distance, time) patch with data units."""
+        rng = np.random.default_rng(42)
+        coords = {
+            "source": np.arange(3),
+            "distance": np.array([0.0, 1.0]),
+            "time": np.arange(400) * 0.005,
+        }
+        dims = ("source", "distance", "time")
+        patch = dc.Patch(data=rng.random((3, 2, 400)), coords=coords, dims=dims)
+        return patch.update_attrs(data_units="m/s")
+
+    def _assert_matches_2d(self, out, patch, batch):
+        """Each batch slice of out equals correlating that 2D slice."""
+        for index in np.ndindex(*(len(patch.get_coord(x)) for x in batch)):
+            select = dict(zip(batch, index))
+            part = patch.select(**select, samples=True).squeeze(batch)
+            expected = part.correlate(distance=0, samples=True)
+            got = out.select(**select, samples=True).squeeze(batch)
+            assert got.dims == expected.dims
+            assert np.allclose(got.data, expected.data)
+            assert got.update(data=expected.data).equals(expected)
+
+    def test_3d_matches_2d_slices(self, patch_3d):
+        """The issue's 3D patch gives the per-source 2D results."""
+        out = patch_3d.correlate(distance=0, samples=True, lag_dim="time")
+        assert out.dims == ("source", "distance", "lag_time", "source_distance")
+        assert get_quantity(out.attrs.data_units) == get_quantity("m/s") ** 2
+        self._assert_matches_2d(out, patch_3d, ["source"])
+
+    def test_4d_matches_2d_slices(self, patch_3d):
+        """Two batch dims, on either side of the source dim, broadcast."""
+        data = np.stack([patch_3d.data, 2 * patch_3d.data], axis=2)
+        coords = {**dict(patch_3d.coords.coord_map), "shot": np.array([10, 20])}
+        dims = ("source", "distance", "shot", "time")
+        patch = dc.Patch(data=data, coords=coords, dims=dims)
+        out = patch.correlate(distance=0, samples=True, lag_dim="time")
+        assert out.dims == (*dims[:3], "lag_time", "source_distance")
+        self._assert_matches_2d(out, patch, ["source", "shot"])
+
+    @pytest.mark.parametrize("pad", (True, False))
+    def test_transformed_batch_dim_stays_transformed(self, patch_3d, pad):
+        """Only the lag dim is inverted; a transformed batch dim is kept."""
+        spectra = patch_3d.dft("source", pad=pad)
+        out = spectra.correlate(distance=0, samples=True, lag_dim="time")
+        assert out.dims[0] == "ft_source"
+        self._assert_matches_2d(out, spectra, ["ft_source"])
+
+    def test_missing_lag_dim_raises(self, patch_3d):
+        """A patch with more than 2 dims must name the lag dim."""
+        with pytest.raises(ParameterError, match="lag_dim must be one of"):
+            patch_3d.correlate(distance=0, samples=True)
+
+    @pytest.mark.parametrize("lag_dim", ("distance", "bob"))
+    def test_bad_lag_dim_raises(self, patch_3d, lag_dim):
+        """The lag dim must be a dim other than the source dim."""
+        with pytest.raises(ParameterError, match="lag_dim must be one of"):
+            patch_3d.correlate(distance=0, samples=True, lag_dim=lag_dim)
+
+
 class TestCorrelateShiftProcessor:
     """What the CorrelateShift class guarantees beyond the framework."""
 
