@@ -295,12 +295,13 @@ coords
     the resolved optical path, a tuple of names to add exactly those, or
     False to add none. The blanket form adds the geometry axes, named as
     the inventory's CRS names them (`x`, `y`, `z` when the inventory
-    keeps the default CRS), the label groups, and `coupling`, whose
-    values are the coupling type of each channel. Names may be `distance`
-    for optical distance, one of the axes the inventory's CRS names, a
-    label group, a typed track (`coupling`, `geometry`,
-    `optical_components`), or a qualified track field such as
-    `coupling.medium`.
+    keeps the default CRS), the label groups, `coupling`, whose
+    values are the coupling type of each channel, and `buffer_type`,
+    the fiber's buffer category, when the path states one. Names may be
+    `distance` for optical distance, one of the axes the inventory's CRS
+    names, a label group, a typed track (`coupling`, `geometry`,
+    `optical_components`), a qualified track field such as
+    `coupling.medium`, or `buffer_type`.
 """.strip()
 
 enrich_on_missing_description = """

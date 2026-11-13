@@ -117,7 +117,7 @@ components_csv = files[f"{PATH}/optical_components.csv"]
 table(f"{PATH}/optical_components.csv").head(9)
 ```
 
-`object_type` selects the row model, distances determine order, and `container` values reference resources. Other tracks use the same optical distances:
+`object_type` selects the row model, distances determine order, and `container` values reference resources. `buffer_type` is controlled: `tight_buffered`, `semi_tight`, `loose_tube`, `ribbon`, `bare`, `other`, or empty when unknown. Other tracks use the same optical distances:
 
 ```{python}
 def spans(csv_text):

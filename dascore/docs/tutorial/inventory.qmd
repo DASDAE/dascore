@@ -27,7 +27,7 @@ Shared objects such as interrogators, cables, enclosures, and measurements live 
 
 An optical path has four independent tracks along optical distance:
 
-- `optical_components`: fiber segments, splices, connectors, amplifiers, and terminators. These tile the complete path and define its extent.
+- `optical_components`: fiber segments, splices, connectors, amplifiers, and terminators. These tile the complete path and define its extent. A fiber segment's `buffer_type` is one of `tight_buffered`, `semi_tight`, `loose_tube`, `ribbon`, `bare`, or `other`, and empty when not stated.
 - `geometry`: measured quantities along the fiber, including coordinates named by the inventory's coordinate reference system.
 - `coupling`: how each interval of cable meets its surroundings.
 - `labels`: interval names such as borehole, drift, or zone.
@@ -86,7 +86,7 @@ Every label names its `group`, the coordinate it becomes. A label with an empty 
 
 Intervals are half-open, `[start, end)`, so adjacent rows tile without overlap; projection still includes the final channel of a covered run.
 
-Geometry columns, label groups, and typed tracks become coordinates. Label group names cannot use structural names, track names, or recognized coordinate labels; see `RESERVED_GROUP_NAMES` in `dascore.core.inventory`. Geometry columns may use coordinate labels—that is how a segment states an axis—but cannot share a name with a label group.
+Geometry columns, label groups, and typed tracks become coordinates. Label group names cannot use structural names, track names, recognized coordinate labels, or a track field's short name such as `buffer_type`; see `RESERVED_GROUP_NAMES` in `dascore.core.inventory`. Geometry columns may use coordinate labels—that is how a segment states an axis—but cannot use the other reserved names or share a name with a label group.
 
 # Inspecting and visualizing
 
@@ -162,7 +162,7 @@ assert set(enriched.get_array("coupling")) == {"trench", ""}
 
 The acquisition's `distance_map` places channels on the optical path. Compatible distance units are converted; incompatible axes raise. With two or more control points, channels outside the map's range are not placed. With one, the map extends both ways: by `spatial_interval` per channel on the `channel` axis (which therefore needs `spatial_interval`), or one meter per meter on the `acquisition_distance` axis. Channels not placed, or placed beyond the path's ends, get `NaN` (or empty text) from its tracks without a warning, as is normal when an interrogator records past the end of the fiber. An unresolved patch is returned unchanged with a warning, so enrichment never silently removes data.
 
-By default, scalar acquisition and `interrogator.*` fields become attributes, and geometry, coupling, and labels become coordinates. Position coordinates take the names the inventory's coordinate reference system declares, such as `easting`, `northing`, and `elevation`, or `x`, `y`, and `z` under the default CRS; either spelling can be requested. Four fields are left out unless requested: `data_type` and `data_units`, because processing may have changed the data, and `sample_rate` and `spatial_interval`, which the patch coordinates already state.
+By default, scalar acquisition and `interrogator.*` fields become attributes, and geometry, coupling, labels, and the fiber's `buffer_type` (when any segment states one) become coordinates. Channels on segments that state no buffer type get an empty value and are not matched by `select(buffer_type=...)`. Position coordinates take the names the inventory's coordinate reference system declares, such as `easting`, `northing`, and `elevation`, or `x`, `y`, and `z` under the default CRS; either spelling can be requested. Four fields are left out unless requested: `data_type` and `data_units`, because processing may have changed the data, and `sample_rate` and `spatial_interval`, which the patch coordinates already state.
 
 Unset attributes are always filled. When a patch attribute conflicts with the inventory, `conflict` decides: `raise` (default), since a conflict usually means the patch resolved to the wrong acquisition; `keep_first` keeps the patch value, `keep_last` uses the inventory, and `drop` removes both.
 

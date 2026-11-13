@@ -357,12 +357,14 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     Return the coordinate names a blanket request copies.
 
     The geometry columns, the label groups, and how each channel is
-    coupled: what the path says about each channel. Optical distance and
-    the other typed tracks are asked for by name, since they restate what
-    the patch's own axis and the inventory already record; a coupling
-    condition states something about the fiber's surroundings which
-    nothing else does, and is the first thing a deployment comparing
-    grouted with hanging fiber has to select on.
+    coupled and buffered: what the path says about each channel. Optical
+    distance and the other typed tracks are asked for by name, since they
+    restate what the patch's own axis and the inventory already record; a
+    coupling condition states something about the fiber's surroundings
+    which nothing else does, and is the first thing a deployment comparing
+    grouted with hanging fiber has to select on. The buffer states the
+    matching fact about the fiber inside its cable: a tight fiber strains
+    with the cable while a loose one does not.
     """
     crs = inventory.coordinate_reference_system
     # The axes are copied under the names the CRS gives them, and only where
@@ -375,7 +377,9 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     out += [x for x in seen if x]
     # A path with no coupling conditions resolves to nothing here, and a
     # blanket request asks only for what the path itself states.
-    return out + (["coupling"] if path.coupling else [])
+    out += ["coupling"] if path.coupling else []
+    buffered = any(getattr(x, "buffer_type", "") for x in path.optical_components)
+    return out + (["buffer_type"] if buffered else [])
 
 
 def _stated_kind(values, unset) -> str:
