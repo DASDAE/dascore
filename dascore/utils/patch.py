@@ -943,8 +943,6 @@ def get_dim_axis_value(
 
     Examples
     --------
-    import dascore.proc.coord    >>> import dascore as dc
-    import dascore.proc.coords    >>> from dascore.utils.patch import get_dim_axis_value
     >>> import dascore as dc
     >>> from dascore.utils.patch import get_dim_axis_value
     >>> patch = dc.get_example_patch()

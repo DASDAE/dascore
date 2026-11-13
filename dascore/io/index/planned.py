@@ -88,7 +88,7 @@ def _stated_units(value) -> str | None:
     than None — and NaN never equals itself, which would make an unstated
     unit look like a mismatch.
     """
-    if value is None or value == "" or pd.isnull(value):
+    if value is None or pd.isnull(value) or value == "":
         return None
     return str(value)
 

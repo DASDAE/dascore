@@ -436,7 +436,7 @@ class TestRePlanKeepsTheTrim:
 class TestStatedUnits:
     """Row values arrive from dataframes, so absence is NaN."""
 
-    @pytest.mark.parametrize("value", [None, "", np.nan, pd.NaT])
+    @pytest.mark.parametrize("value", [None, "", np.nan, pd.NaT, pd.NA])
     def test_absent_units_read_as_none(self, value):
         """NaN never equals itself, so it must not look like a mismatch."""
         assert _stated_units(value) is None
