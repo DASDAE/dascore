@@ -732,7 +732,8 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
     if not names:
         return {}
     # A coordinate riding a dimension is trimmed by a selection on that
-    # dimension, and the reverse; the envelopes state neither, so a view
+    # dimension, and the reverse; the envelopes follow that only as a
+    # range holding what loads, not the samples themselves, so a view
     # naming one leaves every coordinate in it to the patch.
     named = {name for coords, _, _ in residuals for name in coords}
     if "dims" in df and any(
@@ -794,6 +795,9 @@ class PatchCatalog:
         self._ids = None if ids is None else tuple(int(x) for x in ids)
         self._revision = revision or _CatalogRevision()
         self._df_cache = _RevisionCache()
+        # the relation without the last selection's riders trimmed: enough
+        # to load from, and cheaper (see `_load_df`)
+        self._load_cache = _RevisionCache()
         self._item_read_revision = -1
         self._live_cache = _RevisionCache()
         # Source records for rebuilding an in-memory backend (set by
@@ -1228,6 +1232,7 @@ class PatchCatalog:
         with self._revision.lock:
             self._revision.value += 1
             self._df_cache.clear()
+            self._load_cache.clear()
             self._live_cache.clear()
 
     def _cold_live_values(self) -> tuple | None:
@@ -1358,8 +1363,29 @@ class PatchCatalog:
         hidden or renamed private so chunk merge-compatibility (which
         compares all non-private columns) is not spuriously blocked.
         """
+        return self._frame(riders=True)
+
+    def _load_df(self) -> pd.DataFrame:
+        """
+        `to_df` as loading needs it, with the same rows.
+
+        Loading applies every selection to the patch it reads, so it needs
+        no coordinate's envelope trimmed by a selection which did not name
+        it. The last selection's riders are left as they were, wider than
+        what loads, which saves rebuilding them for a spool that is only
+        loaded. Earlier selections trim theirs, as later ones select rows
+        by them, so the rows are those of `to_df`.
+        """
         with self._revision.lock:
             if (cached := self._df_cache.get(self._revision.value)) is not None:
+                return cached
+        return self._frame(riders=False)
+
+    def _frame(self, riders: bool) -> pd.DataFrame:
+        """Build (or fetch) the relation, trimming riders only if ``riders``."""
+        cache = self._df_cache if riders else self._load_cache
+        with self._revision.lock:
+            if (cached := cache.get(self._revision.value)) is not None:
                 return cached
             df = self.backend.query(
                 list(self._queries) or None,
@@ -1390,7 +1416,9 @@ class PatchCatalog:
                 patch_local_adjusted_envelopes,
             )
 
-            df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
+            df = patch_local_adjusted_envelopes(
+                df, self._residuals, drop_empty=False, riders=riders
+            )
             df = self._clipped_to_runs(df)
             df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
                 drop=True
@@ -1402,7 +1430,7 @@ class PatchCatalog:
                 df[name] = filled.astype(dtype)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
-            return self._df_cache.set(df, self._revision.value)
+            return cache.set(df, self._revision.value)
 
     def _trimmed_names(self) -> set[str]:
         """The coordinates a value range trims, which may end in a hole."""
@@ -1466,22 +1494,24 @@ class PatchCatalog:
         with self._revision.lock:
             if (live := self._cold_live_values()) is not None:
                 return len(live)
-            if (df := self._df_cache.get(self._revision.value)) is not None:
-                return len(df)
+            # either relation counts: they hold the same rows
+            for cache in (self._df_cache, self._load_cache):
+                if (df := cache.get(self._revision.value)) is not None:
+                    return len(df)
             # Relative windows and absolute windows after a sample trim can
             # remove rows SQL kept. Count their projected relation so length
             # agrees with positional access, contents, and iteration.
             patch_local = False
             for _, samples, relative in self._residuals:
                 if relative and not samples:
-                    return len(self.to_df())
+                    return len(self._load_df())
                 if samples or relative:
                     patch_local = True
                 elif patch_local:
-                    return len(self.to_df())
+                    return len(self._load_df())
             # A range landing in a hole drops a row SQL kept.
             if self._runs_may_trim():
-                return len(self.to_df())
+                return len(self._load_df())
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
             return self.backend.count(list(self._queries) or None, patch_rows=self._ids)
@@ -1499,11 +1529,11 @@ class PatchCatalog:
                 ):
                     # Repeated positional reads amortize projection through the
                     # existing full-frame cache; a one-off preview stays bounded.
-                    df = self.to_df()
+                    df = self._load_df()
                 else:
                     if index < 0:
                         index = range(len(self))[index]
-                    df = self.window(slice(index, index + 1)).to_df()
+                    df = self.window(slice(index, index + 1))._load_df()
                     index = 0
             row = df.iloc[index].to_dict()
             self._item_read_revision = self._revision.value
@@ -1614,7 +1644,7 @@ class PatchCatalog:
         """
         with self._revision.lock:
             live = self._cold_live_values()
-            df = None if live is not None else self.to_df()
+            df = None if live is not None else self._load_df()
         if live is not None:
             yield from live
             return

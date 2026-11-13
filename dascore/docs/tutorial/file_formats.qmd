@@ -1,0 +1,72 @@
+---
+title: File Formats in Depth
+execute:
+  warning: false
+---
+
+This page covers format-specific options beyond [reading and writing files](file_io.qmd): compression and chunking, Zarr stores, XDAS files, and how readers put stored coordinates on a grid.
+
+```{python}
+from upath import UPath
+
+import dascore as dc
+
+patch = dc.get_example_patch()
+```
+
+# Compression and chunking
+
+DASDAE, PRODML, and NETCDF_CF writers take an `encoding` dict as xarray's [`to_netcdf`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_netcdf.html) does: keys are variable names (`"data"` or a coordinate name; PRODML takes only `"data"` and `"time"`), values are options such as `zlib`, `complevel`, `shuffle`, `chunksizes`, and `fletcher32`. NETCDF_CF passes it to xarray; DASDAE and PRODML translate it for h5py as xarray's h5netcdf engine does, clamping `chunksizes` to each array's length. A write option the writer does not accept raises a [`ParameterError`](`dascore.exceptions.ParameterError`).
+
+```{python}
+encoding = {"data": {"zlib": True, "complevel": 4, "chunksizes": (50, 1000)}}
+patch.io.write(UPath("memory://dascore/tutorial/small.h5"), "DASDAE", encoding=encoding)
+```
+
+# Zarr
+
+The ZARR format writes a patch as a zarr store (a directory) laid out as xarray's [`to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html) writes it, so any xarray user can open it. DASCore reads stores other tools write this way, walking every group at any depth. In each group the payload is `data`, else the only variable, else every variable on the dimensions of the largest one, as the NetCDF reader picks them; coordinate variables, auxiliary coordinates named in a `coordinates` attribute, CF `bounds` tables, scalars and lower-rank helpers are never payloads. Each payload is a patch, keyed by its path in the store (`source_patch_key`, e.g. `"1min/hi_max"`); a group's only payload is keyed by the group's path, and a root payload by its name, as stores DASCore writes have always been read. Several payloads of one group are tagged with their names, so `chunk` keeps them apart. A patch takes only its payload's attributes, none from the groups above it. It needs zarr, installed with [DASCore's extras](../installation.qmd#optional-extras). `file_version` picks the zarr format (`"3"`, the default, or `"2"`), and `encoding` is passed to xarray as is: `chunks` sets the chunk shape, `shards` groups chunks into fewer files (zarr format 3 only), and `compressors` sets the codecs; xarray raises a `ValueError` for other keys, such as `chunksizes`.
+
+One patch is written at the store root, which `xr.open_zarr` opens. Several (including the pieces of a patch with holes) are written one group each, named as `Spool.get_patch_names()` names them, with "/" replaced by "_" and repeats suffixed `__1`, `__2`, ... (as DASDAE does), and `xr.open_datatree(path, engine="zarr")` opens one node per patch; `encoding` applies to every group. Writing never merges patches; merge first (e.g. `spool.chunk(time=None)`) to store one array per contiguous block. Writing replaces a store already at the path, but not a directory or file which is not a store. A directory of stores works as a directory spool. A spool's index sees a store change when its root metadata does, which every DASCore write and `zarr.consolidate_metadata` renew; consolidate after adding groups or arrays with another tool.
+
+```python
+zarr_path = UPath("memory://dascore/tutorial/patch.zarr")
+encoding = {"data": {"chunks": (50, 500), "shards": (100, 1000)}}
+patch.io.write(zarr_path, "ZARR", encoding=encoding)
+zarr_patch = dc.read(zarr_path)[0]
+```
+
+`append=True` adds to a store instead, in its own zarr format and without rewriting what it holds: each patch becomes a new group, named as above and suffixed if the name is taken. `append="time"` (any dimension name) also extends: a patch which continues a stored patch along that dimension (the same kind, data units, dimensions, dtype and other coordinates, its labels starting one step after the stored ones end) extends it, and a patch which continues none, such as one after a gap or of another kind, is added as a new group. A patch which could continue several stored patches raises, as does one DASCore cannot extend whole: one sharing the dimension with other arrays (sibling payloads or helpers), one with a coordinate other than the dimension itself running along it, or one whose payload or labels are stored scaled. The new chunks are written before any shape grows, and each patch ends by consolidating the store's metadata, so readers and a spool's `update` see the new content only once it is complete. A reader opening a group in the moment between an extension's coordinate and payload resizes can fail on their lengths, though it never reads unwritten samples; an extension killed in that moment leaves them unequal, and the store must be rewritten. One writer should append at a time. With no store at the path, `append` writes one.
+
+```python
+store = UPath("memory://dascore/tutorial/growing.zarr")
+first, second = patch.select(time=(None, 100), samples=True), patch.select(time=(100, None), samples=True)
+first.io.write(store, "ZARR")
+second.io.write(store, "ZARR", append="time")  # one patch, now whole
+patch.update_attrs(tag="other").io.write(store, "ZARR", append=True)  # a second patch
+```
+
+A store on object storage is a `UPath` carrying its storage options, and `dc.read`, `dc.scan`, and `dc.spool` take it as they take a local store. A scan reads only metadata and coordinates, and loading a patch reads only the chunks its selection touches. Beside the labels of each evenly sampled coordinate DASCore writes attributes describing its grid, one per field of a DASDAE `CoordRange` node (`_dascore_coord_dtype`, `_dascore_coord_length`, `_dascore_coord_start`, ...), so a scan reads none of the labels it describes, however long the coordinate. The labels are still written for other tools, and a scan reads those of any coordinate left undescribed: one with holes or jitter, one the description cannot rebuild exactly (such as a float32 grid), one whose `encoding` names more than `chunks` or `shards`, and one whose `_dascore_coord_length` no longer matches its labels. A tool which rewrites the labels in place, keeping their length, must drop the attributes. A remote directory of stores cannot be indexed.
+
+```python
+store = UPath("s3://bucket/das.zarr", anon=True)
+spool = dc.spool(store)
+start = spool.get_contents()["time_min"].min()
+first_second = spool.select(time=(start, start + dc.to_timedelta64(1)))[0]
+```
+
+Writing builds the new store beside the path and then moves it into place. On object storage that move is a copy, so a reader can see a partly replaced store while it runs.
+
+# XDAS
+
+DASCore reads, but does not write, NetCDF files in the XDAS layout. Each signal, including those in nested groups, becomes a patch whose `source_patch_key` is its path in the file (for example `"network/fiber_a/signal"`). Tie-point and sampled coordinates are decoded exactly without reading samples, and CF scale, offset and fill values are applied. A signal whose tie points leave a gap, overlap or change the step becomes one patch per evenly sampled stretch, keyed `"<path>#0"`, `"<path>#1"`, and so on. A virtual dataset whose source is missing raises; tile manifests are not supported.
+
+# Snapping coordinates on read
+
+Many instruments store a timestamp per sample, from a clock that jitters or runs apart from the sampling. Readers put the dimensions a format stores this way on a grid, from the start and rate the file states or else from its first and last labels, and check the grid against a few stored labels. Where one sits more than `dascore.config.max_shift` (a fifth of a step) off it, the file may hold a gap, so the labels are kept as stored, with a warning naming the file. `snap` chooses the dimensions: by default the format's own (its reader's `get_metadata` signature shows them), `True` for all, `False` for none, or a tuple of names. `dc.read`, `dc.scan`, `dc.scan_payloads` and `dc.spool` all take it; a directory's index records the `snap` and `max_shift` it was scanned under, and rescans its files when opened with others.
+
+```{python}
+terra15_path = dc.utils.downloader.fetch("terra15_das_1_trimmed.hdf5")
+gridded = dc.read(terra15_path)[0].get_coord("time")  # on a grid
+stored = dc.read(terra15_path, snap=False)[0].get_coord("time")  # the GPS times
+```

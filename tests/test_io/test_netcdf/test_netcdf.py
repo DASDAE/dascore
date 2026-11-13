@@ -5,11 +5,13 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import tracemalloc
+import warnings
 from typing import ClassVar
 
 import h5py
 import numpy as np
 import pytest
+from scipy.io import netcdf_file
 from upath import UPath
 
 import dascore as dc
@@ -1203,6 +1205,44 @@ class TestNoCFNetCDF:
         assert True in flags
         assert flags == sorted(flags)
 
+    @pytest.mark.parametrize(
+        ("units", "expected"), [("microstrain", "microstrain"), ("m s-1", "m/s")]
+    )
+    def test_file_units_apply_to_payloads(self, tmp_path, units, expected):
+        """Units stated once on the file, in CF spelling too, are the payloads'."""
+        path = self._write_cables(tmp_path / "cables.nc", attrs={"units": units})
+        patches = list(dc.spool(path))
+        assert len(patches) == 2
+        for patch in patches:
+            assert patch.attrs.data_units == dc.get_quantity(expected)
+
+    @pytest.mark.parametrize("name", ["units", "data_units"])
+    def test_variable_units_win(self, tmp_path, name):
+        """A variable's own units are kept over the file's."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {"a": (("x",), np.ones(3), {name: "m"})}, attrs={"units": "s"}
+        )
+        dataset.to_netcdf(tmp_path / "a.nc", engine="h5netcdf")
+        (patch,) = dc.spool(tmp_path / "a.nc")
+        assert patch.attrs.data_units == dc.get_quantity("m")
+
+    @pytest.mark.parametrize("units", ["same as input", 2.5])
+    def test_file_units_which_do_not_parse(self, tmp_path, units):
+        """File units which are not units leave the payload without any."""
+        path = self._write_cables(tmp_path / "cables.nc", attrs={"units": units})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # and raise no unit-parse warning
+            patches = list(dc.spool(path))
+        assert all(x.attrs.data_units is None for x in patches)
+
+    def test_cf_files_do_not_take_file_units(self, tmp_path):
+        """A CF file's root units are not its payload's."""
+        attrs = {"units": "microstrain", "Conventions": "CF-1.8"}
+        path = self._write_cables(tmp_path / "cf.nc", cables=("data",), attrs=attrs)
+        assert dc.get_format(path) == ("NETCDF_CF", "1.8")
+        assert dc.spool(path)[0].attrs.data_units is None
+
     def test_not_the_next_files_guess(self, cable_path):
         """A Silixa file scanned after a version 0 file is still Silixa."""
         other = cable_path.parent / "silixa.h5"
@@ -1222,3 +1262,117 @@ class TestNoCFNetCDF:
         with pytest.warns(UserWarning, match="Failed to scan"):
             contents = dc.spool(cable_path.parent).update().get_contents()
         assert set(contents["source_patch_key"]) == {"up_data", "down_data"}
+
+
+NETCDF3_NAME = "kolsass_dts_netcdf3.nc"
+
+
+@pytest.fixture(scope="module")
+def netcdf3_raw():
+    """The classic fixture's labels, read without DASCore."""
+    with netcdf_file(fetch(NETCDF3_NAME), mmap=False) as nc:
+        return {x: nc.variables[x].data.copy() for x in ("time", "z_DTS")}
+
+
+@pytest.fixture(scope="module")
+def netcdf3_patch():
+    """The classic fixture's one patch."""
+    return dc.spool(fetch(NETCDF3_NAME))[0]
+
+
+class TestNetCDF3:
+    """netCDF-3 classic files read through the same CF decoding."""
+
+    name = NETCDF3_NAME
+
+    @staticmethod
+    def _write(path, attrs, form="NETCDF3_CLASSIC"):
+        """A small netCDF-3 file, CF only if ``attrs`` say so."""
+        xr = pytest.importorskip("xarray")
+        data = {"a": (("x", "time"), np.ones((2, 3)))}
+        coords = {"time": ("time", [0, 1, 2], {"units": "seconds since 2000-01-01"})}
+        dataset = xr.Dataset(data, coords=coords, attrs=attrs or {})
+        dataset.to_netcdf(path, engine="scipy", format=form)
+        return path
+
+    def test_detected(self):
+        """Classic files are NETCDF3; nothing else claims them."""
+        assert dc.get_format(fetch(self.name)) == ("NETCDF3", "1")
+
+    def test_netcdf4_still_netcdf_cf(self, example_patch, tmp_path):
+        """A netCDF-4 file is still NETCDF_CF and not NETCDF3."""
+        path = tmp_path / "four.nc"
+        example_patch.io.write(path, "netcdf_cf")
+        assert dc.get_format(path) == ("NETCDF_CF", "1.8")
+        with path.open("rb") as handle:
+            assert netcdf_core.NetCDF3V1().get_format(handle) is False
+
+    def test_coords(self, netcdf3_patch, netcdf3_raw):
+        """Time and depth come from the stored labels."""
+        start = np.datetime64("2022-06-08T00:00:00", "ns")
+        assert netcdf3_patch.dims == ("z_DTS", "time")
+        time = netcdf3_patch.get_coord("time")
+        assert time.min() == start + np.timedelta64(45302, "s")
+        assert time.max() == start + np.timedelta64(45501, "s")
+        assert time.step == np.timedelta64(1, "s")
+        assert netcdf3_raw["time"][[0, -1]].tolist() == [45302.0, 45501.0]
+        depth = netcdf3_patch.get_coord("z_DTS")
+        assert depth.min() == netcdf3_raw["z_DTS"][0] == 0.35
+        assert depth.max() == netcdf3_raw["z_DTS"][-1]
+        assert np.isclose(depth.step, np.diff(netcdf3_raw["z_DTS"]).mean())
+        assert depth.units == dc.get_quantity("m")
+
+    def test_data_units(self, netcdf3_patch):
+        """The payload's units are degrees Celsius."""
+        assert netcdf3_patch.attrs.data_units == dc.get_quantity("°C")
+
+    def test_scan_matches_read(self, netcdf3_patch):
+        """A scan describes the patch a read returns."""
+        (meta,) = dc.scan(fetch(self.name))
+        for name, coord in netcdf3_patch.coords.coord_map.items():
+            summary = meta.coords[name]
+            assert (summary.min, summary.max) == (coord.min(), coord.max())
+            assert summary.step == coord.step
+        assert meta.dims == netcdf3_patch.dims
+        assert meta.source_format == "NETCDF3"
+
+    def test_selection(self, netcdf3_patch):
+        """A selected read equals the same slice of the full read."""
+        time = netcdf3_patch.get_coord("time")
+        bounds = (
+            time.min() + np.timedelta64(10, "s"),
+            time.min() + np.timedelta64(20, "s"),
+        )
+        expected = netcdf3_patch.select(time=bounds, z_DTS=(1, 3))
+        observed = dc.spool(fetch(self.name)).select(time=bounds, z_DTS=(1, 3))[0]
+        assert observed.shape == expected.shape
+        assert observed.equals(expected)
+
+    def test_file_units(self, tmp_path):
+        """Root units are the payload's only when the file is not CF."""
+        plain = self._write(tmp_path / "plain.nc", {"units": "m"})
+        attrs = {"units": "m", "Conventions": "CF-1.8"}
+        cf = self._write(tmp_path / "cf.nc", attrs, form="NETCDF3_64BIT")
+        assert dc.get_format(cf) == ("NETCDF3", "1")  # 64-bit offset
+        assert dc.spool(plain)[0].attrs.data_units == dc.get_quantity("m")
+        assert dc.spool(cf)[0].attrs.data_units is None
+
+    def test_truncated(self, tmp_path):
+        """A cut-short file raises an error a scan skips."""
+        path = tmp_path / "cut.nc"
+        path.write_bytes(fetch(self.name).read_bytes()[:500])
+        assert dc.get_format(path) == ("NETCDF3", "1")
+        with pytest.raises((OSError, ValueError, TypeError, KeyError, IndexError)):
+            dc.read(path)
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            assert not dc.scan(path)
+
+    def test_remote(self, netcdf3_patch):
+        """A remote classic file reads without a local copy."""
+        remote = UPath("memory://netcdf3_test/remote.nc")
+        remote.parent.mkdir(parents=True, exist_ok=True)
+        remote.write_bytes(fetch(self.name).read_bytes())
+        clear_remote_file_cache()
+        assert dc.get_format(remote) == ("NETCDF3", "1")
+        assert dc.read(remote)[0].equals(netcdf3_patch)
+        assert not any(get_remote_cache_path().rglob("*.nc"))

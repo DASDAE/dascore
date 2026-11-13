@@ -1,24 +1,25 @@
-"""Expose selected canonical documents through one skill catalog."""
+"""Serve the shipped skills, each through the docs page that includes it."""
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-import yaml
-
 from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import (
     DOC_PATH,
     SKILL_PATH,
     DocumentationError,
+    _frontmatter,
     _read_source,
     source_paths,
 )
 
 # Skills that must work where the project's DASCore has no command line (an
 # older release, or no environment yet), so they are installed whole.
-_STANDALONE = frozenset({"dascore", "migrate-to-v1", "start-task", "test-beta"})
+_STANDALONE = frozenset(
+    {"dascore", "dascore-migrate-to-v1", "dascore-start-task", "dascore-test-beta"}
+)
 
 # What any other installed skill says in place of its procedure, which would
 # go stale.
@@ -32,35 +33,71 @@ _INSTALLED_BODY = (
 )
 
 
-def get_skills() -> dict[str, dict[str, str]]:
-    """Read skill membership and each page's title and description.
+# A page serves a skill by including its file.
+_SKILL_INCLUDE = re.compile(
+    r"\{\{<\s*include\s+[\"']?\S*\.agents/skills/([^/\s\"']+)/SKILL\.md[\"']?\s*>\}\}"
+)
 
-    A page without a description takes its included skill's.
+
+def _read_skill_file(name: str) -> tuple[dict, str]:
+    """Return a shipped skill file's metadata and body, its title from its heading."""
+    front, body = _read_source(SKILL_PATH / name / "SKILL.md")
+    heading = re.search(r"^# (.+)$", body, flags=re.MULTILINE)
+    return {**front, "title": heading[1].strip() if heading else None}, body
+
+
+def _skill_pages() -> dict[str, Path]:
     """
-    catalog = yaml.safe_load((DOC_PATH / "skills.yml").read_text(encoding="utf-8"))
-    if not isinstance(catalog, dict):
-        raise DocumentationError("The skill catalog must map names to document IDs.")
-    pages = {
-        path.relative_to(DOC_PATH).with_suffix("").as_posix(): path
-        for path in source_paths()
-    }
+    Map each skill to the docs page serving it.
+
+    A page serves the skill whose file it includes, or the one its front
+    matter names under `skill`, for a page holding a skill's procedure in its
+    own text.
+    """
     out = {}
-    for name, target in catalog.items():
-        if not isinstance(name, str) or not re.fullmatch(
-            r"[a-z0-9]+(?:-[a-z0-9]+)*", name
-        ):
+    for path in source_paths():
+        text = path.read_text(encoding="utf-8")
+        claimed = set(_SKILL_INCLUDE.findall(text))
+        if named := _frontmatter(text)[0].get("skill"):
+            claimed.add(named)
+        for name in claimed:
+            if out.setdefault(name, path) != path:
+                raise DocumentationError(
+                    f"Skill {name!r} is served by both {out[name]} and {path}."
+                )
+    return out
+
+
+def get_skills() -> dict[str, dict[str, str | None]]:
+    """
+    Read each shipped skill's page, title, and description.
+
+    Every folder of the shipped skills is a skill, described by its file. Its
+    title comes from the page serving it, or, for a skill no page serves,
+    from the file's first heading; that file is then served as written.
+    """
+    names = sorted(x.parent.name for x in SKILL_PATH.glob("*/SKILL.md"))
+    pages = _skill_pages()
+    if unknown := set(pages) - set(names):
+        raise DocumentationError(f"Pages serve unknown skills: {sorted(unknown)}.")
+    out = {}
+    for name in names:
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
             raise DocumentationError(f"Invalid skill name: {name!r}.")
-        if not isinstance(target, str) or target not in pages:
-            raise DocumentationError(
-                f"Skill {name!r} refers to an unknown document: {target!r}."
+        front, _body = _read_skill_file(name)
+        page, target = pages.get(name), None
+        if page is not None:
+            target = page.relative_to(DOC_PATH).with_suffix("").as_posix()
+            front["title"] = _frontmatter(page.read_text(encoding="utf-8"))[0].get(
+                "title"
             )
-        front, _body = _read_source(pages[target])
         if not all(
             isinstance(front.get(key), str) and front[key].strip()
             for key in ("title", "description")
         ):
+            source = page.name if page else f"{name}/SKILL.md"
             raise DocumentationError(
-                f"Skill {name!r} needs a title and description in {target!r}."
+                f"Skill {name!r} needs a title and description in {source!r}."
             )
         out[name] = {
             "target": target,
@@ -71,14 +108,17 @@ def get_skills() -> dict[str, dict[str, str]]:
 
 
 def read_skill(name: str) -> str:
-    """Read a catalogued page from the current installation's Markdown corpus."""
+    """Read a skill's page from the Markdown corpus, or a page-less skill file."""
     skills = get_skills()
     if name not in skills:
         raise DocumentationError(
             f"Unknown skill {name!r}. Available skills: {', '.join(skills)}."
         )
+    target = skills[name]["target"]
+    if target is None:
+        return _read_skill_file(name)[1]
     with documentation_cache() as (root, manifest):
-        return read_document(root, manifest, skills[name]["target"])
+        return read_document(root, manifest, target)
 
 
 def install_skills(directory: Path | str) -> list[Path]:

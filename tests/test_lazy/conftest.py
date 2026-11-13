@@ -17,6 +17,7 @@ from dascore.io import core as io_core
 from dascore.lazy.block import AXIS_FIELDS
 from dascore.lazy.recipe import Recipe
 from dascore.utils.downloader import fetch
+from dascore.utils.identity import operation_context
 
 
 @pytest.fixture(scope="module")
@@ -219,3 +220,40 @@ def assert_same_members(array, expected, stored=True):
     assert np.array_equal(ours.source_row, theirs.source_row)
     assert ours.cast.values == theirs.cast.values
     assert np.array_equal(ours.cast.codes, theirs.cast.codes)
+
+
+@pytest.fixture()
+def recipe_loads(monkeypatch):
+    """Record each recipe which is loaded, whatever loads it."""
+    calls = []
+    original = Recipe.load
+
+    def recorded(self):
+        calls.append(self)
+        return original(self)
+
+    monkeypatch.setattr(Recipe, "load", recorded)
+    return calls
+
+
+def stored_patch(directory, data, name="stored"):
+    """Write the example patch holding `data` and read it back from the file."""
+    path = directory / f"{name}.h5"
+    dc.write(dc.get_example_patch().new(data=data), path, "dasdae")
+    return dc.read(path)[0]
+
+
+def lazy_patch(stored):
+    """The stored patch holding a recipe of its file, under the same attrs."""
+    # Inside an operation, so the patch keeps the stored patch's id.
+    with operation_context():
+        return stored.to_patch(Recipe.from_source(stored._source))
+
+
+@pytest.fixture(scope="module")
+def stored_float(tmp_path_factory):
+    """A stored float patch with negative values and every cell distinct."""
+    shape = dc.get_example_patch().shape
+    values = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
+    directory = tmp_path_factory.mktemp("stored_float")
+    return stored_patch(directory, values - values.mean())

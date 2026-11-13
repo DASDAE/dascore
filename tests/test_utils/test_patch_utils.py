@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Literal, get_type_hints
 
 import numpy as np
@@ -39,6 +40,7 @@ from dascore.utils.patch import (
     stack_patches,
     swap_kwargs_dim_to_axis,
 )
+from dascore.warnings import DASCoreWarning
 
 
 @dc.patch_function(required_dims=("time", "distance"))
@@ -1130,6 +1132,24 @@ class TestGetPatchName:
         out = get_patch_names(random_spool)
         assert len(out) == len(random_spool)
 
+    def test_absent_fields_no_warning(self, random_patch, tmp_path):
+        """Naming a written patch whose fields are absent raises no warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            random_patch.io.write(tmp_path / "patch.h5", "dasdae")
+
+    def test_float32_bounds(self):
+        """Single-precision bounds keep their short form; absent ones are blank."""
+        df = pd.DataFrame(
+            {
+                "tag": ["survey"],
+                "distance_min": np.array([0.1], dtype="float32"),
+                "distance_max": [np.nan],
+            }
+        )
+        out = get_patch_names(df, attrs=("tag",), coords=("distance",))
+        assert out.iloc[0].endswith("survey__0.1__")
+
     def test_empty(self):
         """Ensure an empty thing returns a series of the right type."""
         out = get_patch_names([])
@@ -1258,16 +1278,34 @@ class TestForcePatchMergeOverlap:
 
     def test_complete_overlap_keeps_first(self, random_patch):
         """Identical envelopes merge to the first patch."""
-        twin = random_patch.new()
-        infos = []
-        for patch in (random_patch, twin):
-            info = patch.coords._get_dim_summary()
-            info["patch"] = patch
-            info["dims"] = ",".join(patch.dims)
-            infos.append(info)
+        infos = self._infos(random_patch, random_patch.new())
         out = _force_patch_merge(infos, merge_kwargs={})
         assert len(out) == 1
         assert out[0]["patch"] is random_patch
+
+    @staticmethod
+    def _infos(*patches):
+        """The patch dicts _force_patch_merge takes."""
+        out = []
+        for patch in patches:
+            info = patch.coords._get_dim_summary()
+            info["patch"] = patch
+            info["dims"] = ",".join(patch.dims)
+            out.append(info)
+        return out
+
+    def test_conflict_policy_reaches_coordinates(self, channel_conflict_pair):
+        """Differing non-dimensional coords follow the conflict policy."""
+        first, _ = channel_conflict_pair
+        infos = self._infos(*channel_conflict_pair)
+        with pytest.raises(CoordMergeError, match="channel"):
+            _force_patch_merge(infos, merge_kwargs={})
+        with pytest.raises(CoordMergeError, match="channel"):
+            _force_patch_merge(infos, merge_kwargs={"conflict": "bogus"})
+        with pytest.warns(DASCoreWarning, match="kept"):
+            out = _force_patch_merge(infos, merge_kwargs={"conflict": "keep_first"})
+        channel = out[0]["patch"].get_array("channel")
+        assert np.array_equal(channel, first.get_array("channel"))
 
 
 class TestDottedPatchNames:

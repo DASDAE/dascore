@@ -65,6 +65,7 @@ from dascore.exceptions import (
     PickleFormatDisabledError,
     RemoteCacheError,
     UnknownFiberFormatError,
+    UnknownFiberVersionError,
 )
 from dascore.io.utils import (
     _DASCORE_DIR,
@@ -500,7 +501,7 @@ class _FiberIOManager:
                     f"Format {format} has no version: [{version}] "
                     f"known versions of this format are: {list(fiber_ios)}"
                 )
-                raise UnknownFiberFormatError(msg)
+                raise UnknownFiberVersionError(msg)
             yield fiber_io
             return
         # reverse sort fiber_ios and yield latest version first.
@@ -749,6 +750,12 @@ def _returns_stored_bytes(func: Callable) -> Callable:
     """
     _BYTE_HOOKS.add(func)
     return func
+
+
+def _version_sort_key(version: str) -> list[tuple[int, int | str]]:
+    """Order version strings numerically, e.g. 0.100 after 0.0 and 10 after 9."""
+    # Tag each part so numbers and text never compare directly.
+    return [(0, int(x)) if x.isdigit() else (1, x) for x in version.split(".")]
 
 
 class FiberIO:
@@ -1065,15 +1072,34 @@ class FiberIO:
         return not _is_wrapped_func(self.write, FiberIO.write)
 
     @classmethod
-    def get_supported_io_table(cls):
-        """Return the supported formats, versions, and optional write capability."""
+    def get_supported_io_table(cls, combine_versions: bool = False):
+        """
+        Return the supported formats, versions, and optional write capability.
+
+        Parameters
+        ----------
+        combine_versions
+            If True, return one row per format, sorted by name: its versions
+            joined in numeric order, and `write` True if any version writes.
+        """
         cls.manager.load_plugins()
-        return pd.DataFrame(
+        table = pd.DataFrame(
             [
                 {"name": name, "version": version, "write": io.implements_write}
                 for name, versions in cls.manager._format_version.items()
                 for version, io in versions.items()
             ]
+        )
+        if not combine_versions:
+            return table
+
+        def _join(versions):
+            return ", ".join(sorted(map(str, versions), key=_version_sort_key))
+
+        return (
+            table.groupby("name", sort=True)
+            .agg(version=("version", _join), write=("write", "any"))
+            .reset_index()
         )
 
     def _updated_after(self, resource, timestamp):
@@ -2162,6 +2188,12 @@ def _iter_scan_results(
                         )
                     except PickleFormatDisabledError as exc:
                         warnings.warn(f"Skipping {patch_source}: {exc}", UserWarning)
+                        continue
+                    except UnknownFiberVersionError as exc:
+                        # Only a version read from the file is news to the caller.
+                        if file_version is None:
+                            msg = f"Skipping {patch_source}: {exc}"
+                            warnings.warn(msg, UserWarning)
                         continue
                     except UnknownFiberFormatError:  # skip bad entities
                         continue

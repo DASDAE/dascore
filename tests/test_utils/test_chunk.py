@@ -14,11 +14,13 @@ from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import (
     _carry_grids,
+    _held_coord,
     _normalize_chunk_units,
     build_chunk_plan,
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
+    patch_local_adjusted_envelopes,
     subdivision_pieces,
 )
 from dascore.utils.time import to_timedelta64
@@ -427,16 +429,25 @@ class TestChunkPlanToMerge:
             plan = build_chunk_plan(df, time=None, tolerance=10, group=("station",))
         assert len(plan.outputs) == 2
 
-    def test_hole_merges_only_with_a_fill_value(self, contiguous_df):
-        """A tolerance spans a real gap only when the plan may fill it (#662)."""
+    def test_tolerance_spans_a_hole(self, contiguous_df):
+        """A tolerance spans a real gap, refitting it, or filling with a fill value."""
         df = contiguous_df.iloc[:2].copy()
         step = df["time_step"].iloc[0]
         df.loc[0, "time_max"] = df.loc[0, "time_min"] + 10 * step
         df.loc[1, "time_min"] = df.loc[0, "time_max"] + 5 * step
         df.loc[1, "time_max"] = df.loc[1, "time_min"] + 10 * step
-        assert len(build_chunk_plan(df, time=None, tolerance=10).outputs) == 2
-        plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
+        assert len(build_chunk_plan(df, time=None).outputs) == 2
+        with pytest.warns(UserWarning, match="gap"):
+            refit = build_chunk_plan(df, time=None, tolerance=10).outputs
+        # the gap is closed by spreading the labels evenly over 22 samples
+        assert len(refit) == 1
+        span = (df["time_max"].max() - df["time_min"].min()).value
+        assert refit["time_step"].iloc[0].value == round(span / 21)
+        with warnings.catch_warnings():  # a fill spreads no labels, so no warning
+            warnings.simplefilter("error")
+            plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
         assert len(plan.outputs) == 1
+        assert plan.outputs["time_step"].iloc[0] == step
 
 
 class TestPlanMembers:
@@ -894,6 +905,65 @@ class TestCarryGrids:
             assert out["_x_grid"].iloc[0] == expected
 
 
+class TestHeldCoord:
+    """The samples a relation row holds, rebuilt from what it states."""
+
+    @pytest.fixture()
+    def origin(self):
+        """A row stating a 1024 Hz grid and the coordinate it describes."""
+        coord = get_coord(start=STARTTIME, step=(1, 1024), shape=(2000,))
+        row = {"x_min": coord.min(), "x_max": coord.max(), "x_step": coord.step}
+        return {**row, "_x_grid": (*coord.runs[0].canonical()[1:], 2000)}, coord
+
+    def test_whole_row(self, origin):
+        """A row whose grid ends on its bounds states its coordinate."""
+        row, coord = origin
+        assert _held_coord(row, "x") == coord
+
+    def test_trimmed_row(self, origin):
+        """A row whose grid no longer ends on its bounds states none."""
+        row, _ = origin
+        row = {**row, "x_min": STARTTIME + np.timedelta64(100, "ms")}
+        assert _held_coord(row, "x") is None
+
+
+class TestSharedDimensionEnvelopes:
+    """Replaying selections onto rows whose coordinates share a dimension."""
+
+    @pytest.fixture()
+    def frame(self):
+        """One row with sensor riding distance, two to a distance step."""
+        return pd.DataFrame(
+            {
+                "distance_min": [0.0],
+                "distance_max": [299.0],
+                "distance_step": [1.0],
+                "_distance_dims": ["distance"],
+                "sensor_min": [1000.0],
+                "sensor_max": [1598.0],
+                "sensor_step": [2.0],
+                "_sensor_dims": ["distance"],
+            }
+        )
+
+    def test_range_narrower_than_rounding(self, frame):
+        """A range holding no sample, closer than rounding, keeps the rider whole."""
+        residuals = (({"sensor": (1020.95, 1021.05)}, False, False),)
+        out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
+        assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
+
+    def test_coordinate_on_two_dimensions(self, frame):
+        """A coordinate on two dimensions trims neither of them."""
+        frame = frame.assign(
+            xy_min=[0.0], xy_max=[10.0], xy_step=[1.0], _xy_dims=["distance,time"]
+        )
+        residuals = (({"xy": (2, 5)}, True, False),)
+        out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
+        assert (out["xy_min"].iloc[0], out["xy_max"].iloc[0]) == (2, 4)
+        assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
+        assert (out["sensor_min"].iloc[0], out["sensor_max"].iloc[0]) == (1000, 1598)
+
+
 class TestBuildGapFrame:
     """Gap reporting on raw dataframes."""
 
@@ -962,17 +1032,27 @@ class TestBuildGapFrame:
         assert build_gap_frame(nested_then_later_df, "time").empty
 
     def test_sub_tolerance_gap_ignored(self, contiguous_df):
-        """A hole under the tolerance is not a gap."""
+        """A seam under the tolerance is not a gap, and nothing makes one."""
         df = contiguous_df.copy()
         df["time_max"] -= df["time_step"]
         assert build_gap_frame(df, "time").empty
-        # ... but tightening the tolerance finds it
-        assert len(build_gap_frame(df, "time", tolerance=0.5)) == len(df) - 1
+        # a tolerance only widens the seam test, so a tight one finds nothing
+        assert build_gap_frame(df, "time", tolerance=0.5).empty
+        # a seam 1.3 steps wide is a gap unless the tolerance spans it
+        wide = df.assign(time_min=df["time_min"] + 0.3 * df["time_step"])
+        wide.loc[0, "time_min"] = df.loc[0, "time_min"]
+        assert len(build_gap_frame(wide, "time")) == len(df) - 1
+        assert build_gap_frame(wide, "time", tolerance=1.5).empty
 
-    def test_unknown_step_reports_no_gap(self, gapy_df):
-        """With no step the tolerance has no sample to scale, so no gaps."""
+    def test_unknown_step_reports_every_seam(self, gapy_df):
+        """With no step only a distance joins, so every seam is a gap."""
         df = gapy_df.assign(time_step=np.timedelta64("NaT", "ns"))
-        assert build_gap_frame(df, "time").empty
+        out = build_gap_frame(df, "time")
+        assert len(out) == len(df) - 1
+        assert out["missing"].isna().all()
+        wide = gapy_df["time_step"].iloc[0] * 16
+        assert build_gap_frame(df, "time", tolerance=wide).empty
+        assert len(build_chunk_plan(df, time=None).outputs) == len(df)
 
     def test_groups_never_bridge(self, gapy_df):
         """A gap is never reported between two unrelated groups."""

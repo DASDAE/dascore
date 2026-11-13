@@ -29,6 +29,7 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import dascore_styles
 from dascore.units import get_quantity, get_quantity_str
+from dascore.utils.array_api import LAZY_BACKEND, backend_name
 from dascore.utils.time import to_float
 
 # What a container holds, whatever that is: `_limit_items` takes any of
@@ -1555,8 +1556,17 @@ def dataless_to_text(dtype, units=None) -> Text:
     return _data_header(dtype, units) + Text(")\n   no data")
 
 
+def lazy_to_text(data, units=None) -> Text:
+    """Describe a lazy array without reading it."""
+    steps = len(data.chain)
+    pending = f"{steps} operation{'' if steps == 1 else 's'} pending"
+    return _data_header(data.dtype, units) + Text(f")\n   not read yet; {pending}")
+
+
 def array_to_text(data, units=None) -> Text:
-    """Convert a patch's data array to text."""
+    """Convert a patch's data array to text; lazy data are described, not read."""
+    if backend_name(data) == LAZY_BACKEND:
+        return lazy_to_text(data, units)
     header = _data_header(data.dtype, units)
     # How much room it takes up. A repr states the dtype and the shape,
     # which is the size in pieces; whether it fits in memory is the

@@ -3,6 +3,7 @@
 import pickle
 import re
 import threading
+import warnings
 from dataclasses import replace
 from unittest.mock import Mock
 
@@ -12,13 +13,20 @@ import pytest
 import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import inventory_patch_pair
-from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
+from dascore.exceptions import (
+    ChunkError,
+    InvalidSpoolQueryError,
+    MissingPatchError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
 from dascore.utils.patch_assembly import coord_from_row
+from dascore.warnings import DASCoreWarning
 from tests.test_core.test_patch_chunk import (
     _T0,
     _assert_labels,
@@ -967,6 +975,35 @@ class TestExplicitMetadataSources:
             )
             assert np.array_equal(loaded.data, wanted.data)
 
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_planned_members_follow_conflict(self, conflict, channel_conflict_pair):
+        """
+        A merged output's index and rebuilt coordinates apply its conflict
+        policy, warning only when the output loads.
+        """
+        with warnings.catch_warnings(action="error"):
+            merged = dc.spool(list(channel_conflict_pair)).chunk(
+                time=None, conflict=conflict
+            )
+            out = merged.select(distance=np.array([[0, 10]]))
+            if conflict == "drop":
+                with pytest.raises(InvalidSpoolQueryError, match="channel"):
+                    merged.select(channel=(0, 10))
+            else:  # the index holds only the channels the merge keeps
+                assert not len(merged.select(channel=(1000, 1010)))
+                assert len(merged.select(channel=(0, 10))) == 1
+        with pytest.warns(DASCoreWarning):
+            out = out[0]
+        assert ("channel" in out.coords.coord_map) == (conflict == "keep_first")
+        assert _ends(out) == (0, 10)
+
+    def test_keep_first_indexes_first_units(self, channel_conflict_pair):
+        """keep_first indexes the first member's coordinate with its units."""
+        first, second = channel_conflict_pair
+        pair = [first.set_units(channel="m"), second.set_units(channel="km")]
+        merged = dc.spool(pair).chunk(time=None, conflict="keep_first")
+        assert merged.get_contents()["channel_units"].tolist() == ["m"]
+
     def test_missing_live_coordinate_metadata_is_not_assumed_complete(self):
         """A stale live index cannot advertise unverified uneven samples."""
         source = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
@@ -1097,14 +1134,16 @@ class TestExplicitDerivedViews:
 
     def test_multi_member_irregular_rechunk_checks_actual_samples(self):
         """Rechunking a merged uneven output cannot publish a gap-only row."""
-        patch = _patch([0.0, 1.0, 3.0, 6.0, 8.0, 11.0])
+        patch = _patch([0.0, 1.0, 3.0, 6.0, 8.0, 11.0]).set_units(distance="m")
         source = dc.spool(
             [
                 patch.select(distance=(0, 3)),
                 patch.select(distance=(6, 11)),
             ]
         )
-        joined = source.chunk(distance=np.array([[0.0, 11.0]]), tolerance=10)
+        # labels with no step join only by a distance
+        window = np.array([[0.0, 11.0]])
+        joined = source.chunk(distance=window, tolerance=dc.get_quantity("10 m"))
         with pytest.raises(ChunkError, match="contains no source samples"):
             joined.chunk(distance=np.array([[4.0, 5.0]]))
         assert (
@@ -1164,7 +1203,7 @@ class TestReviewRegressions:
         assert empty.get_contents().empty
         selected = source.select(distance=np.array([[0, 3]]), depth=(4, 8))
         assert _listed(selected.get_contents()) == [[2, 3]]
-        with pytest.raises(ChunkError, match="sampled"):
+        with pytest.raises(ChunkError, match="outside source coverage"):
             source.select(depth=(4, 8)).chunk_plan(distance=np.array([[0, 1]]))
         if file_backed:
             monkeypatch.setattr(DASDAEV1, "read_array", read_array)

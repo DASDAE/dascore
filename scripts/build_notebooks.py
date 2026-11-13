@@ -40,7 +40,11 @@ EXTRA_PACKAGES = ("pyyaml", "tabulate", "findiff")
 # Mirror tutorial data to avoid GitHub IP rate limits in shared classrooms.
 # Unlisted files still download. Refresh this list by recording fetch calls
 # during tutorial doc-code tests.
-MIRRORED_DATA = ("terra15_das_1_trimmed.hdf5", "example_dasdae_event_1.h5")
+MIRRORED_DATA = (
+    "terra15_das_1_trimmed.hdf5",
+    "example_dasdae_event_1.h5",
+    "UoU_lf_urban.hdf5",
+)
 
 # marimo runs the setup cell before every other cell. In the browser it points
 # pooch at the copies this site ships, so a file downloads from the site only

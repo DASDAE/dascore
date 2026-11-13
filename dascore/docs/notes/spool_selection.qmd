@@ -53,6 +53,8 @@ A single range in native units can be pushed into the reader on even or uneven c
 - several ranges composed on an uneven or float16/float32 coordinate, since stored ranges can't reliably tell which samples earlier selections left;
 - selections involving associated coordinates, so a trim on one coordinate can make a later trim on another coordinate along the same axis a no-op.
 
+The spool's contents follow such a trim before anything loads: selecting on one coordinate narrows the advertised range of every evenly sampled coordinate on its dimension, so `get_contents`, `get_coverage` and `chunk` see what the patch will hold. An advertised range is never narrower than what loads. Times and integers are advertised exactly; a float range may pass the loaded one by the float exactness of the [coordinate contract](coordinates.qmd), since a stored label can sit that far from its grid position. A coordinate with no step, or on several dimensions, keeps its whole range.
+
 Attribute filters, including on `data_id`, always query the indexed file metadata, not ids generated when a selected patch loads.
 
 ## Views

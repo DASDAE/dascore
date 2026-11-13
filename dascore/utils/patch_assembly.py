@@ -46,7 +46,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.chunk import _READ_PAD
-from dascore.utils.chunk_plan import _SOURCE_COLUMNS
+from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
 from dascore.utils.identity import (
     ids_enabled,
     operation_context,
@@ -570,6 +570,65 @@ def patch_from_fill(
     return dc.Patch(data=data, coords=coords, dims=coords.dims, attrs=attrs)
 
 
+def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManager:
+    """
+    The coordinates with ``dim`` labelled by the stretch grid ``row`` names.
+
+    A chunk plan fits one grid to each stretch of joined patches and gives
+    each output's members its slice (``_{dim}_stretch``); an output whose
+    stretch keeps its one patch's own labels names none and is returned
+    as it is. The grid is in the plan's dtype; a time counted in another
+    unit keeps it where every label is whole in that unit, and otherwise
+    takes nanoseconds, as the plan does. A coordinate which did not load
+    the samples the plan numbered keeps the labels it was assembled with.
+    """
+    spec = row.get(f"_{dim}_stretch")
+    if dim not in coords.coord_map:
+        return coords
+    current = coords.coord_map[dim]
+    if spec == "labels" and len(getattr(current, "runs", ())) > 1:  # one list
+        labels = get_coord(data=current.values, units=current.units)
+        return coords._update_grid(dim, **{dim: labels})
+    if not isinstance(spec, tuple):
+        return coords
+    dtype, (origin, num, den, *rest, stated) = np.dtype(current.dtype), spec
+    spec = (origin, num, den, *rest, str(dtype))
+    if dtype.kind in "Mm" and dtype != stated:  # the plan's ticks are nanoseconds
+        per = int(np.array(1, dtype).astype(stated).view(np.int64))
+        start, step = np.int64(origin).view(stated), np.int64(num).view("m8[ns]")
+        steps = np.dtype(dtype.str.replace("M", "m"))  # a timedelta in the unit
+        own = (start.astype(dtype), step.astype(steps), 0, *rest, str(dtype))
+        whole = den == 1 and not origin % per and not num % per
+        spec = own if whole else (origin, num, den, *rest, stated)
+    coord = stretch_coordinate(spec, current.units)
+    if len(coord) != len(current):
+        # a source changed since it was planned, so its samples are not
+        # the ones the plan numbered; they keep the labels they came with
+        return coords
+    return coords._update_grid(dim, **{dim: coord})
+
+
+def _fuses(rows: Sequence[Mapping], dim: str) -> bool:
+    """
+    Whether a merge may fuse its members' labels: as the plan judged them,
+    every member states a step and the plan keeps no stretch's labels.
+    """
+    keeps = (x.get(f"_{dim}_stretch") == "labels" for x in rows)
+    return not any(keeps) and not any(pd.isnull(x.get(f"{dim}_step")) for x in rows)
+
+
+def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
+    """The patch with its ``dim`` labels on its stretch's grid (see above)."""
+    coords = on_stretch_grid(patch.coords, dim, row)
+    if coords is patch.coords:
+        return patch
+    # relabelling is part of the merge the plan named, not another operation
+    with operation_context():
+        return dc.Patch(
+            data=patch.data, coords=coords, attrs=patch.attrs, dims=patch.dims
+        )
+
+
 def _whole_steps(ratio) -> int:
     """How many whole steps fit in a ratio, forgiving float error at the edge."""
     return int(np.floor(float(ratio) + _STEP_SNAP_RTOL))
@@ -583,6 +642,8 @@ def _fill_limit(tolerance) -> tuple:
     is missing one fewer sample than it spans. An infinite count sets no
     limit, which is the one way to ask for every hole to be filled.
     """
+    if tolerance is None:  # without a tolerance no hole is joined to fill
+        return 0, True
     if (count := tolerance.count) is not None:
         if not np.isfinite(count):
             return None, False
@@ -707,8 +768,9 @@ class PatchAssembler:
     # recipe reads the window the index promised rather than the whole
     # array, so a file rewritten since would otherwise pass unnoticed.
     # Takes the joined member frame; the caller keeps what was recorded.
-    # Only a source measured now and found unchanged keeps the recipe.
-    sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
+    # Only a source measured now and found unchanged keeps the recipe;
+    # with strict=False, only one measured and found changed fails.
+    sources_unchanged: Callable[..., bool] | None = None
     trim_dims: tuple[str, ...] = ()
     # Whether members carry coordinates the rows cannot rebuild, so the
     # index cannot stand for their patches (it can still size them).
@@ -749,8 +811,23 @@ class PatchAssembler:
             info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
-            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
-        return [x["patch"] for x in out]
+            fuse = _fuses(df_dict_list, self.plan_dim)
+            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs, fuse=fuse)
+        patches = [x["patch"] for x in out]
+        if len(patches) == 1 and df_dict_list:
+            patches = [self._on_grid(patches[0], joined, df_dict_list[0])]
+        return patches
+
+    def _on_grid(self, patch, joined, row) -> dc.Patch:
+        """The patch on its stretch's grid, unless a source changed since planning."""
+        unchanged, spec = self.sources_unchanged, row.get(f"_{self.plan_dim}_stretch")
+        if (
+            isinstance(spec, tuple)
+            and unchanged
+            and not unchanged(joined, strict=False)
+        ):
+            return patch  # its samples are not the ones the plan numbered
+        return _on_stretch_grid(patch, self.plan_dim, row)
 
     def _load_trimmed_patch(self, patch_kwargs, joined, units=None) -> dc.Patch:
         """Load a single patch and trim it to its instruction range."""
@@ -791,9 +868,10 @@ class PatchAssembler:
         metas = self._member_meta_from_index(df_dict_list)
         if metas is not None:
             out = self._merge_from_index(joined, df_dict_list, merge_dim, metas)
-            if out is not None:
-                return out
-        return self._stream(joined, df_dict_list, merge_dim, samples, units)
+            if out is not None:  # its sources were found unchanged
+                return _on_stretch_grid(out, self.plan_dim, df_dict_list[0])
+        out = self._stream(joined, df_dict_list, merge_dim, samples, units)
+        return self._on_grid(out, joined, df_dict_list[0])
 
     def _merge_from_index(self, joined, df_dict_list, merge_dim, metas):
         """
@@ -824,7 +902,9 @@ class PatchAssembler:
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])
-        return self._assemble(data, dims, merge_dim, coords, attrs, defaults)
+        return self._assemble(
+            data, dims, merge_dim, coords, attrs, df_dict_list, defaults
+        )
 
     def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
@@ -911,8 +991,12 @@ class PatchAssembler:
         coords, attrs = metas[0].coords, metas[0].attrs
         if len(metas) > 1:
             coords, attrs = self._merged_meta(
-                self.plan_dim, [x.coords for x in metas], [x.attrs for x in metas]
+                self.plan_dim,
+                [x.coords for x in metas],
+                [x.attrs for x in metas],
+                rows,
             )
+        coords = on_stretch_grid(coords, self.plan_dim, rows[0])
         if not all(known):
             attrs = attrs.update(data_id="")
         return OutputMeta(dims, coords, attrs, chain[-1], metas)
@@ -976,11 +1060,11 @@ class PatchAssembler:
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
-        return self._assemble(buffer, dims, merge_dim, coords, attrs)
+        return self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
 
-    def _assemble(self, data, dims, merge_dim, coords, attrs, defaults=None):
+    def _assemble(self, data, dims, merge_dim, coords, attrs, rows, defaults=None):
         """Build the merged patch from the members' data, coords and attrs."""
-        coords, attrs = self._merged_meta(merge_dim, coords, attrs)
+        coords, attrs = self._merged_meta(merge_dim, coords, attrs, rows)
         # The merge drops empty and conflicting attrs, which the first
         # member's vendor model fills with its defaults; rows rebuild base
         # attrs, so restate them.
@@ -993,7 +1077,7 @@ class PatchAssembler:
         with operation_context():
             return dc.Patch(data=data, coords=coords, attrs=attrs, dims=list(dims))
 
-    def _merged_meta(self, merge_dim, coords, attrs):
+    def _merged_meta(self, merge_dim, coords, attrs, rows):
         """The coordinates and attrs members merged along ``merge_dim`` have."""
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
@@ -1006,10 +1090,9 @@ class PatchAssembler:
             )
             raise CoordMergeError(msg)
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
-        conf = attr_kwargs.get("conflict", None)
-        drop_conflicting = conf in {"drop", "keep_first"}
+        fuse = _fuses(rows, merge_dim)
         new_coord = _get_merged_coord(
-            summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
+            summary_df, merge_dim, coords, fuse=fuse, **coord_kwargs
         )
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(

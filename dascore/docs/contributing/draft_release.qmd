@@ -1,5 +1,11 @@
 ---
 title: Draft a release
-keywords: [release, changelog, version, tag]
 ---
-{{< include ../../.agents/skills/draft-release/SKILL.md >}}
+{{< include ../../.agents/skills/dascore-draft-release/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+---
+# After the include, so this description replaces the skill file's.
+description: Draft the next release version and its changelog from merged PRs.
+---
+:::

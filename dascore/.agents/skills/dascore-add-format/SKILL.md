@@ -1,5 +1,5 @@
 ---
-name: add-format
+name: dascore-add-format
 description: DASCore development. Add a file format with a FiberIO subclass, covering metadata, array windows, attrs, tests, and entry-point registration.
 ---
 

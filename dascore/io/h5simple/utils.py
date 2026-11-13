@@ -40,6 +40,12 @@ def _get_attrs_coords_and_data(h5, snap):
     # Taken before filtering, which would skip a dims array as a coordinate.
     dims = attr_dict.pop("dims", None)
     attr_dict = drop_unheld_attrs(attr_dict)
+    # Some files state the data's units as a root ``units`` (as netCDF
+    # writers do). With no ``data_units``, units which parse become the data
+    # units; anything else, such as prose, stays a plain ``units`` attr.
+    units = attr_dict.get("units")
+    if "data_units" not in attr_dict and isinstance(units, str) and parse_units(units):
+        attr_dict["data_units"] = attr_dict.pop("units")
     # Some files describe their units in prose ("same as input DAS data");
     # keep that text, but leave the patch without units rather than fail.
     units = attr_dict.get("data_units")

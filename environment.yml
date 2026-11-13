@@ -9,6 +9,7 @@ dependencies:
   - pytest
   - pytest-timeout
   - array-api-compat>=1.9
+  - filelock>=3.12
   - numpy>=2.3.3
   - pydantic>2.1
   - pip
