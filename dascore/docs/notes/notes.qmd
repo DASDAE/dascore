@@ -15,5 +15,6 @@ These pages explain DASCore's implementation and design decisions.
 - [Spool Chunking](spool_chunking.qmd)
 - [Patch Compatibility](patch_compatibility.qmd)
 - [Lazy Operations](lazy_operations.qmd) states the rules an operation keeps on data not read yet: chunk invariance, metadata never lazy, no fallback, and step identity.
+- [Windowed and Lazy Processing](windowed_processing.qmd) is the plan for `Patch.window`, `Patch.impulse_window`, lazy backends and a merge which stays lazy; most of it is not built yet.
 - [Keys, IDs and Rows](identity.qmd)
 - [Inventory Attachment](inventory_attachment.qmd)
