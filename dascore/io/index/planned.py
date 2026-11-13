@@ -20,6 +20,7 @@ import secrets
 from collections.abc import Mapping
 from dataclasses import replace
 from functools import cached_property
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -1219,6 +1220,7 @@ def derived_catalog(
     origin_path=None,
     stamped: tuple[str, ...] | Mapping[str, str] = (),
     lossy: bool = False,
+    snapped: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> PatchCatalog:
     """
     Materialize a plan into a fresh in-memory catalog.
@@ -1228,6 +1230,8 @@ def derived_catalog(
     ``plan.members``; ``parent`` supplies the resolver (live registry,
     file root, nested plans) and the residual selections its view
     carried, which member loading re-applies; ``stamped`` may map to dtypes.
+    ``snapped`` maps an output to the coordinates a snap gives it as it
+    loads, which its record states in place of its source's.
     """
     token = secrets.token_hex(8)
     name = plan.dim
@@ -1345,8 +1349,34 @@ def derived_catalog(
         records = _with_parent_runs(
             records, parent.backend, trims, sources, name, concat
         )
+    if snapped:
+        records = _with_snapped(records, snapped)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)
+
+
+def _with_snapped(records, snapped) -> list:
+    """The records with each output's snapped coordinates stated as they load."""
+    out = []
+    for source in records:
+        patches = []
+        for patch in source.patches:
+            new = snapped.get(int(patch.source_patch_key), {})
+            coords = []
+            for coord in patch.coords:
+                if (snap := new.get(coord.coord_name)) is not None:
+                    restated = _coord_record(coord.coord_name, snap.to_summary())
+                    keep = ("coord_name", "coord_dims")
+                    fields = {
+                        x: getattr(restated, x) for x in coord.__dataclass_fields__
+                    }
+                    coord = replace(
+                        coord, **{k: v for k, v in fields.items() if k not in keep}
+                    )
+                coords.append(coord)
+            patches.append(replace(patch, coords=tuple(coords)))
+        out.append(replace(source, patches=tuple(patches)))
+    return out
 
 
 def _with_parent_runs(

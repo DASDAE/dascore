@@ -715,6 +715,39 @@ class TestSpoolSnapCoords:
             out.get_contents()["time_step"].iloc[0] == expected.get_coord("time").step
         )
 
+    @pytest.mark.parametrize(
+        "kwargs", [{}, {"reverse": True}, {"step": 1.0}, {"step": 0.5}]
+    )
+    def test_lazy_matches_eager(self, kwargs):
+        """Rows, chunks and gaps of a lazy snap are those of the snapped patches."""
+
+        def make(values, start=0.0):
+            coord = get_coord(data=np.asarray(values) + start)
+            coords = {"time": coord, "distance": np.arange(2.0)}
+            data = np.arange(2 * len(coord)).reshape(-1, 2)
+            return dc.Patch(data=data, coords=coords, dims=tuple(coords))
+
+        patches = [
+            make([0.0, 1.1, 1.9, 5.05, 6.4]),
+            make(np.arange(10.0), start=20.0),
+            make([6.4, 5.05, 1.9, 1.1, 0.0], start=40.0),
+        ]
+        spool = dc.spool(patches)
+        with suppress_warnings(UserWarning):
+            lazy = spool.snap_coords("time", **kwargs)
+            eager = dc.spool([x.snap_coords("time", **kwargs) for x in patches])
+        cols = ["time_min", "time_max", "time_step"]
+        assert lazy.get_contents()[cols].equals(eager.get_contents()[cols])
+        labels = lambda x: [y.get_coord("time").values.tolist() for y in x]  # noqa
+        assert labels(lazy) == labels(eager)
+        assert labels(lazy.chunk(time=None)) == labels(eager.chunk(time=None))
+        assert len(lazy.get_gaps()) == len(eager.get_gaps())
+
+    def test_unknown_dimension_raises(self, wacky):
+        """A dimension no patch has is refused by name."""
+        with pytest.raises(dc.exceptions.CoordError, match="bob"):
+            wacky.snap_coords("bob")
+
     def test_chunk_keeps_the_snap(self, wacky):
         """A later chunk plans over the snapped patches, not their sources."""
         (out,) = wacky.snap_coords("time").chunk(time=None)

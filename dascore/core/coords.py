@@ -4197,13 +4197,11 @@ def _step_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
     dtypes = [values.dtype]
     for block in np.split(values, splits):
         grid, dtype = _range_run(dict(start=block[0], step=signed, shape=block.shape))
-        # within a float64's rounding of the largest label, or of the step
-        ulps = _GRID_ULPS * np.spacing(np.abs(block.astype(np.float64)).max())
         near = absorb and np.allclose(
             grid.labels(np.arange(len(block)), dtype),
             block,
             0,
-            max(abs(signed) * _GRID_RTOL, ulps),
+            abs(signed) * _GRID_RTOL,
         )
         if not (near or _grid_holds(grid, block, dtype)):
             # labels a grid does not restate keep the step as one stored run

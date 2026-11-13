@@ -17,6 +17,7 @@ from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
     Grid,
     NumericCoord,
+    _float_allowance,
     _grid_coord,
     _grid_terms,
     _scalar_dtype,
@@ -445,10 +446,14 @@ def _read_stored_coord(node, name, attrs2):
             # so a fractional grid keeps its exact step
             runs = []
             for values in np.split(array, np.cumsum(lengths)[:-1]):
-                try:
-                    grid = get_coord(data=values, step=node_step)._grid
-                except CoordError:  # an earlier writer's step, not the run's
-                    grid = get_coord(data=values, snap=False)._grid
+                grid = get_coord(data=values, snap=False)._grid
+                if node_step is not None:  # the grid written, to float precision
+                    spec = dict(start=values[0], step=node_step, shape=values.shape)
+                    written = get_coord(**spec)
+                    off = np.abs(written.values - values).max()
+                    floats = values.dtype.kind == "f"
+                    if off <= (_float_allowance(values, node_step) if floats else 0):
+                        grid = written._grid
                 runs.append(values if grid is None else grid)
             return NumericCoord(runs=tuple(runs), units=units, dtype=array.dtype)
         if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate

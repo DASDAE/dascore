@@ -91,6 +91,7 @@ from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
 from dascore.core.patch import _is_lazy
 from dascore.exceptions import (
+    CoordError,
     InsufficientMemoryError,
     InvalidInventoryError,
     InvalidSpoolError,
@@ -2181,7 +2182,9 @@ class Spool(NodeRepr, NamespaceOwner):
         catalog = self._catalog
         return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
-    def _materialize_lossy(self, stamp=None, dtypes=None, rows=None, **merge):
+    def _materialize_lossy(
+        self, stamp=None, dtypes=None, rows=None, snapped=None, **merge
+    ):
         """
         Bake residual trims and presentation order into a derived catalog.
 
@@ -2219,6 +2222,7 @@ class Spool(NodeRepr, NamespaceOwner):
             stamped=dtypes or tuple(stamp or ()),
             # a re-plan from the members would load them unsnapped
             lossy=bool(merge),
+            snapped=snapped,
         )
 
     # --- restructuring (materializing) operations -----------------------
@@ -2842,17 +2846,24 @@ class Spool(NodeRepr, NamespaceOwner):
         resolver, residuals = self._catalog.resolver, self._catalog.residuals
         kwargs = dict(reverse=reverse, step=step, max_shift=max_shift)
         dims = rows["dims"].fillna("").astype(str).str.split(",")
+        snapped: dict[int, dict] = {}
         for dim in coords or sorted({x for row in dims for x in row if x}):
-            col = f"{dim}_step"
-            stepless = dims.map(lambda x, d=dim: d in x) & rows[col].isna()
-            for index in np.flatnonzero(stepless.to_numpy()):
+            if f"{dim}_step" not in rows:
+                raise CoordError(
+                    f"Coordinate {dim!r} is not a dimension of this spool."
+                )
+            # only labels change unless a step or a reversal is asked for
+            moves = rows[f"{dim}_step"].isna() | reverse | (step is not None)
+            for index in np.flatnonzero(dims.map(lambda x, d=dim: d in x) & moves):
                 row = rows.iloc[index].to_dict()
                 manager = _source_manager(resolver, row, files, projection=dim)
-                coord = _select_manager(manager, residuals).coord_map[dim]
+                manager = _select_manager(manager, residuals)
                 with suppress_warnings(UserWarning):  # warned as patches load
-                    coord = coord.snap(step=step, max_shift=max_shift)
-                rows.loc[rows.index[index], col] = coord.step
-        catalog = self._materialize_lossy(rows=rows, snap=(coords, kwargs))
+                    manager = manager.snap(dim, **kwargs)[0]
+                snapped.setdefault(int(index), {})[dim] = manager.coord_map[dim]
+        catalog = self._materialize_lossy(
+            rows=rows, snapped=snapped, snap=(coords, kwargs)
+        )
         return self._new_from_catalog(catalog)
 
     @compose_docstring(experimental=experimental_note)

@@ -203,3 +203,15 @@ class TestDASDAESegments:
             (len(x), x.step) for x in segments
         ]
         assert back == patch.get_coord("distance")
+
+    def test_single_sample_segments_keep_steps(self, tmp_path):
+        """Lone samples between holes read back on their segments' step."""
+        start = np.datetime64("2020-01-01", "ns")
+        full = dc.get_coord(start=start, step=np.timedelta64(1, "ms"), shape=(12,))
+        keep = np.isin(np.arange(12), [0, 1, 4, 8, 9])
+        patch = dc.Patch(data=np.zeros(12), coords={"time": full}, dims=("time",))
+        patch = patch.select(time=keep)
+        patch.io.write(tmp_path / "out.h5", "dasdae")
+        back = dc.read(tmp_path / "out.h5")[0].get_coord("time")
+        assert [len(x) for x in back.segments] == [2, 1, 2]
+        assert [x.step for x in back.segments] == [np.timedelta64(1, "ms")] * 3
