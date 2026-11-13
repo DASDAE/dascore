@@ -321,6 +321,15 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
     raise NotImplementedError(msg)
 
 
+def numpy_time(value: datetime | date | timedelta) -> np.datetime64 | np.timedelta64:
+    """Return a python or pandas time as a numpy one at its own precision."""
+    for name in ("to_datetime64", "to_timedelta64"):  # pandas, to keep its unit
+        if hasattr(value, name):
+            return getattr(value, name)()
+    is_delta = isinstance(value, timedelta)
+    return np.timedelta64(value) if is_delta else np.datetime64(value)
+
+
 @to_timedelta64.register(float)
 @to_timedelta64.register(int)
 @to_timedelta64.register(np.number)

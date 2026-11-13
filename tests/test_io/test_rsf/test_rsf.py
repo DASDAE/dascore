@@ -372,7 +372,7 @@ HISTORY = ("pass_filter(time=(None, 10))", "a\nn1=99\x00b")
 
 @pytest.fixture(scope="module")
 def attrs_patch(fractional_patch):
-    """A float32 patch with set, extra, nested and colliding attrs and history."""
+    """A float32 patch with set, extra and colliding attrs and history."""
     attrs = {
         "data_type": "strain_rate",
         "data_units": "1/s",
@@ -383,7 +383,6 @@ def attrs_patch(fractional_patch):
         "empty": None,
         "code": "3",
         "station": 'a "quoted" \\ name',
-        "nest": {"a": [1, 2], "b": {"c": "x=y"}},
         "in": "collides",
         "n1": 7,
         "dascore_note": "prefixed",
@@ -429,7 +428,7 @@ class TestRsfAttrs:
 
     @pytest.mark.parametrize(
         "name, value",
-        [("note", 'say "hi'), ("note", "a\nb"), ("note", {"a": "x y"}), ("my-note", 5)],
+        [("note", 'say "hi'), ("note", "a\nb"), ("my-note", 5)],
     )
     def test_misread_skipped(self, name, value, fractional_patch, tmp_path):
         """An attr Madagascar would misread, or DASCore not read, is skipped."""
@@ -471,3 +470,13 @@ class TestRsfAttrs:
         assert (patch.attrs["input"], patch.attrs["title"]) == (0, "Spike")
         assert "sfspike" not in str(dict(patch.attrs))
         assert patch.get_coord("Time").min() == 0.0
+
+    def test_unheld_value_skipped(self, tmp_path):
+        """A bare value no attr holds, such as a JSON list, is skipped."""
+        lines = ["n1=4", "d1=1", "o1=0", 'data_format="native_float"']
+        lines += ["esize=4", 'in="stdin"', "pair=[1,2]", 'tag="{}"']
+        path = _write_rsf(tmp_path / "list.rsf", lines, np.zeros(4, np.float32))
+        with pytest.warns(UserWarning, match="pair"):
+            patch = dc.spool(path)[0]
+        assert "pair" not in dict(patch.attrs)
+        assert patch.attrs["tag"] == "{}"

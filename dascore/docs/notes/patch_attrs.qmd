@@ -10,7 +10,13 @@ title: PatchAttrs
 
 `PatchAttrs` rejects nested coordinate payloads and does not own `dims` or coordinate-summary fields such as `time_min` and `distance_step`. Keeping them out of attrs means coordinate edits cannot leave stale copies. Use coordinate APIs for structural changes and `Patch.summary.get_coord_summary(...)` or `PatchSummary.flat_dump(...)` for summary/index views.
 
-An extra attr holds one value. A one-value array, list or tuple, which is how HDF5 and netCDF store a scalar, is read as that scalar; one holding several values is skipped with a warning, because an array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension.
+## What an attr holds
+
+An extra attr (one the class does not declare) holds a single string, real number (ints within 64 bits), bool, None, `np.datetime64` or `np.timedelta64` of any unit, or a scalar `Quantity` or `Unit`. A declared field of a [subclass](#format-specific-subclasses) is checked by its own type instead.
+
+Python and pandas times become numpy times at their own precision; a time-zone-aware one is refused, so convert it to UTC first. Bytes and numpy strings become `str`, `pd.NA` becomes `None`, and a one-value array, list or tuple (how HDF5 and netCDF store a scalar) becomes that value. An array of several values is skipped with a warning, and anything else, such as a dict, is refused with an error naming the attr. A reader copying every attr a file holds passes them through [`drop_unheld_attrs`](`dascore.core.attrs.drop_unheld_attrs`), which skips refused ones with a warning.
+
+This is deliberate: attrs are indexed, hashed into ids and compared when patches combine, and every format would need a codec for richer types. Put an array on a coordinate, `patch.update_coords(name=(dims, array))` (or `(None, array)` for one riding no dimension), and structured metadata in fields of a [format-specific subclass](#format-specific-subclasses) or an [inventory](`dascore.Inventory`).
 
 ## `data_type`
 

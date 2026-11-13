@@ -15,6 +15,7 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
+from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae.utils import _read_stored_coord, _save_coord
 from tests.conftest import join_patches
 
@@ -331,3 +332,37 @@ class TestMultiRunRoundTrip:
         out = read.get_coord("time")
         assert out == coord and out.step_exact == coord.step_exact
         np.testing.assert_array_equal(read.data, patch.data)
+
+
+_ATTR_VALUES = {
+    "millis": np.timedelta64(5, "ms"),
+    "seconds": np.datetime64("2020-01-01T00:00:01", "s"),
+    "length": dc.get_quantity("5 m"),
+    "warmth": 2.5 * dc.get_quantity("degC"),
+    "unit": dc.get_quantity("m/s").units,
+}
+
+
+class TestAttrRoundTrip:
+    """Times keep their unit, and quantities and units their units."""
+
+    @pytest.mark.parametrize("load", [dc.read, dc.scan, dc.spool])
+    def test_loaded_as_written(self, tmp_path, load):
+        """Read, scan and spool give each value back as written, units and all."""
+        patch = dc.get_example_patch().update_attrs(**_ATTR_VALUES)
+        attrs = load(dc.write(patch, tmp_path / "a.h5", "dasdae"))[0].attrs
+        for name, value in _ATTR_VALUES.items():
+            assert type(attrs[name]) is type(value)
+            assert str(attrs[name]) == str(value)  # so 500 cm is not 5 m
+
+    @pytest.mark.parametrize(
+        "tag, value",
+        [(None, np.timedelta64(3, "10ms")), ("datetime64[ns]", 10**9)],
+    )
+    def test_codec(self, tag, value):
+        """A multiplied unit is kept, and old nanosecond tags still read."""
+        if tag is None:
+            value, tag = dasdae_utils._encode_attr_value("a", value)
+        tags = {f"{dasdae_utils._ATTR_TYPE_PREFIX}a": tag}
+        out = dasdae_utils._decode_attr_value(tags, "a", value)
+        assert str(out.dtype) == tag and int(out.view(np.int64)) == int(value)

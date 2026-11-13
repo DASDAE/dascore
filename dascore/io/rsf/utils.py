@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
+from dascore.core.attrs import drop_unheld_attrs
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import parse_units, step_from_interval
 
@@ -116,9 +117,9 @@ def get_coords(hdr) -> dict:
 
 
 def _get_attr_value(value: str):
-    """Return a bare value or quoted object as the JSON it spells, else text."""
+    """Return a bare value as the JSON it spells, else its text."""
     text = _unquote(value)
-    if not value.startswith('"') or text.startswith("{"):
+    if not value.startswith('"'):
         with suppress(ValueError):
             return json.loads(text)
     return text
@@ -138,6 +139,7 @@ def get_attrs(text: str) -> dict:
         if not RESERVED.fullmatch(key):
             name = key.removeprefix(PREFIX)
             out[name] = _unquote(value) if name in fields else _get_attr_value(value)
+    out = drop_unheld_attrs(out)
     lines = text.split("\n")
     if history := [x[len(HISTORY) :] for x in lines if x.startswith(HISTORY)]:
         # each line holds the version before the entry

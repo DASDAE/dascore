@@ -323,6 +323,16 @@ class TestH5Simple:
         patch = dc.spool(h5simple_with_dim_attrs_path, file_format="h5simple")[0]
         assert isinstance(patch, dc.Patch)
 
+    def test_odd_root_attrs(self, h5simple_with_dim_attrs_path, tmp_path):
+        """A dims array is used, and an attr no patch holds is skipped."""
+        path = shutil.copy(h5simple_with_dim_attrs_path, tmp_path / "odd.h5")
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["dims"] = ["distance", "time"]
+            h5.attrs["pair"] = np.array((1, 2.0), dtype=[("a", "i4"), ("b", "f8")])
+        with pytest.warns(UserWarning, match="Skipped attr 'pair'"):
+            patch = dc.read(path, file_format="h5simple")[0]
+        assert patch.dims == ("distance", "time") and "pair" not in dict(patch.attrs)
+
     def test_provenance_in_file_is_not_a_patch_attr(self, h5simple_path, tmp_path):
         """A root attr naming where the bytes live is the spool's, not the patch's.
 
