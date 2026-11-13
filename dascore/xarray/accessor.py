@@ -18,6 +18,7 @@ from typing import Any
 
 import dascore as dc
 from dascore.exceptions import PatchConversionError
+from dascore.proc.window import PatchWindow
 from dascore.utils.array_api import is_foreign
 from dascore.utils.misc import available_memory, optional_import
 from dascore.warnings import NumpyFallbackWarning
@@ -85,6 +86,20 @@ def _as_patch(value):
     """A DataArray as the patch it describes; anything else unchanged."""
     xr = optional_import("xarray")
     return xarray_to_patch(value) if isinstance(value, xr.DataArray) else value
+
+
+class _Windowed:
+    """A window over a DataArray's patch, whose results come back as DataArrays."""
+
+    def __init__(self, accessor, patch, window: PatchWindow):
+        self._accessor, self._patch, self._window = accessor, patch, window
+
+    def __getattr__(self, name: str):
+        """Forward one of the window's methods through the accessor."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        bound = getattr(self._window, name)
+        return self._accessor._method(self._patch, bound, f"window.{name}")
 
 
 def _as_xarray(value, lazy: set[str]):
@@ -196,6 +211,10 @@ class _PatchMethods:
             patches = [patch, *(x for x in (*args, *kwargs.values()))]
             size = _largest_to_materialize(patches)
             out = run() if size is None else _guarded(run, name, size)
+            if isinstance(out, PatchWindow):
+                # A window computes nothing; what it does is a patch method
+                # like any other, weighed and converted as one.
+                return _Windowed(self, patch, out)
             return _as_xarray(out, lazy)
 
         # `add` and its kind are objects with methods of their own

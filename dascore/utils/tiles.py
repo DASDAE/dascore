@@ -28,6 +28,17 @@ from numpy.lib.stride_tricks import as_strided
 from dascore.exceptions import ParameterError
 
 
+def fill_dtype(dtype, fill) -> np.dtype:
+    """
+    Return the dtype which holds both an array's values and a fill value.
+
+    From the smallest dtype the fill fits in, not from the fill as a plain
+    number, which NumPy would squeeze into the array's dtype: -1 into a
+    uint8 as 255.
+    """
+    return np.result_type(dtype, np.min_scalar_type(fill))
+
+
 def _taper_like(taper: np.ndarray, array: np.ndarray) -> np.ndarray:
     """Return the taper in float64 for double data, else float32."""
     double = np.finfo(np.result_type(array.dtype, np.float16)).bits >= 64
@@ -146,7 +157,7 @@ class TilePlan:
         """
         own = np.asarray(array).dtype
         # Zero is a value of any dtype; another fill may need a wider one.
-        dtype = dtype or (own if fill == 0 else np.result_type(own, fill))
+        dtype = dtype or (own if fill == 0 else fill_dtype(own, fill))
         buffer = np.full(self.extended, fill, dtype=dtype)
         buffer[self._inner()] = array
         return buffer

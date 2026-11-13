@@ -1435,7 +1435,16 @@ class TestCellBoundsOperations:
 
     @pytest.mark.parametrize(
         "operation",
-        ["resample", "decimate", "interpolate", "pad", "rolling", "rolling_stride"],
+        [
+            "resample",
+            "decimate",
+            "interpolate",
+            "pad",
+            "rolling",
+            "rolling_stride",
+            "window",
+            "window_stride",
+        ],
     )
     def test_new_grid(self, bounded_patch, operation):
         """Changing a grid drops only that dimension's pair."""
@@ -1448,6 +1457,9 @@ class TestCellBoundsOperations:
             out = patch.interpolate(distance=patch.get_array("distance") + 0.25)
         elif operation == "pad":
             out = patch.pad(distance=2, samples=True)
+        elif operation.startswith("window"):
+            step = 2 if operation.endswith("stride") else 1
+            out = patch.window(distance=4, step=step, samples=True).mean()
         else:
             step = 2 if operation.endswith("stride") else 1
             out = patch.rolling(distance=4, step=step, samples=True).mean()

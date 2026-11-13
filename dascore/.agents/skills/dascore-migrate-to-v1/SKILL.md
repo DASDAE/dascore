@@ -143,6 +143,7 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 - `Patch.coords_from_df` raises `ParameterError` rather than overwrite an existing coordinate. Drop it first with `drop_coords`, or set it with `update_coords`.
 - **Silent: stack labels.** `Spool.stack(dim_vary=...)` keeps the first patch's labels for `dim_vary`; 0.1.x relabelled it to start at zero (1970 for times).
 - `hampel_filter` without a dimension raises instead of returning the data unchanged.
+- `Patch.rolling` is deprecated in favour of [`Patch.window`](`dascore.Patch.window`). `rolling(time=1, step=0.5).mean()` is `window(time=1, step=0.5, align="right").mean()`, and `rolling(...).apply(func)` is `window(..., align="right").reduce(func)`. Without `align="right"` a window is labelled by its middle sample, where `rolling` labelled its last. `rolling(center=True)` is the default `align="center"` when no step is given; with a step, `rolling` labelled centred windows off their centre.
 - **Silent: STFT.** `Patch.stft` places its windows differently, so depending on window length and overlap the output `time` values, and the number of windows, can differ from 0.1.x. The output also carries `{dim}_start` and `{dim}_stop` coordinates giving each window's edges.
 - **Silent: correlation units.** `correlate` reports the square of the input data units.
 - **Silent: taper.** `taper` builds its ramp from `2n + 1` samples rather than `2n`, changing edge values slightly.

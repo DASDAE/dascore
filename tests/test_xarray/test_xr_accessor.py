@@ -48,6 +48,18 @@ class TestForwarding:
         assert isinstance(out, xr.DataArray)
         assert np.array_equal(out.values, patch.abs().data)
 
+    def test_a_window_answers_in_data_arrays(self, patch, data_array):
+        """What a window does comes back as a DataArray, as any method's does."""
+        import xarray as xr  # noqa: PLC0415
+
+        window = {"time": 5, "samples": True}
+        reduced = data_array.dc.window(**window).mean()
+        assert isinstance(reduced, xr.DataArray)
+        expected = patch.window(**window).mean().data
+        assert np.array_equal(reduced.values, expected, equal_nan=True)
+        applied = data_array.dc.window(time=16, samples=True).apply(np.negative)
+        assert isinstance(applied, xr.DataArray)
+
     def test_arguments_reach_the_method(self, patch, data_array):
         """A method's own arguments are passed through untouched."""
         out = data_array.dc.pass_filter(time=(1, 10))

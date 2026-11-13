@@ -132,10 +132,11 @@ class TileApply(PatchProcessor):
 
     Notes
     -----
-    - Tiles start before the data and are padded with zeros, as many whole
-      strides before as it takes for every tile which reaches a sample to
-      exist: none when tiles abut, one stride up to half overlap, more
-      beyond it, which an analysis window's dual relies on.
+    - Tiles start before the data and hold `fill` there, zeros unless one
+      is given, as many whole strides before as it takes for every tile
+      which reaches a sample to exist: none when tiles abut, one stride up
+      to half overlap, more beyond it, which an analysis window's dual
+      relies on.
     - The adaptive spectral filter is this with a spectral weighting as
       `function`; see
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).

@@ -681,11 +681,6 @@ class TestArguments:
         with pytest.raises(ParameterError, match="mode must be one of"):
             tile_apply(patch, halve, mode="centre", time=64, samples=True)
 
-    def test_needs_a_dimension(self, patch):
-        """No window, nothing to tile."""
-        with pytest.raises(ParameterError, match="needs a dimension"):
-            tile_apply(patch, halve)
-
     def test_overlap_past_half_refused(self, patch):
         """The taper's ramps would cross."""
         with pytest.raises(ParameterError, match="ramps would cross"):

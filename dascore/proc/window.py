@@ -21,6 +21,7 @@ from dascore.exceptions import ParameterError
 from dascore.proc.rolling import _pandas_agrees, _rolling_pandas
 from dascore.proc.tile_apply import TileApply
 from dascore.utils.patch import _call_str
+from dascore.utils.tiles import fill_dtype
 from dascore.utils.window import resolve_window
 
 __all__ = ("PatchWindow", "WindowReduce")
@@ -41,6 +42,16 @@ _REDUCERS = {
     "std": np.std,
     "sum": np.sum,
 }
+
+
+def _check_options(ends: str, align: str) -> None:
+    """Refuse an `ends` or `align` which is not one of the choices."""
+    if ends not in _ENDS:
+        msg = f"ends must be one of {_ENDS}; got {ends!r}."
+        raise ParameterError(msg)
+    if align not in _BEFORE:
+        msg = f"align must be one of {tuple(_BEFORE)}; got {align!r}."
+        raise ParameterError(msg)
 
 
 class WindowReduce(PatchProcessor):
@@ -85,13 +96,15 @@ class WindowReduce(PatchProcessor):
         args = given.pop("function_args", None)
         kwargs = given.pop("function_kwargs", {})
         window = _call_str("window", given)
-        if isinstance(function, str):
+        if isinstance(function, str) and not (args or kwargs):
             return f"{window}.{function}()"
-        applied = {"function": function, "args": args, **kwargs}
+        # Written last, so a keyword of the function's cannot stand for them.
+        applied = {**kwargs, "function": function, "args": args}
         return f"{window}.{_call_str('reduce', applied)}"
 
     def get_metadata(self, meta):
         """Return the reduced metadata, and where the complete windows sit."""
+        _check_options(self.ends, self.align)
         if isinstance(self.function, str) and self.function not in _REDUCERS:
             msg = (
                 f"A reduction is a function or one of {tuple(_REDUCERS)}; "
@@ -123,8 +136,8 @@ class WindowReduce(PatchProcessor):
         if self.ends == "drop":
             kept, total = slice(first * step, (first + valid) * step, step), valid
         coords, _ = meta.coords.isel(**{dim: kept})
-        # Each output sample summarizes a window, not the input's cell.
         dtype = np.result_type(meta.dtype, np.float64)
+        # Each output sample summarizes a window, not the input's cell.
         out = meta.new(coords=coords._update_grid(dim), dtype=dtype)
         return out, {
             "axis": axis,
@@ -140,10 +153,12 @@ class WindowReduce(PatchProcessor):
         """Return the reduction of each complete window, in a float dtype."""
         named = isinstance(self.function, str)
         function = _REDUCERS[self.function] if named else self.function
+        # Only the bare reduction: pandas is not handed what NumPy would be.
+        bare = named and not (self.function_args or self.function_kwargs)
         # pandas labels a window by its last sample, so its answers are these
         # when the two labels are a whole number of steps apart.
         shift, apart = divmod(size - 1 - before, step)
-        if named and not apart and _pandas_agrees(data, size, step, center=False):
+        if bare and not apart and _pandas_agrees(data, size, step, center=False):
             # pandas' std defaults to ddof=1, NumPy's to 0
             kwargs = {"ddof": 0} if self.function == "std" else {}
             rolled = _rolling_pandas(
@@ -177,7 +192,7 @@ class WindowReduce(PatchProcessor):
             after = max((total - 1) * step + size - before - data.shape[axis], 0)
             width = [(0, 0)] * data.ndim
             width[axis] = (before, after)
-            data = data.astype(np.result_type(data.dtype, self.fill), copy=False)
+            data = data.astype(fill_dtype(data.dtype, self.fill), copy=False)
             data = np.pad(data, width, constant_values=self.fill)
             return self._complete(data, before=0, first=0, valid=total, **where)
         reduced = self._complete(data, before=before, first=first, valid=valid, **where)
@@ -197,7 +212,7 @@ class PatchWindow:
     """
     A patch and a window over it; see [`Patch.window`](`dascore.Patch.window`).
 
-    A call on it is one operation and returns a patch, so a chain goes on
+    What it does returns a patch, so a chain goes on
     from the patch: ``patch.window(time=1).mean().abs()``.
     """
 
@@ -220,11 +235,9 @@ class PatchWindow:
         if self.overlap is not None and self.step is not None:
             msg = "step and overlap are mutually exclusive."
             raise ParameterError(msg)
-        if self.ends not in _ENDS:
-            msg = f"ends must be one of {_ENDS}; got {self.ends!r}."
-            raise ParameterError(msg)
-        if self.align not in _BEFORE:
-            msg = f"align must be one of {tuple(_BEFORE)}; got {self.align!r}."
+        _check_options(self.ends, self.align)
+        if self.fill is not None and (isinstance(self.fill, str) or np.ndim(self.fill)):
+            msg = f"fill must be a single number; got {self.fill!r}."
             raise ParameterError(msg)
 
     def apply(
@@ -322,11 +335,11 @@ class PatchWindow:
         Parameters
         ----------
         function
-            Given the windows with the windowed dimension last, and an
-            ``axis=-1`` keyword naming it, which it reduces. One of
-            ``"mean"``, ``"median"``, ``"min"``, ``"max"``, ``"std"`` or
-            ``"sum"`` names the NumPy function, and lets a faster engine
-            answer where it gives the same values.
+            Given an array with one more axis than the data, the last,
+            which holds each window's samples, and an ``axis=-1`` keyword
+            naming it, which it reduces. One of ``"mean"``, ``"median"``,
+            ``"min"``, ``"max"``, ``"std"`` or ``"sum"`` names the NumPy
+            function.
         *args, **kwargs
             Passed on to the function.
 
@@ -355,9 +368,19 @@ class PatchWindow:
         -----
         - A window with no overlap or step given advances one sample.
         - Only one dimension can be windowed.
+        - A reduction named by a string, with nothing else given to it, may
+          be answered by pandas when the window is long, which is much
+          faster and agrees with NumPy to rounding: a few parts in ten
+          million for float32, less for float64.
         """
         if self.taper is not None or self.analysis is not None:
             msg = "A reduction blends nothing, so it takes no taper or analysis."
+            raise ParameterError(msg)
+        if self.fill is not None and self.ends == "drop":
+            msg = (
+                "fill completes the windows which reach past the data and "
+                "ends='drop' leaves them out; give one or the other."
+            )
             raise ParameterError(msg)
         return WindowReduce(
             function=function,

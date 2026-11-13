@@ -907,11 +907,12 @@ class Patch(NamespaceOwner, PatchMeta):
         samples
             If True, windows, overlaps and steps are sample counts.
         taper
-            For `apply`: the window whose edge the ramps take which blend
-            neighbouring windows -- any name
-            `dascore.utils.signal.get_window` knows. Hann when not given;
-            ``"triang"`` blends linearly. The ramps are made complementary,
-            so windows left unchanged blend back to the input exactly.
+            For `apply`: the shape of the ramps neighbouring windows are
+            blended under -- any name `dascore.utils.signal.get_window`
+            knows. Hann when not given; ``"triang"`` blends linearly. The
+            ramps are made complementary, so windows left unchanged blend
+            back to the input exactly. Not applied in ``"stack"`` mode,
+            where `Patch.reassemble` takes the taper instead.
         analysis
             For `apply`: a window each one is multiplied by before the
             function sees it -- any name, ``(name, parameter)`` tuple, or
@@ -923,7 +924,7 @@ class Patch(NamespaceOwner, PatchMeta):
         ends
             For a reduction: what becomes of a window which reaches past
             either end of the data. ``"pad"`` keeps it, with a value of
-            NaN; ``"drop"`` leaves it out.
+            NaN unless a `fill` is given; ``"drop"`` leaves it out.
         align
             For a reduction: which sample of a window labels it:
             ``"center"``, the middle one (the later of two for an even
@@ -936,6 +937,7 @@ class Patch(NamespaceOwner, PatchMeta):
         **kwargs
             The dimensions to window and the window along each, such as
             ``time=0.5`` (seconds) or ``time=64, distance=16, samples=True``.
+            A dimension named as one of the options above cannot be given.
 
         Examples
         --------

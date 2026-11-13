@@ -27,16 +27,16 @@ ax = patch.viz.waterfall()
 ax.set_title("un-smoothed patch");
 ```
 
-## Rolling
+## Moving windows
 
-Reduce moving windows along one or more dimensions:
+Reduce moving windows along one dimension at a time:
 
 ```{python}
 smoothed_patch = (
     patch.window(time=0.005).mean()
 )
 ax = smoothed_patch.viz.waterfall()
-ax.set_title("rolling time mean");
+ax.set_title("moving time mean");
 ```
 
 Median along distance:
@@ -46,7 +46,7 @@ smoothed_patch = (
     patch.window(distance=20, samples=True).median()
 )
 ax = smoothed_patch.viz.waterfall()
-ax.set_title("rolling distance median");
+ax.set_title("moving distance median");
 ```
 
 Sequentially combine them:
@@ -56,7 +56,7 @@ smoothed_patch = (
     .window(time=0.005).mean()
 )
 ax = smoothed_patch.viz.waterfall()
-ax.set_title("rolling time mean distance median");
+ax.set_title("moving time mean distance median");
 ```
 
 Inspect the edge `NaN` values:

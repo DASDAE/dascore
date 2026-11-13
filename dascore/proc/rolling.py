@@ -325,11 +325,12 @@ _DEPRECATED = (
     "Use Patch.window, whose reductions are labelled at the window's centre "
     "unless told otherwise: patch.rolling(time=1, step=0.5).mean() is "
     "patch.window(time=1, step=0.5, align='right').mean(), and "
-    "rolling(...).apply(func) is window(...).reduce(func). center=True is "
-    "the default align='center' when no step is given; with a step, rolling "
-    "labelled centred windows off their centre and window does not. On a "
-    "patch with one dimension, rolling's std and its treatment of infinite "
-    "values were pandas'; window's are NumPy's."
+    "rolling(...).apply(func) is window(..., align='right').reduce(func). "
+    "center=True is the default align='center' when no step is given; with "
+    "a step, rolling labelled centred windows off their centre and window "
+    "does not. On a patch with one dimension and a step under ten samples, "
+    "rolling's std and its treatment of infinite values were pandas'; "
+    "window's are NumPy's."
 )
 
 
@@ -349,9 +350,11 @@ def rolling(
 
     :::{.callout-warning}
     Deprecated: use [`Patch.window`](`dascore.Patch.window`), whose
-    reductions do what `rolling` did. ``rolling(time=1, step=0.5).mean()``
-    is ``window(time=1, step=0.5, align="right").mean()``, and
-    ``rolling(...).apply(func)`` is ``window(...).reduce(func)``.
+    reductions with ``align="right"`` label a window as `rolling` did.
+    ``rolling(time=1, step=0.5).mean()`` is
+    ``window(time=1, step=0.5, align="right").mean()``, and
+    ``rolling(...).apply(func)`` is
+    ``window(..., align="right").reduce(func)``.
     :::
 
     See also the
