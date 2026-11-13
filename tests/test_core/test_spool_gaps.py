@@ -747,10 +747,11 @@ class TestSpoolFillGaps:
         (out,) = dc.spool(patches).fill_gaps("time", conflict="keep_first")
         assert out.attrs.gain == 1.0 and out.shape == (12,)
 
-    def test_negative_sample_count_raises(self, gappy_spool):
-        """A count of missing samples is never negative."""
-        with pytest.raises(ParameterError, match="non-negative"):
-            gappy_spool.fill_gaps(time=-1, samples=True)
+    @pytest.mark.parametrize("size", [-1, 2.5])
+    def test_samples_must_be_a_count(self, gappy_spool, size):
+        """A sample size is a whole number, never negative."""
+        with pytest.raises(ParameterError, match="non-negative integer"):
+            gappy_spool.fill_gaps(time=size, samples=True)
 
     @pytest.mark.parametrize("snap", [False, True])
     def test_steps_parts_per_million_apart_fill(self, snap):
@@ -794,11 +795,6 @@ class TestSpoolFillGaps:
         """Filling names exactly one dimension."""
         with pytest.raises(ParameterError, match="one dimension"):
             gappy_spool.fill_gaps(**kwargs)
-
-    def test_samples_must_be_a_count(self, gappy_spool):
-        """A sample size is a whole number."""
-        with pytest.raises(ParameterError, match="non-negative integer"):
-            gappy_spool.fill_gaps(time=2.5, samples=True)
 
     @pytest.mark.parametrize("method", ["chunk", "chunk_plan"])
     def test_chunk_refuses_fill_value(self, gappy_spool, method):

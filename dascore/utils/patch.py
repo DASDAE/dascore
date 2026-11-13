@@ -740,15 +740,6 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     return [new_dict]
 
 
-def drop_associated_coords(coords, dim: str, action: str):
-    """
-    Drop, with a warning, the non-dimensional coordinates along a dimension.
-
-    See [`CoordManager.drop_associated`](`dascore.core.CoordManager.drop_associated`).
-    """
-    return coords.drop_associated(dim, action)
-
-
 def get_start_stop_step(patch: PatchType, dim):
     """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
@@ -1166,14 +1157,8 @@ def _refuse_segments(patch, dims, operation: str) -> None:
     across samples would ignore; one list of labels is an irregular axis.
     """
     for dim in iterate(dims):
-        count = len(contiguous_windows(patch.get_coord(dim)))
-        if count > 1:
-            msg = (
-                f"Coordinate {dim} has more than one segment ({count}), which "
-                f"{operation} cannot compute across. Use Patch.fill_gaps to "
-                "join them or Patch.split_gaps to split at them."
-            )
-            raise CoordError(msg)
+        if len(contiguous_windows(coord := patch.get_coord(dim))) > 1:
+            raise CoordError(_uneven_message(dim, coord, operation))
 
 
 def align_patch_coords(

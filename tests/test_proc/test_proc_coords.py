@@ -2367,7 +2367,7 @@ class TestFillGaps:
         patch = _gapped_patch(concat_coords(full[:10], full[16:]), dim="time")
         flipped = patch.flip("time").get_coord("time")
         assert [len(x) for x in flipped.segments] == [14, 10]
-        with pytest.raises(CoordError, match="more than one segment"):
+        with pytest.raises(CoordError, match="segments"):
             patch.flip("time").differentiate("time")
 
     def test_far_float_grid_fills_without_warning(self):

@@ -278,7 +278,7 @@ class TestUnevenDistance:
             dims=("time", "distance"),
             attrs={"data_type": "velocity"},
         )
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+        with pytest.raises(CoordError, match=r"segments.*split_gaps"):
             patch.velocity_to_strain_rate()
 
     def test_edgeless_segments_raise(self, two_run_patch):
@@ -292,7 +292,7 @@ class TestUnevenDistance:
             dims=("time", "distance"),
             attrs={"data_type": "velocity"},
         )
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+        with pytest.raises(CoordError, match=r"segments.*split_gaps"):
             patch.velocity_to_strain_rate_edgeless()
 
     def test_edgeless_raises(self, uneven_patch):

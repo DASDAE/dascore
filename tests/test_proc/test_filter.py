@@ -302,10 +302,10 @@ class TestSobelFilter:
 
     def test_holes_raise(self, holed_patch):
         """More than one segment raises, naming the fixes."""
-        with pytest.raises(CoordError, match=r"one segment.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
-        with pytest.raises(CoordError, match="more than one segment"):
+        with pytest.raises(CoordError, match="segments"):
             holed_patch.sobel_filter("distance")
 
     def test_jitter_filters(self, jittered_patch, jittered_forms):

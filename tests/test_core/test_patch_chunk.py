@@ -4040,20 +4040,19 @@ class TestChunkFillWindows:
         assert out[0].shape == (2, 1)
         assert not np.isnan(out[0].data).any()
 
-    def test_all_fill_windows_read_one_sample(self, spool_and_tolerance):
+    def test_all_fill_windows_read_one_sample(self, spool_and_tolerance, monkeypatch):
         """A window inside a filled gap reads one sample, for its other dims."""
         spool, tolerance = spool_and_tolerance
         chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
-        resolver = chunked._catalog.resolver
         sizes = []
-        original = resolver._assembled
+        original = PatchAssembler._patch_from_instruction_df
 
-        def assembled(*args, **kwargs):
-            out = original(*args, **kwargs)
-            sizes.append(out.shape[out.get_axis("time")])
+        def assembled(self, *args, **kwargs):
+            out = original(self, *args, **kwargs)
+            sizes.extend(x.shape[x.get_axis("time")] for x in out)
             return out
 
-        resolver._assembled = assembled
+        monkeypatch.setattr(PatchAssembler, "_patch_from_instruction_df", assembled)
         # three windows lie wholly inside the hole, between two fed ones
         for index in (3, 4, 5):
             assert np.isnan(chunked[index].data).all()

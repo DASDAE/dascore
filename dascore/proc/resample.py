@@ -18,7 +18,6 @@ from dascore.utils.imports import lazy_import
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _refuse_segments,
-    drop_associated_coords,
     get_dim_axis_value,
     get_start_stop_step,
 )
@@ -362,7 +361,7 @@ class Resample(PatchProcessor):
         # The positions scipy's resample gives for its output.
         start = coord[0]
         new_coord = start + (coord[1] - start) * (len(coord) / num) * np.arange(num)
-        cm = drop_associated_coords(meta.coords, dim, "Resampling")
+        cm = meta.coords.drop_associated(dim, "Resampling")
         out = meta.new(coords=cm._update_grid(dim, **{dim: new_coord}))
         plan = {"axis": axis, "num": num, "coord": None, "samples": None}
         # Interpolate if new sampling rate is not very close to desired sampling rate.

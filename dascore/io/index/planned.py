@@ -1057,16 +1057,11 @@ class PlanResolver(PatchResolver):
                 if (window := trim.get(dim)) is not None:
                     members = reached(members, dim, *window)
                     grid = None if grid is None else grid.select(tuple(window))[0]
-            patch = self._assembled(output_id, members)
+            joined = members.assign(current_index=output_id)
+            (patch,) = self._assembler()._patch_from_instruction_df(joined)
             if fill:
                 patch = fill_on_grid(patch, dim, grid, merge, row.get("_dtype"))
         return self._stamp(patch, row)
-
-    def _assembled(self, output_id: int, members: pd.DataFrame) -> dc.Patch:
-        """The one patch a chunk plan's members assemble into."""
-        joined = members.assign(current_index=output_id)
-        (patch,) = self._assembler()._patch_from_instruction_df(joined)
-        return patch
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
