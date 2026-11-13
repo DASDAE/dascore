@@ -87,6 +87,7 @@ from dascore.utils.identity import (
     warn_random_id,
 )
 from dascore.utils.io import (
+    BinaryReader,
     IOResourceManager,
     get_handle_from_resource,
     release_handle,
@@ -2051,6 +2052,25 @@ def _warn_permission_denied(source):
     warnings.warn(f"Permission denied; skipping {source}", UserWarning)
 
 
+def _warn_if_damaged_hdf5(manager, source):
+    """Warn that a file with an HDF5 signature which h5py cannot open is skipped."""
+    try:
+        header = manager.get_resource(BinaryReader).read(8)
+    except Exception:
+        return
+    if header != b"\x89HDF\r\n\x1a\n":
+        return
+    try:
+        # Cached, so not reopened, when format detection opened the file.
+        manager.get_resource(H5Reader)
+    except Exception:
+        msg = (
+            f"Failed to scan {source}: it has an HDF5 signature but could not "
+            "be opened (likely truncated or damaged)"
+        )
+        warnings.warn(msg, UserWarning)
+
+
 def _scan_candidates(path, file_format, file_version, ext, timestamp, hint) -> list:
     """
     Return the scan inputs, each with the format and version to read it as.
@@ -2196,6 +2216,7 @@ def _iter_scan_results(
                             warnings.warn(msg, UserWarning)
                         continue
                     except UnknownFiberFormatError:  # skip bad entities
+                        _warn_if_damaged_hdf5(man, patch_source)
                         continue
                     except PermissionError:
                         _warn_permission_denied(patch_source)

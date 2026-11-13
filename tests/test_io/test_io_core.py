@@ -1474,6 +1474,60 @@ class TestScan:
             out = dc.scan([denied, readable], progress=None)
         assert [Path(summary.source_path) for summary in out] == [readable]
 
+    @pytest.fixture
+    def truncated_hdf5_dir(self, tmp_path, random_patch):
+        """A directory with a good DASDAE file and one cut to half its bytes."""
+        random_patch.io.write(tmp_path / "good.h5", "dasdae")
+        truncated = tmp_path / "truncated.h5"
+        random_patch.io.write(truncated, "dasdae")
+        raw = truncated.read_bytes()
+        truncated.write_bytes(raw[: len(raw) // 2])
+        return tmp_path
+
+    def test_truncated_hdf5_warns(self, truncated_hdf5_dir):
+        """A truncated HDF5 file warns once and the good file still scans."""
+        truncated = truncated_hdf5_dir / "truncated.h5"
+        good = truncated_hdf5_dir / "good.h5"
+        with pytest.warns(UserWarning, match="HDF5 signature") as caught:
+            out = dc.scan([truncated, good], progress=None)
+        assert [Path(summary.source_path) for summary in out] == [good]
+        assert len(caught) == 1
+        assert f"Failed to scan {truncated}" in str(caught[0].message)
+
+    def test_truncated_hdf5_spool_update_warns(self, truncated_hdf5_dir):
+        """A directory spool update warns once about a truncated HDF5 file."""
+        with pytest.warns(UserWarning, match="HDF5 signature") as caught:
+            spool = dc.spool(truncated_hdf5_dir).update()
+        assert len(spool) == 1
+        assert len(caught) == 1
+        assert "truncated.h5" in str(caught[0].message)
+
+    def test_foreign_files_stay_silent(self, tmp_path):
+        """Text, empty and healthy unknown-format HDF5 files skip silently."""
+        (tmp_path / "README.txt").write_text("not fiber data")
+        (tmp_path / "empty.h5").write_bytes(b"")
+        with h5py.File(tmp_path / "other.h5", "w") as handle:
+            handle["data"] = [1, 2, 3]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert dc.scan(tmp_path, progress=None) == []
+
+    def test_unreadable_bytes_stay_silent(self, tmp_path, monkeypatch):
+        """A file whose bytes cannot be read for the signature skips silently."""
+        path = tmp_path / "unknown.dat"
+        path.write_text("not fiber data")
+        get_resource = IOResourceManager.get_resource
+
+        def guarded_resource(manager, required_type):
+            if required_type is BinaryReader:
+                raise OSError("cannot read")
+            return get_resource(manager, required_type)
+
+        monkeypatch.setattr(IOResourceManager, "get_resource", guarded_resource)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert dc.scan(path, progress=None) == []
+
     def test_path_filtered_out(self, tmp_path, random_patch):
         """A file its extension filter rejects scans as nothing."""
         path = tmp_path / "patch.h5"
