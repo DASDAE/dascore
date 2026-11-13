@@ -465,9 +465,9 @@ class Patch(NamespaceOwner, PatchMeta):
     def radians_to_strain(
         self,
         gauge_length: Any = None,
-        wave_length: float = 1550.0 * 10 ** (-9),
+        wave_length: float | None = None,
         stress_constant: float = 0.79,
-        refractive_index: float = 1.445,
+        refractive_index: float | None = None,
     ) -> Self:
         """Convert phase data to strain or strain rate."""
         return transform.RadiansToStrain(

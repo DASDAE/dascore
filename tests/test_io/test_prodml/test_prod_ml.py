@@ -196,6 +196,31 @@ class TestReadQuantXV2:
         dtype = time.dtype
         assert "[ns]" in str(dtype)
 
+    def test_optical_attrs(self, quantx_v2_das_patch):
+        """The refractive index and laser wavelength (in m) come from Custom."""
+        attrs = quantx_v2_das_patch.attrs
+        assert attrs.refractive_index == pytest.approx(1.4682, rel=1e-6)
+        assert attrs.laser_wavelength == pytest.approx(1550e-9)
+
+    def test_optical_attrs_scanned(self, quantx_v2_example_path):
+        """Scanning reports the same optical attrs."""
+        df = dc.scan_to_df(quantx_v2_example_path)
+        assert df["refractive_index"].iloc[0] == pytest.approx(1.4682, rel=1e-6)
+        assert df["laser_wavelength"].iloc[0] == pytest.approx(1550e-9)
+
+    def test_system_settings_index(self):
+        """FibreIndex on Custom/SystemSettings is the refractive index."""
+        attrs = dc.spool(fetch("prodml_2.1.h5"))[0].attrs
+        assert attrs.refractive_index == pytest.approx(1.4682, rel=1e-6)
+        assert attrs.laser_wavelength is None
+
+    def test_boxed_index(self, quantx_v2_example_path, tmp_path):
+        """An index stored as a length-1 array still reads."""
+        path = shutil.copy(quantx_v2_example_path, tmp_path / "boxed.h5")
+        with h5py.File(path, "a") as fi:
+            fi["Acquisition/Custom"].attrs["Fibre Refractive Index"] = np.array([1.47])
+        assert dc.spool(path)[0].attrs.refractive_index == pytest.approx(1.47)
+
 
 class TestVersionDetection:
     """Tests for the ProdML version fingerprint helper."""
