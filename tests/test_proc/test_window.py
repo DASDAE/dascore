@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import pickle
 import warnings
 from typing import ClassVar
 
@@ -32,6 +33,7 @@ from dascore.proc.whiten import Whiten
 from dascore.proc.window import PatchWindow, Windowed, WindowReduce
 from dascore.transform.hilbert import Envelope
 from dascore.units import percent
+from dascore.utils.array_api import to_numpy
 from dascore.warnings import NumpyFallbackWarning
 
 REDUCERS = ("mean", "median", "min", "max", "std", "sum")
@@ -1120,9 +1122,8 @@ def _on(patch, library: str):
 
 
 def _values(patch) -> np.ndarray:
-    """The patch's data as a NumPy array, computed if they are a dask graph."""
-    data = patch.data
-    return np.asarray(data.compute() if hasattr(data, "compute") else data)
+    """The patch's data as a NumPy array, computed and brought to this device."""
+    return to_numpy(patch.data)
 
 
 @pytest.mark.parametrize("library", ("array_api_strict", "dask"))
@@ -1242,6 +1243,37 @@ class TestOtherBackends:
         expected = patch.window(time=100, samples=True).detrend("distance")
         np.testing.assert_array_equal(_values(out), expected.data)
 
+    def test_dask_pieces(self, patch, library, monkeypatch):
+        """Short chunks are joined along a windowed axis; tasks take turns."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        dask_array = pytest.importorskip("dask.array")
+        there = patch.new(data=dask_array.from_array(patch.data, chunks=(300, 50)))
+        turns = []
+        original = Windowed._blend
+
+        def watched(self, *args, **kwargs):
+            """Note whether the turn is held, and blend."""
+            turns.append(window_module._DASK_TURN.locked())
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(Windowed, "_blend", watched)
+        out = there.window(time=100, samples=True).demean("time")
+        expected = patch.window(time=100, samples=True).demean("time")
+        np.testing.assert_array_equal(_values(out), expected.data)
+        # Forty chunks of 50 samples, computed as two pieces of 800 and more.
+        assert out.data.chunks == there.data.chunks
+        # Blends outside a dask task, as the dtype is found by, hold no turn.
+        assert sum(turns) == 2
+
+    def test_dask_result_pickles(self, patch, library):
+        """A windowed result on dask can be pickled, tasks and all."""
+        if library != "dask":
+            pytest.skip("only dask holds tasks")
+        out = _on(patch, library).window(time=100, samples=True).demean("time")
+        back = pickle.loads(pickle.dumps(out))
+        np.testing.assert_array_equal(_values(back), _values(out))
+
     def test_integers_through_numpy_warn_too(self, patch, library):
         """Integers blended for an operation with no implementation still warn."""
         ints = _on(patch.new(data=(patch.data * 100).astype(np.int16)), library)
@@ -1272,6 +1304,31 @@ class TestOtherBackends:
         assert out.backend == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-3)
         assert not np.allclose(_values(out), plain.data, atol=1e-3)
+
+    def test_kernel_which_answers_in_numpy(self, patch, library):
+        """An operation whose kernel hands back NumPy is put back on the library."""
+        window = {"time": 100, "samples": True}
+        expected = patch.window(**window).adaptive_spectral_filter(time=0.05)
+        there = _on(patch, library)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = there.window(**window).adaptive_spectral_filter(time=0.05)
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
+
+    def test_another_device(self, patch, library):
+        """The fill and the gaps between windows are made where the data are."""
+        if library == "dask":
+            pytest.skip("dask has one device")
+        strict = pytest.importorskip("array_api_strict")
+        elsewhere = strict.asarray(patch.data, device=strict.Device("device1"))
+        # Windows 37 apart leave gaps within each class, and reach past the end.
+        window = {"time": 50, "step": 37, "samples": True, "fill": 2.5}
+        out = patch.new(data=elsewhere).window(**window).abs()
+        expected = patch.window(**window).abs()
+        assert out.data.device == elsewhere.device
+        home = np.asarray(out.data.to_device(strict.Device("CPU_DEVICE")))
+        np.testing.assert_allclose(home, expected.data, rtol=0, atol=1e-12)
 
     def test_kernel_which_changes_the_shape(self, patch, library):
         """A kernel which does not keep the shape it stated is caught here too."""

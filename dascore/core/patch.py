@@ -990,10 +990,11 @@ class Patch(NamespaceOwner, PatchMeta):
           the window must fit inside its dimension. Anything else is
           refused before any data are touched; a function given to `apply`
           has no such limits.
-        - On an array backend other than NumPy an operation in a window
-          is run and blended on that backend, unless it has no
-          implementation for it, when it is converted through NumPy as it
-          is outside a window.
+        - On an array backend other than NumPy the data stay where they
+          are: a dask array is computed a piece at a time when it is asked
+          for, and on any other the windows are run and blended there,
+          unless the operation has no implementation for it, when it is
+          converted through NumPy as it is outside a window.
         - On a lazy patch an operation in a window needs only the windows
           a chunk overlaps, so a windowed dimension is computed in pieces
           even where the operation alone would need it whole. `apply` and

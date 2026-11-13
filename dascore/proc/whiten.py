@@ -9,7 +9,7 @@ import scipy.fft as sft
 from pydantic import ConfigDict
 from scipy.ndimage import uniform_filter1d
 
-from dascore.core.processor import PatchProcessor, position_free_off_frequencies
+from dascore.core.processor import PatchProcessor, _position_free_off_frequencies
 from dascore.exceptions import ParameterError
 from dascore.proc.basic import Angle
 from dascore.proc.taper import TaperRange, _scale_by
@@ -144,7 +144,7 @@ class Whiten(PatchProcessor):
     model_config = ConfigDict(extra="allow")
 
     # Away from a frequency dimension; see the function.
-    position_free = position_free_off_frequencies
+    position_free = _position_free_off_frequencies
 
     def get_metadata(self, meta):
         """Return the whitened metadata, and the transforms, smoothing and taper."""

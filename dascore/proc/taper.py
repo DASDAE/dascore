@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 from pydantic import ConfigDict
 
-from dascore.core.processor import PatchProcessor, position_free_if_relative
+from dascore.core.processor import PatchProcessor, _position_free_if_relative
 from dascore.exceptions import ParameterError
 from dascore.proc.basic import _as_float, _scale_by
 from dascore.units import Quantity
@@ -339,7 +339,7 @@ class TaperRange(_Envelope):
     model_config = ConfigDict(extra="allow")
 
     # Where its values are measured from decides; see the function.
-    position_free = position_free_if_relative
+    position_free = _position_free_if_relative
 
     def get_metadata(self, meta):
         """Return the envelope, shaped to broadcast along its axis."""

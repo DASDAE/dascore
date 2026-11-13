@@ -613,7 +613,7 @@ _UNCHECKED: list[type[PatchProcessor]] = []
 _HOSTS: list[type] = []
 
 
-def position_free_if_relative(self, dims) -> bool:
+def _position_free_if_relative(self, dims) -> bool:
     """
     Say an operation given coordinate values ignores where `dims` start.
 
@@ -627,7 +627,7 @@ def position_free_if_relative(self, dims) -> bool:
     return bool(relative or not set(dims) & set(self.model_extra or {}))
 
 
-def position_free_off_frequencies(self, dims) -> bool:
+def _position_free_off_frequencies(self, dims) -> bool:
     """
     Say an operation which works on a spectrum ignores where `dims` start.
 

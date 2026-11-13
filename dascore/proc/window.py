@@ -9,6 +9,7 @@ operation, which gives back a patch.
 from __future__ import annotations
 
 import math
+import threading
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
     backend_name,
+    device,
     to_numpy,
     warn_numpy_fallback,
 )
@@ -248,8 +250,16 @@ class WindowReduce(PatchProcessor):
 
 
 # The most samples of a dimension which is not windowed that a lazy patch's
-# dtype is found from.
-_PROBE = 64
+# dtype is found from: tried in turn, before the whole dimension, for an
+# operation which cannot plan or run on so few.
+_PROBES = (64, 4096)
+# How many windows long a piece of a dask array is computed in, at least:
+# each piece is given the windows which reach into it from either side, so
+# a piece of one window would compute three to keep one.
+_DASK_WINDOWS = 8
+# DASCore's NumPy kernels are run one at a time when dask computes pieces on
+# several threads: not every one may be run from two threads at once.
+_DASK_TURN = threading.Lock()
 
 
 class Windowed(PatchProcessor):
@@ -291,13 +301,14 @@ class Windowed(PatchProcessor):
       and not settle its result from the data it computed; the window
       must fit inside its dimension.
     - On an array backend other than NumPy the data stay where they are.
-      A dask array is computed a chunk at a time, each chunk from the
-      windows which overlap it, so nothing is computed when the operation
-      is called. On any other library the windows are cut, run and blended
-      there, which takes several array operations for each window; only an
-      operation with no implementation for the library is converted
-      through NumPy, the whole array at once as it is outside a window,
-      with a `NumpyFallbackWarning` naming it.
+      A dask array is computed a piece at a time, each from the windows
+      which overlap it, so nothing is computed when the operation is
+      called; the pieces are run one at a time, since not every kernel may
+      be run from two threads at once. On any other library the windows
+      are cut, run and blended there, which takes several array operations
+      for each window; only an operation with no implementation for the
+      library is converted through NumPy, the whole array at once as it is
+      outside a window, with a `NumpyFallbackWarning` naming it.
     - An operation which only changes metadata leaves the data as they are.
     - On a lazy patch an output chunk needs only the windows which overlap
       it, so a windowed dimension can be cut even where the operation
@@ -364,18 +375,20 @@ class Windowed(PatchProcessor):
         # detrend of integers is float. A dtype does not depend on how long
         # the other dimensions are, so the window is cut short along those;
         # an operation which cannot plan or run that short is given it whole.
-        long = {
-            dim: slice(0, _PROBE)
-            for dim, n in zip(tile.dims, tile.shape)
-            if dim not in window.dims and n > _PROBE
-        }
-        if long:
+        for most in _PROBES:
+            long = {
+                dim: slice(0, most)
+                for dim, n in zip(tile.dims, tile.shape)
+                if dim not in window.dims and n > most
+            }
+            if not long:
+                break
             try:
                 short = tile.new(coords=tile.coords.isel(**long)[0])
                 return self._probed(short, {**plan, "inner": self._planned(short)[1]})
             except Exception:
-                # Whatever it could not do that short, it is asked whole.
-                pass
+                # Whatever it could not do that short, it is asked longer.
+                continue
         return self._probed(tile, plan)
 
     def _probed(self, tile, plan) -> np.dtype:
@@ -635,6 +648,9 @@ class Windowed(PatchProcessor):
                     tile = _weighted(xp, tile, analysis)
                 tile = xp.moveaxis(tile, tail, axes)
                 out = kernel(operation, tile, **inner)
+                if backend_name(out) != backend:
+                    # A kernel which answered in NumPy whatever it was given.
+                    out = asarray_like(out, tile)
                 if tuple(out.shape) != tuple(tile.shape):
                     name = type(operation).__name__
                     msg = (
@@ -658,31 +674,39 @@ class Windowed(PatchProcessor):
         """
         Return the blended windows of a dask array, a chunk at a time.
 
-        Each chunk of the result is a task which is given the windows that
-        overlap it, whole, and blends them with the NumPy kernel: what a
-        chunk of a lazy patch is given, by the same contract. So nothing is
-        computed here, no task holds more than its chunk and the windows
-        around it, and the values are the NumPy ones exactly. A dimension
-        the operation needs whole is one piece, cut back into its chunks
-        at the end.
+        The result is made in pieces, each a task which is given the windows
+        that overlap its piece, whole, and blends them with the NumPy
+        kernel: what a chunk of a lazy patch is given, by the same contract.
+        So nothing is computed here, no task holds more than its piece and
+        the windows around it, and the values are the NumPy ones exactly.
+        A piece is a chunk, or along a windowed dimension several chunks
+        where they are short beside the window; a dimension the operation
+        needs whole is one piece. The result is cut back into the chunks
+        the data came in.
         """
         dask, array = optional_import("dask"), optional_import("dask.array")
         where = {"axes": axes, "size": size, "stride": stride, "length": length}
         plan = {**where, "others": others, "inner": inner}
         contract = self.chunk_contract(_as_numpy_dtype(data.dtype), plan)
+        sizes = dict(zip(axes, size, strict=True))
         spans = []
         for axis, chunks in enumerate(data.chunks):
             edges = np.cumsum((0, *chunks)).tolist()
-            pieces = list(pairwise(edges))
-            spans.append([(0, edges[-1])] if axis in contract.whole else pieces)
-
-        def blended(piece, tiles, cut):
-            """Return one chunk, cut from the blend of the windows around it."""
-            out, _ = self._blend(np.asarray(piece), inner=inner, tiles=tiles, **where)
-            return out[cut]
+            if axis in contract.whole:
+                edges = [0, edges[-1]]
+            elif axis in sizes:
+                # Chunks joined until a piece is several windows long.
+                least, kept = _DASK_WINDOWS * sizes[axis], [0]
+                for edge in edges[1:-1]:
+                    if edge - kept[-1] >= least and edges[-1] - edge >= least:
+                        kept.append(edge)
+                edges = [*kept, edges[-1]]
+            spans.append(list(pairwise(edges)))
+        # Handed to every task once, not copied into each.
+        shared = dask.delayed((self, where, inner), traverse=False)
 
         def build(prefix: tuple):
-            """Return the chunks under `prefix`, nested by axis for `block`."""
+            """Return the pieces under `prefix`, nested by axis for `block`."""
             if len(prefix) < data.ndim:
                 return [build((*prefix, span)) for span in spans[len(prefix)]]
             box = tuple(slice(low, high) for low, high in prefix)
@@ -691,7 +715,8 @@ class Windowed(PatchProcessor):
                 slice(b.start - n.start, b.stop - n.start)
                 for b, n in zip(box, needed, strict=True)
             )
-            task = dask.delayed(blended)(data[needed], contract.tiles(box), cut)
+            tiles = contract.tiles(box)
+            task = dask.delayed(_blended_piece)(shared, data[needed], tiles, cut)
             shape = tuple(high - low for low, high in prefix)
             return array.from_delayed(task, shape=shape, dtype=like.dtype)
 
@@ -746,6 +771,14 @@ class Windowed(PatchProcessor):
         return np.moveaxis(out[inside], tail, axes), made.dtype
 
 
+def _blended_piece(shared, piece, tiles, cut):
+    """Return one piece of a dask array: the windows around it blended, and cut."""
+    operation, where, inner = shared
+    with _DASK_TURN:
+        out, _ = operation._blend(np.asarray(piece), inner=inner, tiles=tiles, **where)
+    return out[cut]
+
+
 def _weighted(xp, array, weights: np.ndarray):
     """Return an array times NumPy weights, on the array's own backend."""
     # In the dtype NumPy would give, stated outright: an array library may
@@ -773,7 +806,8 @@ def _block(xp, like, axis: int, length: int, fill):
         return None
     shape = list(like.shape)
     shape[axis] = length
-    return xp.full(tuple(shape), fill, dtype=like.dtype)
+    # On the device the data are on, where a library has more than one.
+    return xp.full(tuple(shape), fill, dtype=like.dtype, device=device(like))
 
 
 def _laid_out(xp, windows: dict, tiles, size, stride, extent):

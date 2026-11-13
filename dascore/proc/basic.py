@@ -25,7 +25,7 @@ from dascore.core.coordmanager import (
 from dascore.core.coords import get_coord
 from dascore.core.processor import (
     PatchProcessor,
-    position_free_if_relative,
+    _position_free_if_relative,
     register_kernel,
 )
 from dascore.core.source import ArraySource
@@ -907,7 +907,7 @@ class PowCoord(PatchProcessor):
     model_config = ConfigDict(extra="allow")
 
     # Where its values are measured from decides; see the function.
-    position_free = position_free_if_relative
+    position_free = _position_free_if_relative
 
     def get_metadata(self, meta):
         """Return metadata with the gained units, and each dimension's curve."""
