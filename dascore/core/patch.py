@@ -620,12 +620,17 @@ class Patch(NamespaceOwner, PatchMeta):
         ).run(self)
 
     def correlate(
-        self, samples: bool = False, *, lag_dim: str | None = None, **kwargs
+        self,
+        samples: bool = False,
+        *,
+        lag_dim: str | None = None,
+        normalize: bool = False,
+        **kwargs,
     ) -> Self:
         """Correlate source row/columns in a patch with all other row/columns."""
-        return dascore.proc.Correlate(samples=samples, lag_dim=lag_dim, **kwargs).run(
-            self
-        )
+        return dascore.proc.Correlate(
+            samples=samples, lag_dim=lag_dim, normalize=normalize, **kwargs
+        ).run(self)
 
     def correlate_shift(self, dim: str, undo_weighting: bool = True) -> Self:
         """Apply a shift to the patch data to undo correlation in frequency domain."""

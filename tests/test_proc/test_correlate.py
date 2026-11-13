@@ -1,5 +1,7 @@
 """Tests for correlate patch processing function."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -418,3 +420,110 @@ class TestCorrelateMetadata:
         assert out.dims == ("distance", "lag_time", "source_distance")
         assert out.shape == (300, 4000, 1)
         assert out.dtype == corr(random_patch).dtype == np.float64
+
+
+class TestCorrelateNormalize:
+    """Normalized correlation divides by the trace and source energies."""
+
+    @pytest.fixture()
+    def patch(self):
+        """A small random patch with data units."""
+        patch = dc.get_example_patch("random_das", shape=(6, 51))
+        return patch.update_attrs(data_units="m/s")
+
+    def _zero_lag(self, out):
+        """Return the zero-lag slice of a correlation along lag_time."""
+        lags = to_float(out.get_array("lag_time"))
+        return out.select(lag_time=np.argmin(np.abs(lags)), samples=True)
+
+    def test_autocorrelation_peak_is_one(self, patch):
+        """Every trace correlated with itself is one at zero lag."""
+        out = patch.correlate(distance=list(range(6)), samples=True, normalize=True)
+        assert np.allclose(np.diagonal(self._zero_lag(out).squeeze("lag_time").data), 1)
+
+    def test_bounded(self, patch):
+        """Every value lies in [-1, 1]."""
+        out = patch.correlate(distance=[0, 3], samples=True, normalize=True)
+        assert np.abs(out.data).max() <= 1 + 1e-12
+
+    def test_matches_manual_normalization(self):
+        """The result equals dividing by the energies by hand."""
+        patch = dc.get_example_patch().pass_filter(time=(5, 50))
+        energy = (patch**2).sum("time").data
+        cc = patch.correlate(distance=0, samples=True).squeeze()
+        expected = cc.data / np.sqrt(energy * energy[0])
+        out = patch.correlate(distance=0, samples=True, normalize=True).squeeze()
+        assert np.allclose(out.data, expected)
+
+    def test_multiple_sources(self, patch):
+        """Each source of a batch matches correlating it alone."""
+        out = patch.correlate(distance=[1, 4], samples=True, normalize=True)
+        for i, source in enumerate([1, 4]):
+            single = patch.correlate(distance=source, samples=True, normalize=True)
+            assert np.allclose(out.data[..., i], single.data[..., 0])
+        assert np.allclose(self._zero_lag(out).data[[1, 4], 0, [0, 1]], 1)
+
+    def test_nd_patch(self):
+        """Each batch of an N-D patch is normalized by its own traces."""
+        rng = np.random.default_rng(0)
+        coords = {"source": [0, 1], "distance": [0.0, 1.0], "time": np.arange(40)}
+        patch = dc.Patch(data=rng.random((2, 2, 40)), coords=coords, dims=list(coords))
+        kwargs = dict(distance=0, samples=True, normalize=True)
+        out = patch.correlate(lag_dim="time", **kwargs)
+        for i in range(2):
+            part = patch.select(source=i, samples=True).squeeze("source")
+            assert np.allclose(out.data[i], part.correlate(**kwargs).data)
+        assert np.allclose(self._zero_lag(out).data[:, 0, 0, 0], 1)
+
+    @pytest.mark.parametrize("real", [True, False])
+    def test_frequency_domain_matches(self, patch, real):
+        """A transformed patch normalizes as the time-domain one does."""
+        expected = patch.correlate(distance=[0, 2], samples=True, normalize=True)
+        dft = patch.pad(time="correlate").dft("time", real=real)
+        out = dft.correlate(distance=[0, 2], samples=True, normalize=True)
+        out = out.idft().correlate_shift("time")
+        assert np.allclose(out.data, expected.data)
+        assert np.allclose(self._zero_lag(out).data[2, 0, 1], 1)
+        assert get_quantity(out.attrs.data_units).dimensionless
+
+    def test_zero_trace_gives_zeros(self, patch):
+        """A trace with no energy correlates to zeros without a warning."""
+        data = patch.data.copy()
+        data[2] = 0
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = patch.new(data=data).correlate(
+                distance=[0, 2], samples=True, normalize=True
+            )
+        assert np.all(out.data[2] == 0)
+        assert np.all(out.data[..., 1] == 0)
+
+    def test_units_dimensionless(self, patch):
+        """The result is dimensionless, with or without coordinate units."""
+        out = patch.correlate(distance=0, samples=True, normalize=True)
+        assert get_quantity(out.attrs.data_units).dimensionless
+        no_units = patch.update_coords(time=np.arange(51)).set_units(time=None)
+        out = no_units.correlate(distance=0, samples=True, normalize=True)
+        assert get_quantity(out.attrs.data_units) == get_quantity("dimensionless")
+
+    @pytest.mark.parametrize("scale", [1e-13, 1e10])
+    def test_float32_amplitude_invariant(self, scale):
+        """Tiny or huge single-precision traces still peak at one."""
+        time = np.arange(51) * 0.004
+        wave = np.exp(-(((time - 0.1) / 0.02) ** 2))
+        data = (np.stack([wave, wave[::-1]]) * scale).astype(np.float32)
+        coords = {"distance": [0.0, 1.0], "time": time}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        out = patch.correlate(distance=0, samples=True, normalize=True)
+        assert out.dtype == np.float32
+        assert np.isclose(np.abs(out.data).max(), 1, atol=1e-5)
+
+    def test_nan_source_stays_nan(self, patch):
+        """A NaN in the source gives NaN, not zeros, like the default."""
+        data = patch.data.copy()
+        data[0, 3] = np.nan
+        out = patch.new(data=data).correlate(
+            distance=[0, 1], samples=True, normalize=True
+        )
+        assert np.all(np.isnan(out.data[..., 0]))
+        assert not np.any(np.isnan(out.data[1, :, 1]))

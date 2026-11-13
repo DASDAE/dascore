@@ -30,3 +30,12 @@ Use channel 4 (zero-based index 3) as the virtual source. Its autocorrelation is
 corr = patch.correlate(distance=3, samples=True)
 corr.squeeze().viz.waterfall();
 ```
+
+## Normalized correlation
+
+`normalize=True` divides each correlation by the square root of the trace's whole-trace energy times the source's, so the autocorrelation peaks at one and no value exceeds one in magnitude. The energies do not change with lag, so for traces with their mean removed this equals the Pearson coefficient only at zero lag.
+
+```{python}
+corr = patch.correlate(distance=3, samples=True, normalize=True)
+corr.squeeze().viz.waterfall();
+```
