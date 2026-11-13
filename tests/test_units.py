@@ -132,6 +132,7 @@ class TestGetQuantStr:
         (
             get_quantity("m") ** np.float64(1 / 3),
             get_quantity("m") ** np.float32(1 / 3),
+            get_quantity("m") ** np.float32(0.1),
             get_quantity("100 m") ** (1 / 3),
             get_quantity("m ** (1/3) / s ** 0.333333"),
             get_quantity("m ** 1.23456789 * s ** 1.23457e-7 / kg ** 2"),

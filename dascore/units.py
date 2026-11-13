@@ -391,7 +391,8 @@ def _unit_to_str(unit: Unit) -> str:
 
 def _has_rounded_exponent(unit: Unit) -> bool:
     """True if the formatter, which keeps six digits, would round an exponent."""
-    return any(float(f"{x:n}") != x for x in unit._units.values())
+    powers = (np.asarray(x, dtype=float).item() for x in unit._units.values())
+    return any(float(f"{x:n}") != x for x in powers)
 
 
 def _exact_unit_str(unit: Unit) -> str:
