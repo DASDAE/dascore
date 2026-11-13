@@ -65,9 +65,6 @@ from dascore.utils.pd import (
 )
 from dascore.utils.time import to_float
 
-# Slack when counting whole steps between a window edge and a sample, so a
-# ratio a float rounding short of a whole number still counts it.
-
 
 def _get_varying_dim(df) -> str | None:
     """

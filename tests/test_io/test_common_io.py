@@ -1133,6 +1133,18 @@ class TestSnapConformance:
             for name, coord in patch.coords.coord_map.items():
                 assert getattr(coord, "runs_count", 1) == 1, name
 
+    @pytest.mark.parametrize("snap", [None, True, False, ("time",)])
+    def test_in_file_gap_is_one_segment(self, snap):
+        """Labels with a gap in one file and a stated grid stay one segment."""
+        labels = np.r_[np.arange(0.0, 10.0), np.arange(20.0, 30.0)]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # the gap is reported, not hidden
+            out = io_utils.stored_coord(
+                labels, snap, name="time", where="test", start=0.0, step=1.0
+            )
+        assert out.runs_count == 1
+        np.testing.assert_array_equal(out.values, labels)
+
     def test_snap_false_moves_no_label(self, io_path_tuple, monkeypatch):
         """Nothing which puts labels on a grid runs under snap=False."""
         _, path = io_path_tuple

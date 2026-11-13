@@ -117,7 +117,9 @@ class TestSnapDims:
         """A time step may be given in seconds."""
         time = random_patch.get_coord("time")
         out = random_patch.snap_coords("time", step=dc.to_float(time.step))
-        assert out.get_coord("time") == time
+        snapped = out.get_coord("time")
+        assert snapped == time and snapped.evenly_sampled
+        assert snapped.step == time.step
 
     def test_step_collision_raises(self):
         """Two labels nearest one position of the grid cannot both sit there."""
@@ -2291,6 +2293,42 @@ class TestFillGaps:
             patch.fill_gaps("time", fill_value=1.5)
         out = patch.fill_gaps("time", fill_value=0)
         assert out.data.dtype == np.int32 and (out.data[:, 5:8] == 0).all()
+
+    @pytest.mark.parametrize("offset", [0.5, -0.5])
+    def test_half_a_step_off_raises(self, offset):
+        """A later segment exactly half a step off a position is refused."""
+        first = get_coord(start=0.0, step=1.0, shape=(4,))
+        second = get_coord(start=6.0 + offset, step=1.0, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        with pytest.raises(CoordError, match="half a step"):
+            patch.fill_gaps("x")
+
+    def test_flip_keeps_segments(self):
+        """A flipped coordinate keeps its segments, so a gap is still refused."""
+        full = get_coord(start=0.0, step=0.1, shape=(30,))
+        patch = _gapped_patch(concat_coords(full[:10], full[16:]), dim="time")
+        flipped = patch.flip("time").get_coord("time")
+        assert [len(x) for x in flipped.segments] == [14, 10]
+        with pytest.raises(CoordError, match="more than one segment"):
+            patch.flip("time").differentiate("time")
+
+    def test_far_float_grid_fills_without_warning(self):
+        """Segments cut from one far float grid move by no more than rounding."""
+        full = get_coord(start=1e9, step=0.001, shape=(30,))
+        patch = _gapped_patch(concat_coords(full[:10], full[20:]), dim="x")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = patch.fill_gaps("x")
+        assert out.get_coord("x") == full
+
+    def test_new_step_does_not_warn_of_a_snap(self):
+        """Asking for a new step is not a snap, so it says nothing of one."""
+        labels = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
+        patch = _gapped_patch(get_coord(data=labels), dim="x")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = patch.update_coords(x_step=2.0)
+        assert out.get_coord("x").step == 2.0
 
     def test_associated_coords_take_nan_or_nat(self, gapped):
         """Float and time coordinates along the dimension fill as the data does."""

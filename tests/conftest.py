@@ -596,7 +596,7 @@ def _seam_patch(step):
 
 @pytest.fixture(scope="session")
 def holed_patch():
-    """A patch whose time coordinate declares a step and misses samples."""
+    """A patch whose time coordinate is two segments on one step."""
     return _seam_patch(step=1.0)
 
 
@@ -623,12 +623,21 @@ def two_run_patch():
 def jittered_patch():
     """A patch whose time labels keep a step but sit off its grid."""
     labels = np.arange(120.0)
-    labels[1:-1:7] += 0.1
+    labels[1::7] += 0.1
     time = NumericCoord.from_labels(labels, step=1.0)
     assert time.jittered and not time.gapped
-    data = np.ones((1, 120))
+    data = (labels**2)[None]  # spacing shows in what is computed
     coords = {"distance": np.array([0]), "time": time}
     return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+
+@pytest.fixture(scope="session")
+def jittered_forms(jittered_patch):
+    """The jittered patch as labels with no step, and on its step's grid."""
+    time = jittered_patch.get_coord("time")
+    labels = NumericCoord.from_labels(time.values)
+    grid = dc.get_coord(start=0.0, step=1.0, shape=time.shape)
+    return tuple(jittered_patch.update_coords(time=x) for x in (labels, grid))
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)

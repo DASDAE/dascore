@@ -522,7 +522,7 @@ class TestReviewFindings:
         patch = patch.update_coords(distance=design_case)
         with pytest.raises(CoordError, match="not evenly sampled"):
             patch.get_coord("distance", require_evenly_sampled=True)
-        with pytest.raises(CoordError, match="evenly sampled"):
+        with pytest.raises(CoordError, match=r"segment.*fill_gaps"):
             patch.update_attrs(data_type="velocity").velocity_to_strain_rate_edgeless()
 
     def test_median_spacing_ignores_orientation(self):
@@ -1130,23 +1130,10 @@ class TestStepContract:
         out = NumericCoord.from_labels(np.arange(6), step=1)[::2]
         assert out.evenly_sampled and out.step == 2
 
-    def test_fractional_grid_contradicts_a_whole_step(self):
-        """A whole-tick step cannot be declared over a fractional grid run."""
-        runs = (Grid(0, 12, 5, 4), Grid(20, 2, 1, 3))
-        with pytest.raises(ValidationError, match="contradicts"):
-            NumericCoord(runs=runs, dtype="int64", step=2)
-
-    def test_fractional_grids_off_one_lattice_raise(self):
-        """Fractional runs of one cadence but another phase share no step."""
-        runs = (Grid(0, 3, 2, 3), Grid(7, 3, 2, 3))
-        with pytest.raises(ValidationError, match="contradicts"):
-            NumericCoord(runs=runs, dtype="int64", step=2)
-
-    def test_declared_step_a_grid_contradicts_raises(self):
-        """A declared step other than the one the grid runs sit on raises."""
+    def test_step_beside_segments_is_dropped(self):
+        """Segments share no step, so one stated beside them is not kept."""
         runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))
-        with pytest.raises(ValidationError, match="contradicts"):
-            NumericCoord(runs=runs, dtype="int64", step=1)
+        assert NumericCoord(runs=runs, dtype="int64", step=1).step is None
         assert NumericCoord(runs=runs, dtype="int64", step=2).step is None
 
     def test_fit_keeps_a_step_it_leaves_intact(self):

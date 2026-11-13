@@ -585,7 +585,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
         updates = {}
         for coord_name in coords:
             current = cm.coord_map[coord_name]
-            snapped = current.snap(step=step, max_shift=max_shift)
+            snapped = current.snap(step=step, max_shift=max_shift, warn=True)
             if snapped is not current:
                 updates[coord_name] = snapped
         if not updates:
@@ -1439,7 +1439,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         def _flip_coord(coord, axis):
             inds = broadcast_for_index(coord.ndim, axis, slice(None, None, -1))
-            return coord[inds]
+            # a 1D coordinate takes the slice itself, which keeps its segments
+            return coord[inds[0]] if coord.ndim == 1 else coord[inds]
 
         out = {}
         dim_map = self.dim_map

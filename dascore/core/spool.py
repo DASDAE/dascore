@@ -227,22 +227,16 @@ class _PendingFill:
     def __init__(self, spool, dim, merge):
         self.spool, self.dim, self.merge = spool, dim, merge
         self.frames = spool._plan_frames(dim)
-        self._plan = self._built = None
+        self._built = None
 
-    @property
-    def plan(self) -> ChunkPlan:
-        """The fill's own plan, which merges each stretch."""
-        if self._plan is None:
+    def _real(self):
+        """The fill's catalog, merging each stretch, built when first asked for."""
+        if self._built is None:
             working = self.frames[1]
             with _any_step():
                 plan = build_chunk_plan(working, **self.merge, **{self.dim: None})
-            self._plan = coalesce_runs(plan, working)
-        return self._plan
-
-    def _real(self):
-        """The fill's catalog, built the first time it is asked for."""
-        if self._built is None:
-            self._built = self.spool._chunked(self.frames[0], self.plan)._catalog
+            plan = coalesce_runs(plan, working)
+            self._built = self.spool._chunked(self.frames[0], plan)._catalog
         return self._built
 
     def __getattr__(self, name):
@@ -251,7 +245,7 @@ class _PendingFill:
         return getattr(self._real(), name)
 
     def __len__(self) -> int:
-        return len(self.plan.outputs)
+        return len(self._real())
 
     def __iter__(self):
         return iter(self._real())

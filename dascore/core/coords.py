@@ -10,6 +10,7 @@ import abc
 import dataclasses
 import itertools
 import math
+import os
 import re
 import warnings
 from collections.abc import Mapping, Sequence, Sized
@@ -1035,7 +1036,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""
 
-    def snap(self, step=None, max_shift=None) -> BaseCoord:
+    def snap(self, step=None, max_shift=None, warn=False) -> BaseCoord:
         """
         Snap the coordinates to evenly sampled grid points.
 
@@ -3024,8 +3025,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             )
             return self._slice_runs(span)
         stride = 1 if np.all(diffs > 0) else -1 if np.all(diffs < 0) else 0
-        if not stride or not self._direction():
-            # a reorder, or labels in no order, holds no segments
+        lone = len(self.runs) == 1 and isinstance(self.runs[0], Labels)
+        stepless = lone and _is_null(self.step)
+        if not stride or not self._direction() or stepless:
+            # a reorder, labels in no order, or one list of labels with no
+            # step (an irregular axis, as dev kept it) holds no segments
             values = self._get_index_values(indices)
             return get_coord(data=values, units=self.units, snap=False)
         # each stretch of consecutive positions is its own segment
@@ -3402,18 +3406,19 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         span = np.abs(end - first)
         return np.timedelta64(span, "ns") if dtype_time_like(self.dtype) else span
 
-    def snap(self, step=None, max_shift=None) -> BaseCoord:
+    def snap(self, step=None, max_shift=None, warn=False) -> BaseCoord:
         """
         Snap the coordinates to evenly sampled grid points.
 
         The labels spread evenly between the min and max, or with ``step``
         go to the nearest positions of its grid through the first. A move
-        over one step warns; one over ``max_shift`` steps raises.
+        over ``max_shift`` steps raises; one over one step warns if ``warn``
+        (`snap_coords` asks, operations snapping for their own use do not).
         """
         if self._partial or (self._grid is not None and step is None):
             return self
         out = self._spread() if step is None else self._on_step(step)
-        if len(self) < 2:
+        if len(self) < 2 or (max_shift is None and not warn):
             return out
         moved = _shift(out, np.asarray(self.values), out.step if step is None else step)
         if max_shift is not None and moved > max_shift:
@@ -3422,12 +3427,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 f"than max_shift ({max_shift})."
             )
             raise CoordError(msg)
-        if moved > 1:
+        if warn and moved > 1:
             msg = (
                 f"Snapping moved labels by up to {moved:.3g} steps; a gap in "
                 "them is spread over the grid. Use fill_gaps to keep it."
             )
-            warnings.warn(msg, UserWarning, stacklevel=2)
+            here = os.path.dirname(dc.__file__)  # the caller's line, not ours
+            warnings.warn(msg, UserWarning, skip_file_prefixes=(here,))
         return out
 
     def _on_step(self, step) -> BaseCoord:
@@ -3957,20 +3963,9 @@ def _runs_step(runs, declared, dtype, sources):
     """
     if len(runs) == 1 and isinstance(runs[0], Grid):
         return runs[0].step(dtype)
-    if _is_null(declared):
+    if _is_null(declared) or len(runs) > 1:  # segments share no step
         return None
     step = _declared_step(declared, dtype)
-    if len(runs) > 1:
-        # a step stated beside segments must be each grid's own
-        if any(
-            isinstance(x, Grid)
-            and len(x) > 1
-            and (x.step_den > 1 or not _same_step(abs(x.step(dtype)), abs(step)))
-            for x in runs
-        ):
-            msg = f"The declared step {step} contradicts a grid run's spacing."
-            raise CoordError(msg)
-        return None
     values = _source(sources, runs[0], dtype)
     if values.ndim != 1 or (len(values) > 1 and not is_strictly_monotonic(values)):
         msg = "A declared step needs one-dimensional, monotonic values."

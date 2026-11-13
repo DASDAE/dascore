@@ -1332,6 +1332,7 @@ class TestWindowsOverFilledGaps:
         narrowed = filled.select(reference_time=(time[0], time[1]))
         (patch,) = narrowed.cut(distance=np.array([[3, 8]]))
         assert patch.shape == (6, 2)
+        assert patch.coords["distance"].values.tolist() == [3, 4, 5, 6, 7, 8]
         assert patch.data[:, 0].tolist() == [1, 1, -1, -1, 1, 1]
 
     def test_nothing_to_fill_keeps_riders(self):

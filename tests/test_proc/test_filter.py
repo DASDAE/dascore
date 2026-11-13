@@ -288,20 +288,16 @@ class TestSobelFilter:
         with pytest.raises(CoordError, match="more than one segment"):
             holed_patch.sobel_filter("distance")
 
-    def test_jitter_computes(self, jittered_patch):
+    def test_jitter_computes(self, jittered_patch, jittered_forms):
         """One list of labels is an irregular axis, computed on by its labels."""
+        labels, _ = jittered_forms
         out = jittered_patch.sobel_filter("time")
-        assert isinstance(out, dc.Patch)
+        assert np.allclose(out.data, labels.sobel_filter("time").data)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still filters."""
         out = stepless_seam_patch.sobel_filter("time")
         assert out.shape == stepless_seam_patch.shape
-
-    def test_two_runs_raise(self, two_run_patch):
-        """Two step-less segments raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
-            two_run_patch.sobel_filter("time")
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

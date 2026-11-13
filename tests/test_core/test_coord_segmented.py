@@ -850,6 +850,15 @@ class TestEdgeCases:
         )
         assert float_gap_coord != three
 
+    def test_mask_keeps_a_stepless_list(self):
+        """Dropping a sample from labels with no step leaves one list, as on dev."""
+        labels = get_coord(data=np.array([0.0, 1.0, 5.0, 6.0, 20.0, 21.5]))
+        keep = np.ones(6, dtype=bool)
+        keep[3] = False
+        out = labels[keep]
+        assert out.runs_count == 1 and out.step is None
+        np.testing.assert_array_equal(out.values, labels.values[keep])
+
     def test_eq_split_differently(self):
         """Segments split at other places, or stated otherwise, are equal by labels."""
         grid = lambda start, size: get_coord(start=start, step=1.0, shape=(size,))  # noqa

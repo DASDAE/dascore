@@ -13,10 +13,19 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.core.spool as spool_module
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import random_spool
-from dascore.exceptions import ChunkError, CoordError, ParameterError, UnitError
+from dascore.exceptions import (
+    ChunkError,
+    CoordError,
+    CoordMergeError,
+    ParameterError,
+    UnitError,
+)
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.patch import _concatenate_group
+from dascore.warnings import DASCoreWarning
 
 ONE_SECOND = np.timedelta64(1, "s")
 ONE_NS = np.timedelta64(1, "ns")
@@ -535,10 +544,19 @@ class TestSpoolFillGaps:
         (out,) = filled.cut(time=window)
         assert len(reads) == 1 and not np.isnan(out.data).any()
 
-    def test_chunk_plans_once_onto_the_files(self, gappy_spool):
+    def test_chunk_plans_once_onto_the_files(self, gappy_spool, monkeypatch):
         """A chunk of a fill is one plan, its windows loading from the files."""
+        plans = []
+        build = spool_module.build_chunk_plan
+
+        def counted(*args, **kwargs):
+            plans.append(kwargs)
+            return build(*args, **kwargs)
+
+        monkeypatch.setattr(spool_module, "build_chunk_plan", counted)
         filled = gappy_spool.fill_gaps("time")
         chunked = filled.chunk(time=4)
+        assert len(plans) == 1
         assert filled._catalog._built is None  # the fill's own was never built
         paths = chunked._catalog.resolver.member_rows["source_path"].astype(str)
         assert not paths.str.startswith("plan://").any()
@@ -658,6 +676,20 @@ class TestSpoolFillGaps:
         windows = spool.fill_gaps(time=2).chunk(time=5, keep_partial=True)
         assert sum(x.shape[0] for x in windows) == 14
 
+    def test_conflict(self):
+        """Attrs the patches state differently follow the fill's conflict."""
+        times = [get_coord(start=x, step=1.0, shape=(5,)) for x in (0.0, 7.0)]
+        patches = [
+            dc.Patch(
+                data=np.ones(5), coords={"time": t}, dims=("time",), attrs={"gain": tag}
+            )
+            for t, tag in zip(times, (1.0, 2.0), strict=True)
+        ]
+        with pytest.raises(CoordMergeError, match="gain"):
+            list(dc.spool(patches).fill_gaps("time"))
+        (out,) = dc.spool(patches).fill_gaps("time", conflict="keep_first")
+        assert out.attrs.gain == 1.0 and out.shape == (12,)
+
     def test_negative_sample_count_raises(self, gappy_spool):
         """A count of missing samples is never negative."""
         with pytest.raises(ParameterError, match="non-negative"):
@@ -696,6 +728,37 @@ class TestSpoolFillGaps:
         """Chunk never fills, and names the method which does."""
         with pytest.raises(ParameterError, match=r"Spool\.fill_gaps"):
             getattr(gappy_spool, method)(time=None, tolerance=10, fill_value=np.nan)
+
+
+class TestConcatenateOrder:
+    """Concatenate joins in order, and says when the labels it joins are not."""
+
+    @staticmethod
+    def _patch(start):
+        coords = {
+            "distance": [0],
+            "time": get_coord(start=start, step=1.0, shape=(10,)),
+        }
+        return dc.Patch(
+            data=np.arange(10.0)[None] + start, coords=coords, dims=tuple(coords)
+        )
+
+    def test_overlap_warns(self):
+        """Overlapping patches give unordered labels and a warning."""
+        patches = [self._patch(x) for x in (0.0, 5.0)]
+        with pytest.warns(DASCoreWarning, match="out of order"):
+            (out,) = dc.spool(patches).concatenate(time=None)
+        coord = out.get_coord("time")
+        assert not (coord.sorted or coord.reverse_sorted)
+        # each label keeps its sample
+        assert np.array_equal(out.data[0], coord.values)
+
+    def test_member_order_is_kept(self):
+        """A group concatenated directly keeps its members' order and data."""
+        patches = [self._patch(20.0), self._patch(0.0)]
+        with pytest.warns(DASCoreWarning, match="out of order"):
+            out = _concatenate_group(patches, "time", patches[0].attrs, "test")
+        assert np.array_equal(out.data[0], out.get_coord("time").values)
 
 
 class TestSpoolSnapCoords:

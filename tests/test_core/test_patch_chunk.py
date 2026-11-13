@@ -4043,16 +4043,19 @@ class TestChunkFillWindows:
         spool, tolerance = spool_and_tolerance
         chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
         resolver = chunked._catalog.resolver
-        reads = []
-        original = resolver._load_member
-        resolver._load_member = lambda *a, **kw: (
-            reads.append(1),
-            original(*a, **kw),
-        )[1]
+        sizes = []
+        original = resolver._assembled
+
+        def assembled(*args, **kwargs):
+            out = original(*args, **kwargs)
+            sizes.append(out.shape[out.get_axis("time")])
+            return out
+
+        resolver._assembled = assembled
         # three windows lie wholly inside the hole, between two fed ones
         for index in (3, 4, 5):
             assert np.isnan(chunked[index].data).all()
-        assert len(reads) == 3  # one output each, reading one sample
+        assert sizes == [1, 1, 1]  # one output each, of one sample
 
     def test_fill_window_keeps_associated_coords(self, random_patch_with_lat_lon):
         """A window with no data still carries what its siblings carry."""

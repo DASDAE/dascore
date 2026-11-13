@@ -415,9 +415,9 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     values = _normalize_coord_values(getattr(coord, "values", coord))
     declared = getattr(coord, "step", None)
     if declared is None and len(getattr(coord, "runs", ())) > 1:
-        # segments share no step, so the first one stating its own sizes cells
-        steps = (x.step for x in coord.segments if not pd.isnull(x.step))
-        declared = next(steps, None)
+        # segments share no step, so the first grid's own sizes cells
+        grids = (x for x in coord.runs if hasattr(x, "step_num"))
+        declared = next((x.step(coord.dtype) for x in grids), None)
     step = _cell_step(declared, values)
     if len(values) == 1:
         if step is None:

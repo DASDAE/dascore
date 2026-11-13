@@ -282,20 +282,18 @@ class TestHoles:
         with pytest.raises(CoordError, match=r"one segment.*fill_gaps.*split_gaps"):
             holed_patch.integrate("time", definite=definite)
 
-    def test_jitter_computes(self, jittered_patch):
+    def test_jitter_computes(self, jittered_patch, jittered_forms):
         """One list of labels is an irregular axis, computed on by its labels."""
+        labels, grid = jittered_forms
         out = jittered_patch.integrate("time")
-        assert isinstance(out, dc.Patch)
+        assert np.allclose(out.data, labels.integrate("time").data)
+        # the spacing of the labels, not of the step, shows in the result
+        assert not np.allclose(out.data, grid.integrate("time").data)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, integrated by label spacing."""
         out = stepless_seam_patch.integrate("time", definite=True)
         assert np.allclose(out.data, 79.5)
-
-    def test_two_runs_raise(self, two_run_patch):
-        """Two step-less segments raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
-            two_run_patch.integrate("time", definite=True)
 
 
 class TestNaN:
