@@ -1978,7 +1978,8 @@ def _fill_grids(rows, codes, n_parts, name, dtype, lattice):
         msg = (
             f"Cannot fill a gap along {name!r} between samples on step "
             f"{steps[heads[codes]][bad]} and samples on step {steps[bad]}. "
-            "Resample or snap first."
+            "Fill with a size smaller than that gap, select first to leave "
+            "it out, or resample to one step."
         )
         raise CoordError(msg)
     with np.errstate(invalid="ignore"):

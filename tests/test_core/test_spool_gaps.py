@@ -613,6 +613,41 @@ class TestSpoolFillGaps:
             np.testing.assert_array_equal(got.data, want.data)
             assert got.get_coord("x") == want.get_coord("x")
 
+    @pytest.mark.parametrize("timed", [False, True])
+    @pytest.mark.parametrize(
+        "select",
+        [
+            dict(time=(1.05, -1.05), relative=True),
+            dict(time=(1.05, 203.95)),  # bounds between samples
+            dict(time=(1, -1), samples=True),
+        ],
+    )
+    def test_windows_over_a_selection_match_the_fill(self, select, timed):
+        """Windows of a selection's fill are those of the materialized fill."""
+        conv = dc.to_datetime64 if timed else float
+        step = dc.to_timedelta64(1.0) if timed else 1.0
+        patches = [
+            dc.Patch(
+                data=np.arange(100.0)[None] + start,
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=conv(start), step=step, shape=(100,)),
+                },
+                dims=("distance", "time"),
+            )
+            for start in (0.0, 105.0)
+        ]
+        if not select.get("relative") and not select.get("samples"):
+            select = dict(time=tuple(conv(x) for x in select["time"]))
+        view = dc.spool(patches).select(**select)
+        filled = view.fill_gaps(time=10)
+        expected = dc.spool(list(filled)).chunk(time=20, keep_partial=True)
+        out = filled.chunk(time=20, keep_partial=True)
+        assert len(out) == len(expected)
+        for got, want in zip(out, expected, strict=True):
+            np.testing.assert_array_equal(got.data, want.data)
+            assert got.get_coord("time") == want.get_coord("time")
+
     def test_gap_window_takes_its_own_stretch(self):
         """A window of only fill describes, and loads from, its own stretch."""
 
@@ -709,7 +744,8 @@ class TestSpoolFillGaps:
         )
         with pytest.raises(CoordError, match="Resample or snap"):
             joined.fill_gaps("x")
-        with pytest.raises(CoordError, match="Resample or snap"):
+        remedy = "size smaller than that gap, select first .* or resample"
+        with pytest.raises(CoordError, match=remedy):
             len(dc.spool(patches).fill_gaps("x"))  # it plans as it is asked
 
     @pytest.mark.parametrize("kwargs", [{}, {"time": 1, "distance": 1}])
