@@ -193,13 +193,9 @@ class _AutoPatchRoller(_NumpyPatchRoller):
 
     __slots__ = ()
 
-    def _pandas_agrees(self) -> bool:
-        """Whether pandas gives NumPy's windows and values for this data."""
-        return _pandas_agrees(self.patch.data, self.window, self.step, self.center)
-
     def _reduce(self, function):
         """Reduce each window by a NumPy function, through pandas if faster."""
-        if not self._pandas_agrees():
+        if not _pandas_agrees(self.patch.data, self.window, self.step, self.center):
             return self.apply(function)
         # pandas' std defaults to ddof=1, NumPy's to 0
         kwargs = {"ddof": 0} if function is np.std else {}
@@ -328,8 +324,12 @@ def _rolling_mean(data, *, window, step, axis, pandas):
 _DEPRECATED = (
     "Use Patch.window, whose reductions are labelled at the window's centre "
     "unless told otherwise: patch.rolling(time=1, step=0.5).mean() is "
-    "patch.window(time=1, step=0.5, align='right').mean(), and center=True "
-    "is the default align='center'."
+    "patch.window(time=1, step=0.5, align='right').mean(), and "
+    "rolling(...).apply(func) is window(...).reduce(func). center=True is "
+    "the default align='center' when no step is given; with a step, rolling "
+    "labelled centred windows off their centre and window does not. On a "
+    "patch with one dimension, rolling's std and its treatment of infinite "
+    "values were pandas'; window's are NumPy's."
 )
 
 
@@ -346,6 +346,13 @@ def rolling(
 ) -> _NumpyPatchRoller | _PandasPatchRoller:
     """
     Apply a rolling function along a specified dimension.
+
+    :::{.callout-warning}
+    Deprecated: use [`Patch.window`](`dascore.Patch.window`), whose
+    reductions do what `rolling` did. ``rolling(time=1, step=0.5).mean()``
+    is ``window(time=1, step=0.5, align="right").mean()``, and
+    ``rolling(...).apply(func)`` is ``window(...).reduce(func)``.
+    :::
 
     See also the
     [rolling section of the processing tutorial](/tutorial/processing.qmd#rolling)

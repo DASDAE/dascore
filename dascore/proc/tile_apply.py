@@ -202,17 +202,11 @@ class TileApply(PatchProcessor):
 
     def _spelled(self, name: str) -> str:
         """Return the call as it is written: a window, then what is applied."""
-        named = ("overlap", "step", "taper", "analysis", "fill")
-        options = {x: getattr(self, x) for x in named}
-        if self.samples:
-            options["samples"] = True
-        applied: dict[str, Any] = {"function": self.function}
-        if self.mode != "overlap_add":
-            applied["mode"] = self.mode
-        if self.engine != "auto":
-            applied["engine"] = self.engine
-        window = _call_str("window", {**(self.model_extra or {}), **options})
-        return f"{window}.{_call_str('apply', applied)}"
+        given = self._inputs()[0]
+        applied = {
+            x: given.pop(x) for x in ("function", "mode", "engine") if x in given
+        }
+        return f"{_call_str('window', given)}.{_call_str('apply', applied)}"
 
     def get_metadata(self, meta):
         """Return a stack's metadata, and the windowed axes, size and stride."""

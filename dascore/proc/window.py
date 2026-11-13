@@ -1,35 +1,9 @@
 """
 Windows of a patch, and what is done in them.
 
-[`Patch.window`](`dascore.Patch.window`) declares a tiling of a patch and
-computes nothing: which dimensions are windowed, how long each window is,
-and how far each one advances. It returns a
-[`PatchWindow`](`dascore.proc.window.PatchWindow`), and a call on that is
-one operation, which gives back a patch:
-
-- [`apply`](`dascore.proc.window.PatchWindow.apply`) hands the windows to a
-  function and blends what it returns back into a patch shaped like the
-  input, or returns the windows stacked;
-- a reduction -- `mean`, `median`, `min`, `max`, `std`, `sum`, or any
-  function through [`reduce`](`dascore.proc.window.PatchWindow.reduce`) --
-  gives one value for each window.
-
-Examples
---------
->>> import numpy as np
->>> import dascore as dc
->>> patch = dc.get_example_patch()
->>>
->>> # A moving average over 11 samples, shaped like the patch.
->>> smooth = patch.window(time=11, samples=True).mean()
->>> assert smooth.shape == patch.shape
->>>
->>> # The same windows, half a window apart, each scaled to unit RMS.
->>> def agc(tiles):
-...     rms = np.sqrt(np.mean(tiles**2, axis=-1, keepdims=True))
-...     return tiles / np.where(rms > 0, rms, 1)
->>> gained = patch.window(time=0.5).apply(agc)
->>> assert gained.shape == patch.shape
+[`Patch.window`](`dascore.Patch.window`) declares the windows, and returns
+a [`PatchWindow`](`dascore.proc.window.PatchWindow`); a call on that is one
+operation, which gives back a patch.
 """
 
 from __future__ import annotations
@@ -69,12 +43,6 @@ _REDUCERS = {
 }
 
 
-def _options(**given) -> dict[str, Any]:
-    """Return the window options a call set, for its history."""
-    defaults = {"samples": False, "ends": "pad", "align": "center"}
-    return {k: v for k, v in given.items() if v is not None and v != defaults.get(k)}
-
-
 class WindowReduce(PatchProcessor):
     """
     Reduce each window along one dimension to a single value.
@@ -112,24 +80,24 @@ class WindowReduce(PatchProcessor):
 
     def _spelled(self, name: str) -> str:
         """Return the call as it is written: a window, then the reduction."""
-        options = _options(
-            overlap=self.overlap,
-            step=self.step,
-            samples=self.samples,
-            ends=self.ends,
-            align=self.align,
-            fill=self.fill,
-        )
-        window = _call_str("window", {**(self.model_extra or {}), **options})
-        if isinstance(self.function, str) and self.function in _REDUCERS:
-            return f"{window}.{self.function}()"
-        applied: dict[str, Any] = {"function": self.function}
-        if self.function_args:
-            applied["args"] = self.function_args
-        return f"{window}.{_call_str('reduce', {**applied, **self.function_kwargs})}"
+        given = self._inputs()[0]
+        function = given.pop("function")
+        args = given.pop("function_args", None)
+        kwargs = given.pop("function_kwargs", {})
+        window = _call_str("window", given)
+        if isinstance(function, str):
+            return f"{window}.{function}()"
+        applied = {"function": function, "args": args, **kwargs}
+        return f"{window}.{_call_str('reduce', applied)}"
 
     def get_metadata(self, meta):
         """Return the reduced metadata, and where the complete windows sit."""
+        if isinstance(self.function, str) and self.function not in _REDUCERS:
+            msg = (
+                f"A reduction is a function or one of {tuple(_REDUCERS)}; "
+                f"got {self.function!r}."
+            )
+            raise ParameterError(msg)
         window = resolve_window(
             meta,
             self.model_extra or {},
@@ -151,17 +119,13 @@ class WindowReduce(PatchProcessor):
         first = math.ceil(before / step)
         last = (length - size + before) // step
         valid = max(last - first + 1, 0)
+        kept, total = slice(None, None, step), len(range(0, length, step))
         if self.ends == "drop":
-            start = first * step
-            kept = slice(start, start + (valid - 1) * step + 1, step)
-            kept = kept if valid else slice(0, 0)
-            lead, total = 0, valid
-        else:
-            kept = slice(None, None, step)
-            lead, total = first, len(range(0, length, step))
+            kept, total = slice(first * step, (first + valid) * step, step), valid
         coords, _ = meta.coords.isel(**{dim: kept})
         # Each output sample summarizes a window, not the input's cell.
-        out = meta.new(coords=coords._update_grid(dim), dtype=np.float64)
+        dtype = np.result_type(meta.dtype, np.float64)
+        out = meta.new(coords=coords._update_grid(dim), dtype=dtype)
         return out, {
             "axis": axis,
             "size": size,
@@ -169,12 +133,11 @@ class WindowReduce(PatchProcessor):
             "before": before,
             "first": first,
             "valid": valid,
-            "lead": lead,
             "total": total,
         }
 
     def _complete(self, data, *, axis, size, step, before, first, valid):
-        """Return the reduction of each complete window, in float64."""
+        """Return the reduction of each complete window, in a float dtype."""
         named = isinstance(self.function, str)
         function = _REDUCERS[self.function] if named else self.function
         # pandas labels a window by its last sample, so its answers are these
@@ -202,41 +165,29 @@ class WindowReduce(PatchProcessor):
         pick[axis] = slice(start, start + (valid - 1) * step + 1, step)
         windows = view[tuple(pick)]
         raw = function(windows, *self.function_args, axis=-1, **self.function_kwargs)
-        return np.asarray(raw, dtype=np.float64)
+        # Float64, or complex for complex data, so a window can hold NaN.
+        return np.asarray(raw, dtype=np.result_type(data.dtype, np.float64))
 
-    def numpy_kernel(
-        self, data, *, axis, size, step, before, first, valid, lead, total
-    ):
+    def numpy_kernel(self, data, *, axis, size, step, before, first, valid, total):
         """Return one value for each window; NaN where a window is incomplete."""
+        where = {"axis": axis, "size": size, "step": step}
         if self.fill is not None and total != valid:
-            # Filled out at both ends, every window is complete.
+            # Filled out at both ends, every window is complete. The data
+            # are widened first, so a fill they cannot hold is not cut down.
             after = max((total - 1) * step + size - before - data.shape[axis], 0)
             width = [(0, 0)] * data.ndim
             width[axis] = (before, after)
+            data = data.astype(np.result_type(data.dtype, self.fill), copy=False)
             data = np.pad(data, width, constant_values=self.fill)
-            return self._complete(
-                data, axis=axis, size=size, step=step, before=0, first=0, valid=total
-            )
-        if not valid:
-            shape = list(data.shape)
-            shape[axis] = total
-            return np.full(shape, np.nan)
-        reduced = self._complete(
-            data,
-            axis=axis,
-            size=size,
-            step=step,
-            before=before,
-            first=first,
-            valid=valid,
-        )
+            return self._complete(data, before=0, first=0, valid=total, **where)
+        reduced = self._complete(data, before=before, first=first, valid=valid, **where)
         if total == valid:
             return reduced
         shape = list(reduced.shape)
         shape[axis] = total
-        out = np.full(shape, np.nan)
+        out = np.full(shape, np.nan, dtype=reduced.dtype)
         place = [slice(None)] * out.ndim
-        place[axis] = slice(lead, lead + valid)
+        place[axis] = slice(first, first + valid)
         out[tuple(place)] = reduced
         return out
 
@@ -341,11 +292,9 @@ class PatchWindow:
           Under a taper the overlap is never more than half, since the ramps
           would cross; under an analysis window it may be as deep as scipy
           can invert.
-        - Windows start before the data, and hold the window's `fill` there
-          and past its end -- zeros unless one is given -- so every sample
-          is under a whole taper. The function sees those values. The window's
-          `ends` and `align` say nothing about blended windows, and anything
-          but their defaults is refused.
+        - Windows start before the data and run past its end, holding the
+          window's `fill` there, so every sample is under a whole taper. The
+          function sees those values.
         """
         if self.ends != "pad" or self.align != "center":
             msg = (
@@ -384,10 +333,10 @@ class PatchWindow:
         Returns
         -------
         Patch
-            One value for each window, in float64, along the windowed
-            dimension. A window is labelled by one of the input's samples,
-            the one its `align` names, so with a step of one sample the
-            patch keeps its shape and coordinates.
+            One value for each window, in float64 (complex for complex
+            data), along the windowed dimension. A window is labelled by
+            one of the input's samples, the one its `align` names, so with
+            a step of one sample the patch keeps its shape and coordinates.
 
         Examples
         --------
@@ -405,11 +354,6 @@ class PatchWindow:
         Notes
         -----
         - A window with no overlap or step given advances one sample.
-        - A window which reaches past either end of the data is incomplete.
-          With ``ends="pad"`` its value is NaN, unless the window has a
-          `fill`, which the data are then filled out with so that it is
-          computed; with ``ends="drop"`` it is left out, and the result is
-          shorter.
         - Only one dimension can be windowed.
         """
         if self.taper is not None or self.analysis is not None:

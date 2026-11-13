@@ -64,7 +64,7 @@ Their docstrings give the exact rules and what is unsupported. Patches have no `
 
 ## Familiar methods
 
-Many patch methods share xarray's names: `transpose`, `squeeze`, `where`, `fillna`, `dropna`, `pipe`, `rolling`, `idxmax`, and the reductions (`mean`, `max`, `std`, ...). Reductions keep the reduced dimension with length one unless given `dim_reduce="squeeze"`. NumPy functions also return patches.
+Many patch methods share xarray's names: `transpose`, `squeeze`, `where`, `fillna`, `dropna`, `pipe`, `idxmax`, and the reductions (`mean`, `max`, `std`, ...). Reductions keep the reduced dimension with length one unless given `dim_reduce="squeeze"`. NumPy functions also return patches.
 
 ```{python}
 positive = patch.where(patch > 0, 0)

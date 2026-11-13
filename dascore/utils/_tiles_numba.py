@@ -58,7 +58,8 @@ def apply_jit(
     same shape. `analysis` multiplies each tile before `func` sees it; None
     is a window of ones. `fill` is what a tile holds beyond the array.
     """
-    padded = plan.pad(array, dtype=np.result_type(array, np.float32), fill=fill)
+    dtype = np.result_type(array, np.float32, fill)
+    padded = plan.pad(array, dtype=dtype, fill=fill)
     if analysis is None:
         analysis = np.ones(plan.size, dtype=padded.dtype)
     analysis = analysis.astype(padded.dtype)

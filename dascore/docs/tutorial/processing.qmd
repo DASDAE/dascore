@@ -116,7 +116,7 @@ smoothed = event.window(time=50, samples=True, ends="drop").mean()
 smoothed.viz.waterfall(show=True);
 ```
 
-Rolling objects provide reductions such as `mean`, `median`, `min`, `max`, `std`, and `sum`. Specify a coordinate-unit window or set `samples=True` for an exact sample count.
+A window provides the reductions `mean`, `median`, `min`, `max`, `std`, and `sum`, and `reduce` for any other function. Specify a coordinate-unit window or set `samples=True` for an exact sample count.
 
 # Gain
 

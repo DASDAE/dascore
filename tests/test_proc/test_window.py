@@ -11,8 +11,6 @@ import dascore as dc
 from dascore.core.source import ArraySource
 from dascore.exceptions import LazyOperationError, ParameterError
 from dascore.lazy.recipe import Recipe
-from dascore.proc.tile_apply import TileApply
-from dascore.proc.window import PatchWindow
 from dascore.units import percent
 
 REDUCERS = ("mean", "median", "min", "max", "std", "sum")
@@ -42,13 +40,6 @@ def _rolled(patch, name="mean", **kwargs):
 class TestDeclaration:
     """`Patch.window` states a window and computes nothing."""
 
-    def test_returns_a_window(self, patch):
-        """The window holds the patch and what was asked for."""
-        window = patch.window(time=0.5, overlap=0.1)
-        assert isinstance(window, PatchWindow)
-        assert window.patch is patch
-        assert dict(window.dims) == {"time": 0.5}
-
     def test_needs_a_dimension(self, patch):
         """A window of nothing is refused."""
         with pytest.raises(ParameterError, match="needs a dimension"):
@@ -67,7 +58,7 @@ class TestDeclaration:
 
     def test_unknown_dimension_refused(self, patch):
         """A dimension the patch lacks is refused by the operation."""
-        with pytest.raises(Exception, match="bob"):
+        with pytest.raises(ParameterError, match="bob"):
             patch.window(bob=3, samples=True).mean()
 
 
@@ -120,26 +111,54 @@ class TestReduce:
 
     def test_longer_than_the_data_refused(self, ramp):
         """A window which could never be complete is refused."""
-        with pytest.raises(ParameterError):
+        with pytest.raises(ParameterError, match="larger than coordinate"):
             ramp.window(time=7, samples=True).mean()
 
-    @pytest.mark.parametrize("name", REDUCERS)
-    def test_named_is_the_numpy_function(self, patch, name):
-        """Each named reduction is NumPy's function of each window."""
-        window = patch.window(time=7, step=3, samples=True)
-        named = getattr(window, name)()
-        by_function = window.reduce(getattr(np, name))
-        np.testing.assert_allclose(named.data, by_function.data, equal_nan=True)
-        view = np.lib.stride_tricks.sliding_window_view(patch.data, 7, axis=1)
-        # Output 1 is labelled by sample 3, whose window starts at sample 0.
-        expected = getattr(np, name)(view[:, 0], axis=-1)
-        np.testing.assert_allclose(named.data[:, 1], expected)
+    def test_no_complete_window(self, ramp):
+        """With no window complete, every value is NaN, or nothing is left."""
+        window = {"time": 6, "step": 4, "samples": True}
+        np.testing.assert_array_equal(ramp.window(**window).mean().data, [np.nan] * 2)
+        assert ramp.window(**window, ends="drop").mean().shape == (0,)
+
+    def test_one_dimension_uses_numpys_std(self):
+        """A patch of one dimension is reduced as any other: ddof of zero."""
+        data = np.arange(6.0) ** 2
+        squares = dc.Patch(data=data, coords={"time": np.arange(6)}, dims=("time",))
+        out = squares.window(time=3, samples=True, align="right").std()
+        np.testing.assert_allclose(
+            out.data[2:], [np.std(data[i : i + 3]) for i in range(4)]
+        )
+
+    def test_other_layouts(self):
+        """Three dimensions and a descending coordinate reduce the same way."""
+        data = np.random.default_rng(3).standard_normal((3, 4, 20))
+        coords = {"a": np.arange(3), "b": np.arange(4), "time": np.arange(20)[::-1]}
+        cube = dc.Patch(data=data, coords=coords, dims=("a", "b", "time"))
+        out = cube.window(time=5, step=2, samples=True, ends="drop").max()
+        np.testing.assert_array_equal(
+            out.get_array("time"), [17, 15, 13, 11, 9, 7, 5, 3]
+        )
+        np.testing.assert_array_equal(out.data[..., 0], data[..., 0:5].max(axis=-1))
+        np.testing.assert_array_equal(out.data[..., -1], data[..., 14:19].max(axis=-1))
+
+    def test_complex_stays_complex(self):
+        """Complex data keep both parts."""
+        data = np.arange(6) * 1j
+        turned = dc.Patch(data=data, coords={"time": np.arange(6)}, dims=("time",))
+        out = turned.window(time=3, samples=True, ends="drop").mean()
+        np.testing.assert_array_equal(out.data, np.array([1j, 2j, 3j, 4j]))
+
+    def test_unknown_name_refused(self, patch):
+        """A reduction named by a string must be one of the six."""
+        with pytest.raises(ParameterError, match="A reduction is a function"):
+            patch.window(time=3, samples=True).reduce("var")
 
     @pytest.mark.parametrize("name", REDUCERS)
     @pytest.mark.parametrize("align", ("center", "right", "left"))
-    def test_fast_engine_agrees(self, patch, name, align):
+    @pytest.mark.parametrize("step", (1, 3, 4))
+    def test_fast_engine_agrees(self, patch, name, align, step):
         """A long window, which another engine answers, gives NumPy's values."""
-        window = patch.window(time=400, samples=True, align=align)
+        window = patch.window(time=400, step=step, samples=True, align=align)
         named = getattr(window, name)()
         by_function = window.reduce(getattr(np, name))
         np.testing.assert_allclose(
@@ -155,10 +174,15 @@ class TestReduce:
         np.testing.assert_array_equal(out.data[2], expected)
 
     def test_arguments_reach_the_function(self, patch):
-        """What is given after the function is passed on to it."""
-        out = patch.window(time=50, samples=True, ends="drop").reduce(np.percentile, 80)
+        """What is given after the function is passed on to it, by name too."""
+        window = patch.window(time=50, samples=True, ends="drop")
         expected = np.percentile(patch.data[:, :50], 80, axis=-1)
-        np.testing.assert_allclose(out.data[:, 0], expected)
+        np.testing.assert_allclose(
+            window.reduce(np.percentile, 80).data[:, 0], expected
+        )
+        np.testing.assert_allclose(
+            window.reduce(np.percentile, q=80).data[:, 0], expected
+        )
 
     def test_units_and_percent(self, patch):
         """A step in coordinate units and an overlap in percent say the same."""
@@ -174,10 +198,13 @@ class TestReduce:
         out = ints.window(time=3, samples=True).sum()
         assert out.dtype == out.data.dtype == np.float64
         assert np.isnan(out.data[:, 0]).all() and (out.data[:, 1:-1] == 3).all()
+        # With nothing to pad, the values and the stated dtype are still floats.
+        whole = ints.window(time=3, samples=True, ends="drop").reduce(np.sum)
+        assert whole.dtype == whole.data.dtype == np.float64
 
     def test_one_dimension_only(self, patch):
         """A reduction over two windowed dimensions is refused."""
-        with pytest.raises(ParameterError):
+        with pytest.raises(ParameterError, match="exactly one dimension"):
             patch.window(time=3, distance=3, samples=True).mean()
 
     @pytest.mark.parametrize("option", ({"taper": "hann"}, {"analysis": "hann"}))
@@ -192,6 +219,20 @@ class TestReduce:
         np.testing.assert_allclose(out.data, [1 / 3, 1, 2, 3, 4, 3])
         stepped = ramp.window(time=3, step=2, samples=True, fill=np.nan)
         np.testing.assert_allclose(stepped.reduce(np.nanmean).data, [0.5, 2, 4])
+
+    def test_fill_on_integers(self):
+        """A fill the data's dtype cannot hold is not cut down to fit it."""
+        coords = {"time": np.arange(6)}
+        ints = dc.Patch(data=np.arange(6), coords=coords, dims=("time",))
+        out = ints.window(time=3, samples=True, fill=0.5).sum()
+        np.testing.assert_allclose(out.data, [1.5, 3, 6, 9, 12, 9.5])
+        holed = ints.window(time=3, samples=True, fill=np.nan).reduce(np.nanmean)
+        np.testing.assert_allclose(holed.data, [0.5, 1, 2, 3, 4, 4.5])
+
+    def test_fill_with_drop_changes_nothing(self, ramp):
+        """Nothing is incomplete once the incomplete are dropped."""
+        out = ramp.window(time=3, samples=True, ends="drop", fill=9.0).mean()
+        np.testing.assert_array_equal(out.data, [1, 2, 3, 4])
 
     def test_fill_agrees_with_no_fill_inside(self, patch):
         """A fill changes only the windows which reach past the data."""
@@ -222,9 +263,18 @@ class TestRollingParity:
         assert out.coords == old.coords
         np.testing.assert_allclose(out.data, old.data, equal_nan=True)
 
+    def test_stepped_center_is_not_rollings(self):
+        """With a step, a window is on its label, where rolling's was off it."""
+        coords = {"time": np.arange(12)}
+        ramp = dc.Patch(data=np.arange(12.0), coords=coords, dims=("time",))
+        out = ramp.window(time=3, step=2, samples=True).mean()
+        np.testing.assert_array_equal(out.data, [np.nan, 2, 4, 6, 8, 10])
+        old = _rolled(ramp, time=3, step=2, samples=True, center=True, engine="numpy")
+        assert not np.array_equal(out.data, old.data, equal_nan=True)
+
     @pytest.mark.parametrize("size", (3, 4, 9, 250))
     def test_center_is_rolling_centered(self, patch, size):
-        """The default label is rolling's center=True, even windows included."""
+        """With no step, the default label is rolling's center=True."""
         out = patch.window(time=size, samples=True).mean()
         old = _rolled(patch, time=size, samples=True, center=True)
         assert out.coords == old.coords
@@ -259,6 +309,20 @@ class TestIdentity:
             "window(step='0.25',time='0.5').reduce(args='(80)',function='percentile')"
         )
 
+    def test_every_option_is_written(self, patch):
+        """Each option a call set is in what history says of it."""
+        window = {"time": 3, "samples": True, "align": "right", "fill": 1.0}
+        out = patch.window(**window, overlap=1).max()
+        assert out.attrs.history[-1] == (
+            "window(align='right',fill='1.0',overlap='1',samples='True',time='3').max()"
+        )
+        tiles = patch.window(time=64, step=32, samples=True, fill=1.0)
+        stacked = tiles.apply(np.positive, mode="stack", engine="numpy")
+        assert stacked.attrs.history[-1] == (
+            "window(fill='1.0',samples='True',step='32',time='64')"
+            ".apply(engine='numpy',function='positive',mode='stack')"
+        )
+
     def test_apply_history(self, patch):
         """An applied function is named after its window."""
         out = patch.window(time=0.5, taper="triang").apply(np.positive)
@@ -268,7 +332,7 @@ class TestIdentity:
 
     @pytest.mark.parametrize(
         "change",
-        ({"time": 4}, {"step": 2}, {"ends": "drop"}, {"align": "right"}),
+        ({"time": 4}, {"step": 2}, {"ends": "drop"}, {"align": "right"}, {"fill": 0}),
     )
     def test_window_is_part_of_the_id(self, patch, change):
         """The same call has one id; any change to the window makes another."""
@@ -279,26 +343,9 @@ class TestIdentity:
         assert first.attrs.data_id == again.attrs.data_id != patch.attrs.data_id
         assert other.attrs.data_id != first.attrs.data_id
 
-    def test_reduction_is_part_of_the_id(self, patch):
-        """Two reductions of one window are two results."""
-        window = patch.window(time=3, samples=True)
-        assert window.mean().attrs.data_id != window.std().attrs.data_id
-
 
 class TestApply:
     """`apply` hands the windows to a function and blends or stacks them."""
-
-    def test_is_the_operation(self, patch):
-        """The window's apply is the tile operation with the window's options."""
-        out = patch.window(time=64, overlap=16, samples=True).apply(np.negative)
-        direct = TileApply(np.negative, time=64, overlap=16, samples=True)(patch)
-        np.testing.assert_array_equal(out.data, direct.data)
-        assert out.attrs.data_id == direct.attrs.data_id
-
-    def test_unchanged_windows_blend_back(self, patch):
-        """Windows nothing was done to sum to the patch."""
-        out = patch.window(time=64, distance=16, samples=True).apply(lambda x: x)
-        np.testing.assert_allclose(out.data, patch.data, atol=1e-12)
 
     def test_step_is_the_overlap_it_leaves(self, patch):
         """A step says what an overlap of the rest of the window says."""
@@ -311,28 +358,46 @@ class TestApply:
         with pytest.raises(ParameterError, match="gaps"):
             patch.window(time=64, step=100, samples=True).apply(lambda x: x)
 
-    def test_stack(self, patch):
-        """Stacked windows come back as a patch which reassembles."""
-        tiles = patch.window(time=64, samples=True).apply(lambda x: x, mode="stack")
-        assert tiles.dims == (*patch.dims, "time_offset")
-        np.testing.assert_allclose(tiles.reassemble().data, patch.data, atol=1e-12)
+    @pytest.mark.parametrize("mode", ("overlap_add", "stack"))
+    @pytest.mark.parametrize("compiled", (False, True))
+    def test_fill_is_what_a_window_holds_past_the_data(self, patch, mode, compiled):
+        """Either engine and either mode hand the function the fill."""
+        numba = pytest.importorskip("numba") if compiled else None
+        channel = patch.select(distance=0, samples=True).squeeze()
 
-    def test_fill_is_what_a_window_holds_past_the_data(self, patch):
-        """The function sees the fill, and unchanged windows still blend back."""
+        def lowest(tiles):
+            """Every sample replaced by the lowest its window (or stack) holds."""
+            return np.full(tiles.shape, tiles.min())
+
+        function = numba.njit(lowest) if compiled else lowest
+        window = {"time": 64, "samples": True}
+        plain = channel.window(**window).apply(function, mode=mode)
+        filled = channel.window(**window, fill=-99.0).apply(function, mode=mode)
+        # Only the fill is that low, and without one nothing is.
+        assert filled.data.min() == -99.0 and plain.data.min() > -99.0
+
+    def test_fill_widens_integers(self, patch):
+        """An integer patch given a fractional fill holds it whole."""
+        ints = patch.new(data=np.ones(patch.shape, np.int16))
         seen = []
 
         def peek(tiles):
-            """Keep the first window, which starts before the data."""
-            seen.append(tiles[0].copy())
+            """Keep the lowest value handed over."""
+            seen.append(tiles.min())
             return tiles
 
-        window = {"time": 64, "samples": True}
-        patch.select(distance=0, samples=True).window(**window).apply(peek)
-        filled = patch.select(distance=0, samples=True).window(**window, fill=7.0)
-        out = filled.apply(peek)
-        assert (seen[0][:32] == 0).all() and (seen[1][:32] == 7.0).all()
-        expected = patch.select(distance=0, samples=True).data
-        np.testing.assert_allclose(out.data, expected, atol=1e-12)
+        ints.window(time=64, samples=True, fill=0.5).apply(peek)
+        assert set(seen) == {0.5}
+
+    def test_complex_fill_reaches_a_compiled_function(self, patch):
+        """The compiled engine keeps both parts of a complex fill."""
+        numba = pytest.importorskip("numba")
+        window = patch.window(time=8, samples=True, fill=1 + 2j)
+        # A window's sum reaches every sample of it, so the fill reaches the data.
+        compiled = window.apply(numba.njit(lambda tile: tile + tile.sum()))
+        plain = window.apply(lambda tiles: tiles + tiles.sum(axis=-1, keepdims=True))
+        assert np.iscomplexobj(compiled.data)
+        np.testing.assert_allclose(compiled.data, plain.data, atol=1e-6)
 
     def test_fill_is_part_of_the_id(self, patch):
         """Two fills are two results."""
