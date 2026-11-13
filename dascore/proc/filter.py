@@ -778,6 +778,9 @@ class SlopeFilter(PatchProcessor):
         out = convert_units(array, new_units, units)
         return out
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the filtered metadata, the transforms and the slope mask."""
         filt, dims = self.filt, self.dims

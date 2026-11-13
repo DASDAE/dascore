@@ -158,6 +158,9 @@ class Integrate(PatchProcessor):
     dim: Any
     definite: Any = False
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the integral's coords, units and data_type, and the spacing."""
         dims = iterate(self.dim if self.dim is not None else meta.dims)

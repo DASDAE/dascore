@@ -143,6 +143,9 @@ class Whiten(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the whitened metadata, and the transforms, smoothing and taper."""
         smooth_size, water_level = self.smooth_size, self.water_level

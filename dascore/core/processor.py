@@ -135,30 +135,10 @@ class PatchProcessor(DascoreBaseModel):
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
-    method. It then runs in any number of windows of
-    [`Patch.window`](`dascore.Patch.window`) at once; without it each
-    window's plan is worked out to check, and beyond 1000 windows the
-    operation is refused.
-
-    Each subclass is registered under `name` (snake case of the class name
-    unless set). One of DASCore's own is reached through a method of that
-    name, written in the body of `Patch` or, for an operation with no
-    kernel, `PatchMeta`:
-
-        def scale(self, factor: float = 2.0) -> Self:
-            '''Multiply the data by a factor.'''
-            return Scale(factor=factor).run(self)
-
-    A real method is one a type checker, an IDE and `help` can all read,
-    which a synthesized function is not, and `-> Self` is what `run`
-    promises: metadata comes back metadata and a subclass comes back a
-    subclass. Every field must appear among its parameters; the method may
-    take more, since a body may resolve something before building the
-    instance. `cls.patch_function` is that method, and carries the class's
-    docstring: the parameters, notes and examples are written once, with
-    the class. A class with `name = None` has no method and is registered
-    nowhere, and a class outside DASCore declares a staticmethod of that
-    name itself, taking the patch positionally.
+    method, or writes a `position_free(self)` method where its arguments
+    decide. Only such an operation runs in the windows of
+    [`Patch.window`](`dascore.Patch.window`), where one plan is worked out
+    and run in every window.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -175,10 +155,11 @@ class PatchProcessor(DascoreBaseModel):
     data_type: ClassVar[str | None] = None
     # Whether `get_metadata` returns the same plan wherever the patch's
     # coordinates start, as one which reads only axes, lengths, steps and
-    # units does. It lets the operation run in the windows of `Patch.window`
-    # without each window's plan being worked out to check. Read from the
+    # units does. Only such an operation runs in the windows of
+    # `Patch.window`, where one plan is run in every window. Read from the
     # class which writes `get_metadata`, so a subclass which overrides the
-    # method says so again.
+    # method says so again. An operation whose arguments decide it writes
+    # a method of this name instead, which is given the instance.
     position_free: ClassVar[bool] = False
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
@@ -244,12 +225,14 @@ class PatchProcessor(DascoreBaseModel):
             kwargs = {**given, **kwargs}
         super().__init__(**kwargs)
 
-    @classmethod
-    def _is_position_free(cls) -> bool:
+    def _is_position_free(self) -> bool:
         """Whether the plan is known not to depend on where coordinates start."""
-        owner = next(x for x in cls.__mro__ if "get_metadata" in x.__dict__)
+        owner = next(x for x in type(self).__mro__ if "get_metadata" in x.__dict__)
         # The base plans nothing, which no position can change.
-        return owner is PatchProcessor or bool(owner.__dict__.get("position_free"))
+        if owner is PatchProcessor:
+            return True
+        declared = owner.__dict__.get("position_free", False)
+        return bool(declared(self) if callable(declared) else declared)
 
     @property
     def kwargs(self) -> dict[str, Any]:

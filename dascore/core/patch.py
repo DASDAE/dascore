@@ -979,16 +979,19 @@ class Patch(NamespaceOwner, PatchMeta):
         - A window chosen here changes the result: the mean of each window
           is not the mean of the patch, and an operation run in each window
           and blended is not that operation run on the patch.
-        - A patch operation can run in a window if it is written as a
-          [`PatchProcessor`](`dascore.core.processor.PatchProcessor`),
-          gives back a window of the same shape and coordinates, takes no
-          other patch, does not settle its result from the data it
-          computed, and does the same thing wherever its window sits; the
-          window must also fit inside its dimension. Anything else is
+        - One plan is worked out for the operation, from the first window,
+          and run in every window. A patch operation can therefore run in a
+          window only if it acts relative to its window, which its class
+          states (see [`Windowed`](`dascore.proc.window.Windowed`)); it
+          must also be written as a
+          [`PatchProcessor`](`dascore.core.processor.PatchProcessor`), give
+          back a window of the same shape and coordinates, take no other
+          patch, and not settle its result from the data it computed, and
+          the window must fit inside its dimension. Anything else is
           refused before any data are touched; a function given to `apply`
-          has no such limits. See
-          [`Windowed`](`dascore.proc.window.Windowed`) for how an
-          operation says the last, and what is done for one which does not.
+          has no such limits.
+        - On an array backend other than NumPy an operation in a window
+          is run and blended on that backend.
         - On a lazy patch an operation in a window needs only the windows
           a chunk overlaps, so a windowed dimension is computed in pieces
           even where the operation alone would need it whole. `apply` and

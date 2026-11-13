@@ -338,6 +338,12 @@ class TaperRange(_Envelope):
 
     model_config = ConfigDict(extra="allow")
 
+    def position_free(self) -> bool:
+        """Whether the plan ignores where the coordinates start."""
+        # Values measured from the start of a coordinate are the same in
+        # every window; absolute ones name a place only some windows hold.
+        return bool(self.relative)
+
     def get_metadata(self, meta):
         """Return the envelope, shaped to broadcast along its axis."""
         dim, ax, values = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]
