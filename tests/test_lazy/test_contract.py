@@ -12,7 +12,13 @@ import pytest
 import dascore as dc
 import dascore.lazy
 from dascore.exceptions import IncompatiblePatchError, LazyOperationError
-from dascore.lazy.contract import ChunkContract, Pointwise, Unchanged
+from dascore.lazy.contract import (
+    ChunkContract,
+    Halo,
+    Pointwise,
+    Unchanged,
+    Window,
+)
 
 
 class TestContracts:
@@ -30,6 +36,38 @@ class TestContracts:
     def test_kinds_differ(self):
         """A no-op is not pointwise, nor the other way round."""
         assert Pointwise() != Unchanged()
+
+
+class TestNeeds:
+    """Which box of the input each contract reads for a box of the output."""
+
+    box = (slice(10, 20), slice(2, 4))
+
+    def test_halo_stops_at_the_ends(self):
+        """Nothing is read from beyond the array."""
+        halo = Halo({0: (50, 50), 1: (1, 1)})
+        assert halo.needs(self.box, (25, 4)) == (slice(0, 25), slice(1, 4))
+
+    @pytest.mark.parametrize(
+        "index, start",
+        ((slice(None), 0), (slice(5, None), 5), (slice(-30, -1), 70), (slice(7, 9), 7)),
+    )
+    def test_window_moves(self, index, start):
+        """The box is moved by where the window starts, however it is spelled."""
+        window = Window((index, slice(None)))
+        found = window.needs((slice(0, 2), slice(2, 4)), (100, 5))
+        assert found == (slice(start, start + 2), slice(2, 4))
+
+
+class TestApply:
+    """Computing a box of the output from the input it needs."""
+
+    def test_trims_what_was_grown(self):
+        """The kernel's result is cut back to the box wanted."""
+        data = np.arange(14.0).reshape(7, 2)
+        box, needed = (slice(5, 8), slice(0, 2)), (slice(3, 10), slice(0, 2))
+        out = Halo({0: (2, 2)}).apply(lambda x: x * 2, data, box, needed)
+        assert np.array_equal(out, data[2:5] * 2)
 
 
 class TestHook:
