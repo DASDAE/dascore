@@ -894,9 +894,9 @@ FREE_CALLS = {
     "Whiten": lambda x: x.whiten(smooth_size=5, time=None),
     "Roll": lambda x: x.roll(time=5, samples=True),
     "SlopeFilter": lambda x: x.slope_filter(filt=(2e3, 2.2e3, 8e3, 2e4)),
-    "Stalta": lambda x: x.stalta(time=(0.05, 0.3)),
     "Kurtosis": lambda x: x.kurtosis(time=0.1),
     "VelocityToStrainRate": lambda x: x.velocity_to_strain_rate(),
+    "RadiansToStrain": lambda x: x.radians_to_strain(gauge_length=10),
     "Where": lambda x: x.where(np.True_),
     # These three say so only for values measured from a coordinate's start.
     "LineMute": lambda x: x.line_mute(time=(0.1, 0.2)),
@@ -935,6 +935,13 @@ class _Captures:
         )
 
 
+def _for_operation(patch, name: str):
+    """The patch with the attrs a declared operation asks for."""
+    if name == "RadiansToStrain":
+        return patch.update_attrs(data_units="radians")
+    return patch.update_attrs(data_type="velocity")
+
+
 def _same_plan(one, other) -> bool:
     """Whether two plans hold the same values, exactly, arrays included."""
     if isinstance(one, dict) and isinstance(other, dict):
@@ -965,8 +972,9 @@ class TestPositionFree:
             # Steps which no float holds exactly, so rounding has its say.
             floats = np.arange(patch.shape[1]) * 0.004 + 1e6 / 3
             patch = patch.update_coords(time=floats)
+        patch = _for_operation(patch, name)
         operation = FREE_CALLS[name](_Captures(patch))
-        assert operation._is_position_free()
+        assert operation._is_position_free(("time",))
         meta = patch.drop_data()
         plans = []
         for start in (0, 37, 250, 251, 999, 1400, 1899):
@@ -977,11 +985,13 @@ class TestPositionFree:
     @pytest.mark.parametrize("name", FREE_CALLS)
     def test_declared_runs_in_a_window(self, patch, name):
         """Each declared operation is run in windows and gives a patch back."""
-        patch = patch.update_attrs(data_type="velocity")
+        patch = _for_operation(patch, name)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             out = FREE_CALLS[name](patch.window(time=100, samples=True))
         assert out.shape == patch.shape
+        # Blended, and not a window of nothing: a value for every sample.
+        assert not np.isnan(np.abs(out.data)).any()
 
     def test_who_is_free(self):
         """One which plans nothing is; one which overrides the plan says again."""
@@ -1000,11 +1010,27 @@ class TestPositionFree:
                 """Return the parent's plan."""
                 return super().get_metadata(meta)
 
-        assert Planless()._is_position_free()
-        assert dc.proc.Detrend(dim="time")._is_position_free()
-        assert Envelope(dim="time")._is_position_free()
-        assert not Overridden(dim="time")._is_position_free()
-        assert not _Sized()._is_position_free()
+        class Mistaken(_Sized):
+            """An operation whose declaration is no plain method."""
+
+            name = None
+
+            @property
+            def position_free(self):
+                """Return False, which a property is not asked for."""
+                return False
+
+            def get_metadata(self, meta):
+                """Return the parent's plan."""
+                return super().get_metadata(meta)
+
+        dims = ("time",)
+        assert Planless()._is_position_free(dims)
+        assert dc.proc.Detrend(dim="time")._is_position_free(dims)
+        assert Envelope(dim="time")._is_position_free(dims)
+        assert not Overridden(dim="time")._is_position_free(dims)
+        assert not _Sized()._is_position_free(dims)
+        assert not Mistaken()._is_position_free(dims)
 
     def test_undeclared_is_refused(self, patch):
         """An operation which does not say so is not run, however few windows."""
@@ -1015,8 +1041,19 @@ class TestPositionFree:
         """Values from a coordinate's start are every window's; absolute are not."""
         window = patch.window(time=100, samples=True)
         assert window.line_mute(time=(0.1, 0.2)).shape == patch.shape
-        with pytest.raises(ParameterError, match="setting position_free"):
+        with pytest.raises(ParameterError, match="relative=True"):
             window.line_mute(time=(0.1, 0.2), relative=False)
+        # A place along a dimension which is not windowed is every window's.
+        far = patch.get_coord("distance").values[[10, 20]]
+        out = window.line_mute(distance=tuple(far), relative=False)
+        assert out.shape == patch.shape
+
+    def test_frequencies_are_places(self, patch):
+        """A patch already transformed is weighted by where its frequencies are."""
+        spectrum = patch.dft(("time", "distance"))
+        window = spectrum.window(ft_time=100, samples=True)
+        with pytest.raises(ParameterError, match="setting position_free"):
+            window.slope_filter(filt=(2e3, 2.2e3, 8e3, 2e4))
 
     def test_many_windows(self):
         """A declared operation is one plan, whatever the number of windows."""
@@ -1098,13 +1135,48 @@ class TestOtherBackends:
         assert out.backend == library and _values(out).dtype == expected.dtype
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
 
-    def test_operation_without_the_library_converts_a_window(self, patch, library):
-        """Only the operation with no implementation falls back, and says so."""
+    def test_operation_without_the_library_converts_once(
+        self, patch, library, monkeypatch
+    ):
+        """An operation with no implementation is converted for whole, and says so."""
+        calls = []
+        original = window_module.to_numpy
+        monkeypatch.setattr(
+            window_module, "to_numpy", lambda x: calls.append(1) or original(x)
+        )
         expected = patch.window(time=100, samples=True).detrend("time")
         with pytest.warns(NumpyFallbackWarning, match="detrend has no"):
             out = _on(patch, library).window(time=100, samples=True).detrend("time")
-        assert out.backend == library
+        # Once, not once for each of the 39 windows.
+        assert out.backend == library and len(calls) == 1
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
+
+    def test_dask_keeps_its_chunks(self, patch, library):
+        """The result is chunked as the data were, not once for each window."""
+        if library != "dask":
+            pytest.skip("only dask has chunks")
+        there = _on(patch, library)
+        out = there.window(time=100, distance=30, samples=True).abs()
+        assert out.data.chunks == there.data.chunks
+
+    def test_operation_which_needs_its_axis_whole(self, patch, library):
+        """A window is one piece along its axes, as a transform asks of dask."""
+        expected = patch.window(time=100, samples=True).whiten(time=None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = _on(patch, library).window(time=100, samples=True).whiten(time=None)
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
+
+    @pytest.mark.parametrize("fill", (2.5, np.float32(2.5)), ids=("plain", "numpy"))
+    @pytest.mark.parametrize("dtype", ("int8", "uint8", "bool"))
+    def test_fill_on_small_integers(self, patch, library, fill, dtype):
+        """A fill the data cannot hold widens them on any library."""
+        small = patch.new(data=(patch.data > 0).astype(dtype))
+        window = {"time": 100, "samples": True, "fill": fill}
+        expected = small.window(**window).real()
+        out = _on(small, library).window(**window).real()
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-3)
 
     def test_kernel_which_changes_the_shape(self, patch, library):
         """A kernel which does not keep the shape it stated is caught here too."""

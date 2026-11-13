@@ -322,6 +322,9 @@ class RadiansToStrain(PatchProcessor):
     stress_constant: float = 0.79
     refractive_index: float | None = None
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return strain metadata and the factor for phase units."""
         # Normalize prefixed and aliased units (mrad, Radians) to rad.

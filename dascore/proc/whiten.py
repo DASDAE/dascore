@@ -143,8 +143,12 @@ class Whiten(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
-    # The plan never reads where the coordinates start.
-    position_free = True
+    def position_free(self, dims) -> bool:
+        """Whether the plan ignores where the coordinates of `dims` start."""
+        # From a patch in time and distance the plan is made of steps and
+        # lengths. One already transformed is weighted by its frequencies
+        # themselves, which a window along a frequency does not all hold.
+        return not any(x.startswith("ft_") for x in dims)
 
     def get_metadata(self, meta):
         """Return the whitened metadata, and the transforms, smoothing and taper."""

@@ -31,6 +31,8 @@ from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
     backend_name,
+    to_numpy,
+    warn_numpy_fallback,
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
@@ -290,8 +292,8 @@ class Windowed(PatchProcessor):
       must fit inside its dimension.
     - On an array backend other than NumPy the windows are cut, run and
       blended on that backend. Only an operation with no implementation
-      for it is converted through NumPy, a window at a time, as the
-      `numpy_fallback` warning says.
+      for it is converted through NumPy, the whole array at once as it is
+      outside a window, with a `NumpyFallbackWarning` naming it.
     - An operation which only changes metadata leaves the data as they are.
     - On a lazy patch an output chunk needs only the windows which overlap
       it, so a windowed dimension can be cut even where the operation
@@ -452,12 +454,14 @@ class Windowed(PatchProcessor):
         check_patch_attrs(tile, operation.required_attrs)
         made, inner = self._planned(tile)
         self._check_made(tile, made)
-        if not operation._is_position_free():
+        if not operation._is_position_free(window.dims):
             self._refuse(
                 "it does not say that it does the same thing wherever a window "
                 "sits, which a class says by setting position_free. One plan "
                 "is worked out and run in every window, so an operation which "
-                "reads where its coordinates start has no place in one."
+                "reads where its coordinates start has no place in one; one "
+                "given coordinate values may take them from the start of its "
+                "window with relative=True."
             )
         lazy = meta.backend == LAZY_BACKEND
         plan = {
@@ -532,9 +536,20 @@ class Windowed(PatchProcessor):
         not every array library allows.
         """
         operation = self.operation
-        kernel = type(operation).kernel_for(backend_name(data))
+        backend = backend_name(data)
+        kernel = type(operation).kernel_for(backend)
         if kernel is None:
             return data
+        where = {"axes": axes, "size": size, "stride": stride, "length": length}
+        if (name := getattr(kernel, "_converts", None)) is not None:
+            # The operation has nothing for this backend and goes through
+            # NumPy. Once, for the whole array: a window at a time, a lazy
+            # backend would compute what its windows share again for each.
+            warn_numpy_fallback(name, backend, skip_dascore=True)
+            out, made = self._blend(to_numpy(data), inner=inner, tiles=tiles, **where)
+            if not quiet:
+                _warn_if_integers(made, out.dtype)
+            return asarray_like(out, data)
         xp = array_namespace(data)
         plan = get_tile_plan(length, size, stride)
         tiles = tiles or tuple((0, count) for count in plan.grid)
@@ -542,9 +557,11 @@ class Windowed(PatchProcessor):
         tail = tuple(range(-ndim, 0))
         moved = xp.moveaxis(data, axes, tail)
         fill = 0 if self.fill is None else self.fill
+        # A plain number, which every array library takes.
+        fill = fill.item() if isinstance(fill, np.generic) else fill
         if fill != 0:
             wide = fill_dtype(_as_numpy_dtype(moved.dtype), fill)
-            moved = xp.astype(moved, asarray_like(np.empty(0, wide), moved).dtype)
+            moved = xp.astype(moved, _dtype_on(moved, wide))
         # A window reaching beyond the array holds the fill there: the data
         # are lengthened at each end by a block of it.
         spans = zip(tiles, size, stride, plan.margin, length, strict=True)
@@ -560,44 +577,53 @@ class Windowed(PatchProcessor):
             moved = xp.concat([x for x in blocks if x is not None], axis=level - ndim)
             extent.append(high - low)
             inside.append(slice(before, high - low - after))
+        if hasattr(moved, "rechunk"):
+            # A dask window is one chunk along the axes it was cut on: an
+            # operation may need its axis whole, as a transform does.
+            moved = moved.rechunk(dict.fromkeys(tail, -1))
         overlap = tuple(z - step for z, step in zip(size, stride, strict=True))
         analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
-        made, dtype = {}, None
-        for index in product(*(range(first, last) for first, last in tiles)):
-            starts = ((k - t[0]) * step for k, t, step in zip(index, tiles, stride))
-            pick = (..., *(slice(at, at + z) for at, z in zip(starts, size)))
-            tile = moved[pick]
-            if analysis is not None:
-                tile = _weighted(xp, tile, analysis)
-            tile = xp.moveaxis(tile, tail, axes)
-            out = kernel(operation, tile, **inner)
-            if tuple(out.shape) != tuple(tile.shape):
-                name = type(operation).__name__
-                msg = (
-                    f"{name} computed a window of shape {tuple(out.shape)} from "
-                    f"one of {tuple(tile.shape)}; its get_metadata stated the "
-                    "same shape."
-                )
-                raise PatchError(msg)
-            dtype = _as_numpy_dtype(out.dtype)
-            made[index] = _weighted(xp, xp.moveaxis(out, axes, tail), synthesis)
         # Windows a whole number of colours apart never share a sample, so
-        # each such class is laid out with nothing between its windows, and
-        # the classes are added: in one order always, by where each window
-        # sits in the array, so a sample's windows are summed the same way
-        # however the array was cut.
-        classes: dict[tuple, dict] = {}
-        for index, tile in made.items():
+        # each such class is run, laid out with nothing between its windows,
+        # and added to the rest before the next is begun: little more than
+        # the result is ever held. The classes go in one order always, by
+        # where each window sits in the array, so a sample's windows are
+        # summed the same way however the array was cut.
+        classes: dict[tuple, list] = {}
+        for index in product(*(range(first, last) for first, last in tiles)):
             colour = tuple(k % c for k, c in zip(index, plan.colours, strict=True))
-            classes.setdefault(colour, {})[index] = tile
-        total = None
+            classes.setdefault(colour, []).append(index)
+        total, dtype = None, None
         for colour in sorted(classes):
-            laid = _laid_out(xp, classes[colour], tiles, size, stride, extent)
+            made = {}
+            for index in classes[colour]:
+                starts = ((k - t[0]) * s for k, t, s in zip(index, tiles, stride))
+                pick = (..., *(slice(at, at + z) for at, z in zip(starts, size)))
+                tile = moved[pick]
+                if analysis is not None:
+                    tile = _weighted(xp, tile, analysis)
+                tile = xp.moveaxis(tile, tail, axes)
+                out = kernel(operation, tile, **inner)
+                if tuple(out.shape) != tuple(tile.shape):
+                    name = type(operation).__name__
+                    msg = (
+                        f"{name} computed a window of shape {tuple(out.shape)} "
+                        f"from one of {tuple(tile.shape)}; its get_metadata "
+                        "stated the same shape."
+                    )
+                    raise PatchError(msg)
+                dtype = _as_numpy_dtype(out.dtype)
+                made[index] = _weighted(xp, xp.moveaxis(out, axes, tail), synthesis)
+            laid = _laid_out(xp, made, tiles, size, stride, extent)
             total = laid if total is None else total + laid
+            # Let go before the next class is run.
+            made = laid = None
         assert total is not None and dtype is not None  # an axis has a window
         if not quiet:
             _warn_if_integers(dtype, _as_numpy_dtype(total.dtype))
-        return xp.moveaxis(total[(..., *inside)], tail, axes)
+        out = xp.moveaxis(total[(..., *inside)], tail, axes)
+        # Back in the chunks a dask array came in, not one for each window.
+        return out.rechunk(data.chunks) if hasattr(out, "rechunk") else out
 
     def _blend(self, data, *, axes, size, stride, length, inner, tiles):
         """Return the blended windows, and the dtype the operation made."""
@@ -656,8 +682,17 @@ def _weighted(xp, array, weights: np.ndarray):
     weights = _taper_like(weights, like)
     wide = np.result_type(like, weights)
     if wide != like.dtype:
-        array = xp.astype(array, asarray_like(np.empty(0, wide), array).dtype)
+        array = xp.astype(array, _dtype_on(array, wide))
     return array * asarray_like(weights.astype(wide, copy=False), array)
+
+
+def _dtype_on(array, dtype: np.dtype):
+    """Return a NumPy dtype as the dtype of an array's own library."""
+    try:
+        return asarray_like(np.empty(0, dtype), array).dtype
+    except (TypeError, ValueError):
+        # A library without half precision is given single.
+        return asarray_like(np.empty(0, np.result_type(dtype, np.float32)), array).dtype
 
 
 def _block(xp, like, axis: int, length: int, fill):

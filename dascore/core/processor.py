@@ -43,6 +43,7 @@ import numbers
 import sys
 import textwrap
 import warnings
+from collections.abc import Sequence
 from contextvars import ContextVar
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -135,10 +136,31 @@ class PatchProcessor(DascoreBaseModel):
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
-    method, or writes a `position_free(self)` method where its arguments
-    decide. Only such an operation runs in the windows of
+    method. Where its arguments decide, it writes a method instead,
+    `position_free(self, dims)`, given the dimensions whose start may move.
+    Only such an operation runs in the windows of
     [`Patch.window`](`dascore.Patch.window`), where one plan is worked out
     and run in every window.
+
+    Each subclass is registered under `name` (snake case of the class name
+    unless set). One of DASCore's own is reached through a method of that
+    name, written in the body of `Patch` or, for an operation with no
+    kernel, `PatchMeta`:
+
+        def scale(self, factor: float = 2.0) -> Self:
+            '''Multiply the data by a factor.'''
+            return Scale(factor=factor).run(self)
+
+    A real method is one a type checker, an IDE and `help` can all read,
+    which a synthesized function is not, and `-> Self` is what `run`
+    promises: metadata comes back metadata and a subclass comes back a
+    subclass. Every field must appear among its parameters; the method may
+    take more, since a body may resolve something before building the
+    instance. `cls.patch_function` is that method, and carries the class's
+    docstring: the parameters, notes and examples are written once, with
+    the class. A class with `name = None` has no method and is registered
+    nowhere, and a class outside DASCore declares a staticmethod of that
+    name itself, taking the patch positionally.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -159,7 +181,8 @@ class PatchProcessor(DascoreBaseModel):
     # `Patch.window`, where one plan is run in every window. Read from the
     # class which writes `get_metadata`, so a subclass which overrides the
     # method says so again. An operation whose arguments decide it writes
-    # a method of this name instead, which is given the instance.
+    # a method of this name instead, `position_free(self, dims)`, given the
+    # dimensions whose start may move.
     position_free: ClassVar[bool] = False
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
@@ -225,14 +248,21 @@ class PatchProcessor(DascoreBaseModel):
             kwargs = {**given, **kwargs}
         super().__init__(**kwargs)
 
-    def _is_position_free(self) -> bool:
-        """Whether the plan is known not to depend on where coordinates start."""
+    def _is_position_free(self, dims: Sequence[str]) -> bool:
+        """
+        Whether the plan is known not to depend on where `dims` start.
+
+        Only True itself, or a plain method which answers True, says so:
+        anything else a class has under the name says nothing.
+        """
         owner = next(x for x in type(self).__mro__ if "get_metadata" in x.__dict__)
         # The base plans nothing, which no position can change.
         if owner is PatchProcessor:
             return True
         declared = owner.__dict__.get("position_free", False)
-        return bool(declared(self) if callable(declared) else declared)
+        if isinstance(declared, FunctionType):
+            return declared(self, tuple(dims)) is True
+        return declared is True
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -1104,7 +1134,12 @@ def _via_numpy(numpy_kernel, name: str):
         # Handed back unchanged is still "nothing to do".
         return data if result is numpy_data else _back_to(result, data)
 
-    return run_on_numpy
+    # Says that this is a conversion and not the backend's own kernel, and
+    # under what name the conversion is warned of. `Any`, because the
+    # attribute is one a plain function lacks.
+    out: Any = run_on_numpy
+    out._converts = name
+    return out
 
 
 def _back_to(result, like):

@@ -58,9 +58,6 @@ class Stalta(PatchProcessor):
     _positional_fields = ()
     data_type = "stalta"
 
-    # The plan never reads where the coordinates start.
-    position_free = True
-
     def get_metadata(self, meta):
         """Return the ratio's metadata, and each window and how it is rolled."""
         dim, (sta, lta) = check_filter_kwargs(self.model_extra or {})
