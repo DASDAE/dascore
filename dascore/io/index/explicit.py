@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from functools import partial
 from typing import Any
 
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import derived_catalog
-from dascore.utils.chunk_plan import (
-    _ensure_patch_row,
-    _trim_explicit,
-    build_subdivision_plan,
-    refuse_riders,
-)
-from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
+from dascore.utils.chunk_plan import _ensure_patch_row, window_plan
+from dascore.utils.explicit_ranges import ExplicitRanges
 
 
 class _SchemaBackend:
@@ -63,26 +57,7 @@ class ExplicitSelectCatalog:
                 return self._cached
             source = _ensure_patch_row(self.parent.to_df().reset_index(drop=True))
             assert source["_patch_row"].is_unique, "catalog rows must be unique"
-            by_id = source.set_index("_patch_row", drop=False)
-            refuse_riders(self.ranges, source)
-            first = next(iter(self.ranges))
-            boxes = list(zip(*(x.rows for x in self.ranges.values()), strict=True))
-            frames = [
-                self.parent.select(
-                    _coords={x: b for x, b in zip(self.ranges, box) if b != (None,) * 2}
-                ).to_df()["_patch_row"]
-                for box in boxes
-            ]
-            selected = by_id.loc[[x for frame in frames for x in frame]]
-            selected = selected.reset_index(drop=True)
-            spans = selected[[f"{first}_min", f"{first}_max"]].to_numpy()
-            plan = build_subdivision_plan(selected, [[tuple(x)] for x in spans], first)
-            plan.members["_modified"] = False  # whole rows, even a NaN span
-            # Identity is bookkeeping, never a patch attribute.
-            plan.outputs["_request_row"] = [n for n, x in enumerate(frames) for _ in x]
-            lookup = partial(known_coordinates, self.parent)
-            plan.params.update(keep_partial=True, on_incomplete="ignore")
-            plan = _trim_explicit(plan, selected, self.ranges, lookup, strict=True)
+            plan = window_plan(source, self.ranges, self.parent)
             catalog = derived_catalog(
                 source_rows=source,
                 plan=plan,

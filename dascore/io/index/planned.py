@@ -61,8 +61,8 @@ from dascore.utils.chunk_plan import (
     grid_fits,
     patch_local_adjusted_envelopes,
 )
-from dascore.utils.explicit_ranges import _select_manager, _source_manager
 from dascore.utils.misc import is_range
+from dascore.utils.misc import stated_units as _stated_units
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     SOURCE_RANGE_ENDS,
@@ -80,18 +80,6 @@ _READ_KWARGS = ("path", "file_format", "file_version")
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
-
-
-def _stated_units(value) -> str | None:
-    """Return a unit string, or None when the row states none.
-
-    Row values arrive from dataframes, so an absent unit is NaN rather
-    than None — and NaN never equals itself, which would make an unstated
-    unit look like a mismatch.
-    """
-    if value is None or pd.isnull(value) or value == "":
-        return None
-    return str(value)
 
 
 def _source_units_column(name: str) -> str:
@@ -707,7 +695,6 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         output_rows: pd.DataFrame | None = None,
-        anchor_rows: pd.DataFrame | None = None,
         trim_dims: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
@@ -749,11 +736,6 @@ class PlanResolver(PatchResolver):
         self._output_rows: dict[int, Mapping] = {}
         # a sibling's coordinates per output which has none of its own
         self._fill_coords: dict[int, CoordManager] = {}
-        self._anchor_rows = (
-            {}
-            if anchor_rows is None
-            else {row["_patch_row"]: row for row in anchor_rows.to_dict("records")}
-        )
         if merge_kwargs.get("fill_value") is not None and output_rows is not None:
             self._output_rows = {
                 int(row["output_id"]): row for row in output_rows.to_dict("records")
@@ -788,6 +770,7 @@ class PlanResolver(PatchResolver):
             sources_unchanged=self._sources_unchanged,
             trim_dims=self.trim_dims,
             aux_coords=bool(self.aux_coords),
+            stamped=self.stamped,
         )
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
@@ -1027,10 +1010,7 @@ class PlanResolver(PatchResolver):
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         fill_value = self.merge_kwargs.get("fill_value")
         fill_row = self._output_rows.get(output_id) if fill_value is not None else None
-        can_fill = fill_row is not None and (
-            "_request_row" not in fill_row
-            or not pd.isnull(fill_row.get(f"{self.dim}_step"))
-        )
+        can_fill = fill_row is not None
         if not len(members):
             # only a fill plan publishes an output no source feeds
             assert fill_row is not None, "no plan members found for output row"
@@ -1079,27 +1059,8 @@ class PlanResolver(PatchResolver):
         those; an envelope cannot restate an arbitrary array, and the
         frame holds every numeric one as float. Outputs are numbered in
         order, so the nearest fed one is a neighbour in the same
-        partition. File, live, and nested-plan anchors supply coordinate
-        metadata; unsupported sources use the loader as a fallback.
+        partition.
         """
-        output = self._output_rows.get(output_id, {})
-        anchor_id = output.get("_anchor_patch_row")
-        if anchor_id is not None and anchor_id in self._anchor_rows:
-            if output_id not in self._fill_coords:
-                anchor = self._anchor_rows[anchor_id]
-                coords = _source_manager(self.loader, anchor)
-                if coords is not None:
-                    coords = _select_manager(coords, self.parent_residuals)
-                if coords is None:
-                    # Unsupported metadata sources still have a patch loader.
-                    coords = self._load_member({**anchor, "_modified": False}).coords
-                # Fill bounds use the plan's unit, while either anchor path
-                # can return coordinates in the source's native unit.
-                units = _stated_units(output.get(f"_{self.dim}_units"))
-                if units is not None:
-                    coords = coords.convert_units(**{self.dim: units})
-                self._fill_coords[output_id] = coords
-            return self._fill_coords[output_id]
         ids = self.member_rows["output_id"].to_numpy()
         assert len(ids), "a fill plan with no members anywhere has no structure"
         nearest = int(ids[np.argmin(np.abs(ids - output_id))])
@@ -1306,27 +1267,17 @@ def derived_catalog(
     )
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
-    anchors = (
-        sources[sources["_patch_row"].isin(plan.outputs["_anchor_patch_row"])]
-        if "_anchor_patch_row" in plan.outputs
-        else None
-    )
     loader = CompositeResolver()
     if parent is not None:
         member_paths = set(
             member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
         )
-        if anchors is not None:
-            member_paths.update(
-                anchors.get("source_path", pd.Series(dtype=str)).astype(str)
-            )
         loader.absorb(parent.resolver, paths=member_paths)
         loader.file._upaths.update(upaths)
         # a directory's members read under the decode it scanned them with
-        rows = member_rows if anchors is None else pd.concat([member_rows, anchors])
         columns = ["source_path", "source_format", "source_version"]
-        if set(columns) <= set(rows.columns):
-            stated = rows[columns].drop_duplicates().itertuples(index=False)
+        if set(columns) <= set(member_rows.columns):
+            stated = member_rows[columns].drop_duplicates().itertuples(index=False)
             loader.file.hold_decodes(directory_decodes(parent.resolver, stated))
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # a coordinate riding a dimension it is not named for, on any member,
@@ -1347,7 +1298,6 @@ def derived_catalog(
         stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
         output_rows=plan.outputs,
-        anchor_rows=anchors,
         trim_dims=plan.trim_dims,
     )
     backend = get_backend(":memory:")
@@ -1369,9 +1319,7 @@ def derived_catalog(
         source_trimmed=_trimmed_dims(parent_residuals, coord_dims_map),
     )
     if merge_kwargs.get("fill_value") is not None:
-        aux_info = _aux_info_for_unfed(
-            aux_info, outputs, sources, name, coord_dims_map, trimmed_dims, trims
-        )
+        aux_info = _aux_info_for_unfed(aux_info, outputs, trims)
     outputs = _with_windowed_dims(outputs, aux_info, name)
     records = _output_records(
         outputs,
@@ -1443,42 +1391,18 @@ _CARRIED_RUN_FIELDS = (
 )
 
 
-def _aux_info_for_unfed(
-    aux_info: Mapping,
-    outputs: pd.DataFrame,
-    sources: pd.DataFrame,
-    plan_dim: str,
-    coord_dims_map: Mapping[str, str],
-    trimmed_dims: frozenset[str],
-    members: pd.DataFrame,
-) -> dict:
-    """Describe fill-only outputs from a sibling or their metadata anchor."""
-    out = dict(aux_info)
-    known = np.array(sorted(aux_info))
-    fed = set(members["output_id"])
-    by_id = sources.set_index("_patch_row", drop=False)
-    for row in outputs.to_dict("records"):
-        output_id = int(row["output_id"])
+def _aux_info_for_unfed(aux_info: Mapping, outputs, members) -> dict:
+    """
+    Describe fill-only outputs as their nearest fed sibling, as they load
+    (`PlanResolver._sibling_coords`): its info, if it has any.
+    """
+    out, fed = dict(aux_info), np.unique(members["output_id"].to_numpy(np.int64))
+    for output_id in outputs["output_id"].to_numpy(np.int64):
         # a fed output is described by its members, even with nothing left
-        if output_id in out or output_id in fed:
-            continue
-        anchor_id = row.get("_anchor_patch_row")
-        if anchor_id in by_id.index:
-            anchor = by_id.loc[[anchor_id]].reset_index(drop=True)
-            pseudo = pd.DataFrame([{"output_id": output_id, "_patch_row": anchor_id}])
-            info = _aux_coord_info(
-                anchor, pseudo, plan_dim, coord_dims_map, trimmed_dims
-            )
-            if info:
-                out[output_id] = {
-                    name: value
-                    for name, value in info[output_id].items()
-                    if plan_dim not in value["dims"]
-                }
-                continue
-        if len(known):
-            out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
-    return out
+        if len(fed) and output_id not in fed:
+            nearest = int(fed[np.argmin(np.abs(fed - output_id))])
+            out[int(output_id)] = aux_info.get(nearest, {})
+    return {x: y for x, y in out.items() if y}
 
 
 def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:

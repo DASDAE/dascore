@@ -775,6 +775,8 @@ class PatchAssembler:
     # Whether members carry coordinates the rows cannot rebuild, so the
     # index cannot stand for their patches (it can still size them).
     aux_coords: bool = False
+    # Attrs the plan restates on its output, so members' values never clash.
+    stamped: tuple[str, ...] = ()
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -1096,7 +1098,10 @@ class PatchAssembler:
         )
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(
-            attrs, **attr_kwargs, merge_params=self.merge_kwargs
+            attrs,
+            **attr_kwargs,
+            drop_attrs=self.stamped,
+            merge_params=self.merge_kwargs,
         )
         return new_coord, new_attrs
 

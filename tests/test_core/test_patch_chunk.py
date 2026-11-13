@@ -1051,7 +1051,7 @@ class TestDescendingChunk:
         short = self._member([8, 7, 6], 0.1, -1.0)
         long = self._member([8, 7, 6, 5, 4], 0.2, -1.0)
         spool = dc.spool([short, long])
-        for patch in (spool.chunk(time=None)[0], spool.chunk(time=[[4, 8]])[0]):
+        for patch in (spool.chunk(time=None)[0], spool.cut(time=[[4, 8]])[0]):
             labels = patch.get_coord("time").values
             np.testing.assert_array_equal(labels, np.arange(8.0, 3, -1))
             np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 3 + [0.2] * 2))
@@ -1060,7 +1060,7 @@ class TestDescendingChunk:
         """A window inside an overlap takes it from the higher source."""
         high = self._member([8, 7, 6, 5, 4], 0.1, -1.0)
         low = self._member([7, 6, 5, 4, 3], 0.2, -1.0)
-        patch = dc.spool([low, high]).chunk(time=[[4, 6]])[0]
+        patch = dc.spool([low, high]).cut(time=[[4, 6]])[0]
         labels = patch.get_coord("time").values
         np.testing.assert_array_equal(labels, [6.0, 5.0, 4.0])
         np.testing.assert_allclose(patch.data[0], labels + 0.1)
@@ -2575,7 +2575,7 @@ class TestMergeDimCoords:
         """An explicit window spanning both members concatenates the rider."""
         time = [x.get_coord("time") for x in power_halves]
         window = [(time[0].min(), time[1].max())]
-        out = make_spool(power_halves).chunk(time=window)
+        out = make_spool(power_halves).cut(time=window)
         assert len(out) == 1
         assert set(np.unique(out[0].get_array("power"))) == {1.0, 2.0}
 
@@ -5510,7 +5510,7 @@ class TestChunkMergeRegressions:
             self._seconds_patch(30, 3),
         ]
         window = ORIGIN + np.array([[24, 26]]).astype("timedelta64[s]")
-        chunked = merge_spool(patches).chunk(time=window)
+        chunked = merge_spool(patches).cut(time=window)
         (patch,) = chunked
         np.testing.assert_array_equal(patch.data, [25])
         assert pd.isnull(chunked.get_contents()["time_step"].iloc[0])

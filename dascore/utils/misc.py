@@ -949,6 +949,13 @@ def _spool_map(
     return [x for y in client.map(new_func, spools) for x in y]
 
 
+def stated_units(value) -> str | None:
+    """A unit string from a dataframe value, or None where it states none."""
+    if value is None or pd.isnull(value) or value == "":
+        return None
+    return str(value)
+
+
 def is_range(value) -> bool:
     """True for a 2-tuple range (a ``(start, stop)`` selector)."""
     return isinstance(value, tuple) and len(value) == 2

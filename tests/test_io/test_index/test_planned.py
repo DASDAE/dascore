@@ -381,7 +381,7 @@ class TestWindowedRiders:
         "derive",
         [
             lambda x: x.chunk(distance=50),
-            lambda x: x.chunk(distance=np.array([[10, 20], [50, 55]])),
+            lambda x: x.cut(distance=np.array([[10, 20], [50, 55]])),
             lambda x: x.select(distance=np.array([[10, 20], [50, 55]])),
             lambda x: x.select(sensor=np.array([[1020, 1040], [1100, 1110]])),
         ],
@@ -414,10 +414,49 @@ class TestWindowedRiders:
         """A window in a unit the source does not use keeps its envelopes."""
         feet = sensor_patch.update_coords(distance_min=1000).set_units(distance="ft")
         spool = dc.spool([sensor_patch, feet])
-        out = spool.chunk(distance=np.array([[310, 320]]), conflict="drop")
+        # the feet part joins in metres, a unit its source does not use
+        out = spool.cut(distance=np.array([[290, 320]]) * m, conflict="drop")
         advertised, loaded = _bounds(out.get_contents(), out, "sensor")
-        assert advertised == [(1000.0, 1598.0)]
+        assert advertised[1] == (1000.0, 1598.0)
+        assert loaded[1] == (1000.0, 1098.0)
+        _assert_holds(advertised[:1], loaded[:1])
+        # a window cut converts into each source's own unit, so trims exactly
+        out = spool.cut(distance=np.array([[310, 320]]) * m, conflict="drop")
+        advertised, loaded = _bounds(out.get_contents(), out, "sensor")
         assert loaded == [(1036.0, 1098.0)]
+        _assert_holds(advertised, loaded)
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def halves(self, request, sensor_patch, tmp_path_factory):
+        """The sensor patch split across distance, in memory and in files."""
+        parts = [sensor_patch.select(distance=x) for x in ((0, 149), (150, 299))]
+        if request.param == "memory":
+            return dc.spool(parts)
+        path = tmp_path_factory.mktemp("windowed_halves")
+        for num, part in enumerate(parts):
+            dc.write(part, path / f"half_{num}.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    @pytest.mark.parametrize(
+        "derive",
+        [
+            lambda x: x.cut(distance=np.array([[100, 200], [140, 145]])),
+            lambda x: x.select(distance=np.array([[100, 200], [140, 145]])),
+            lambda x: x.cut(
+                dc.AnnotationSet(
+                    pd.DataFrame({"distance": [100.0, 200.0]}),
+                    dims=("distance", "time"),
+                ),
+                distance=(-10, 10),
+            ),
+        ],
+    )
+    def test_joined_contents_match_patches(self, halves, derive):
+        """Windows joined across sources, or by annotation, advertise their loads."""
+        out = derive(halves)
+        contents = out.get_contents()
+        for name in ("distance", "sensor"):
+            _assert_holds(*_bounds(contents, out, name))
 
 
 class TestRecordOnce:

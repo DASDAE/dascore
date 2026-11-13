@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from dascore.config import config_context
-from dascore.exceptions import ChunkError, ParameterError
+from dascore.exceptions import ParameterError
 from dascore.units import Quantity, convert_units
 from dascore.utils.misc import express_range_for_coord
 
@@ -24,37 +24,40 @@ class ExplicitRanges:
 
 def looks_explicit(value) -> bool:
     """Flag shapes needing explicit validation before ordinary query parsing."""
-    return (isinstance(value, np.ndarray) and value.ndim != 1) or (
+    if isinstance(value, Quantity):  # an (n, 2) array with units
+        return np.ndim(value.magnitude) == 2
+    return (isinstance(value, np.ndarray) and value.ndim > 1) or (
         isinstance(value, list | tuple)
         and (not value or isinstance(value[0], list | tuple | np.ndarray))
     )
 
 
 def explicit_ranges(value) -> ExplicitRanges | None:
-    """Return validated window rows, or None for an existing input form."""
-    if isinstance(value, ExplicitRanges):  # already validated
-        return value
+    """
+    Return validated window rows, or None for an existing input form.
+
+    An open end is None; an infinity opens its own side, so a row holding
+    one keeps its other bound on the far side. Bounds are left in the
+    order given, which `_absolute_bounds` swaps where reversed.
+    """
     if not looks_explicit(value):
         if isinstance(value, np.ndarray) and value.ndim == 1:
             msg = "Explicit ranges must have shape (n, 2), not a 1D array."
             raise ParameterError(msg)
         return None
-    if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            return None
-        candidate = value
-    else:
-        candidate = np.asarray(value, dtype=object)
+    if isinstance(value, Quantity):  # each bound a quantity
+        value = [[x * value.units for x in row] for row in value.magnitude]
+    candidate = np.asarray(
+        value, dtype=None if isinstance(value, np.ndarray) else object
+    )
     if candidate.ndim != 2 or candidate.shape[1] != 2:
         msg = f"Explicit ranges must have shape (n, 2), got {candidate.shape}."
         raise ParameterError(msg)
     rows: list[tuple[object, object]] = []
     for index in range(len(candidate)):
-        low, high = candidate[index, 0], candidate[index, 1]
-        bounds: list[object] = []
-        for bound in (low, high):
-            if isinstance(bound, np.str_):
-                bound = str(bound)
+        bounds, opens = [], []
+        for bound in candidate[index]:
+            bound = str(bound) if isinstance(bound, np.str_) else bound
             if bound is None or bound is Ellipsis:
                 bounds.append(None)  # an open end
                 continue
@@ -62,52 +65,16 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
-            missing = bool(pd.isna(magnitude))  # NaN and NaT, before infinities
-            infinite = not missing and isinstance(magnitude, (int, float, np.number))
-            infinite = infinite and not np.isfinite(magnitude)
-            if infinite and (float(magnitude) > 0) == (not bounds):
-                msg = f"Explicit range row {index} has a reversed infinite bound."
-                raise ParameterError(msg)
-            bounds.append(None if missing or infinite else bound)
-        # a lone closed end is checked against itself; open ends never reverse
-        pair = [x for x in bounds if x is not None]
-        pair = pair * 2 if len(pair) == 1 else pair
-        if pair and isinstance(pair[0], Quantity) == isinstance(pair[1], Quantity):
-            if isinstance(pair[0], Quantity):
-                assert isinstance(pair[1], Quantity)
-                try:
-                    comparable: list[Any] = [
-                        pair[0].magnitude,
-                        cast(Any, pair[1]).to(pair[0].units).magnitude,
-                    ]
-                except Exception as exc:
-                    msg = f"Explicit range row {index} has incompatible bound units."
-                    raise ParameterError(msg) from exc
-            else:
-                comparable = pair
-            if any(isinstance(x, str) for x in comparable) and (
-                all(isinstance(x, str) for x in comparable)
-                or any(isinstance(x, (pd.Timestamp, np.datetime64)) for x in comparable)
-            ):
-                try:
-                    comparable = [pd.Timestamp(cast(Any, x)) for x in comparable]
-                except (TypeError, ValueError) as exc:
-                    msg = (
-                        f"Explicit range row {index} has string bounds which are "
-                        "not parseable datetimes."
-                    )
-                    raise ParameterError(msg) from exc
-            try:
-                reversed_bounds = cast(Any, comparable[0]) > cast(Any, comparable[1])
-            except (TypeError, ValueError) as exc:
-                msg = f"Explicit range row {index} has incomparable bound types."
-                raise ParameterError(msg) from exc
-            if reversed_bounds:
-                msg = (
-                    f"Explicit range row {index} has its lower bound above "
-                    "its upper bound."
-                )
-                raise ParameterError(msg)
+            inf = isinstance(magnitude, float | np.floating) and np.isinf(magnitude)
+            opens += [magnitude > 0] if inf else []
+            bounds.append(None if inf or pd.isna(magnitude) else bound)  # NaN, NaT
+        if len(opens) == 2 and opens[0] == opens[1]:  # one sign twice: nothing
+            msg = f"Explicit range row {index} has two infinities of one sign."
+            raise ParameterError(msg)
+        if opens:  # +inf leaves the row's other bound low, -inf high
+            closed = [x for x in bounds if x is not None] if len(set(opens)) < 2 else []
+            bounds = [*closed, None] if set(opens) == {True} else [None, *closed]
+            bounds = [*bounds, None][:2]
         rows.append((bounds[0], bounds[1]))
     return ExplicitRanges(tuple(rows))
 
@@ -272,19 +239,12 @@ def _planned_manager(plan, row, files=None, projection=None):
     # Patch utilities import spool/chunk planning; defer until plans are read.
     from dascore.utils import patch_assembly as pa  # noqa: PLC0415
 
-    if not recovered:
-        if projected:
-            raise ChunkError("plan output has no members or reconstructable grid")
-        anchor_id = plan._output_rows[int(key)].get("_anchor_patch_row")
-        anchor = plan._anchor_rows.get(anchor_id)
-        coords = (
-            None
-            if anchor is None
-            else _source_manager(plan.loader, anchor, files, projection=projection)
-        )
-        if coords is not None:
-            coords = _select_manager(coords, plan.parent_residuals)
-    elif len(recovered) == 1:
+    if not recovered:  # only fill: its nearest fed sibling's, on this one's grid
+        ids = plan.member_rows["output_id"].to_numpy(np.int64)
+        near = str(ids[np.argmin(np.abs(ids - int(key)))])
+        sibling = {**row, "source_patch_key": near}
+        return _planned_manager(plan, sibling, files, requested_projection)
+    if len(recovered) == 1:
         coords = recovered[0]
     else:
         from dascore.utils.patch import (  # noqa: PLC0415
@@ -303,16 +263,7 @@ def _planned_manager(plan, row, files=None, projection=None):
             warn=False,
             **kwargs,
         )
-    if coords is not None and len(members):
-        coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
-    if coords is None:
-        return None
-    if projected:
-        target = row.get(f"_{plan.dim}_units")
-        current = coords.coord_map[plan.dim].units
-        if target is not None and not pd.isnull(target) and current is not None:
-            if str(current) != str(target):
-                coords = coords.convert_units(**{plan.dim: target})
+    coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
     if plan.merge_kwargs.get("fill_value") is None or plan.dim not in coords.dims:
         return _project_manager(coords, requested_projection)
     # A filled output takes its grid from the output, not its anchor.
