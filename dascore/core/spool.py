@@ -107,6 +107,7 @@ from dascore.utils.chunk_plan import (
     ChunkPlan,
     _drop_patch_local_empty,
     _ensure_patch_row,
+    _normalize_chunk_units,
     _resolve_group_attrs,
     _structural,
     build_chunk_plan,
@@ -136,10 +137,10 @@ from dascore.utils.display import (
 from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
+    ExplicitRanges,
     _select_manager,
     _source_manager,
     explicit_windows,
-    known_coordinates,
     looks_explicit,
 )
 from dascore.utils.misc import (
@@ -230,9 +231,9 @@ def _window_rows(kwargs, present) -> list[dict]:
     """Explicit cut windows as one {dim: bounds} per row, refusing other forms."""
     ranges = explicit_windows(kwargs)
     if not kwargs or set(ranges) != set(kwargs):
+        got = ", ".join(x for x in kwargs if x not in ranges) or "no windows"
         msg = "cut takes an annotation set or (n, 2) windows, eg time=windows; "
-        msg += f"not {', '.join(x for x in kwargs if x not in ranges) or 'nothing'}."
-        raise ParameterError(msg)
+        raise ParameterError(msg + f"got {got}.")
     rows = list(zip(*(x.rows for x in ranges.values())))
     windows = [{x: y for x, y in zip(ranges, row) if y != (None, None)} for row in rows]
     if present and (lacking := {x for window in windows for x in window} - present):
@@ -794,11 +795,11 @@ class Spool(NodeRepr, NamespaceOwner):
             envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
             Specifies query. A coordinate accepts one ``(start, stop)`` range
-            or an ``(n, 2)`` array of absolute ranges (``None``, NaN or NaT
-            is open); arrays on several coordinates need equal row counts,
-            row ``i`` of each forming one box. Rows select independently in
-            input order, so overlaps and duplicates return separate pieces,
-            each row's in its sources' order;
+            or an ``(n, 2)`` array of absolute ranges, in the forms
+            [Spool Chunking](`dascore/docs/notes/spool_chunking.qmd`)
+            lists; row ``i`` of each array forms one box. Rows select
+            independently in input order, each row's pieces in their
+            sources' order, so overlaps and duplicates return separate pieces;
             [`Spool.cut`](`dascore.Spool.cut`) joins each row's pieces.
             Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
@@ -2209,6 +2210,9 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build one plan from this spool's current source rows."""
+        if "on_incomplete" in dim_kwargs:
+            msg = "chunk's on_incomplete was removed with its explicit windows; "
+            raise ParameterError(msg + "Spool.cut keeps incomplete windows' samples.")
         source_rows, working = self._plan_frames(next(iter(dim_kwargs), None))
         plan = build_chunk_plan(working, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
@@ -2680,21 +2684,23 @@ class Spool(NodeRepr, NamespaceOwner):
         Each window is cut from the sources it reaches and joined across
         them as [`chunk`](`dascore.Spool.chunk`) joins, along every
         dimension, so a gap leaves labelled fragments. Windows are either
-        `(n, 2)` arrays (`time=windows`), several pairing row by row, or
-        the features of an annotation set, lone rows included, cut to
+        `(n, 2)` arrays (`time=windows`, in the forms
+        [Spool Chunking](`dascore/docs/notes/spool_chunking.qmd`) lists),
+        or the features of an annotation set, lone rows included, cut to
         their bounds (see `AnnotationSet.bounds`). Bounds include both
         ends, so the sample at an annotation range's (half-open) maximum
-        is kept; an open end (`None`, `...`, NaN, NaT, an infinity) reaches
-        the data's edge. A window skips any patch lacking a dimension it
-        bounds, one holding no samples gives nothing, and overlapping
-        windows duplicate data. Unlike `chunk`'s windows, no window need
-        be complete. Planning reads coordinates but no data arrays, and
-        plans every window at once.
+        is kept. A window skips any patch lacking a dimension it bounds,
+        one holding no samples gives nothing, and overlapping windows
+        duplicate data. Unlike `chunk`'s windows, no window need be
+        complete. Planning reads coordinates but no data arrays.
 
         Each output states, as attrs and `get_contents` columns, its
         `window` (its row) or, cut by annotations, its `feature_id` (blank
         for a lone row) and `annotation` (a lone row's index label, blank
-        for a feature), which join back to the set. Their envelopes are the
+        for a feature), which join back to the set. These are written to
+        files like any attribute, and differ between outputs, so rejoining
+        outputs needs `chunk(..., conflict="drop")`. Patches already
+        carrying a `window` attribute are refused. Envelopes are the
         samples kept, not the window asked for.
 
         Parameters
@@ -2707,12 +2713,13 @@ class Spool(NodeRepr, NamespaceOwner):
             As for `chunk`, along each dimension the windows bound.
         **kwargs
             Without `annotations`, `dim=windows`: an `(n, 2)` array of
-            absolute bounds; quantities convert to each patch's units.
-            With them, `dim=(before, after)`: offsets added to a feature's
-            ends along `dim` which are stated values, `before` (usually
-            negative) to its minimum and `after` to its maximum; range ends
-            are kept. A feature at a single value needs one. Time offsets
-            are timedeltas, strings with units such as "-1s", or seconds.
+            absolute bounds (a dimension named `tolerance` or `max_shift`
+            cannot take one). With them, `dim=(before, after)`: offsets
+            added to a feature's ends along `dim` which are stated values,
+            `before` (usually negative) to its minimum and `after` to its
+            maximum; range ends are kept. A feature at a single value needs
+            one. Time offsets are timedeltas, strings with units such as
+            "-1s", or seconds.
 
         Examples
         --------
@@ -2733,6 +2740,13 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert len(cut) == 1
         """
         present = {x for dims in self._df["dims"] for x in dims.split(",")}
+        if annotations is not None and not isinstance(annotations, dc.AnnotationSet):
+            msg = "cut's windows are keywords, eg cut(time=windows); its only "
+            raise ParameterError(msg + "positional argument is an annotation set.")
+        named = "window" not in self._catalog._stamps and "window" in self._df
+        if annotations is None and named and self._df["window"].notna().any():
+            msg = "Patches carry an attribute named window, which cut labels its "
+            raise ParameterError(msg + "outputs with; rename it before cutting.")
         if annotations is None:
             windows = _window_rows(kwargs, present)
             stamps, dtypes = [(x,) for x in range(len(windows))], {"window": "Int64"}
@@ -2755,18 +2769,14 @@ class Spool(NodeRepr, NamespaceOwner):
             main = min(have, key=lambda x: (-split[x], -counts[x]))
             others = [x for x in have if x != main]
             # pieces never span a hole, so only a window in several needs joins
-            ends = [[windows[i].get(x, (None,) * 2) for i in asks] for x in have]
             arrays = {
-                x: np.array(ends[have.index(x)], dtype=object) for x in [main, *others]
+                x: ExplicitRanges(tuple(windows[i].get(x, (None,) * 2) for i in asks))
+                for x in [main, *others]
             }
             source_rows, working = part._plan_frames(main, *others)
+            working = _normalize_chunk_units(working, main)  # as chunk joins them
 
-            def lookup(rows, dim, part=part, sources=source_rows):
-                """The coordinates of the sources of rows, which lack their paths."""
-                held = sources["_patch_row"].isin(rows["_patch_row"])
-                return known_coordinates(part._catalog, sources[held], dim)
-
-            plan = window_plan(working, explicit_windows(arrays), lookup)
+            plan = window_plan(working, arrays, part._catalog, source_rows)
             if plan.outputs.empty:
                 continue
             asked = np.take(asks, plan.outputs["_request_row"])
@@ -2778,16 +2788,25 @@ class Spool(NodeRepr, NamespaceOwner):
             group = [*_resolve_group_attrs(None, set(out._df)), *dtypes]
             joins = {"tolerance": tolerance, "max_shift": max_shift}
             again = [main] if any(counts[x] for x in others) else []
-            for dim in [main, *others, *again]:
-                # only a window in several pieces has anything to join
-                many = out._df[list(dtypes)].astype(object).duplicated(keep=False)
+            for dim in [main, *others, *again]:  # again: what others made alike
+                # only pieces of one window alike on every other dim can join
+                alike = [f"{x}_{y}" for x in have if x != dim for y in ("min", "max")]
+                keys = out._df[[*dtypes, *alike]].astype(object)
+                many = keys.duplicated(keep=False)
                 if not many.any():
                     continue
-                bounded = joins if counts[dim] else {}
-                joined = out[many.to_numpy()].chunk(
-                    **{dim: None}, group=group, **bounded
-                )
-                out = joined if many.all() else out[~many.to_numpy()] + joined
+                merge: dict[str, Any] = {dim: None, **(joins if counts[dim] else {})}
+                source_rows, rows = out._plan_frames(dim)
+                held = rows["_patch_row"].isin(out._df["_patch_row"][many]).to_numpy()
+                plan = build_chunk_plan(rows[held], group=group, **merge)
+                lone = rows[~held]  # passes through whole, in the same catalog
+                ends = zip(lone[f"{dim}_min"], lone[f"{dim}_max"])
+                kept = build_subdivision_plan(lone, [[x] for x in ends], dim)
+                for x in (kept.outputs, kept.members):
+                    x["output_id"] += len(plan.outputs)
+                stack = lambda x: pd.concat([getattr(plan, x), getattr(kept, x)])  # noqa
+                plan = replace(plan, outputs=stack("outputs"), members=stack("members"))
+                out = out._chunked(source_rows, plan, dtypes=dtypes, lossy=True)
             cuts.append(out)
         if not cuts:
             return self._new_from_catalog(
@@ -2805,9 +2824,6 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _annotation_windows(self, annotations, present, pads) -> tuple[list, list]:
         """An annotation set's windows, as {dim: bounds}, and their stamps."""
-        if any(looks_explicit(x) for x in pads.values()):
-            msg = "cut takes pads with an annotation set, or windows without one."
-            raise ParameterError(msg)
         bounds, closed = annotations._extents()
         for dim, pad in pads.items():
             known = dim in set(annotations.dims) & present

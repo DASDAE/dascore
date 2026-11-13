@@ -265,10 +265,13 @@ assert len(dc.spool([p1]) + dc.spool([p1])) == 1
 
 `chunk` and `chunk_plan` take lengths only, and refuse an `(n, 2)` array of windows. [`Spool.select`](`dascore.Spool.select`) returns each source's part of each window, unjoined, and [`Spool.cut`](`dascore.Spool.cut`) joins each window's parts as `chunk` joins them.
 
-- Each row is one window, inclusive at both ends. `None`, `...`, NaN, NaT, or a signed infinity leaves a bound open at the edge of the data.
+Both take windows in these forms:
+
+- An `(n, 2)` numpy array, nested lists, or a quantity wrapping an `(n, 2)` array (`np.array([[10, 20]]) * m`). Each row is one window, inclusive at both ends.
+- Reversed bounds are swapped (rule 8 of the [coordinate guidelines](coordinates.qmd)). `None`, `...`, NaN, or NaT leaves a bound open at the edge of the data; a signed infinity opens its own side, whichever column holds it.
 - Several dimensions can take arrays with the same number of rows; row `i` of every array forms one box. A row open at both ends spans its dimension, and keeps patches lacking it.
-- Bare numbers are in each patch's own units; quantities convert to them as absolute points.
-- Outputs come in window order, overlapping and duplicate rows included, and each window's parts in coordinate order. An empty `(0, 2)` array gives an empty spool.
+- Bare numbers are in each patch's own units; quantities convert to them as absolute points. On a datetime coordinate, bounds are instants: datetimes, datetime strings, or numbers of seconds since 1970, as `Patch.select` reads them. A timedelta or time quantity there is refused, since it is an offset; add it to a start time.
+- Outputs come in window order, overlapping and duplicate rows included, and each window's parts in their sources' coordinate order. An empty `(0, 2)` array gives an empty spool.
 - No window has to be complete (rule 9 of the [coordinate guidelines](coordinates.qmd)): a window running past the data, or into a gap, keeps the samples it holds, and one holding none gives nothing.
 
 Planning pairs every window with every source in array operations, so thousands of windows plan in seconds. It reads coordinates, never data arrays: a window's samples come from each source's coordinate, which the index states for regular grids and the file states otherwise, and a source whose coordinate is unknown raises `MissingPatchError`.

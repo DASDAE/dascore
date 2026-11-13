@@ -18,9 +18,11 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math
+import numbers
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal
@@ -50,7 +52,11 @@ from dascore.units import (
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import _GRID_SNAP_RTOL, _READ_PAD, get_intervals
 from dascore.utils.docs import compose_docstring
-from dascore.utils.explicit_ranges import ExplicitRanges, explicit_ranges
+from dascore.utils.explicit_ranges import (
+    ExplicitRanges,
+    explicit_ranges,
+    known_coordinates,
+)
 from dascore.utils.gaps import (
     DEFAULT_TOLERANCE,
     GapTolerance,
@@ -3545,37 +3551,40 @@ def _carry_grids(outputs, members, sources, name):
 
 
 def _absolute_bounds(bounds, start, unit, stop):
-    """Express absolute bounds in a row's units; open ends take the edges given."""
+    """Bounds in a row's units, swapped if reversed (rule 8); open: the edges."""
     out = []
-    time = is_datetime64(start)
-    duration = is_timedelta64(start)
+    time, duration = is_datetime64(start), is_timedelta64(start)
     for bound, edge in zip(bounds, (start, stop)):
         if bound is None:
             out.append(edge)
+        elif time and isinstance(bound, Quantity | np.timedelta64 | timedelta):
+            msg = f"Datetime bounds must be absolute instants, got {bound}; "
+            raise ParameterError(msg + "add an offset to a start time instead.")
         elif isinstance(bound, Quantity):
-            if time:
-                msg = f"Datetime bounds must be absolute instants, got {bound}."
-                raise ParameterError(msg)
             target = "s" if duration else (unit or None)
             if target is None:
                 msg = (
                     f"Cannot use quantity bounds on a unitless coordinate: {bounds!r}."
                 )
                 raise UnitError(msg)
-            point = convert_units(
-                bound.magnitude, to_units=target, from_units=bound.units
-            )
+            try:
+                point = convert_units(bound.magnitude, target, bound.units)
+            except UnitError as exc:
+                msg = f"Explicit range {bounds!r} has bounds in incompatible units."
+                raise ParameterError(msg) from exc
             out.append(to_timedelta64(point) if duration else point)
-        elif time:
-            out.append(to_datetime64(bound))
-        elif duration:
-            out.append(to_timedelta64(bound))
+        elif not (time or duration or isinstance(bound, numbers.Real)):
+            msg = f"Explicit range {bounds!r} bounds numbers; strings and datetimes"
+            raise ParameterError(msg + " bound only datetime coordinates.")
+        elif time or duration:
+            try:
+                out.append((to_datetime64 if time else to_timedelta64)(bound))
+            except (TypeError, ValueError) as exc:
+                msg = f"Explicit range {bounds!r} has bounds which are not datetimes."
+                raise ParameterError(msg) from exc
         else:
             out.append(bound)
-    if out[0] > out[1] and all(x is not None for x in bounds):
-        msg = f"Explicit range {bounds!r} has its lower bound above its upper bound."
-        raise ParameterError(msg)
-    return tuple(out)
+    return tuple(out) if out[0] <= out[1] else (out[1], out[0])
 
 
 _OPEN = {  # the ends of an open window, by value family
@@ -3586,10 +3595,7 @@ _OPEN = {  # the ends of an open window, by value family
 
 
 def _window_edges(df: pd.DataFrame, dim: str, ranges: ExplicitRanges):
-    """
-    Which rows hold `dim`, their envelopes, which windows span it, and a
-    function giving windows' bounds in rows' units.
-    """
+    """Rows holding `dim`, their envelopes, spanning windows, and window bounds."""
     low, high = f"{dim}_min", f"{dim}_max"
     blank = pd.Series(None, index=df.index, dtype=object)
     has = df.get(low, blank).notna().to_numpy()
@@ -3632,20 +3638,31 @@ def _sample_bounds(coord, lows, highs, unit):
     return values[np.where(held, first, 0)], values[np.where(held, last, 0)], held
 
 
-def window_plan(df: pd.DataFrame, windows: Mapping, lookup) -> ChunkPlan:
+def _meets(edges, req, pos) -> np.ndarray:
+    """Whether each window ``req`` meets row ``pos`` on every windowed dim."""
+    keep = np.ones(len(req), dtype=bool)
+    for has, mins, maxs, spans, bounds in edges:
+        low, high = bounds(req, pos)
+        meets = (low <= maxs[pos]) & (high >= mins[pos])
+        keep &= np.where(has[pos], meets, spans[req])
+    return keep
+
+
+def window_plan(df, windows: Mapping, catalog, sources=None) -> ChunkPlan:
     """
     Plan each window's piece of each row it reaches, clipped to its samples.
 
     ``windows`` maps dims to `ExplicitRanges` of one row count, row ``i`` of
     each making window ``i`` (``_request_row`` on the outputs, which come in
     window order, then in their sources' order); bounds are inclusive, and a
-    window open at both ends spans its dim, keeping rows lacking it.
-    ``lookup(rows, dim)`` finds the rows' coordinates, which name the samples
-    kept. Windows and rows pair with array operations, never a window at a
-    time; the first dim is the plan's, and the others trim.
+    window open at both ends spans its dim, keeping rows lacking it. The
+    rows' coordinates in `catalog`, found by their ``sources`` (else the rows
+    themselves), name the samples kept. Windows and rows pair in array
+    operations, never a window at a time; the first dim is the plan's.
     """
     df = _drop_patch_local_empty(_ensure_patch_row(df)).reset_index(drop=True)
     refuse_riders(windows, df)
+    sources = df if sources is None else sources
     edges = {dim: _window_edges(df, dim, x) for dim, x in windows.items()}
     name, count = next(iter(windows)), len(next(iter(windows.values())).rows)
     block = max(1, 4_000_000 // max(len(df), 1))  # pairs held at once
@@ -3653,20 +3670,15 @@ def window_plan(df: pd.DataFrame, windows: Mapping, lookup) -> ChunkPlan:
     for begin in range(0, count, block):
         req = np.repeat(np.arange(begin, min(begin + block, count)), len(df))
         pos = np.tile(np.arange(len(df)), len(req) // max(len(df), 1))
-        keep = np.ones(len(req), dtype=bool)
-        for has, mins, maxs, spans, bounds in edges.values():
-            low, high = bounds(req, pos)
-            meets = (low <= maxs[pos]) & (high >= mins[pos])
-            keep &= np.where(has[pos], meets, spans[req])
+        keep = _meets(edges.values(), req, pos)
         found.append((req[keep], pos[keep]))
     req, pos = (np.concatenate(x) for x in zip(*found))
     # a window's pieces in their sources' order, so an overlap's earlier
     # source comes first and wins it when the window joins (rule 6)
     same = _normalize_numeric_units(df, name)  # one unit per dimensionality
     ends = _order_key(pd.concat([same[f"{name}_min"], same[f"{name}_max"]]))
-    first = np.where(
-        _directions(df[f"{name}_step"]) < 0, -ends[len(df) :], ends[: len(df)]
-    )
+    down = _directions(df[f"{name}_step"]) < 0
+    first = np.where(down, -ends[len(df) :], ends[: len(df)])
     order = np.lexsort((df["_patch_row"].to_numpy()[pos], first[pos], req))
     req, pos = req[order], pos[order]
     keep, clipped = np.ones(len(req), dtype=bool), {}
@@ -3677,7 +3689,8 @@ def window_plan(df: pd.DataFrame, windows: Mapping, lookup) -> ChunkPlan:
         trim = np.flatnonzero(has[pos] & ~spans[req])
         low, high = bounds(req[trim], pos[trim])
         low, high = np.maximum(low, lo[trim]), np.minimum(high, hi[trim])
-        coords = lookup(df.iloc[np.unique(pos[trim])], dim)
+        held = sources["_patch_row"].isin(df["_patch_row"].iloc[np.unique(pos[trim])])
+        coords = known_coordinates(catalog, sources[held], dim)
         units = df.get(f"_{dim}_units", pd.Series(None, index=df.index))
         order = np.argsort(pos[trim], kind="stable")
         for at in np.split(order, np.flatnonzero(np.diff(pos[trim][order])) + 1):
@@ -3691,6 +3704,11 @@ def window_plan(df: pd.DataFrame, windows: Mapping, lookup) -> ChunkPlan:
                 out = _sample_bounds(coord, low[at], high[at], unit)
                 lo[trim[at]], hi[trim[at]], held = out
                 keep[trim[at]] &= held
+        if dim == name and lo.dtype.kind == "f":  # a sample two units round apart
+            slack = np.abs(df[f"{name}_step"].to_numpy(float))[pos] * _GRID_SNAP_RTOL
+            for x, how in ((lo, "min"), (hi, "max")):
+                e = pd.Series(np.where(keep, x, np.nan)).groupby(req).transform(how)
+                x[:] = np.where(np.abs(x - e) <= slack, e, x)
         modified |= (lo != mins[pos]) | (hi != maxs[pos])
         clipped[dim] = tuple(pd.Series(x).where(has[pos]).to_numpy() for x in (lo, hi))
     picked = {dim: (x[keep], y[keep]) for dim, (x, y) in clipped.items()}
@@ -3705,10 +3723,8 @@ def window_plan(df: pd.DataFrame, windows: Mapping, lookup) -> ChunkPlan:
 
 def _pieces_plan(df, positions, bounds: Mapping, modified) -> ChunkPlan:
     """
-    Plan one output per piece of a row, at ``positions`` of `df`.
-
-    ``bounds`` maps each dim to the pieces' (lows, highs), the first being
-    the plan's dim and others trims.
+    Plan one output per piece of a row at ``positions`` of `df`; ``bounds``
+    maps each dim (the plan's first, then trims) to the pieces' (lows, highs).
     """
     name, *trims = bounds
     ids = np.arange(len(positions), dtype=np.int64)
@@ -3735,4 +3751,6 @@ def _pieces_plan(df, positions, bounds: Mapping, modified) -> ChunkPlan:
             "_modified": np.asarray(modified, dtype=bool),
         }
     )
+    if (unit := f"_{name}_units") in df:  # the unit trims are in, as in chunk's
+        members[unit] = df[unit].to_numpy()[positions]
     return ChunkPlan(outputs, members, name, None, {}, tuple(trims))

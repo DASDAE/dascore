@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -24,35 +24,40 @@ class ExplicitRanges:
 
 def looks_explicit(value) -> bool:
     """Flag shapes needing explicit validation before ordinary query parsing."""
-    return (isinstance(value, np.ndarray) and value.ndim != 1) or (
+    if isinstance(value, Quantity):  # an (n, 2) array with units
+        return np.ndim(value.magnitude) == 2
+    return (isinstance(value, np.ndarray) and value.ndim > 1) or (
         isinstance(value, list | tuple)
         and (not value or isinstance(value[0], list | tuple | np.ndarray))
     )
 
 
 def explicit_ranges(value) -> ExplicitRanges | None:
-    """Return validated window rows, or None for an existing input form."""
+    """
+    Return validated window rows, or None for an existing input form.
+
+    An open end is None; an infinity opens its own side, so a row holding
+    one keeps its other bound on the far side. Bounds are left in the
+    order given, which `_absolute_bounds` swaps where reversed.
+    """
     if not looks_explicit(value):
         if isinstance(value, np.ndarray) and value.ndim == 1:
             msg = "Explicit ranges must have shape (n, 2), not a 1D array."
             raise ParameterError(msg)
         return None
-    if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            return None
-        candidate = value
-    else:
-        candidate = np.asarray(value, dtype=object)
+    if isinstance(value, Quantity):  # each bound a quantity
+        value = [[x * value.units for x in row] for row in value.magnitude]
+    candidate = np.asarray(
+        value, dtype=None if isinstance(value, np.ndarray) else object
+    )
     if candidate.ndim != 2 or candidate.shape[1] != 2:
         msg = f"Explicit ranges must have shape (n, 2), got {candidate.shape}."
         raise ParameterError(msg)
     rows: list[tuple[object, object]] = []
     for index in range(len(candidate)):
-        low, high = candidate[index, 0], candidate[index, 1]
-        bounds: list[object] = []
-        for bound in (low, high):
-            if isinstance(bound, np.str_):
-                bound = str(bound)
+        bounds, opens = [], set()
+        for bound in candidate[index]:
+            bound = str(bound) if isinstance(bound, np.str_) else bound
             if bound is None or bound is Ellipsis:
                 bounds.append(None)  # an open end
                 continue
@@ -60,52 +65,13 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
-            missing = bool(pd.isna(magnitude))  # NaN and NaT, before infinities
-            infinite = not missing and isinstance(magnitude, (int, float, np.number))
-            infinite = infinite and not np.isfinite(magnitude)
-            if infinite and (float(magnitude) > 0) == (not bounds):
-                msg = f"Explicit range row {index} has a reversed infinite bound."
-                raise ParameterError(msg)
-            bounds.append(None if missing or infinite else bound)
-        # a lone closed end is checked against itself; open ends never reverse
-        pair = [x for x in bounds if x is not None]
-        pair = pair * 2 if len(pair) == 1 else pair
-        if pair and isinstance(pair[0], Quantity) == isinstance(pair[1], Quantity):
-            if isinstance(pair[0], Quantity):
-                assert isinstance(pair[1], Quantity)
-                try:
-                    comparable: list[Any] = [
-                        pair[0].magnitude,
-                        cast(Any, pair[1]).to(pair[0].units).magnitude,
-                    ]
-                except Exception as exc:
-                    msg = f"Explicit range row {index} has incompatible bound units."
-                    raise ParameterError(msg) from exc
-            else:
-                comparable = pair
-            if any(isinstance(x, str) for x in comparable) and (
-                all(isinstance(x, str) for x in comparable)
-                or any(isinstance(x, (pd.Timestamp, np.datetime64)) for x in comparable)
-            ):
-                try:
-                    comparable = [pd.Timestamp(cast(Any, x)) for x in comparable]
-                except (TypeError, ValueError) as exc:
-                    msg = (
-                        f"Explicit range row {index} has string bounds which are "
-                        "not parseable datetimes."
-                    )
-                    raise ParameterError(msg) from exc
-            try:
-                reversed_bounds = cast(Any, comparable[0]) > cast(Any, comparable[1])
-            except (TypeError, ValueError) as exc:
-                msg = f"Explicit range row {index} has incomparable bound types."
-                raise ParameterError(msg) from exc
-            if reversed_bounds:
-                msg = (
-                    f"Explicit range row {index} has its lower bound above "
-                    "its upper bound."
-                )
-                raise ParameterError(msg)
+            inf = isinstance(magnitude, float | np.floating) and np.isinf(magnitude)
+            opens |= {magnitude > 0} if inf else set()
+            bounds.append(None if inf or pd.isna(magnitude) else bound)  # NaN, NaT
+        if opens:  # +inf leaves the row's other bound low, -inf high
+            closed = [x for x in bounds if x is not None] if len(opens) == 1 else []
+            bounds = [*closed, None] if opens == {True} else [None, *closed]
+            bounds = [*bounds, None][:2]
         rows.append((bounds[0], bounds[1]))
     return ExplicitRanges(tuple(rows))
 

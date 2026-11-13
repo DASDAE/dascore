@@ -298,8 +298,8 @@ class TestExplicitCut:
         assert np.array_equal(
             mixed[0].coords["time"].values, scalar[0].coords["time"].values
         )
-        with pytest.raises(ParameterError, match="incomparable"):
-            spool.select(time=np.array([[1, "later"]], dtype=object))
+        with pytest.raises(ParameterError, match="not datetimes"):
+            len(spool.select(time=np.array([[1, "later"]], dtype=object)))
 
     @pytest.mark.parametrize("kind", ["datetime64[s]", "timedelta64[s]"])
     def test_time_family_absolute_windows(self, kind):
@@ -342,8 +342,8 @@ class TestExplicitCut:
         spool = dc.spool(_patch(np.arange(10)))
         assert len(spool.cut(distance=np.array([[1.1, 1.9]]))) == 0
 
-    def test_datetime_rejects_quantity_and_mixed_bounds_reject_reverse(self):
-        """Only instants can bound datetimes; mixed native/unit points stay ordered."""
+    def test_datetime_rejects_quantity_and_mixed_bounds_swap(self):
+        """Only instants bound datetimes; mixed native/unit points swap (rule 8)."""
         values = np.arange(10).astype("datetime64[s]")
         time_spool = dc.spool(
             dc.Patch(data=np.arange(10), coords={"time": values}, dims=("time",))
@@ -351,8 +351,10 @@ class TestExplicitCut:
         with pytest.raises(ParameterError, match="absolute instants"):
             time_spool.cut(time=np.array([[2 * s, 4 * s]], dtype=object))
         distance = dc.spool(_patch(np.arange(10)).set_units(distance="m"))
-        with pytest.raises(ParameterError, match="lower bound above"):
-            distance.cut(distance=np.array([[5, 2 * m]], dtype=object))
+        swapped = distance.cut(distance=np.array([[5, 2 * m]], dtype=object))
+        assert [_ends(x) for x in swapped] == [(2, 5)]
+        with pytest.raises(ParameterError, match="incompatible units"):
+            distance.cut(distance=np.array([[3 * m, 1 * s]], dtype=object))
 
     def test_uneven_request_past_envelope_keeps_samples(self):
         """An uneven source supplies the samples inside an over-wide window."""
@@ -385,17 +387,24 @@ class TestExplicitCut:
         [
             (True, 2),
             ([1], 2),
-            (np.inf, 2),
-            (1, -np.inf),
-            (3, 1),
-            (3 * m, 1 * s),
+            ("1", 2),
         ],
     )
     def test_invalid_absolute_bounds(self, bounds):
-        """A bounded window needs finite scalar ordered compatible endpoints."""
+        """A bounded window needs scalar, comparable endpoints."""
         spool = dc.spool(_patch(np.arange(10)))
         with pytest.raises(ParameterError):
             spool.cut(distance=np.array([bounds], dtype=object))
+
+    @pytest.mark.parametrize(
+        "bounds, ends",
+        [((np.inf, 2), (2, 9)), ((1, -np.inf), (0, 1)), ((3, 1), (1, 3))],
+    )
+    def test_reversed_and_infinite_bounds(self, bounds, ends):
+        """Reversed bounds swap and an infinity opens its side (rule 8)."""
+        spool = dc.spool(_patch(np.arange(10)))
+        (out,) = spool.cut(distance=np.array([bounds], dtype=object))
+        assert _ends(out) == ends
 
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_text_dimension_refused(self, method):
@@ -649,16 +658,16 @@ class TestExplicitMetadataSources:
         selected = spool.select(distance=windows)
         assert len(selected) == 2
         cut = spool.cut(distance=windows)
-        assert len(cut) == 1  # the overlap is kept once, in the first's units
-        assert np.allclose(_ends(cut[0].convert_units(distance="m")), (20, 25))
+        # the overlap is kept once, from the earlier source, in its metres
+        assert len(cut) == 1
+        assert _ends(cut[0]) == (20, 25)
         narrower = np.array([[21 * m, 24 * m]], dtype=object)
         for derived in (
             cut.select(distance=narrower),
             cut.cut(distance=narrower),
         ):
             assert len(derived) == 1
-            ends = _ends(derived[0].convert_units(distance="m"))
-            assert np.allclose(ends, (21, 24))
+            assert _ends(derived[0]) == (21, 24)
 
     def test_conflicts_only_between_contributors(self):
         """Separate windows carry different attrs; a combined one conflicts."""
@@ -1359,3 +1368,82 @@ class TestWindowsOverFilledChunks:
         (patch,) = pieces.select(depth=(4, 12)).cut(distance=np.array([[1, 7]]))
         assert patch.coords["distance"].values.tolist() == [2, 3, 4, 5, 6]
         assert patch.coords["depth"].values.tolist() == [4, 6, 8, 10, 12]
+
+
+@pytest.fixture(scope="module", params=["memory", "directory"])
+def forms_spool(request, tmp_path_factory):
+    """The example spool, in memory or as a directory of files."""
+    spool = dc.get_example_spool()
+    if request.param == "memory":
+        return spool
+    path = tmp_path_factory.mktemp("forms")
+    dc.examples.spool_to_directory(spool, path=path)
+    return dc.spool(path).update(progress=None)
+
+
+class TestWindowForms:
+    """The forms a window's bounds take, alike in select and cut."""
+
+    @staticmethod
+    def _spans(spool, dim):
+        """Each output's ends along dim, from contents and from the data."""
+        rows = spool.get_contents()[[f"{dim}_min", f"{dim}_max"]]
+        loaded = [(x.get_coord(dim).min(), x.get_coord(dim).max()) for x in spool]
+        assert list(rows.itertuples(index=False, name=None)) == loaded
+        return loaded
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_reversed_bounds_swap(self, forms_spool, method):
+        """A row's reversed bounds are swapped, per row and dimension (rule 8)."""
+        start = forms_spool.get_contents()["time_min"].min()
+        times = np.array([start + np.timedelta64(x, "s") for x in (1, 9, 3, 12)])
+        call = getattr(forms_spool, method)
+        forward = call(time=times.reshape(2, 2), distance=np.array([[10, 20], [5, 9]]))
+        swapped = call(
+            time=times.reshape(2, 2)[:, ::-1], distance=np.array([[20, 10], [5, 9]])
+        )
+        for dim in ("time", "distance"):
+            assert self._spans(swapped, dim) == self._spans(forward, dim)
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_infinite_end_is_open(self, forms_spool, method):
+        """An infinity opens its own side, whichever column holds it."""
+        call = getattr(forms_spool, method)
+        expected = self._spans(
+            call(distance=np.array([[290, None], [None, 3]])), "distance"
+        )
+        got = call(distance=np.array([[np.inf, 290], [3, -np.inf]]))
+        assert self._spans(got, "distance") == expected
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_quantity_array(self, forms_spool, method):
+        """A quantity holding an (n, 2) array is windows, as quantities are."""
+        call = getattr(forms_spool, method)
+        each = np.array([[10 * m, 20 * m], [5 * m, 9 * m]], dtype=object)
+        whole = np.array([[10, 20], [5, 9]]) * m
+        expected = self._spans(call(distance=each), "distance")
+        assert self._spans(call(distance=whole), "distance") == expected
+        assert expected[0] == (10, 20)
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_timedelta_on_datetime_refused(self, forms_spool, method):
+        """An offset is not an instant: say to add it to a start time."""
+        offsets = np.array([[1, 3]]).astype("timedelta64[s]")
+        with pytest.raises(ParameterError, match=r"absolute instants.*start"):
+            len(getattr(forms_spool, method)(time=offsets))
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_numbers_on_datetime_are_epoch_seconds(self, forms_spool, method):
+        """A number bounding a datetime is seconds since 1970, as in Patch.select."""
+        start = forms_spool.get_contents()["time_min"].min()
+        seconds = (start - np.datetime64(0, "s")) / np.timedelta64(1, "s")
+        call = getattr(forms_spool, method)
+        expected = call(time=np.array([[start, start + np.timedelta64(2, "s")]]))
+        got = call(time=np.array([[seconds, seconds + 2.0]]))
+        (got_ends,) = self._spans(got, "time")
+        assert self._spans(expected, "time") == [got_ends] and got_ends[0] == start
+        patch = forms_spool[0].select(time=(seconds, seconds + 2.0))
+        assert (
+            patch.get_coord("time").min(),
+            patch.get_coord("time").max(),
+        ) == got_ends

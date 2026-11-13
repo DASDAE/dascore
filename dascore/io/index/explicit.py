@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from functools import partial
 from typing import Any
 
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import derived_catalog
 from dascore.utils.chunk_plan import _ensure_patch_row, window_plan
-from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
+from dascore.utils.explicit_ranges import ExplicitRanges
 
 
 class _SchemaBackend:
@@ -58,8 +57,7 @@ class ExplicitSelectCatalog:
                 return self._cached
             source = _ensure_patch_row(self.parent.to_df().reset_index(drop=True))
             assert source["_patch_row"].is_unique, "catalog rows must be unique"
-            lookup = partial(known_coordinates, self.parent)
-            plan = window_plan(source, self.ranges, lookup)
+            plan = window_plan(source, self.ranges, self.parent)
             catalog = derived_catalog(
                 source_rows=source,
                 plan=plan,
