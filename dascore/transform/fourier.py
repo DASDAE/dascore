@@ -170,14 +170,13 @@ def _get_dft_new_coords(patch, dxs, dims, axes, real, original_cm=None):
     return cm
 
 
-def _get_dft_attrs(patch, dims, new_coords, pad=False, output="FFT"):
+def _get_dft_attrs(patch, dims, new_coords, output="FFT"):
     """Get new attributes for transformed patch."""
     new = dict(patch.attrs)
     new["data_units"] = _get_dft_data_units(patch, dims)
     new["_pre_dft_data_type"] = new.get("data_type")
     new["data_type"] = "fourier_transform"
     new["_dft_output"] = output
-    new["_dft_padded"] = pad
     return PatchAttrs(**new)
 
 
@@ -413,9 +412,7 @@ class Dft(PatchProcessor):
         new_coords = _get_dft_new_coords(
             padded, dxs, dims, axes, real, original_cm=original_cm
         )
-        attrs = _get_dft_attrs(
-            padded, dims, new_coords, pad=self.pad, output=output_type
-        )
+        attrs = _get_dft_attrs(padded, dims, new_coords, output=output_type)
         out = padded.new(coords=new_coords, attrs=attrs)
         axes = tuple(int(x) for x in axes)
         step = _operand(np.prod(dxs), meta.dtype)
@@ -487,7 +484,6 @@ def _get_idft_dims_steps_axis(patch, dim):
 def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
     """Get the new coords for the idft and expected sizes to pass to numpy."""
     shapes = patch.shape
-    padded = patch.attrs.get("_dft_padded", False)
     coord_map = patch.coords.disassociate_coord(*dims).get_coord_tuple_map()
     sizes = []
     padding = {}
@@ -508,10 +504,10 @@ def _get_idft_coords_and_sizes(patch, dims, new_dims, axes, real):
         prefix = _associated_prefix(new_dim)
         for name in [x for x in coord_map if x.startswith(prefix)]:
             coord_map[name[len(prefix) :]] = (new_dim, coord_map.pop(name)[1])
-        if not padded:  # No padding, go to next dim.
+        unpadded = coord_map.pop(f"_{new_dim}_unpadded", None)
+        if unpadded is None:  # dft did not pad this dim.
             continue
-        old_len = len(coord_map.pop(f"_{new_dim}_unpadded")[1])
-        diff = old_len - len(coord_map[new_dim][1])
+        diff = len(unpadded[1]) - len(coord_map[new_dim][1])
         if diff < 0:
             padding[new_dim] = (0, diff)
     ft = FourierTransformatter()
