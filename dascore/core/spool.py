@@ -259,18 +259,7 @@ class _PendingFill:
         fill = {x: self.merge[x] for x in ("tolerance", "fill_value")}
         working = self.frames[1]
         plan = build_chunk_plan(working, **(params | fill), **dim_kwargs)
-        plan = coalesce_runs(plan, working)
-        members, dim = plan.members, plan.dim
-        ids = members["output_id"].to_numpy()
-        lone = np.setdiff1d(plan.outputs["output_id"].to_numpy(), ids)
-        if len(lone):  # a window inside a gap reads one sample of its neighbour
-            fed = np.unique(ids)
-            near = fed[np.abs(fed[None, :] - lone[:, None]).argmin(axis=1)]
-            first = members.drop_duplicates("output_id").set_index("output_id")
-            one = first.loc[near].reset_index().assign(output_id=lone, _modified=True)
-            one[f"{dim}_max"] = one[f"{dim}_min"]
-            members = pd.concat([members, one], ignore_index=True)
-        return replace(plan, members=members, params=plan.params | {"windows": True})
+        return coalesce_runs(plan, working)
 
 
 def _stamp_key(*stamps) -> tuple:
@@ -2795,11 +2784,11 @@ class Spool(NodeRepr, NamespaceOwner):
 
         # read from the plan: its values are normalized (eg a dimensionless
         # tolerance is a plain multiple)
-        names = ("conflict", "fill_value", "tolerance", "max_shift", "windows")
+        names = ("conflict", "fill_value", "tolerance", "max_shift")
         merge = {x: plan.params[x] for x in names if x in plan.params}
         # windows over a fill's outputs load from its files, in one layer
         base, fill = self, self._catalog
-        if isinstance(fill, _PendingFill) and "windows" in merge:
+        if isinstance(fill, _PendingFill) and merge.get("fill_value") is not None:
             base = fill.spool
         catalog = derived_catalog(
             source_rows=source_rows,

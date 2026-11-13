@@ -2417,7 +2417,8 @@ class TestFilledWindows:
         time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
         coords = {"distance": [0], "time": time}
         patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
-        view = dc.spool([patch]).select(time=(0.8, -0.1), relative=True)
+        # a relative selection resolves only as it loads, so it is absolute here
+        view = dc.spool([patch]).select(time=(2.2, 2.9))
         with pytest.raises(ChunkError, match="chunk"):
             view.fill_gaps("time").chunk(time=2.0, keep_partial=True)
 
@@ -3998,9 +3999,14 @@ class TestChunkFillWindows:
         for windowed in chunked:
             coord = windowed.get_coord("distance")
             assert coord.values[0] > coord.values[-1]
-        # the hole spans 101 to 199, so those windows hold nothing else
+        # windows count from the top, as a chunk of the filled patch does,
+        # and the hole spans 199 down to 101
         all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
-        assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
+        assert all_fill == [False] * 5 + [True] * 4 + [False] * 6
+        filled = dc.spool([spool.fill_gaps(distance=200)[0]]).chunk(distance=20)
+        assert [x.get_coord("distance") for x in chunked] == [
+            x.get_coord("distance") for x in filled
+        ]
 
     def test_window_shorter_than_a_step_is_refused(self, random_patch):
         """A window holding no sample position is no output at all."""

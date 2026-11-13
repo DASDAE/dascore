@@ -565,6 +565,54 @@ class TestSpoolFillGaps:
         (cut,) = filled.cut(x=np.array([[full[18], full[27]]]))
         assert cut.shape == (1, 10) and np.isnan(cut.data[0, 2:7]).all()
 
+    @pytest.mark.parametrize(
+        ("start", "step", "window"),
+        [
+            (1e9, 0.1, 3.7),
+            (1e9, 0.001, 0.01),
+            (1.7e9, 1.0209523, 10.209523),
+            (1e4, 0.001, 0.037),
+            (1e6, 0.001, 0.01),
+            (0.0, 0.25, 2.5),
+        ],
+    )
+    def test_float_windows_match_filled_patch(self, start, step, window):
+        """Windows of a fill hold, sample for sample, those of the filled patch."""
+        full = get_coord(start=start, step=step, shape=(600,))
+
+        def make(part):
+            coords = {"x": full[part], "distance": np.arange(2.0)}
+            data = np.arange(600.0)[part][:, None] * np.ones((1, 2))
+            return dc.Patch(data=data, coords=coords, dims=("x", "distance"))
+
+        parts = (slice(0, 200), slice(207, 400), slice(450, 600))
+        filled = dc.spool([make(x) for x in parts]).fill_gaps("x")
+        expected = dc.spool([filled[0]]).chunk(x=window, keep_partial=True)
+        out = filled.chunk(x=window, keep_partial=True)
+        assert len(out) == len(expected)
+        for got, want in zip(out, expected, strict=True):
+            np.testing.assert_array_equal(got.data, want.data)
+            assert got.get_coord("x") == want.get_coord("x")
+
+    def test_gap_window_takes_its_own_stretch(self):
+        """A window of only fill describes, and loads from, its own stretch."""
+
+        def make(start, count, station, channels=2):
+            coords = {
+                "time": get_coord(start=float(start), step=0.01, shape=(count,)),
+                "distance": np.arange(channels) * 1.0,
+            }
+            data = np.zeros((count, channels))
+            attrs = {"station": station}
+            return dc.Patch(data=data, coords=coords, dims=tuple(coords), attrs=attrs)
+
+        spool = dc.spool([make(0, 100, "A"), make(10.0, 50, "A"), make(0, 300, "B", 3)])
+        out = spool.fill_gaps("time").chunk(time=1)
+        rows = out.get_contents()
+        for station, patch in zip(rows["station"], out, strict=True):
+            assert patch.attrs.station == station
+            assert patch.shape[1] == (2 if station == "A" else 3)
+
     @pytest.mark.parametrize("kwargs", [{}, {"time": 1, "distance": 1}])
     def test_one_dimension(self, gappy_spool, kwargs):
         """Filling names exactly one dimension."""

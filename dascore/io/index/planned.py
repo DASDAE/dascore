@@ -26,7 +26,7 @@ import pandas as pd
 from upath import UPath
 
 import dascore as dc
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary, get_coord
+from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO
@@ -61,6 +61,7 @@ from dascore.utils.chunk_plan import (
     _SampleTracker,
     grid_fits,
     patch_local_adjusted_envelopes,
+    stretch_coordinate,
 )
 from dascore.utils.gaps import RunRecord
 from dascore.utils.misc import is_range
@@ -69,8 +70,6 @@ from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     SOURCE_RANGE_ENDS,
     PatchAssembler,
-    _row_values,
-    coord_from_row,
     fill_on_grid,
     source_range_column,
 )
@@ -698,7 +697,6 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
-        output_rows: pd.DataFrame | None = None,
         trim_dims: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
@@ -733,11 +731,6 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
-        # the outputs a fill plan fills to, for the grid each fills onto
-        self._output_rows: dict[int, Mapping] = {}
-        if merge_kwargs.get("fill_value") is not None and output_rows is not None:
-            records = output_rows.to_dict("records")
-            self._output_rows = {int(x["output_id"]): x for x in records}
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -752,8 +745,7 @@ class PlanResolver(PatchResolver):
     def _assembler(self):
         # the fill is written once the members merge (`_filled`), so the
         # merge, and the ids it stamps, never see it
-        skip = ("fill_value", "windows")
-        merge = {k: v for k, v in self.merge_kwargs.items() if k not in skip}
+        merge = {k: v for k, v in self.merge_kwargs.items() if k != "fill_value"}
         return PatchAssembler(
             load_patch=self._load_member,
             merge_kwargs=merge,
@@ -1031,35 +1023,26 @@ class PlanResolver(PatchResolver):
         return patch
 
     def _filled(self, output_id: int, members, row, trim) -> dc.Patch:
-        """A fill plan's output, or the window of its grid a trim or row asks."""
+        """
+        A fill plan's output on its stretch's grid, or the part a trim asks for.
+
+        Each member carries its output's slice of the stretch's grid, which
+        the members fill onto; a trim loads only the members reaching it.
+        """
         dim, merge = self.dim, self.merge_kwargs
-        # a window of a fill is its own row, its members trimmed to it
-        planned = merge.get("windows") and trim.get(dim) is None
-        if merge.get("windows"):
-            ends = (
-                (row[f"{dim}_min"], row[f"{dim}_max"]) if dim not in row else row[dim]
-            )
-            trim = {dim: trim.get(dim) or ends}
-        out, grid = self._output_rows[output_id], None
+        spec = members[f"_{dim}_stretch"].iloc[0]
+        units = _stated_units(members[f"_{dim}_units"].iloc[0])
+        # a whole stretch keeps the grid its members fill onto themselves
+        whole = not isinstance(spec, tuple) or (spec[5], spec[6]) == (0, spec[3])
+        grid = None if whole and not trim else stretch_coordinate(spec, units)
         if (window := trim.get(dim)) is not None:
-            members = members if planned else reached(members, dim, *window)
-            units = _stated_units(out.get(f"_{dim}_units"))
-            if isinstance(out.get(f"_{dim}_grid"), tuple):  # exact, from the row
-                grid = coord_from_row(out, dim, units)
-            elif (ends := _row_values(out, dim)) is not None:  # nearest positions
-                low, high, step = ends
-                count = round(to_float(high - low) / abs(to_float(step))) + 1
-                start = high if step < step * 0 else low
-                grid = get_coord(start=start, step=step, shape=(count,), units=units)
-            if grid is not None:
-                grid = grid.select(tuple(window))[0]
+            members = reached(members, dim, *window)
+            grid = None if grid is None else grid.select(tuple(window))[0]
         patch = self._assembled(output_id, members)
-        fill, tolerance, dtype = (
-            merge["fill_value"],
-            merge["tolerance"],
-            out.get("_dtype"),
+        fill, tolerance = merge["fill_value"], merge["tolerance"]
+        return fill_on_grid(
+            patch, dim, grid, fill, tolerance, row.get("_dtype") or None
         )
-        return fill_on_grid(patch, dim, grid, fill, tolerance, dtype or None)
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -1288,7 +1271,6 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
-        output_rows=plan.outputs,
         trim_dims=plan.trim_dims,
     )
     backend = get_backend(":memory:")

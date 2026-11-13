@@ -155,7 +155,9 @@ def _stretches(df: pd.DataFrame, dim: str, indexed, read):
     The rows cut at their holes, and each stretch clipped to its row.
 
     Returns the positions of the rows cut, and ``(position, low, high,
-    step)`` for each stretch which survives its row's envelope.
+    step, first)`` for each stretch which survives its row's envelope,
+    ``first`` being the stretch's first label, or None where its stated
+    step is rounded off its true spacing, so no lattice counts from it.
     """
     lo, hi = f"{dim}_min", f"{dim}_max"
     cut, out = [], []
@@ -174,8 +176,11 @@ def _stretches(df: pd.DataFrame, dim: str, indexed, read):
         cut.append(index)
         for stretch in stretches:
             low, high = max(stretch.min, row[lo]), min(stretch.max, row[hi])
+            step, span = stretch.step, stretch.max - stretch.min
+            exact = step is None or isinstance(span, float)
+            exact = exact or (stretch.count - 1) * step == span
             if low <= high:
-                out.append((index, low, high, stretch.step))
+                out.append((index, low, high, step, stretch.min if exact else None))
     return cut, out
 
 
@@ -200,6 +205,9 @@ def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
     names = (f"{dim}_min", f"{dim}_max", f"{dim}_step")
     for num, col in enumerate(names, start=1):
         _set_column(split, col, [x[num] for x in stretches], df)
+    # each stretch's samples count from its own first label
+    split[f"_{dim}_source_envelope"] = [{names[0]: x[4]} for x in stretches]
+    split = split.drop(columns=f"_{dim}_src_low", errors="ignore")
     if modified:
         split["_modified"] = True
     kept = df.drop(index=df.index[cut])
@@ -221,7 +229,7 @@ def clip_to_runs(df: pd.DataFrame, dim: str, indexed, read) -> pd.DataFrame:
     cut, stretches = _stretches(df, dim, indexed, read)
     if not cut:
         return df
-    reached = pd.DataFrame(stretches, columns=["row", "low", "high", "step"])
+    reached = pd.DataFrame(stretches, columns=["row", "low", "high", "step", "_"])
     bounds = reached.groupby("row").agg(low=("low", "min"), high=("high", "max"))
     out = df.copy(deep=False)
     rows = bounds.index.to_numpy(dtype=np.int64)
@@ -1936,6 +1944,77 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
     return grids, relabel, np.nan_to_num(shift)  # no grid, no move
 
 
+def _fill_grids(rows, codes, n_parts, name, dtype, lattice):
+    """
+    Each stretch of a fill on its first row's grid, and each row's position.
+
+    A row sits at the position nearest its first label, so positions count
+    the samples the fill writes, as `Patch.fill_gaps` places segments; a
+    stretch holding a row with no step has no grid.
+    """
+    ticks = _counts_ticks(dtype)
+    own, sign = rows["_own"].to_numpy(), rows["_forward"].to_numpy()
+    # a view's edges move onto its own samples, so rows state what loads
+    at = (lattice, np.arange(len(rows)), ticks, sign)
+    first, last = rows["_first"].to_numpy(), rows["_last"].to_numpy()
+    prec = 0 if ticks else _precision(False, own, _narrow(rows, name), first, last)
+    first = _own_label_at(-prec, *at, first, own)
+    last = _own_label_at(prec, *at, last, own, after=False)
+    with np.errstate(invalid="ignore"):
+        count = np.rint((last - first).astype(np.float64) / own) + 1
+    keep = np.isnan(own) | (count > 0)
+    rows["_first"], rows["_last"] = first, last
+    rows["_count"] = np.where(keep, np.nan_to_num(count, nan=-1), 0).astype(np.int64)
+    heads = pd.Series(first).groupby(codes).idxmin().reindex(range(n_parts)).to_numpy()
+    with np.errstate(invalid="ignore"):
+        pos = np.rint((first - first[heads[codes]]) / own[heads[codes]])
+    pos = np.nan_to_num(pos).astype(np.int64)
+    sizes = pd.Series(pos + rows["_count"].to_numpy()).groupby(codes).max()
+    grids = [None] * n_parts
+    for part, head in enumerate(heads):
+        if np.isnan(own[head]) or sizes[part] <= 0:
+            continue
+        size, origin = int(sizes[part]), sign[head] * first[head]
+        if not ticks:
+            grids[part] = Grid(origin, sign[head] * own[head], 0, size)
+            continue
+        base, stride, den, phase = (int(x[head]) for x in lattice[:4])
+        if den > 1 and stride > 0 and sign[head] > 0:  # its own fractional grid
+            grid = Grid(base, stride, den, size, phase=phase)
+            grids[part] = grid.sliced(int(grid.index_of(int(origin), True)), 1, size)
+        else:  # a half tick, as a 1024 Hz step has, is exact in a float
+            step = Fraction(own[head]).limit_denominator(1024)
+            grids[part] = Grid(
+                int(origin), int(sign[head] * step.numerator), step.denominator, size
+            )
+    return grids, pos
+
+
+def _fed_gaps(windows, kept, kcodes, rel_out, rel_src, lo, hi):
+    """
+    Give each window no row reaches one sample of its stretch's nearest row.
+
+    A window inside a filled gap is all fill; the sample gives it the other
+    dimensions of its own stretch.
+    """
+    parts, firsts, _ = windows
+    lone = np.setdiff1d(np.arange(len(firsts)), rel_out)
+    if not len(lone):
+        return rel_out, rel_src, lo, hi
+    pos, first = kept["_pos"].to_numpy(), kept["_first"].to_numpy()
+    sign = kept["_forward"].to_numpy()
+    rows = []
+    for window in lone:
+        cands = np.flatnonzero(kcodes == parts[window])
+        rows.append(cands[np.argmin(np.abs(pos[cands] - firsts[window]))])
+    rows = np.asarray(rows, dtype=np.int64)
+    edge = first[rows] * sign[rows]
+    rel_out, rel_src = np.r_[rel_out, lone], np.r_[rel_src, rows]
+    lo, hi = np.r_[lo, edge], np.r_[hi, edge]
+    order = np.lexsort((rel_src, rel_out))
+    return rel_out[order], rel_src[order], lo[order], hi[order]
+
+
 def _grid_windows(grid, value, overlap, keep_partial):
     """
     The first and last position of each window on a stretch's grid.
@@ -2901,11 +2980,15 @@ def build_chunk_plan(
     shift_all = np.zeros(len(kept_df))
     gridded = np.zeros(n_parts, dtype=bool)
     lattice = _sample_lattices(kept_df, name)
-    if fill_value is None:  # a fill keeps source labels
+    if fill_value is None:
         grids, relabel, shift_all = _fit_grids(
             kept_df, kcodes, n_parts, name, max_shift, label_dtype, lattice
         )
-        gridded = np.array([x is not None for x in grids], dtype=bool)
+    else:  # a fill keeps each stretch on its first row's grid
+        fill = _fill_grids(kept_df, kcodes, n_parts, name, label_dtype, lattice)
+        grids, kept_df["_pos"] = fill
+        relabel = np.ones(n_parts, dtype=bool)
+    gridded = np.array([x is not None for x in grids], dtype=bool)
     regular = not merge_mode
     if regular:
         # a window covering a row with its own labels takes it as it is
@@ -3050,19 +3133,6 @@ def build_chunk_plan(
                 break
             starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
             ends_p = stops_p
-            if fill_value is not None:
-                # filled windows hold the first source's grid, else the partition's
-                grid = [x[koffsets[part]][None] for x in lattice]
-                if not grid[1][0]:
-                    grid[0][:] = to_int(g_starts[part])
-                    grid[1][:] = to_int(abs(part_step))
-                edges = g_starts[part : part + 1], g_stops[part : part + 1]
-                starts_p, stops_p = _member_samples(*edges, starts_p, ends_p, grid)
-                keep = starts_p <= stops_p
-                starts_p, stops_p, ends_p = starts_p[keep], stops_p[keep], ends_p[keep]
-            # A filled window can hold no sample at all, nor then a partition.
-            if not len(starts_p):
-                continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -3098,24 +3168,18 @@ def build_chunk_plan(
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
-        # runtime error; it is not surfaced at all. A fill value lifts
-        # that: a window lying wholly inside a bridged hole has no source
-        # to draw from and is assembled from fill alone, so the outputs
-        # cover the partition evenly instead of skipping the hole.
-        fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
+        # runtime error; it is not surfaced at all.
+        fed = m_counts > 0
         fed_counts[part] = int(fed.sum())
         if regular and total:
-            # an output's envelope is its members' first and last samples, or
-            # with a fill, those beside its window's, which float rounding of
-            # the window's edges can leave short of them
-            firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
-            starts_p, stops_p = np.array(starts_p), np.array(stops_p)
-            held = rel_out[firsts]
-            low, high = np.minimum.reduceat(lo, firsts), np.maximum.reduceat(hi, firsts)
-            if fill_value is not None:
-                low = np.minimum(low, starts_p[held])
-                high = np.maximum(high, stops_p[held])
-            starts_p[held], stops_p[held] = low, high
+            # an output's envelope is its members' first and last samples
+            if total == n_out and fed.all():  # one member each
+                starts_p, stops_p = lo, hi
+            else:
+                firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
+                starts_p, stops_p = np.array(starts_p), np.array(stops_p)
+                starts_p[rel_out[firsts]] = np.minimum.reduceat(lo, firsts)
+                stops_p[rel_out[firsts]] = np.maximum.reduceat(hi, firsts)
         out_grids.append([None] * int(fed.sum()))
         out_starts.append(starts_p[fed])
         out_stops.append(stops_p[fed])
@@ -3139,6 +3203,9 @@ def build_chunk_plan(
         rel_out, rel_src, lo, hi = _grid_members(
             windows, kept_df, kcodes, offsets, lattice, ticks
         )
+        if fill_value is not None:  # a window in a gap reads a sample of its stretch
+            fed = (rel_out, rel_src, lo, hi)
+            rel_out, rel_src, lo, hi = _fed_gaps(windows, kept_df, kcodes, *fed)
         lo, hi = _as_values(lo, start_all.dtype), _as_values(hi, start_all.dtype)
         # every position belongs to a row, so every window is fed
         opens = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
@@ -3283,7 +3350,7 @@ def build_chunk_plan(
         outputs, members, pieces, kept_df, src_rows, name, label_dtype
     )
     members["shift"] = shift_all[src_rows]
-    outputs = _carry_grids(outputs, members, sorted_df, name, fill_value is not None)
+    outputs = _carry_grids(outputs, members, sorted_df, name)
     # integers counted in ticks go back to the frame's floats
     back = dict.fromkeys([min_name, max_name], frame_dtype)
     return ChunkPlan(outputs.astype(back), members.astype(back), name, value, params)
@@ -4107,7 +4174,7 @@ def stretch_coordinate(spec, units=None):
     return get_coord(runs=(run,), dtype=dtype, units=units)
 
 
-def _carry_grids(outputs, members, sources, name, fill=False):
+def _carry_grids(outputs, members, sources, name):
     """
     Give outputs on one exact grid the grid of their samples.
 
@@ -4116,7 +4183,7 @@ def _carry_grids(outputs, members, sources, name, fill=False):
     ``(ideal + k * num) // den`` ticks; members on one lattice share num,
     den and ideal origin modulo num. A grid counts only where its labels
     end on the row's bounds (a trimmed row's do not) and its members hold
-    every sample, or a fill writes the rest on its first member's grid.
+    every sample.
     """
     col, (low, high, _) = f"_{name}_grid", _dim_columns(outputs, name)
     fitted = outputs.get(f"_{name}_stretch", pd.Series(None, index=outputs.index))
@@ -4139,14 +4206,15 @@ def _carry_grids(outputs, members, sources, name, fill=False):
             held[out] = held.get(out, 0) + k1 - k0 + 1
     grids = []
     for out, lo, hi in zip(outputs["output_id"], outputs[low], outputs[high]):
-        if first.get(out) not in lattice or (len(kinds[out]) != 1 and not fill):
+        if len(kinds.get(out, ())) != 1 or first[out] not in lattice:
             grids.append(None)
             continue
         num, den, _, ideal = lattice[first[out]]
         k0, k1 = _lattice_span(lattice[first[out]], to_int(lo), to_int(hi))
         # slicing keeps a reduced grid reduced: num and den set what divides phase
         grid = (num, den, (ideal + k0 * num) % den, k1 - k0 + 1)
-        grids.append(grid if fill or grid[-1] == held[out] else None)
+        # a fill the members do not hold is padded on whole ticks, off the grid
+        grids.append(grid if grid[-1] == held[out] else None)
     if fitted.any():  # a stretch's grid states its own (see `_describe_pieces`)
         grids = [x if not y else z for x, y, z in zip(grids, fitted, outputs[col])]
     return outputs.assign(**{col: grids})
