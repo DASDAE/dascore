@@ -11,8 +11,16 @@ on ``PartStartTime``. A node with a single
 time sample takes its step from the node's ``OutputDataRate``, or has no step
 when that rate is missing, zero or not finite.
 
+``PRODML_FLAT`` reads files holding one root ``DAS`` (time, locus) dataset
+whose attrs use PRODML raw-node and user-setting names (``PartStartTime``,
+``OutputDataRate``, ``StartDistance``, ``SpatialResolution``,
+``FibreLengthMultiplier``, ...). Distances are taken as metres, which these
+files do not state. ``AmpScaling`` is the factor already applied to the stored
+samples, so ``RawDataUnit`` describes them as stored; it is kept as the
+``amp_scaling`` attr.
+
 More info about ProdML can be found here:
 https://www.energistics.org/prodml-developers-users
 """
 from __future__ import annotations
-from .core import ProdMLV2_0, ProdMLV2_1
+from .core import ProdMLFlatV1, ProdMLV2_0, ProdMLV2_1

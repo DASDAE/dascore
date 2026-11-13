@@ -6,14 +6,17 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
-from dascore.io import FiberIO
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.io.core import _dataset_source, _returns_stored_bytes
 from dascore.io.utils import slice_dataset
 
 from ...utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from .utils import (
+    _FLAT_DATASET,
     _get_data_node,
+    _get_flat_metadata,
     _get_prodml_version_str,
+    _is_flat_prodml,
     _write_prodml,
     _yield_prodml_attrs_coords,
 )
@@ -67,3 +70,25 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
     def write(self, spool, resource: H5Writer, encoding: dict | None = None, **kwargs):
         """Write one raw Patch; ``encoding`` may name "data" and "time"."""
         _write_prodml(spool, resource, h5_encoding(encoding, ("data", "time")))
+
+
+class ProdMLFlatV1(H5ArrayMixin, FiberIO):
+    """
+    Support for flat files: one root ``DAS`` (time, locus) dataset whose attrs
+    use PRODML raw-node names, with no ``Acquisition`` group.
+    """
+
+    name = "PRODML_FLAT"
+    preferred_extensions = ("hdf5", "h5")
+    version = "1"
+
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return the version if the file has the flat layout."""
+        return self.version if _is_flat_prodml(resource) else None
+
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = ()
+    ) -> list[dc.PatchMeta]:
+        """Build coordinates and attrs from the dataset's attrs."""
+        attrs, coords = _get_flat_metadata(resource)
+        return self._dataset_meta(attrs, coords, resource[_FLAT_DATASET])
