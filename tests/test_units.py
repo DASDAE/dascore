@@ -255,6 +255,10 @@ class TestTemperatureSpellings:
         quant = get_quantity(spelling)
         assert quant.dimensionality == get_quantity(expected).dimensionality
 
+    def test_magnitude_without_space(self):
+        """A number written against the spelling keeps its magnitude."""
+        assert get_quantity("20degrees C") == get_quantity("20 degC")
+
     def test_explicit_product_unchanged(self):
         """An explicit product of degree and coulomb stays a product."""
         assert get_quantity("deg*C").units == get_unit("degree") * get_unit("C")
