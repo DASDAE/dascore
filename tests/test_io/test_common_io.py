@@ -47,7 +47,7 @@ from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
 from dascore.io.pickle import PickleIO
-from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
+from dascore.io.prodml import ProdMLFlatV1, ProdMLV2_0, ProdMLV2_1
 from dascore.io.puniu import PuniuV1
 from dascore.io.rsf import RSFV1
 from dascore.io.segy import SegyV1_0
@@ -174,6 +174,7 @@ COMMON_IO_READ_TESTS = {
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
     ),
+    ProdMLFlatV1(): ("prodml_flat_1.h5",),
     PuniuV1(): (FixtureFile("puniu_matrix_file"),),
     RSFV1(): ("example_dascore.rsf",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
@@ -236,6 +237,7 @@ VENDOR_ATTRS = frozenset(
         "acqres",
         "acquisition_id",
         "acquisition_range_m",
+        "amp_scaling",
         "ampli_power",
         "amppower",
         "api",
