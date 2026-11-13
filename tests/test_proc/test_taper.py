@@ -360,6 +360,11 @@ class TestTaperHoles:
         out = stepless_seam_patch.taper(time=0.1)
         assert out.shape == stepless_seam_patch.shape
 
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.taper(time=0.1)
+
 
 class TestTaperDtype:
     """A taper keeps a float dtype and makes other data float64."""

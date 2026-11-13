@@ -8,7 +8,12 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError, PatchAttributeError, UnitError
+from dascore.exceptions import (
+    CoordError,
+    ParameterError,
+    PatchAttributeError,
+    UnitError,
+)
 from dascore.transform.strain import VelocityToStrainRateEdgeless
 from dascore.units import get_quantity
 
@@ -233,6 +238,53 @@ class TestStaggeredStrainRateConversion:
         # Zero step_multiple should raise an error
         with pytest.raises(ParameterError, match="must be positive"):
             patch.velocity_to_strain_rate_edgeless(step_multiple=0)
+
+
+class TestUnevenDistance:
+    """Tests for strain rate on a distance coordinate with no step."""
+
+    @pytest.fixture(scope="class")
+    def uneven_patch(self):
+        """A velocity patch on unevenly spaced distance labels."""
+        rng = np.random.default_rng(0)
+        arc = np.r_[0, np.cumsum(rng.uniform(1, 3, 19))]
+        attrs = dict(data_type="velocity", data_units="m/s", gauge_length=10)
+        distance = dc.get_coord(data=arc, units="m")
+        coords = {"time": np.arange(30) * 0.01, "distance": distance}
+        data = rng.normal(size=(30, 20))
+        dims = ("time", "distance")
+        return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+
+    def test_matches_differentiate(self, uneven_patch):
+        """The default form differentiates the labels, with no gauge length."""
+        out = uneven_patch.velocity_to_strain_rate()
+        expected = uneven_patch.differentiate("distance")
+        assert np.array_equal(out.data, expected.data)
+        assert out.attrs.data_type == "strain_rate"
+        assert get_quantity(out.attrs.data_units) == get_quantity("1/s")
+        assert out.attrs.get("gauge_length") is None
+
+    def test_larger_step_multiple_raises(self, uneven_patch):
+        """A step_multiple other than 2 points to differentiate."""
+        with pytest.raises(CoordError, match="differentiate"):
+            uneven_patch.velocity_to_strain_rate(step_multiple=4)
+
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less distance segments raise, naming the fixes."""
+        distance = two_run_patch.get_coord("time")
+        patch = dc.Patch(
+            data=two_run_patch.data,
+            coords={"time": np.array([0.0]), "distance": distance},
+            dims=("time", "distance"),
+            attrs={"data_type": "velocity"},
+        )
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            patch.velocity_to_strain_rate()
+
+    def test_edgeless_raises(self, uneven_patch):
+        """The edgeless form points to differentiate."""
+        with pytest.raises(CoordError, match="differentiate"):
+            uneven_patch.velocity_to_strain_rate_edgeless()
 
 
 class TestRadianToStrain:

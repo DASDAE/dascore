@@ -298,6 +298,11 @@ class TestSobelFilter:
         out = stepless_seam_patch.sobel_filter("time")
         assert out.shape == stepless_seam_patch.shape
 
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.sobel_filter("time")
+
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])
 def test_filters_validate_their_dims(random_patch, name):

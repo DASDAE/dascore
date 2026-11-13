@@ -607,6 +607,19 @@ def stepless_seam_patch():
 
 
 @pytest.fixture(scope="session")
+def two_run_patch():
+    """A patch whose time coordinate is two step-less runs (two segments)."""
+    time = concat_coords(
+        dc.get_coord(data=np.r_[0.0, 1.0, 3.0, 6.0]),
+        dc.get_coord(data=np.r_[100.0, 102.0, 105.0, 109.0]),
+    )
+    assert time.step is None and time.runs_count == 2
+    data = np.r_[np.zeros(4), np.ones(4)][None]
+    coords = {"distance": np.array([0]), "time": time}
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+
+@pytest.fixture(scope="session")
 def jittered_patch():
     """A patch whose time labels keep a step but sit off its grid."""
     labels = np.arange(120.0)

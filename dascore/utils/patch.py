@@ -1162,12 +1162,20 @@ def _refuse_holes_and_jitter(patch, dims, operation: str) -> None:
 
     A coordinate with no step is an irregular axis, which an operation
     computes on by its labels, as DASCore 0.1.x did; one with a step it does
-    not keep (holes or jitter) raises a CoordError naming the operation.
+    not keep (holes or jitter), or several segments sharing no step, raises
+    a CoordError naming the operation.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)
         if coord.gapped or coord.jittered:
             raise CoordError(_uneven_message(dim, coord, operation))
+        if coord.step is None and getattr(coord, "runs_count", 1) > 1:
+            msg = (
+                f"Coordinate {dim} has more than one segment, which {operation} "
+                "cannot compute across. Use Patch.fill_gaps to join them or "
+                "Patch.split_gaps to split at them."
+            )
+            raise CoordError(msg)
 
 
 def align_patch_coords(
