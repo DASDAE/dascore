@@ -15,7 +15,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.exceptions import InvalidFiberFileError, InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
     parse_units,
@@ -639,7 +639,15 @@ def _yield_prodml_attrs_coords(
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
         attr, coords, dtype = func(node_info, d_coord, base_info, snap=snap)
-        yield attr, coords, node_info.name, dtype, _node_dataset(node_info)
+        dataset = _node_dataset(node_info)
+        if dataset.shape != coords.shape:
+            msg = (
+                f"PRODML node {node_info.name} in {fi.filename}: the file's "
+                f"coordinates describe shape {coords.shape} but its data has "
+                f"shape {dataset.shape}."
+            )
+            raise InvalidFiberFileError(msg)
+        yield attr, coords, node_info.name, dtype, dataset
 
 
 def _get_dims_from_attrs(attrs):

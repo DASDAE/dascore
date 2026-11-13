@@ -12,6 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import get_coord
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import read
 from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
@@ -182,6 +183,56 @@ class TestStoredTimes:
         time = dc.read(path)[0].get_coord("time")
         assert time.evenly_sampled
         assert (time.min(), time.max()) == (stored[0], stored[-1])
+
+
+# RawData cuts and the shapes the refusal names.
+_CUTS = {
+    "time": (np.s_[:-10], r"\(2500, 512\).*\(2490, 512\)"),
+    "distance": (np.s_[:, :-10], r"\(2500, 512\).*\(2500, 502\)"),
+}
+
+
+class TestShortRawData:
+    """A file whose data is smaller than its coordinates is refused."""
+
+    @staticmethod
+    def _cut(tmp_path, cut):
+        """Cut part of RawData, leaving the coordinates alone."""
+        path = tmp_path / "short.h5"
+        shutil.copy(fetch("prodml_2.0.h5"), path)
+        with h5py.File(path, "a") as h5:
+            raw = h5["Acquisition/Raw[0]"]
+            data, attrs = raw["RawData"][...], dict(raw["RawData"].attrs)
+            del raw["RawData"]
+            raw.create_dataset("RawData", data=data[cut]).attrs.update(attrs)
+        return path
+
+    @pytest.fixture(params=list(_CUTS))
+    def short(self, tmp_path, request):
+        """A short file and the message expected for it."""
+        cut, shapes = _CUTS[request.param]
+        return self._cut(tmp_path, cut), rf"Raw\[0\].*short\.h5.*{shapes}"
+
+    def test_read_raises(self, short):
+        """Reading names the node, file and both shapes."""
+        path, match = short
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
+
+    def test_scan_warns_and_skips(self, short):
+        """Scanning skips the file with one warning carrying the reason."""
+        path, match = short
+        with pytest.warns(UserWarning, match=match) as record:
+            assert not dc.scan(path)
+        assert len(record) == 1
+
+    def test_directory_spool_skips(self, tmp_path):
+        """A directory spool indexes nothing from the file."""
+        cut, shapes = _CUTS["time"]
+        path = self._cut(tmp_path, cut)
+        with pytest.warns(UserWarning, match=shapes):
+            spool = dc.spool(path.parent).update()
+        assert not len(spool)
 
 
 class TestReadQuantXV2:
