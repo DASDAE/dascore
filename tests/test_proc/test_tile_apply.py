@@ -704,6 +704,11 @@ class TestArguments:
         assert out.attrs.history == expected.attrs.history
         assert out.attrs.data_id == expected.attrs.data_id
 
+    def test_the_processor_needs_a_dimension(self, patch):
+        """Built directly, without a window to check it, it still refuses none."""
+        with pytest.raises(ParameterError, match="needs a dimension"):
+            TileApply(function=halve)(patch)
+
 
 class TestPhysicalTileBounds:
     """Physical edges and reconstruction indices have independent contracts."""
