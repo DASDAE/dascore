@@ -2783,10 +2783,11 @@ def build_chunk_plan(
     ``fill_value`` instead fills the seams `tolerance` joins, keeping each
     source's labels.
 
-    ``df`` must be the spool's own relation, which carries each grid's exact
-    terms. The frame `Spool.get_contents` returns rounds steps to whole
-    nanoseconds, so a plan built from it can drift on a fractional grid;
-    use `Spool.chunk` instead.
+    Windows follow each grid's exact terms where ``df`` carries them, as
+    the spool's own relation does. A frame without them, hand-built or from
+    `Spool.get_contents` (which rounds steps to whole nanoseconds), is
+    planned on its rounded step and can drift on a fractional grid; use
+    `Spool.chunk` for those.
     """
     if len(kwargs) != 1:
         msg = (
