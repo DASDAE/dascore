@@ -520,6 +520,37 @@ class TestInverseDiscreteFourierTransform:
         assert idft.shape == sin_patch_trimmed.shape
         assert np.allclose(np.real(idft.data), sin_patch_trimmed.data)
 
+    @pytest.fixture(scope="class")
+    def odd_patch(self):
+        """A 3D patch whose source and time lengths both need padding."""
+        coords = {
+            "source": np.arange(17),
+            "distance": np.arange(3.0),
+            "time": np.arange(53) * 0.01,
+        }
+        data = random_state.random((17, 3, 53))
+        return dc.Patch(data=data, coords=coords, dims=tuple(coords))
+
+    def _assert_round_trip(self, out, patch):
+        """Ensure out is patch again, with no private dft leftovers."""
+        self._patches_about_equal(out.real(), patch)
+        assert out.coords == patch.coords
+        assert set(dict(out.attrs)) == set(dict(patch.attrs))
+
+    @pytest.mark.parametrize("order", [("time", "source"), ("source", "time")])
+    def test_undo_padding_one_dim_at_a_time(self, odd_patch, order):
+        """Inverting the dims one at a time removes each one's padding."""
+        out = odd_patch.dft(("source", "time")).idft(order[0]).idft(order[1])
+        self._assert_round_trip(out, odd_patch)
+
+    @pytest.mark.parametrize("order", [("time", "source"), ("source", "time")])
+    @pytest.mark.parametrize("pads", [(True, False), (False, True)])
+    def test_undo_padding_mixed_forward_calls(self, odd_patch, order, pads):
+        """Separate dft calls, only one padding, still invert one at a time."""
+        dft = odd_patch.dft("source", pad=pads[0]).dft("time", pad=pads[1])
+        out = dft.idft(order[0]).idft(order[1])
+        self._assert_round_trip(out, odd_patch)
+
     def test_two_coords_wanting_one_parking_space(self):
         """A pair of names which park in the same place is refused."""
         patch = dc.Patch(

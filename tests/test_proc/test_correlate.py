@@ -342,6 +342,15 @@ class TestCorrelateND:
         assert out.dims[0] == "ft_source"
         self._assert_matches_2d(out, spectra, ["ft_source"])
 
+    def test_padded_batch_dim_inverts_to_its_length(self, patch_3d):
+        """Inverting a padded batch dim after correlating restores its length."""
+        # 17 sources, which dft pads to 18.
+        data = np.random.default_rng(42).random((17, 2, 400))
+        coords = patch_3d.coords.update(source=np.arange(17))
+        patch = patch_3d.new(data=data, coords=coords)
+        out = patch.dft("source").correlate(distance=0, samples=True, lag_dim="time")
+        assert out.idft("source").get_coord("source") == patch.get_coord("source")
+
     def test_missing_lag_dim_raises(self, patch_3d):
         """A patch with more than 2 dims must name the lag dim."""
         with pytest.raises(ParameterError, match="lag_dim must be one of"):
