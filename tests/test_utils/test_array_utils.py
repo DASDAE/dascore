@@ -410,6 +410,53 @@ class TestApplyUfunc:
         with pytest.raises(UnitError, match="logarithmic"):
             level + 1
 
+    def test_logarithmic_units_have_no_power(self, random_patch):
+        """A power, root, or reciprocal of a level in dB is refused."""
+        level = random_patch.set_units("dB")
+        cases = (lambda: level**2, lambda: np.sqrt(level), lambda: 3 / level)
+        for case in cases:
+            with pytest.raises(UnitError, match="logarithmic"):
+                case()
+        for out in (level**1, level // 3, level % 3):
+            assert get_quantity(out.attrs.data_units) == get_quantity("dB")
+
+    @pytest.mark.parametrize(
+        "func, unit, expected",
+        (
+            (np.sqrt, "mm", "mm**0.5"),
+            (np.sqrt, "0.25", "0.5"),
+            (np.square, "0.25", "0.0625"),
+            (np.reciprocal, "0.25", "4"),
+            (np.reciprocal, "100 cm", "0.01 / cm"),
+            (np.cbrt, "µϵ", "µϵ**0.333333"),  # as the label rounds it
+        ),
+    )
+    def test_unary_power_units(self, random_patch, func, unit, expected):
+        """A unary ufunc which is a power gives the power's units."""
+        out = func(random_patch.set_units(unit))
+        assert np.allclose(out.data, func(random_patch.data))
+        assert get_quantity(out.attrs.data_units) == get_quantity(expected)
+
+    @pytest.mark.parametrize("func", (np.abs, np.arcsin, np.arctan))
+    def test_other_unary_ufuncs_keep_units(self, random_patch, func):
+        """A unary ufunc which is not a power leaves the units alone."""
+        out = func(random_patch.set_units("0.25"))
+        assert get_quantity(out.attrs.data_units) == get_quantity("0.25")
+
+    @pytest.mark.parametrize("unit", ("µϵ", "0.25"))
+    def test_scaled_dimensionless_floor_and_mod(self, random_patch, unit):
+        """A bare number is not coerced into a scaled unit by // or %."""
+        patch = random_patch.set_units(unit)
+        units = get_quantity(unit)
+        for out in (patch // 3, patch % 3, np.fmod(patch, 3)):
+            assert get_quantity(out.attrs.data_units) == units
+        out = 3 // (patch + 1)
+        assert get_quantity(out.attrs.data_units) == 1 / units
+        out = random_patch // (3 * get_quantity("µϵ"))
+        assert get_quantity(out.attrs.data_units) == get_quantity("1/µϵ")
+        for out in (1.5 % patch, np.fmod(1.5, patch)):
+            assert get_quantity(out.attrs.data_units) == get_quantity("1")
+
     def test_generalized_ufunc_with_units(self):
         """A gufunc such as matmul cannot be probed on scalars; numpy runs it."""
         square = dc.get_example_patch(shape=(10, 10)).set_units("m")
