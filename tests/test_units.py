@@ -259,6 +259,12 @@ class TestTemperatureSpellings:
         """A number written against the spelling keeps its magnitude."""
         assert get_quantity("20degrees C") == get_quantity("20 degC")
 
+    @pytest.mark.parametrize("units", ["mdeg C", "µdeg C"])
+    def test_prefixed_degree_unchanged(self, units):
+        """A prefixed degree is not a temperature spelling."""
+        expected = get_quantity(units.replace(" ", "*"))
+        assert get_quantity(units) == expected
+
     def test_explicit_product_unchanged(self):
         """An explicit product of degree and coulomb stays a product."""
         assert get_quantity("deg*C").units == get_unit("degree") * get_unit("C")

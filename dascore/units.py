@@ -37,7 +37,7 @@ _EXPONENT_END = re.compile(r"(\^|\*\*)\s*$")
 # Temperature spellings found in files, e.g. "degrees C", "degreesC", "° C",
 # "degrees_Celsius"; pint reads the spaced ones as degree * coulomb (or farad).
 _DEGREE_TEMPERATURE = re.compile(
-    r"(?:(?<![A-Za-z])[Dd]eg(?:ree)?s?\.?|°)[\s_]*(?:(C)(?:elsius)?|F(?:ahrenheit)?)\b"
+    r"(?:(?<![^\W\d])[Dd]eg(?:ree)?s?\.?|°)[\s_]*(?:(C)(?:elsius)?|F(?:ahrenheit)?)\b"
 )
 
 
