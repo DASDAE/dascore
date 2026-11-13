@@ -90,6 +90,8 @@ All other attributes (not grouping attributes, not dimensions) must be equal wit
 
 A missing value (null or `""`) counts as a value, so an attribute one member set and another didn't is a conflict; the output can only state one thing. History and ids are never checked: the output carries the first member's history, and derives its ids from all its members. Merging members whose histories differ, such as processed with unprocessed data, warns.
 
+`conflict` also settles a non-dimensional coordinate on another dimension which the members hold differently or not at all: `"keep_first"` keeps the first member's (unless it lacks one, or the coordinate rides the chunked dimension), `"drop"` leaves it out, and both warn naming it. The output's index describes the coordinate the merge keeps.
+
 ```{python}
 import pytest
 from dascore.exceptions import CoordMergeError

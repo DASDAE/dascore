@@ -951,7 +951,7 @@ def _spool_map(
 
 def stated_units(value) -> str | None:
     """A unit string from a dataframe value, or None where it states none."""
-    if value is None or value == "" or pd.isnull(value):
+    if value is None or pd.isnull(value) or value == "":
         return None
     return str(value)
 

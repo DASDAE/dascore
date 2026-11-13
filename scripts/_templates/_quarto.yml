@@ -306,6 +306,9 @@ website:
         - text: Lazy Operations
           href: notes/lazy_operations.qmd
 
+        - text: Windowed and Lazy Processing
+          href: notes/windowed_processing.qmd
+
         - text: Spool Index
           href: notes/spool_index.qmd
 

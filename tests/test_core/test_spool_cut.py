@@ -18,6 +18,7 @@ from dascore.exceptions import CoordMergeError, ParameterError
 from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
 from dascore.units import m
+from dascore.warnings import DASCoreWarning
 
 DIMS = ("distance", "time")
 SECOND = pd.Timedelta("1s")
@@ -790,3 +791,24 @@ class TestCutWindows:
         np.testing.assert_allclose(
             [(x.min(), x.max()) for x in metres], [[16, 45], [100, 150]]
         )
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_conflicting_coordinates_follow_conflict(
+        self, conflict, channel_conflict_pair
+    ):
+        """A window across sources whose channels differ follows `conflict`."""
+        first, second = channel_conflict_pair
+        spool = dc.spool([first, second])
+        time = first.get_coord("time")
+        windows = np.array([[time.values[-10], second.get_coord("time").values[10]]])
+        with pytest.raises(CoordMergeError, match="channel"):
+            list(spool.cut(time=windows))
+        cut = spool.cut(time=windows, conflict=conflict)
+        with pytest.warns(DASCoreWarning):  # loading settles the channels
+            (out,) = cut
+        if conflict == "keep_first":
+            np.testing.assert_array_equal(
+                out.get_coord("channel").values, first.get_coord("channel").values
+            )
+        else:
+            assert "channel" not in out.coords.coord_map

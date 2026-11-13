@@ -2,6 +2,7 @@
 
 import pickle
 import threading
+import warnings
 from dataclasses import replace
 from datetime import timedelta
 from unittest.mock import Mock
@@ -13,7 +14,12 @@ import pytest
 import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import inventory_patch_pair
-from dascore.exceptions import MissingPatchError, ParameterError, UnitError
+from dascore.exceptions import (
+    InvalidSpoolQueryError,
+    MissingPatchError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
 from dascore.units import ft, get_quantity, m, s
@@ -553,6 +559,35 @@ class TestExplicitMetadataSources:
             loaded.get_coord("time").values, wanted.get_coord("time").values
         )
         assert np.array_equal(loaded.data, wanted.data)
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_planned_members_follow_conflict(self, conflict, channel_conflict_pair):
+        """
+        A merged output's index and rebuilt coordinates apply its conflict
+        policy, warning only when the output loads.
+        """
+        with warnings.catch_warnings(action="error"):
+            merged = dc.spool(list(channel_conflict_pair)).chunk(
+                time=None, conflict=conflict
+            )
+            out = merged.select(distance=np.array([[0, 10]]))
+            if conflict == "drop":
+                with pytest.raises(InvalidSpoolQueryError, match="channel"):
+                    merged.select(channel=(0, 10))
+            else:  # the index holds only the channels the merge keeps
+                assert not len(merged.select(channel=(1000, 1010)))
+                assert len(merged.select(channel=(0, 10))) == 1
+        with pytest.warns(DASCoreWarning):
+            out = out[0]
+        assert ("channel" in out.coords.coord_map) == (conflict == "keep_first")
+        assert _ends(out) == (0, 10)
+
+    def test_keep_first_indexes_first_units(self, channel_conflict_pair):
+        """keep_first indexes the first member's coordinate with its units."""
+        first, second = channel_conflict_pair
+        pair = [first.set_units(channel="m"), second.set_units(channel="km")]
+        merged = dc.spool(pair).chunk(time=None, conflict="keep_first")
+        assert merged.get_contents()["channel_units"].tolist() == ["m"]
 
     def test_missing_live_coordinate_metadata_is_not_assumed_complete(self):
         """A stale live index cannot advertise unverified uneven samples."""

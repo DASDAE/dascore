@@ -4,6 +4,8 @@ Tests for coordinate manager utils.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -11,6 +13,7 @@ import dascore as dc
 from dascore.core.coords import NumericCoord
 from dascore.exceptions import CoordMergeError
 from dascore.utils.coordmanager import merge_coord_managers
+from dascore.warnings import DASCoreWarning
 
 
 class TestMergeCoordManagers:
@@ -180,16 +183,81 @@ class TestMergeCoordManagers:
 
     def test_conflicting_non_dimensional_coords(self, conflicting_non_dim_coords):
         """
-        Ensure conflicting non-dimensional coords can be merged if drop_conflict=True,
-        Otherwise raise.
+        Ensure conflicting non-dimensional coords can be merged if
+        conflict is loosened, otherwise raise. Private coordinates drop
+        silently, even under keep_first.
         """
         c1, c2 = conflicting_non_dim_coords
 
-        out = merge_coord_managers([c1, c2], dim="time", drop_conflicting=True)
-        assert not any([x.startswith("_") for x in out.coord_map])
+        for conflict in ("drop", "keep_first"):
+            with warnings.catch_warnings(action="error"):
+                out = merge_coord_managers([c1, c2], dim="time", conflict=conflict)
+            assert not any([x.startswith("_") for x in out.coord_map])
 
         with pytest.raises(CoordMergeError, match="cannot be merged"):
-            merge_coord_managers([c1, c2], dim="time", drop_conflicting=False)
+            merge_coord_managers([c1, c2], dim="time", conflict="raise")
+
+    @pytest.fixture
+    def channel_pair(self, channel_conflict_pair):
+        """Consecutive managers whose distance `channel` coords differ."""
+        return tuple(x.coords for x in channel_conflict_pair)
+
+    def test_keep_first_keeps_public_coordinate(self, channel_pair):
+        """
+        keep_first keeps the first manager's differing coordinate on a
+        non-merge dimension, and both loosened policies warn, naming it.
+        """
+        cm1, cm2 = channel_pair
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept"):
+            out = merge_coord_managers([cm1, cm2], dim="time", conflict="keep_first")
+        assert np.array_equal(out.get_array("channel"), cm1.get_array("channel"))
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] dropped"):
+            out = merge_coord_managers([cm1, cm2], dim="time", conflict="drop")
+        assert "channel" not in out.coord_map
+        with pytest.raises(CoordMergeError, match="channel"):
+            merge_coord_managers([cm1, cm2], dim="time")
+
+    def test_unshared_coordinate_follows_conflict(self, cm_basic):
+        """
+        A coordinate only the first manager holds is kept by keep_first
+        when it lies off the merge dimension, and dropped otherwise.
+        """
+        n = cm_basic.shape[cm_basic.get_axis("distance")]
+        time = cm_basic.get_coord("time")
+        cm1 = cm_basic.update_coords(
+            channel=("distance", np.arange(n)),
+            power=("time", np.arange(len(time), dtype=float)),
+        )
+        cm2 = cm_basic.update_coords(time=time + time.coord_range())
+        with pytest.warns(DASCoreWarning, match="kept.*dropped"):
+            out = merge_coord_managers([cm1, cm2], dim="time", conflict="keep_first")
+        assert np.array_equal(out.get_array("channel"), np.arange(n))
+        # A rider cannot be kept from one member alone.
+        assert "power" not in out.coord_map
+        with pytest.warns(DASCoreWarning, match="dropped"):
+            out = merge_coord_managers([cm1, cm2], dim="time", conflict="drop")
+        assert "channel" not in out.coord_map
+
+    def test_keep_first_follows_input_order(self, channel_pair):
+        """keep_first keeps the first manager given, not the earliest."""
+        early, late = channel_pair
+        with pytest.warns(DASCoreWarning, match="kept"):
+            out = merge_coord_managers([late, early], dim="time", conflict="keep_first")
+        assert np.array_equal(out.get_array("channel"), late.get_array("channel"))
+        # The merged dimension still runs in time order.
+        assert out.get_coord("time").min() == early.get_coord("time").min()
+
+    @pytest.mark.parametrize("conflict", ["raise", "keep_first", "drop"])
+    def test_dimension_coordinates_are_never_loosened(self, cm_basic, conflict):
+        """Differing coordinates on another dimension raise under any policy."""
+        time = cm_basic.get_coord("time")
+        distance = cm_basic.get_coord("distance")
+        other = cm_basic.update_coords(
+            distance=distance.update_limits(min=distance.max()),
+            time=time + time.coord_range(),
+        )
+        with pytest.raises(CoordMergeError, match="distance is a dimension"):
+            merge_coord_managers([cm_basic, other], dim="time", conflict=conflict)
 
 
 class TestRawMergeKeepsUnits:

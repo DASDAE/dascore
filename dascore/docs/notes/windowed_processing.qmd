@@ -1,0 +1,170 @@
+---
+title: Windowed and Lazy Processing
+---
+
+This note is a plan: it states the API DASCore is building for processing a patch in windows and for processing data larger than memory, and the rules both keep. Nothing in it is implemented unless the note says so, and the code blocks are not executed. [Lazy Operations](lazy_operations.qmd) describes what exists today: the lazy array, the chunk contracts, and the executor which runs a chain a box at a time.
+
+The two subjects are one design. A lazy chain can be split into boxes only where each operation says how far it reaches, and a window is how a user says that for an operation which would otherwise need a whole axis.
+
+## What it will look like
+
+```python
+import dascore as dc
+from dascore.units import s
+
+spool = dc.spool("/data/das/2026-11-01").set_backend("lazy")
+day = spool.chunk(time=None)[0]  # nothing is read
+
+out = (
+    day.select(distance=(200, 1800))
+    .window(time=10 * s, overlap=2 * s).detrend("time")
+    .impulse_window(time=1e-6).pass_filter(time=(1, 20))
+    .median_filter(distance=5, samples=True)
+)
+
+out.spool().chunk(time=600).io.write("filtered", "dasdae")
+```
+
+Each line returns at once with the right coordinates, shape, dtype and `data_id`. The last line reads, computes and writes one box at a time.
+
+## One model for every tiled operation
+
+Cutting an array into overlapping tiles, running something on each, and putting the results back is what a halo filter, a window, an impulse window and a rolling reduction all do. They differ in three choices.
+
+| | Who picks the tile size | What happens to the overlap | Output |
+|---|---|---|---|
+| A halo operation, such as `median_filter` | DASCore; it never affects the result | Discarded | The input's shape |
+| `impulse_window` | DASCore; the overlap is measured | Discarded | The input's shape |
+| `window` | The user; it changes the result | Blended under a taper | The input's shape |
+| A reduction in a window | The user | Nothing to combine | One value for each tile |
+
+The first column is the one a user must understand. Where DASCore picks the tile size, chunking is an implementation detail and the result is the eager one. Where the user picks it, the windowed operation is a different operation from the global one: `window(...).detrend()` is a piecewise detrend, and `window(...).normalize()` is automatic gain control.
+
+## `Patch.window`
+
+`window` declares a tiling and computes nothing. The call on what it returns is one operation, and gives back an ordinary patch.
+
+```python
+w = patch.window(time=10 * s, overlap=2 * s)
+
+w.detrend("time")  # tiled, and blended back
+w.mean("time")     # one value for each tile
+w.apply(func)      # any function of a tile
+```
+
+- **Size.** A keyword for each windowed dimension, in the coordinate's units or, with `samples=True`, in samples.
+- **Overlap or step.** `overlap` is how far each tile reaches into the next, and may be a percentage of the window. `step` is how far each tile advances, and may be longer than the window, which leaves gaps and is only meaningful for a reduction. Giving both is refused.
+- **Blending.** `taper` names the ramp the overlap is blended under: Hann by default, `"triang"` for a linear blend. The ramps are complementary, so an unchanged tile comes back exactly. `analysis` instead multiplies each tile by a window before the operation and blends under its dual.
+- **Ends.** `ends` says what becomes of a last tile which is short: `"pad"`, the default, fills it by an edge mode and cuts the result back; `"drop"` leaves it out; `"shift"` moves it back to end where the array ends. The output shape follows from the metadata for each.
+- **Scope.** A window covers one operation. `patch.window(...).detrend("time").pass_filter(...)` detrends in windows and then filters the blended result. Several steps inside each tile are written as a function given to `apply`.
+
+`window` is defined on `Patch` only. A spool is already windowed by patch: `spool.chunk(time=10, overlap=2)` followed by an operation on each patch is a window whose tiles stay separate.
+
+### What an operation may do in a window
+
+Everything about a windowed operation is decided from metadata when it is called: the output shape and coordinates, how the plan is cut, and whether the tiling is allowed. A tiling which cannot work is refused at the call, never when the data are read.
+
+- **Shape.** An operation may change a tile's shape if the tiles still land on one output grid, which `get_metadata` on a tile's metadata decides. `decimate(time=10)` in a window and step which are multiples of 10 is blended as usual; in a window of 1005 samples it is refused. A reduction gives one value for each tile, on a coordinate of tile centres.
+- **Plan.** The plan is worked out from a tile's metadata, not the patch's. `taper` in a window therefore tapers each tile.
+- **Inputs.** A tile sees itself and the inputs given to the operation, and nothing else. An input shaped like the data, such as the mask of `where`, is tiled alongside the data. Any other input is handed to every tile whole. An operation which needs a channel the tile does not hold must be given it: `patch.window(distance=100).correlate(source)`.
+- **Blending.** The result is blended as it is. Blended phase angles are wrong and DASCore cannot know that an array holds angles, so the choice is the user's. Blending integer or boolean output warns.
+- **Kernel.** `window` is a declaration, and an operation needs no kernel written for it. The tile engine, which is today's `dascore.utils.tiles` and its numba drivers, cuts the data, works the plan out for a tile, runs the operation's ordinary kernel on each, and blends. Where an operation in some window is an operation DASCore already has, the window runs that one instead: `window(time=5, samples=True).median()` is `median_filter`, and a reduction with a step is what `rolling` computes.
+
+A windowed operation records its window in history, as `window(time=10.0, overlap=2.0).detrend(dim='time')`, and in its `data_id`.
+
+## `Patch.impulse_window`
+
+Some operations reach across a whole axis in principle and a short distance in practice. A recursive filter's response to one sample decays, so beyond some distance what it adds is below any tolerance worth naming. `impulse_window` measures that distance and uses it as an overlap which is discarded.
+
+```python
+patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+```
+
+- **Arguments.** A tolerance for each dimension the operation reaches along.
+- **Measurement.** The operation's own kernel is run on an impulse, with the plan it will be run with. The overlap along a dimension is the smallest distance beyond which the summed absolute response is under the tolerance times the whole. The probe grows until that distance sits well inside it, and each side is measured separately, so a causal filter gets an overlap on one side. The measurement depends on the plan alone and is cached for it.
+- **When it does not settle.** The call raises by default. An argument selects falling back to the whole axis.
+- **Which operations.** Only ones which are linear and act the same at every position, which an operation states itself. A response to an impulse says nothing about any other.
+
+Plain `pass_filter` stays exact and needs its axis whole. The user chooses to accept a result equal to a tolerance.
+
+## Backends
+
+A spool or a patch is moved to a backend by name.
+
+```python
+spool.set_backend("jax")             # eager, on JAX
+spool.set_backend("LazyArray")       # lazy, kernels on NumPy
+spool.set_backend("LazyArray[jax]")  # lazy, kernels on JAX
+patch.set_backend("numpy")           # what Patch.load does
+```
+
+`"lazy"` is an alias for `"LazyArray"`, and `"LazyArray"` for `"LazyArray[numpy]"`. The bracket names the array library each box is computed on, which leaves room for another lazy backend later.
+
+One setting decides what happens when an operation has no kernel for the backend and would convert through NumPy: `raise`, `warn` or `ignore`. Under a lazy backend it is `raise`, as it is today; otherwise `warn`. The same setting decides a merge which cannot stay lazy.
+
+A lazy array cannot be an input to an operation on another lazy array. `lazy_a - lazy_b` is refused, and so is a lazy mask; the second input is loaded first. This keeps the chain linear.
+
+## The lazy patch as a promise
+
+A lazy patch promises an array. Its identity is what was done, and its provenance runs back to the files.
+
+- **While only selections are pending**, the patch names a window of its source, as an in-memory patch read from a file does. The same samples have the same `data_id` however they were reached. A `select` on a patch with nothing pending narrows the recipe.
+- **Each computing step** gives a new `data_id`, derived from the operation's id and the id before it, and the step records the id it made.
+- **The recipe** names each stored source and the box of the array it fills, so a lazy patch can be traced step by step to the samples on disk.
+
+## A merge which stays lazy
+
+A spool already merges files by building a recipe from its index, one member for each file window, with the coordinates and attrs taken from the index. Today it loads that recipe at once. Under a lazy backend it hands the recipe to the patch instead.
+
+```python
+day = spool.chunk(time=None)[0]  # a recipe of 1440 members; nothing read
+hour = day.select(time=("2026-11-01T03", "2026-11-01T04"))
+hour.load()                      # opens the 60 files the hour touches
+```
+
+Three cases the eager merge settles by reading need a rule.
+
+- **Members the index cannot describe** are merged from loaded patches today. Under a lazy backend the fallback setting decides.
+- **A file rewritten since it was indexed** is caught before the eager read. The check moves to when the lazy data are read.
+- **Members in different data units** are rescaled as they are merged. That is arithmetic on the data, so it becomes a pending step or such a merge falls back.
+
+## How a window meets the executor
+
+A halo operation is a tiling whose overlap is discarded and whose tile size DASCore chooses, which is the `Halo` contract. A window adds one contract, in which an output box needs the tiles which overlap it.
+
+- The tile grid is anchored to the array, not to the box, so how the work is cut cannot change the result.
+- A box is grown outward to tile boundaries, the tiles are computed and blended, and the box is cut from the result.
+- An axis windowed this way can be cut, which a whole-axis operation's cannot.
+
+## Writing
+
+No new verb. A lazy patch is split through a spool and written as any spool is.
+
+```python
+out.spool().chunk(time=600, overlap=10).io.write("target", "dasdae")
+out.io.write("target", "zarr", encoding={"data": {"chunks": (100, 10_000)}})
+```
+
+The writer drives one pass of the executor with the pieces as its boxes, so a step which needs an axis whole is computed once and not once for each piece. For zarr the boxes are multiples of the stored chunks, so each box writes whole chunks.
+
+## What this replaces
+
+- **`tile_apply`** becomes `window(...).apply(...)`. It has not been released, so it is removed outright.
+- **`rolling`** becomes a reduction in a window with a step. It is released, so it is deprecated and rebuilt on the same model, keeping its fast paths.
+- **`median_filter`** is `window(...).median()` with a step of one sample, and the same kernel answers for both.
+
+These land before the public API is frozen for 1.0.
+
+## Order of work
+
+1. `window` on in-memory patches: `apply`, reductions, the `ends` option, and `rolling` rebuilt on it. Useful with no lazy code at all.
+2. Operations which honour a window, and the window contract in the executor.
+3. `set_backend`, the lazy reader, and the merge which stays lazy.
+4. `impulse_window`.
+5. Writing in one pass, and zarr chunks.
+6. Reading ahead of the computation on a thread pool, driven by the read schedule.
+
+## Still to settle
+
+- The name of the fallback setting.
+- Contracts for the operations a usual chain needs and which state none yet: `detrend`, `decimate`, `taper`, arithmetic with a scalar, the reductions and `sobel_filter`.

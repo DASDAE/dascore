@@ -653,7 +653,11 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
     tolerance = merge_kwargs.pop("tolerance", None)
-    coord_kwargs = {"tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance}
+    coord_kwargs = {
+        "tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance,
+        # attrs and conflicting non-dimensional coords share one policy
+        "conflict": merge_kwargs.get("conflict") or "raise",
+    }
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
@@ -662,12 +666,7 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
 
 
 def _get_merged_coord(
-    df,
-    merge_dim,
-    coords,
-    drop_conflicting=False,
-    tolerance=DEFAULT_TOLERANCE,
-    fuse=True,
+    df, merge_dim, coords, tolerance=DEFAULT_TOLERANCE, fuse=True, **kwargs
 ):
     """
     Get merged coordinates for patches combined along merge_dim.
@@ -682,6 +681,7 @@ def _get_merged_coord(
     `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
     A chunk output whose stretch has a grid then takes its labels from
     that grid (see `dascore.utils.patch_assembly.on_stretch_grid`).
+    `kwargs` go to `merge_coord_managers`.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -690,18 +690,14 @@ def _get_merged_coord(
     except CoordError:
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
         # fall back to raw value concatenation of the dim coord.
-        return merge_coord_managers(
-            coords, dim=merge_dim, drop_conflicting=drop_conflicting
-        )
+        return merge_coord_managers(coords, dim=merge_dim, **kwargs)
     if fuse:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
-    return merge_coord_managers(
-        coords, dim=merge_dim, drop_conflicting=drop_conflicting, dim_coord=merged
-    )
+    return merge_coord_managers(coords, dim=merge_dim, dim_coord=merged, **kwargs)
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
@@ -731,12 +727,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    # Determine if conflicting non-dimensional coords should be dropped.
-    conf = attr_kwargs.get("conflict", None)
-    drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_merged_coord(
-        df, merge_dim, coords, drop_conf_coords, fuse=fuse, **coord_kwargs
-    )
+    new_coord = _get_merged_coord(df, merge_dim, coords, fuse=fuse, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.
@@ -952,8 +943,6 @@ def get_dim_axis_value(
 
     Examples
     --------
-    import dascore.proc.coord    >>> import dascore as dc
-    import dascore.proc.coords    >>> from dascore.utils.patch import get_dim_axis_value
     >>> import dascore as dc
     >>> from dascore.utils.patch import get_dim_axis_value
     >>> patch = dc.get_example_patch()

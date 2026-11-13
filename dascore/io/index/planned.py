@@ -313,6 +313,7 @@ def _aux_coord_info(
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
     concat: bool = False,
+    conflict: str | None = None,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -330,6 +331,9 @@ def _aux_coord_info(
     a rider whose members share one step and meet end to end keeps that
     step (its values still differ member by member, so not its identity).
 
+    A merge's `conflict` settles a coordinate the members do not hold
+    alike (see `merge_coord_managers`): "drop", or a rider some member
+    lacks, leaves it out; "keep_first" describes the first member's.
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -407,10 +411,26 @@ def _aux_coord_info(
         # a coordinate no member holds contributes nothing; one the members
         # do hold is always named, even when nothing about its values can
         # be stated — the patch will have it, so the catalog says so
-        held = grouped[cmin].count().to_numpy() > 0
+        holds = joined[cmin].notna()
         if key_col in joined.columns:
-            held = held | (grouped[key_col].count().to_numpy() > 0)
-        absent = ~held
+            holds = holds | joined[key_col].notna()
+        by_output = holds.groupby(joined["output_id"], sort=True)
+        absent = ~by_output.any().to_numpy()
+        if conflict in ("keep_first", "drop") and not concat:
+            ends = [c for c in (cmin, cmax, key_col, unit_col) if c in joined]
+            lacking = ~by_output.all().to_numpy()
+            differs = (grouped[ends].nunique(dropna=False) > 1).any(axis=1)
+            settled = lacking if rides else lacking | differs.to_numpy()
+            heads = joined.drop_duplicates("output_id").sort_values("output_id")
+            first = heads[ends].to_numpy().T
+            gone = ~holds[heads.index].to_numpy() | (conflict == "drop") | rides
+            absent |= settled & gone
+            lows = np.where(settled, first[0], lows)
+            highs = np.where(settled, first[1], highs)
+            keep, step_ok = keep & ~settled, step_ok & ~settled
+            if unit_col in joined:  # the kept coordinate carries its units
+                unit_first = np.where(settled, first[-1], unit_first)
+                unit_ok = unit_ok | settled
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -1183,10 +1203,16 @@ def derived_catalog(
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(
-        sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
+        sources,
+        trims,
+        name,
+        coord_dims_map,
+        trimmed_dims,
+        concat=mode == "concat",
+        conflict=merge_kwargs.get("conflict"),
     )
     if merge_kwargs.get("fill_value") is not None:
-        aux_info = _aux_info_for_unfed(aux_info, outputs)
+        aux_info = _aux_info_for_unfed(aux_info, outputs, trims)
     records = _output_records(
         outputs,
         token,
@@ -1257,13 +1283,15 @@ _CARRIED_RUN_FIELDS = (
 )
 
 
-def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:
+def _aux_info_for_unfed(aux_info: Mapping, outputs, members) -> dict:
     """Describe fill-only outputs from their nearest fed sibling."""
     out = dict(aux_info)
     known = np.array(sorted(aux_info))
+    fed = set(members["output_id"])
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
-        if output_id in out:
+        # a fed output is described by its members, even with nothing left
+        if output_id in out or output_id in fed:
             continue
         if len(known):
             out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
