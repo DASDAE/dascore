@@ -137,7 +137,7 @@ class PatchProcessor(DascoreBaseModel):
     patch's coordinates start sets `position_free = True`, beside the
     method. It then runs in any number of windows of
     [`Patch.window`](`dascore.Patch.window`) at once; without it each
-    window's plan is worked out to check, and beyond 2000 windows the
+    window's plan is worked out to check, and beyond 1000 windows the
     operation is refused.
 
     Each subclass is registered under `name` (snake case of the class name

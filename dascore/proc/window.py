@@ -261,8 +261,10 @@ def _same(one, other) -> bool:
 
 
 # The most windows whose plans are worked out to check an operation which
-# does not say it is `position_free`; about a tenth of a second's work.
-_MAX_CHECKED = 2000
+# does not say it is `position_free`. Each costs tens of microseconds and
+# the operation's own planning, which for a taper makes about a third of a
+# second of the lot.
+_MAX_CHECKED = 1000
 
 
 class Windowed(PatchProcessor):
@@ -301,7 +303,7 @@ class Windowed(PatchProcessor):
     - An operation says the last itself, by setting `position_free` on its
       class; DASCore's detrend, filters, normalizations and the like do.
       One which does not has its plan worked out for every whole window to
-      check, and is refused where there are more than 2000 windows.
+      check, and is refused where there are more than 1000 windows.
     - An operation which only changes metadata leaves the data as they are.
     - On a lazy patch an output chunk needs only the windows which overlap
       it, so a windowed dimension can be cut even where the operation
@@ -647,7 +649,7 @@ class PatchWindow:
             msg = (
                 f"{name} is not a patch operation a window can run. A window "
                 "runs the patch operations written as processors, such as "
-                "detrend, taper or pass_filter; anything else is a function "
+                "detrend, normalize or pass_filter; anything else is a function "
                 "given to apply."
             )
             raise AttributeError(msg)

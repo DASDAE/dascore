@@ -85,10 +85,7 @@ def _reach(mode, widths: dict[int, int], dtype):
 
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
-    try:
-        found = _designed(float(sr), float(filt_min), float(filt_max), int(corners))
-    except TypeError:  # a bound which is no number, such as None
-        return _design(sr, filt_min, filt_max, corners)
+    found = _designed(sr, filt_min, filt_max, corners)
     # A copy, so nothing a caller does to it reaches the next one.
     return found.copy()
 

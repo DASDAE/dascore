@@ -57,7 +57,7 @@ print(local.attrs.history[-1])
 
 The window covers the one operation called on it, and what comes back is an ordinary patch, so a chain goes on from there: `patch.window(time=0.02).detrend("time").pass_filter(time=(1, 300))` detrends in windows and then filters the blended result.
 
-An operation can run in a window when it gives back a window of the same shape and coordinates, takes no other patch, and does the same thing wherever its window sits; the window must also fit inside its dimension. `decimate` and `select`, which change a window's shape, and `line_mute` given absolute coordinate values, which does something different in each window, are refused before any data are touched. DASCore's `detrend`, filters and normalizations state that they ignore where a window sits; an operation which does not state it, `taper` among them, is checked window by window, and refused where there are more than 2000 windows. A function given to `apply`, below, has no such limits.
+An operation can run in a window when it gives back a window of the same shape and coordinates, takes no other patch, and does the same thing wherever its window sits; the window must also fit inside its dimension. `decimate` and `select`, which change a window's shape, and `line_mute` given absolute coordinate values, which does something different in each window, are refused before any data are touched. DASCore's `detrend`, filters and normalizations state that they ignore where a window sits; an operation which does not state it, `taper` among them, is checked window by window, and refused where there are more than 1000 windows. A function given to `apply`, below, has no such limits.
 
 ## Tiles, blended
 

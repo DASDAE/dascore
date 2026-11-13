@@ -18,7 +18,7 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.proc.filter import SlopeFilter
+from dascore.proc.filter import PassFilter, SlopeFilter
 from dascore.units import Hz, convert_units, get_unit, m, percent, s
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_sampling_rate
@@ -26,6 +26,20 @@ from dascore.utils.patch import get_dim_sampling_rate
 
 class TestPassFilterChecks:
     """Test that bad filter checks raise appropriate errors."""
+
+    @pytest.mark.parametrize("corners", (4.5, "4"))
+    def test_corners_are_not_coerced(self, random_patch, corners):
+        """A design remembered for 4 corners does not answer for what is not 4."""
+        random_patch.pass_filter(corners=4, time=(1, 10))
+        with pytest.raises(ValueError):
+            random_patch.pass_filter(corners=corners, time=(1, 10))
+
+    def test_design_is_not_shared(self, random_patch):
+        """Each call gets its own filter, whatever a caller does to one."""
+        first = PassFilter(time=(1, 10)).get_metadata(random_patch)[1]["sos"]
+        first[:] = 0
+        again = PassFilter(time=(1, 10)).get_metadata(random_patch)[1]["sos"]
+        assert again.any()
 
     def test_no_kwargs_raises(self, random_patch):
         """Ensure ValueError is raised with no dim parameters."""
