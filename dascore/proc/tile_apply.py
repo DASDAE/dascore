@@ -112,6 +112,48 @@ def _engine_for(engine: str, func) -> str:
     return engine
 
 
+def _blended_window(
+    patch, selected, *, samples, overlap, step, taper, analysis, whole=False
+) -> Window:
+    """
+    Return the window tiles are cut and blended by, in the patch's axis order.
+
+    `whole` refuses a window longer than its dimension, for a caller which
+    needs one window wholly inside the patch.
+    """
+    if not selected:
+        msg = "A window needs a dimension and its size, e.g. time=0.5."
+        raise ParameterError(msg)
+    if analysis is not None and taper is not None:
+        msg = (
+            "Given an analysis window, the tiles are blended under its dual; "
+            "a taper cannot be given as well."
+        )
+        raise ParameterError(msg)
+    if isinstance(analysis, np.ndarray) and analysis.ndim != 1:
+        msg = (
+            "An analysis window given as an array is one-dimensional, an "
+            "edge applied along every windowed dimension, so that its dual "
+            "can be built along each axis."
+        )
+        raise ParameterError(msg)
+    # In the patch's axis order, whatever order they were named in, so a
+    # stack's tile and offset axes come out in that order too.
+    position = {dim: axis for axis, dim in enumerate(patch.dims)}
+    selected = dict(sorted(selected.items(), key=lambda kv: position.get(kv[0], -1)))
+    return resolve_window(
+        patch,
+        selected,
+        samples=samples,
+        overlap=overlap,
+        step=step,
+        # Half the window, the most the taper's ramps allow.
+        default_overlap=lambda size: size // 2,
+        min_samples=2,
+        enforce_lt_coord=whole,
+    )
+
+
 class TileApply(PatchProcessor):
     """
     Apply a function to overlapping windows of the patch.
@@ -167,38 +209,14 @@ class TileApply(PatchProcessor):
         if self.mode not in _MODES:
             msg = f"mode must be one of {_MODES}; got {self.mode!r}."
             raise ParameterError(msg)
-        selected = self.model_extra or {}
-        if not selected:
-            msg = "A window needs a dimension and its size, e.g. time=0.5."
-            raise ParameterError(msg)
-        if self.analysis is not None and self.taper is not None:
-            msg = (
-                "Given an analysis window, the tiles are blended under its dual; "
-                "a taper cannot be given as well."
-            )
-            raise ParameterError(msg)
-        if isinstance(self.analysis, np.ndarray) and self.analysis.ndim != 1:
-            msg = (
-                "An analysis window given as an array is one-dimensional, an "
-                "edge applied along every windowed dimension, so that its dual "
-                "can be built along each axis."
-            )
-            raise ParameterError(msg)
-        # In the patch's axis order, whatever order they were named in, so a
-        # stack's tile and offset axes come out in that order too.
-        position = {dim: axis for axis, dim in enumerate(patch.dims)}
-        selected = dict(
-            sorted(selected.items(), key=lambda kv: position.get(kv[0], -1))
-        )
-        return resolve_window(
+        return _blended_window(
             patch,
-            selected,
+            self.model_extra or {},
             samples=self.samples,
             overlap=self.overlap,
             step=self.step,
-            # Half the window, the most the taper's ramps allow.
-            default_overlap=lambda size: size // 2,
-            min_samples=2,
+            taper=self.taper,
+            analysis=self.analysis,
         )
 
     def _spelled(self, name: str) -> str:

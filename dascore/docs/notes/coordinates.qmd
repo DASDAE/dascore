@@ -22,7 +22,7 @@ pieces = spool.chunk(time=None)       # one patch per stretch
 
 The sampling rules apply to one-dimensional, monotonic, numeric or time-like (datetime or timedelta) dimension coordinates; others have no step.
 
-**Associated coordinates** run along a dimension without being one. Whatever an operation does along a dimension, it does to them; if it can't, it drops them with a warning (`fill_gaps` gives them NaN or NaT where it can). Selecting by a multi-dimensional one raises and suggests a mask. Units always survive.
+**Associated coordinates** run along a dimension without being one. Whatever an operation does along a dimension, it does to them; if it can't, it drops them with a warning, or silently where it collapses the dimension, as reductions and a definite `integrate` do (`fill_gaps` gives them NaN or NaT where it can). Selecting by a multi-dimensional one raises and suggests a mask. Units always survive.
 
 ## Terms
 

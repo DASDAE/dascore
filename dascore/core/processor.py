@@ -106,6 +106,11 @@ if TYPE_CHECKING:
 # wraps; `run` spends it, so nothing further down is affected.
 _RECORD: ContextVar[bool] = ContextVar("dascore_record_call", default=True)
 
+# Where an operation is put instead of being run, when something wants the
+# operation a patch method builds rather than its result; see
+# `captured_operation`.
+_CAPTURE: ContextVar[list | None] = ContextVar("dascore_capture", default=None)
+
 
 class PatchProcessor(DascoreBaseModel):
     """
@@ -127,6 +132,13 @@ class PatchProcessor(DascoreBaseModel):
     - `chunk_contract(dtype, plan)`: what a chunk of the output needs of
       the input, which is what lets the operation run on a lazy array.
       None, the default, says it cannot.
+
+    A class whose `get_metadata` returns the same plan wherever the
+    patch's coordinates start sets `position_free = True`, beside the
+    method. It then runs in any number of windows of
+    [`Patch.window`](`dascore.Patch.window`) at once; without it each
+    window's plan is worked out to check, and beyond 1000 windows the
+    operation is refused.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that
@@ -161,6 +173,13 @@ class PatchProcessor(DascoreBaseModel):
     required_attrs: ClassVar[attr_type] = None
     # The result's data_type: None keeps the input's, "" clears it.
     data_type: ClassVar[str | None] = None
+    # Whether `get_metadata` returns the same plan wherever the patch's
+    # coordinates start, as one which reads only axes, lengths, steps and
+    # units does. It lets the operation run in the windows of `Patch.window`
+    # without each window's plan being worked out to check. Read from the
+    # class which writes `get_metadata`, so a subclass which overrides the
+    # method says so again.
+    position_free: ClassVar[bool] = False
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
     # The fields a call may give positionally, in order; None for all.
@@ -224,6 +243,13 @@ class PatchProcessor(DascoreBaseModel):
                 raise TypeError(msg)
             kwargs = {**given, **kwargs}
         super().__init__(**kwargs)
+
+    @classmethod
+    def _is_position_free(cls) -> bool:
+        """Whether the plan is known not to depend on where coordinates start."""
+        owner = next(x for x in cls.__mro__ if "get_metadata" in x.__dict__)
+        # The base plans nothing, which no position can change.
+        return owner is PatchProcessor or bool(owner.__dict__.get("position_free"))
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -412,6 +438,10 @@ class PatchProcessor(DascoreBaseModel):
         the metadata nor the data hands back what it was given, and records
         nothing.
         """
+        if (captured := _CAPTURE.get()) is not None:
+            # Wanted as an operation, not run: see `captured_operation`.
+            captured.append(self)
+            return patch
         record = _RECORD.get()
         if not record:
             # Spent on this one call, which is the one a bypass wrapped: an
@@ -568,6 +598,35 @@ _MODULE_SPELLINGS = frozenset({"dascore.proc.aggregate"})
 _UNCHECKED: list[type[PatchProcessor]] = []
 # `[Patch, PatchMeta]`, once there are such classes to check against.
 _HOSTS: list[type] = []
+
+
+def captured_operation(method, patch, /, *args, **kwargs) -> PatchProcessor:
+    """
+    Return the operation a patch method would run, without running it.
+
+    A method's body resolves its arguments and builds its processor, so
+    calling it is the one way to get the processor a call means. Nothing is
+    computed and the patch is not changed.
+
+    Raises
+    ------
+    ParameterError
+        If the method is not one operation: a function which is not a
+        processor, or a method which runs several.
+    """
+    token = _CAPTURE.set(found := [])
+    try:
+        method(patch, *args, **kwargs)
+    finally:
+        _CAPTURE.reset(token)
+    if len(found) != 1:
+        name = getattr(method, "__name__", repr(method))
+        msg = (
+            f"{name} is not a single patch operation, so it cannot be taken "
+            f"as one: calling it ran {len(found)} operations."
+        )
+        raise ParameterError(msg)
+    return found[0]
 
 
 def _unrecorded_attrs(attrs: PatchAttrs) -> PatchAttrs:

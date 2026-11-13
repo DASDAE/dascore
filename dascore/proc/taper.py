@@ -138,6 +138,12 @@ class Taper(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
+    # The ramps are a length of the window, never a place in it. Found
+    # against a float coordinate, a length can round a sample either way
+    # from one window to the next; in the windows of `Patch.window` every
+    # window is given the first one's, which is what a taper of each means.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the axis, the ramps, and where each meets the untouched middle."""
         shape = meta.shape

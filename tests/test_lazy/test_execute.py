@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import tracemalloc
+import warnings
+from typing import ClassVar
+
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.exceptions import LazyOperationError, PatchError
+from dascore.core.source import ArraySource
+from dascore.exceptions import LazyOperationError, ParameterError, PatchError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.contract import Pointwise, Window
 from dascore.lazy.execute import chunk_boxes, compute, read_schedule
-from dascore.lazy.recipe import concat
+from dascore.lazy.recipe import Recipe, concat
 from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
 
@@ -236,6 +241,146 @@ class TestLoad:
         assert (len(recipe_loads) > 1) == (rows > 0)
         assert loaded.attrs == expected.attrs
         np.testing.assert_allclose(loaded.data, expected.data, rtol=1e-12, atol=1e-12)
+
+
+class TestWindowed:
+    """An operation in a window is computed from the windows a box overlaps."""
+
+    CASES: ClassVar = {
+        # An operation with no contract, which eagerly needs its axis whole.
+        "detrend": lambda x: x.window(time=64, samples=True).detrend("time"),
+        "whole_axis": lambda x: x.window(distance=32, samples=True).pass_filter(
+            time=(10, 100)
+        ),
+        "halo_beside": lambda x: x.window(time=64, samples=True).median_filter(
+            distance=3, samples=True
+        ),
+        "halo_inside": lambda x: x.window(time=64, samples=True).median_filter(
+            time=3, samples=True
+        ),
+        "pointwise": lambda x: x.window(time=50, step=37, samples=True).abs(),
+        "two_dims": lambda x: x.window(time=64, distance=16, samples=True).detrend(
+            "time"
+        ),
+        "analysis": lambda x: x.window(
+            time=64, overlap=48, samples=True, analysis="hann"
+        ).abs(),
+        "fill": lambda x: x.window(time=64, samples=True, fill=3.0).abs(),
+        "in_a_chain": lambda x: (
+            x.select(time=(10, 1700), samples=True)
+            .window(time=64, samples=True)
+            .detrend("time")
+            .abs()
+        ),
+    }
+
+    @pytest.mark.parametrize("name", CASES)
+    @pytest.mark.parametrize("rows", (0, 60, 3, 1 / 8))
+    def test_any_block_size(self, lazy, eager, name, rows):
+        """However the work is cut, the result is the eager one exactly."""
+        out, expected = self.CASES[name](lazy), self.CASES[name](eager)
+        assert out.backend == "lazy"
+        with config_context(lazy_block_size=int(rows * ROW)):
+            loaded = out.load()
+        assert loaded.attrs == expected.attrs
+        assert np.array_equal(loaded.data, expected.data)
+
+    def test_windowed_axis_is_cut(self, lazy):
+        """A dimension detrend needs whole is cut once it is windowed."""
+        array = lazy.window(time=64, samples=True).detrend("time").data
+        boxes = chunk_boxes(array, block_size=ROW)
+        assert len({box[1] for box in boxes}) > 1
+        # Nothing says how far a detrend reaches along distance.
+        assert {box[0] for box in boxes} == {slice(0, lazy.shape[0])}
+
+    def test_reads_only_its_windows(self, lazy):
+        """A box reads the windows which overlap it, and no more."""
+        array = lazy.window(time=64, samples=True).abs().data
+        box = (slice(10, 20), slice(1000, 1010))
+        # Windows of 64 every 32, the first starting 32 before the array.
+        assert read_schedule(array, [box]) == [(slice(10, 20), slice(960, 1056))]
+
+    @pytest.mark.parametrize(
+        "window",
+        ({}, {"fill": 2.5}, {"analysis": "hann", "overlap": 48}),
+        ids=("plain", "fill", "analysis"),
+    )
+    @pytest.mark.parametrize("name", ("abs", "real"))
+    def test_states_the_dtype_of_integers(self, tmp_path_factory, window, name):
+        """The dtype stated before anything is read is the one computed."""
+        data = np.random.default_rng(2).integers(-9, 9, (300, 2000), np.int16)
+        ints = lazy_patch(stored_patch(tmp_path_factory.mktemp("ints"), data))
+        # Only integers which reach the blend as integers are warned of: a
+        # fill or an analysis window has made floats of them already.
+        expected_warning = () if window else (UserWarning,)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = getattr(ints.window(time=64, samples=True, **window), name)()
+            eager = ints.load().window(time=64, samples=True, **window)
+            expected = getattr(eager, name)()
+            # Said once when declared, and not again for each box computed.
+            with config_context(lazy_block_size=10 * ROW):
+                loaded = out.load()
+        blends = [x for x in caught if "Blending windows of" in str(x.message)]
+        assert len(blends) == 2 * len(expected_warning)
+        assert out.dtype == loaded.dtype == expected.dtype
+        assert np.array_equal(loaded.data, expected.data)
+
+    @pytest.mark.parametrize("name, args", (("abs", ()), ("set_units", ("m",))))
+    def test_bad_blend_refused_before_reading(self, lazy, recipe_loads, name, args):
+        """A taper whose ramps would cross is refused when it is called."""
+        window = lazy.window(time=64, overlap=48, samples=True)
+        # Whether or not the operation computes anything to blend.
+        with pytest.raises(ParameterError, match="ramps would cross"):
+            getattr(window, name)(*args)
+        assert not recipe_loads
+
+    def test_declaring_is_quiet(self, lazy, recipe_loads):
+        """The window of zeros run to find the dtype raises no warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = lazy.window(time=64, samples=True).standardize("time")
+        assert out.dtype == np.float64 and not recipe_loads
+
+    def test_metadata_only_adds_no_step(self, lazy):
+        """An operation with no kernel leaves the lazy array as it was."""
+        out = lazy.window(time=64, samples=True).set_units("m/s")
+        assert out.data is lazy.data
+        assert out.attrs.data_units == dc.get_quantity("m/s")
+
+    def test_declaring_reads_and_holds_little(self):
+        """The dtype is found from a short window, however long the others are."""
+        shape = (8, 20_000_000)
+        coords = {"distance": np.arange(8.0), "time": np.arange(shape[1])}
+        recipe = Recipe.from_source(ArraySource.full(shape, 1, dtype=np.int16))
+        long = dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
+        tracemalloc.start()
+        try:
+            out = long.window(distance=4, samples=True).detrend("distance")
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # One window whole would be 4 by 20 million samples.
+        assert out.dtype == np.float64 and peak < 20e6
+
+    def test_dtype_of_what_cannot_run_short(self, tmp_path_factory):
+        """An operation which needs more of a dimension than is tried gets it."""
+        data = np.random.default_rng(3).integers(-9, 9, (300, 2000), np.int16)
+        ints = lazy_patch(stored_patch(tmp_path_factory.mktemp("short"), data))
+        # A fit to 201 samples of time, where the dtype is first tried on 64.
+        call = {"polyorder": 2, "time": 201, "samples": True}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            out = ints.window(distance=32, samples=True).savgol_filter(**call)
+            eager = ints.load().window(distance=32, samples=True)
+            expected = eager.savgol_filter(**call)
+        assert out.dtype == expected.dtype
+
+    def test_reduction_still_refused(self, lazy, recipe_loads):
+        """A reduction in a window states no contract yet."""
+        with pytest.raises(LazyOperationError):
+            lazy.window(time=64, samples=True).mean()
+        assert not recipe_loads
 
 
 class TestFilterArguments:

@@ -410,15 +410,16 @@ class TestApplyUfunc:
         with pytest.raises(UnitError, match="logarithmic"):
             level + 1
 
-    def test_logarithmic_units_have_no_power(self, random_patch):
-        """A power, root, or reciprocal of a level in dB is refused."""
-        level = random_patch.set_units("dB")
+    @pytest.mark.parametrize("unit", ("dB", "dBm"))
+    def test_logarithmic_units_have_no_power(self, random_patch, unit):
+        """A power, root, or reciprocal of a level is refused."""
+        level = random_patch.set_units(unit)
         cases = (lambda: level**2, lambda: np.sqrt(level), lambda: 3 / level)
         for case in cases:
             with pytest.raises(UnitError, match="logarithmic"):
                 case()
-        for out in (level**1, level // 3, level % 3):
-            assert get_quantity(out.attrs.data_units) == get_quantity("dB")
+        for out in (level**1, level * 3, level // 3, level % 3):
+            assert get_quantity(out.attrs.data_units) == get_quantity(unit)
 
     @pytest.mark.parametrize(
         "func, unit, expected",
@@ -428,7 +429,7 @@ class TestApplyUfunc:
             (np.square, "0.25", "0.0625"),
             (np.reciprocal, "0.25", "4"),
             (np.reciprocal, "100 cm", "0.01 / cm"),
-            (np.cbrt, "µϵ", "µϵ**0.333333"),  # as the label rounds it
+            (np.cbrt, "µϵ", "µϵ**(1/3)"),
         ),
     )
     def test_unary_power_units(self, random_patch, func, unit, expected):
@@ -436,6 +437,16 @@ class TestApplyUfunc:
         out = func(random_patch.set_units(unit))
         assert np.allclose(out.data, func(random_patch.data))
         assert get_quantity(out.attrs.data_units) == get_quantity(expected)
+
+    @pytest.mark.parametrize(
+        "root, power",
+        ((np.cbrt, 3), (lambda x: x ** (1 / 3), 3), (lambda x: x ** (1 / 7), 7)),
+    )
+    def test_fractional_power_round_trips(self, random_patch, root, power):
+        """The stored exponent of a root is exact, so undoing it gives metres."""
+        rooted = root(random_patch.set_units("m"))
+        out = (rooted**power).convert_units("m")
+        assert get_quantity(out.attrs.data_units) == get_quantity("m")
 
     @pytest.mark.parametrize("func", (np.abs, np.arcsin, np.arctan))
     def test_other_unary_ufuncs_keep_units(self, random_patch, func):

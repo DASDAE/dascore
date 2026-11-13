@@ -70,6 +70,9 @@ class Detrend(PatchProcessor):
     dim: str
     type: Literal["linear", "constant"] = "linear"
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the axis to detrend along."""
         if self.dim not in meta.dims:

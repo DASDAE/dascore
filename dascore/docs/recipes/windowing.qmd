@@ -10,7 +10,8 @@ execute:
 |---|---|---|
 | a value per sample, from the samples around it | a reduction, such as `patch.window(time=0.1).mean()` | a patch shaped like the input |
 | a transform of each window, kept as windows | [`Patch.stft`](`dascore.Patch.stft`), or [`apply`](`dascore.proc.window.PatchWindow.apply`) with `mode="stack"` | a patch with a window axis |
-| each window transformed and the windows blended back | [`apply`](`dascore.proc.window.PatchWindow.apply`) | a patch shaped like the input |
+| a patch operation run in each window, and the windows blended back | the operation, such as `patch.window(time=1).detrend("time")` | a patch shaped like the input |
+| a function of your own run in each window, and the windows blended back | [`apply`](`dascore.proc.window.PatchWindow.apply`) | a patch shaped like the input |
 
 Window lengths use coordinate units or samples (`samples=True`). `overlap` accepts a count, duration, percentage, or per-dimension mapping, and `step` says how far each window advances instead. A window with neither overlaps the next by half when it is blended, and advances one sample when it is reduced.
 
@@ -35,6 +36,28 @@ assert not np.isnan(envelope.data).any()
 # Any function which reduces the last axis.
 upper = patch.window(time=0.1, step=0.05).reduce(np.nanpercentile, 90)
 ```
+
+## An operation in each window
+
+A patch operation called on a window runs in each window, and the windows are blended back under complementary tapers. The result is a different one from the operation run on the whole patch: this takes a trend out of each 20 ms, which follows a drift a single line through the whole record cannot.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_2")
+
+whole = patch.detrend("time")
+local = patch.window(time=0.02).detrend("time")
+assert local.shape == patch.shape
+assert not np.allclose(local.data, whole.data)
+print(local.attrs.history[-1])
+```
+
+The window covers the one operation called on it, and what comes back is an ordinary patch, so a chain goes on from there: `patch.window(time=0.02).detrend("time").pass_filter(time=(1, 300))` detrends in windows and then filters the blended result.
+
+An operation can run in a window when it gives back a window of the same shape and coordinates, takes no other patch, and does the same thing wherever its window sits; the window must also fit inside its dimension. `decimate` and `select`, which change a window's shape, and `line_mute` given absolute coordinate values, which does something different in each window, are refused before any data are touched. DASCore's `detrend`, `taper`, filters and normalizations state that they ignore where a window sits; an operation which does not state it is checked window by window, and refused where there are more than 1000 windows. A function given to `apply`, below, has no such limits.
 
 ## Tiles, blended
 

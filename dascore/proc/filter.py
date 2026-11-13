@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import sys
+from functools import lru_cache
 from typing import Any, ClassVar
 
 import numpy as np
@@ -84,6 +85,23 @@ def _reach(mode, widths: dict[int, int], dtype):
 
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
+    try:
+        found = _designed(sr, filt_min, filt_max, corners)
+    except TypeError:  # an argument which is no key, such as an array
+        return _design(sr, filt_min, filt_max, corners)
+    # A copy, so nothing a caller does to it reaches the next one.
+    return found.copy()
+
+
+@lru_cache(maxsize=64)
+def _designed(sr, filt_min, filt_max, corners):
+    """Return a filter designed once for its arguments."""
+    # A filter in each of many windows is the same filter each time.
+    return _design(sr, filt_min, filt_max, corners)
+
+
+def _design(sr, filt_min, filt_max, corners):
+    """Design the second order sections."""
     nyquist = 0.5 * sr
     low = None if pd.isnull(filt_min) else filt_min / nyquist
     high = None if pd.isnull(filt_max) else filt_max / nyquist
@@ -159,6 +177,9 @@ class PassFilter(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the axis and the filter's second-order sections."""
         dim, (arg1, arg2) = check_filter_kwargs(self.model_extra or {})
@@ -222,6 +243,9 @@ class SobelFilter(PatchProcessor):
     mode: Any = "reflect"
     cval: Any = 0.0
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
         problems = {
@@ -252,6 +276,9 @@ class _WindowFilter(PatchProcessor):
     model_config = ConfigDict(extra="allow")
     # How `resolve_window` reads the window.
     _window_rules: ClassVar[dict[str, Any]] = {"min_samples": 0}
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the window along every axis, and the axes it spans."""
@@ -379,6 +406,9 @@ class NotchFilter(PatchProcessor):
     q: Any
 
     model_config = ConfigDict(extra="allow")
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the axis and filter coefficients of each dimension."""
@@ -542,6 +572,9 @@ class GaussianFilter(_WindowFilter):
     mode: Any = "reflect"
     cval: Any = 0.0
     truncate: Any = 4.0
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return each sigma in samples, unrounded: it is no window length."""
