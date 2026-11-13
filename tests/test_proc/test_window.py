@@ -1075,6 +1075,14 @@ class TestPositionFree:
         out = window.line_mute(distance=tuple(far), relative=False)
         assert out.shape == patch.shape
 
+    def test_values_no_window_can_plan_for(self, patch):
+        """Absolute values the first window cannot even plan are refused the same."""
+        start = patch.get_coord("time").min()
+        edges = [start + dc.to_timedelta64(5 + x / 10) for x in range(4)]
+        window = patch.window(time=100, samples=True)
+        with pytest.raises(ParameterError, match="has a `relative` argument"):
+            window.taper_range(time=tuple(edges))
+
     def test_ragged_arguments(self, patch):
         """Values which make no array, as a line's ends, are not taken for one."""
         window = patch.window(time=100, samples=True)
@@ -1179,9 +1187,8 @@ class TestOtherBackends:
             """Raise: nothing should be converted."""
             raise AssertionError("the data were converted to NumPy")
 
-        # Both ways DASCore has of doing it: the window's own, and the one
-        # an operation with no implementation for the library goes through.
-        monkeypatch.setattr(window_module, "to_numpy", refuse)
+        # The one way an operation with no implementation for the library,
+        # or a window around one, is taken through NumPy.
         monkeypatch.setattr(processor_module, "to_numpy", refuse)
 
     @pytest.mark.parametrize("name", CASES)
@@ -1235,9 +1242,9 @@ class TestOtherBackends:
         operation.
         """
         calls = []
-        original = window_module.to_numpy
+        original = processor_module.to_numpy
         monkeypatch.setattr(
-            window_module, "to_numpy", lambda x: calls.append(1) or original(x)
+            processor_module, "to_numpy", lambda x: calls.append(1) or original(x)
         )
         expected = patch.window(time=100, samples=True).detrend("time")
         there = _on(patch, library)
@@ -1322,7 +1329,7 @@ class TestOtherBackends:
         assert _values(out).dtype == np.float32
 
     def test_operation_which_needs_its_axis_whole(self, patch, library):
-        """A window is one piece along its axes, as a transform asks of dask."""
+        """A transform, which needs its axis in one piece, runs in a window."""
         expected = patch.window(time=100, samples=True).whiten(time=None)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")

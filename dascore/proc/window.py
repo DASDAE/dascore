@@ -21,9 +21,10 @@ from typing import Any
 import numpy as np
 from pydantic import ConfigDict
 
-from dascore.core.processor import PatchProcessor, captured_operation
+from dascore.core.processor import PatchProcessor, _via_numpy, captured_operation
 from dascore.exceptions import ParameterError, PatchError
 from dascore.lazy.contract import Halo, Pointwise, Tiles, Unchanged, WholeAxis
+from dascore.proc.basic import _pad_array
 from dascore.proc.rolling import _pandas_agrees, _rolling_pandas
 from dascore.proc.tile_apply import TileApply, _blended_window, _windowed, _windows
 from dascore.utils.array_api import (
@@ -33,8 +34,6 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     device,
-    to_numpy,
-    warn_numpy_fallback,
 )
 from dascore.utils.misc import optional_import, suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
@@ -602,11 +601,9 @@ class Windowed(PatchProcessor):
             # The operation has nothing for this backend and goes through
             # NumPy. Once, for the whole array: a window at a time, a lazy
             # backend would compute what its windows share again for each.
-            warn_numpy_fallback(name, backend, skip_dascore=True)
-            out, made = self._blend(to_numpy(data), inner=inner, tiles=tiles, **where)
-            if not quiet:
-                _warn_if_integers(made, out.dtype)
-            return asarray_like(out, data)
+            convert = _via_numpy(type(self).numpy_kernel, name)
+            rest = {"others": others, "inner": inner, "quiet": quiet, "tiles": tiles}
+            return convert(self, data, **where, **rest)
         xp = array_namespace(data)
         plan = get_tile_plan(length, size, stride)
         tiles = tiles or tuple((0, count) for count in plan.grid)
@@ -614,26 +611,20 @@ class Windowed(PatchProcessor):
         tail = tuple(range(-ndim, 0))
         moved = xp.moveaxis(data, axes, tail)
         fill = 0 if self.fill is None else self.fill
-        # A plain number, which every array library takes.
-        fill = fill.item() if isinstance(fill, np.generic) else fill
         if fill != 0:
             wide = fill_dtype(_as_numpy_dtype(moved.dtype), fill)
             moved = xp.astype(moved, _dtype_on(moved, wide))
         # A window reaching beyond the array holds the fill there: the data
-        # are lengthened at each end by a block of it.
+        # are lengthened at each end by as much of it as the windows reach.
         spans = zip(tiles, size, stride, plan.margin, length, strict=True)
-        extent, inside = [], []
-        for level, ((first, last), z, step, margin, n) in enumerate(spans):
+        extent, inside, widths = [], [], [(0, 0)] * (moved.ndim - ndim)
+        for (first, last), z, step, margin, n in spans:
             low, high = first * step - margin, (last - 1) * step - margin + z
             before, after = max(low, 0) - low, high - min(high, n)
-            blocks = [
-                _block(xp, moved, level - ndim, before, fill),
-                moved,
-                _block(xp, moved, level - ndim, after, fill),
-            ]
-            moved = xp.concat([x for x in blocks if x is not None], axis=level - ndim)
+            widths.append((before, after))
             extent.append(high - low)
             inside.append(slice(before, high - low - after))
+        moved = _pad_array(moved, widths, fill)
         overlap = tuple(z - step for z, step in zip(size, stride, strict=True))
         analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
         # Windows a whole number of colours apart never share a sample, so
@@ -712,8 +703,10 @@ class Windowed(PatchProcessor):
                         kept.append(edge)
                 edges = [*kept, edges[-1]]
             spans.append(list(pairwise(edges)))
-        # Handed to every task once, not copied into each.
-        shared = dask.delayed((self, where, inner, like.dtype), traverse=False)
+        # What a chunk of a lazy patch is run by. Handed to every task once,
+        # not copied into each.
+        run = partial(self.numpy_kernel, **plan, quiet=True)
+        shared = dask.delayed((contract, run, like.dtype), traverse=False)
 
         def build(prefix: tuple):
             """Return the pieces under `prefix`, nested by axis for `block`."""
@@ -721,12 +714,7 @@ class Windowed(PatchProcessor):
                 return [build((*prefix, span)) for span in spans[len(prefix)]]
             box = tuple(slice(low, high) for low, high in prefix)
             needed = contract.needs(box, data.shape)
-            cut = tuple(
-                slice(b.start - n.start, b.stop - n.start)
-                for b, n in zip(box, needed, strict=True)
-            )
-            tiles = contract.tiles(box)
-            task = dask.delayed(_blended_piece)(shared, data[needed], tiles, cut)
+            task = dask.delayed(_blended_piece)(shared, data[needed], box, needed)
             shape = tuple(high - low for low, high in prefix)
             return array.from_delayed(task, shape=shape, dtype=like.dtype)
 
@@ -781,13 +769,13 @@ class Windowed(PatchProcessor):
         return np.moveaxis(out[inside], tail, axes), made.dtype
 
 
-def _blended_piece(shared, piece, tiles, cut):
+def _blended_piece(shared, piece, box, needed):
     """Return one piece of a dask array: the windows around it blended, and cut."""
-    operation, where, inner, dtype = shared
+    contract, run, dtype = shared
     with _DASK_TURN:
-        out, _ = operation._blend(np.asarray(piece), inner=inner, tiles=tiles, **where)
+        out = contract.apply(run, np.asarray(piece), box, needed)
     # In the dtype the result states, whatever this piece's values made.
-    return out[cut].astype(dtype, copy=False)
+    return out.astype(dtype, copy=False)
 
 
 def _weighted(xp, array, weights: np.ndarray):
