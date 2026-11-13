@@ -50,7 +50,7 @@ A coordinate with more than `dascore.config.max_index_runs` (256) runs is stored
 
 ### What else is kept
 
-The index also keeps each numeric attribute's and coordinate's original dtype, and whether the scalar attributes fully describe the patch (history is never stored). That lets DASCore tell which rows it can rebuild from metadata alone and which need the file opened. A coordinate whose values have no supported range form keeps its name, but you cannot select on it. `{dim}_step` is filled in only for evenly sampled coordinates.
+The index also keeps each numeric attribute's and coordinate's original dtype, and whether the scalar attributes fully describe the patch (history and the SEG-Y text header are per-patch provenance and are never stored). That lets DASCore tell which rows it can rebuild from metadata alone and which need the file opened. A coordinate whose values have no supported range form keeps its name, but you cannot select on it. `{dim}_step` is filled in only for evenly sampled coordinates.
 
 ## Time queries
 
