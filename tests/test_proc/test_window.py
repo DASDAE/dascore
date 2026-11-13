@@ -17,6 +17,7 @@ from dascore.core import processor as processor_module
 from dascore.core.processor import PatchProcessor, captured_operation
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
+    FilterValueError,
     LazyOperationError,
     ParameterError,
     PatchAttributeError,
@@ -798,9 +799,19 @@ class TestOperationsRefused:
     def test_error_of_the_operation_names_the_window(self, patch):
         """What the operation raises for one window says that is where."""
         window = patch.window(time=100, samples=True)
-        with pytest.raises(ValueError, match="out of bounds") as caught:
-            window.taper_range(time=(0.1, 0.2, 0.3, 0.4), relative=False)
+        # A corner above what any window's sampling can hold.
+        with pytest.raises(FilterValueError) as caught:
+            window.pass_filter(time=(1, 1e9))
         assert "one window of Patch.window" in caught.value.__notes__[0]
+
+    def test_absolute_values_are_refused_wherever_they_lie(self, patch):
+        """Absolute values no window holds are refused as those in the first are."""
+        window = patch.window(time=100, samples=True)
+        start = patch.get_coord("time").min()
+        for seconds in (0.0, 5.0):
+            edges = [start + dc.to_timedelta64(seconds + x) for x in (0.1, 0.2)]
+            with pytest.raises(ParameterError, match="has a `relative` argument"):
+                window.line_mute(time=tuple(edges), relative=False)
 
     @pytest.mark.parametrize(
         "needs, error",
@@ -1033,7 +1044,14 @@ class TestPositionFree:
                 """Return the parent's plan."""
                 return super().get_metadata(meta)
 
+        class Unsaid(dc.proc.Detrend):
+            """A detrend which takes back what its parent says."""
+
+            name = None
+            position_free = False
+
         dims = ("time",)
+        assert not Unsaid(dim="time")._is_position_free(dims)
         assert Planless()._is_position_free(dims)
         assert dc.proc.Detrend(dim="time")._is_position_free(dims)
         assert Envelope(dim="time")._is_position_free(dims)
@@ -1043,7 +1061,7 @@ class TestPositionFree:
 
     def test_undeclared_is_refused(self, patch):
         """An operation which does not say so is not run, however few windows."""
-        with pytest.raises(ParameterError, match="setting position_free"):
+        with pytest.raises(ParameterError, match="says by position_free"):
             Windowed(_Sized(), time=100, samples=True)(patch)
 
     def test_arguments_can_decide(self, patch):
@@ -1057,11 +1075,17 @@ class TestPositionFree:
         out = window.line_mute(distance=tuple(far), relative=False)
         assert out.shape == patch.shape
 
+    def test_ragged_arguments(self, patch):
+        """Values which make no array, as a line's ends, are not taken for one."""
+        window = patch.window(time=100, samples=True)
+        out = window.line_mute(time=(0, [0, 0.3]), distance=(None, [0, 300]))
+        assert out.shape == patch.shape
+
     def test_frequencies_are_places(self, patch):
         """A patch already transformed is weighted by where its frequencies are."""
         spectrum = patch.dft(("time", "distance"))
         window = spectrum.window(ft_time=100, samples=True)
-        with pytest.raises(ParameterError, match="setting position_free"):
+        with pytest.raises(ParameterError, match="says by position_free"):
             window.slope_filter(filt=(2e3, 2.2e3, 8e3, 2e4))
 
     def test_many_windows(self, monkeypatch):
@@ -1265,6 +1289,20 @@ class TestOtherBackends:
         assert out.data.chunks == there.data.chunks
         # Blends outside a dask task, as the dtype is found by, hold no turn.
         assert sum(turns) == 2
+
+    def test_dask_pieces_agree_on_a_dtype(self, library):
+        """Every piece has the dtype stated, whatever its own values made."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        dask_array = pytest.importorskip("dask.array")
+        data = np.ones((12, 400), np.uint8)
+        coords = {"distance": np.arange(12.0), "time": np.arange(400.0)}
+        patch = dc.Patch(data, coords, ("distance", "time"))
+        there = patch.new(data=dask_array.from_array(data, chunks=(12, 100)))
+        # Half precision windows, which a detrend widens only where one holds NaN.
+        out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
+        blocks = [x.compute().dtype for x in out.data.blocks]
+        assert set(blocks) == {np.dtype(out.dtype)}
 
     def test_dask_result_pickles(self, patch, library):
         """A windowed result on dask can be pickled, tasks and all."""

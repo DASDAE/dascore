@@ -138,9 +138,10 @@ class PatchProcessor(DascoreBaseModel):
     patch's coordinates start sets `position_free = True`, beside the
     method. Where its arguments decide, it writes a method instead,
     `position_free(self, dims)`, given the dimensions whose start may move.
-    Only such an operation runs in the windows of
+    A class which writes `get_metadata` runs in the windows of
     [`Patch.window`](`dascore.Patch.window`), where one plan is worked out
-    and run in every window.
+    and run in every window, only if it says so; one which plans nothing
+    need not.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that
@@ -177,8 +178,9 @@ class PatchProcessor(DascoreBaseModel):
     data_type: ClassVar[str | None] = None
     # Whether `get_metadata` returns the same plan wherever the patch's
     # coordinates start, as one which reads only axes, lengths, steps and
-    # units does. Only such an operation runs in the windows of
-    # `Patch.window`, where one plan is run in every window. Read from the
+    # units does. A class which writes `get_metadata` runs in the windows
+    # of `Patch.window`, where one plan is run in every window, only if it
+    # says so. Read from the
     # class which writes `get_metadata`, so a subclass which overrides the
     # method says so again. An operation whose arguments decide it writes
     # a method of this name instead, `position_free(self, dims)`, given the
@@ -252,17 +254,24 @@ class PatchProcessor(DascoreBaseModel):
         """
         Whether the plan is known not to depend on where `dims` start.
 
-        Only True itself, or a plain method which answers True, says so:
-        anything else a class has under the name says nothing.
+        The nearest class to say anything decides, and only True itself, or
+        a plain method which answers True, says yes. A class which writes
+        `get_metadata` and says nothing has not said so, whatever its
+        parents say of the plan they wrote; one with no plan of its own
+        anywhere has none which a position could change.
         """
-        owner = next(x for x in type(self).__mro__ if "get_metadata" in x.__dict__)
-        # The base plans nothing, which no position can change.
-        if owner is PatchProcessor:
-            return True
-        declared = owner.__dict__.get("position_free", False)
-        if isinstance(declared, FunctionType):
-            return declared(self, tuple(dims)) is True
-        return declared is True
+        for klass in type(self).__mro__:
+            if klass is PatchProcessor:
+                break
+            contents = klass.__dict__
+            if "position_free" in contents:
+                declared = contents["position_free"]
+                if isinstance(declared, FunctionType):
+                    return declared(self, tuple(dims)) is True
+                return declared is True
+            if "get_metadata" in contents:
+                return False
+        return True
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -631,8 +640,8 @@ def _position_free_off_frequencies(self, dims) -> bool:
     """
     Say an operation which works on a spectrum ignores where `dims` start.
 
-    A `position_free` for a class which transforms a patch in time and
-    distance itself, when its plan is made of steps and lengths. Given a
+    A `position_free` for a class which transforms a patch itself, when
+    its plan is made of steps and lengths. Given a
     patch already transformed it weights by the frequencies themselves,
     which a window along a frequency dimension does not all hold.
     """
