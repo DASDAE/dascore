@@ -26,7 +26,6 @@ from typing import (
     NamedTuple,
     Self,
     TypeVar,
-    cast,
     overload,
 )
 
@@ -219,6 +218,59 @@ def _warn_snap_coords(snap_coords) -> None:
         "Patch.snap_coords to regularize labels. Drop the argument."
     )
     warnings.warn(msg, DeprecationWarning, stacklevel=3)
+
+
+class _PendingFill:
+    """A `fill_gaps` catalog, built when asked for; `windows` plans a chunk of it."""
+
+    def __init__(self, spool, dim, merge):
+        self.spool, self.dim, self.merge = spool, dim, merge
+        self.frames = spool._plan_frames(dim)
+        self._plan = self._built = None
+
+    @property
+    def plan(self) -> ChunkPlan:
+        """The fill's own plan, which merges each stretch."""
+        if self._plan is None:
+            working = self.frames[1]
+            plan = build_chunk_plan(working, **self.merge, **{self.dim: None})
+            self._plan = coalesce_runs(plan, working)
+        return self._plan
+
+    def _real(self):
+        """The fill's catalog, built the first time it is asked for."""
+        if self._built is None:
+            self._built = self.spool._chunked(self.frames[0], self.plan)._catalog
+        return self._built
+
+    def __getattr__(self, name):
+        if name.startswith("__") or "merge" not in self.__dict__:
+            raise AttributeError(name)
+        return getattr(self._real(), name)
+
+    def __len__(self) -> int:
+        return len(self.plan.outputs)
+
+    def __iter__(self):
+        return iter(self._real())
+
+    def windows(self, params, dim_kwargs) -> ChunkPlan:
+        """A chunk's windows over the fill, each fed by the files it reaches."""
+        fill = {x: self.merge[x] for x in ("tolerance", "fill_value")}
+        working = self.frames[1]
+        plan = build_chunk_plan(working, **(params | fill), **dim_kwargs)
+        plan = coalesce_runs(plan, working)
+        members, dim = plan.members, plan.dim
+        ids = members["output_id"].to_numpy()
+        lone = np.setdiff1d(plan.outputs["output_id"].to_numpy(), ids)
+        if len(lone):  # a window inside a gap reads one sample of its neighbour
+            fed = np.unique(ids)
+            near = fed[np.abs(fed[None, :] - lone[:, None]).argmin(axis=1)]
+            first = members.drop_duplicates("output_id").set_index("output_id")
+            one = first.loc[near].reset_index().assign(output_id=lone, _modified=True)
+            one[f"{dim}_max"] = one[f"{dim}_min"]
+            members = pd.concat([members, one], ignore_index=True)
+        return replace(plan, members=members, params=plan.params | {"windows": True})
 
 
 def _stamp_key(*stamps) -> tuple:
@@ -2254,13 +2306,12 @@ class Spool(NodeRepr, NamespaceOwner):
             msg += "it, and pass explicit windows to Spool.cut, which keeps "
             raise ParameterError(msg + "incomplete windows' samples.")
         if "fill_value" in dim_kwargs:
-            msg = (
-                "chunk takes no fill_value: fill the gaps first with "
-                "Spool.fill_gaps, which chunk then joins across, eg "
-                "spool.fill_gaps(time=10).chunk(time=60)."
-            )
-            raise ParameterError(msg)
-        source_rows, working = self._plan_frames(next(iter(dim_kwargs), None))
+            msg = "chunk takes no fill_value: fill gaps first with Spool.fill_gaps"
+            raise ParameterError(msg + ", eg spool.fill_gaps(time=10).chunk(time=60).")
+        dim = next(iter(dim_kwargs), None)
+        if isinstance(fill := self._catalog, _PendingFill) and fill.dim == dim:
+            return fill.frames[0], fill.windows(params, dim_kwargs)
+        source_rows, working = self._plan_frames(dim)
         plan = build_chunk_plan(working, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
 
@@ -2703,31 +2754,17 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Parameters
         ----------
-        *args
-            The dimension to fill every gap along, eg
-            `spool.fill_gaps("time")`.
-        fill_value
-            The value written at filled positions; it must fit the data's
-            dtype, so NaN needs float data. A value the data cannot hold
-            raises as a patch loads.
-        samples
-            If True, the size given with the dimension counts missing samples.
+        *args, fill_value, samples, **kwargs
+            As [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) takes them; a
+            fill value the data cannot hold raises as a patch loads.
         conflict
             {conflict_desc}
-        **kwargs
-            The dimension and the widest gap to fill, in the coordinate's
-            units (seconds for time), or as a quantity or timedelta, eg
-            `time=10`. A gap's width is its missing samples times the step;
-            None fills every gap.
 
         Examples
         --------
         >>> import dascore as dc
         >>> spool = dc.get_example_spool("random_das", time_gap=1)
-        >>> # fill gaps of up to 2 seconds: the patches join into one
-        >>> filled = spool.fill_gaps(time=2)
-        >>> assert len(filled) == 1
-        >>> # then cut it into 4 second chunks
+        >>> filled = spool.fill_gaps(time=2)  # gaps up to 2 s: one patch
         >>> chunks = filled.chunk(time=4)
         """
         if len(args) + len(kwargs) != 1:
@@ -2743,15 +2780,9 @@ class Spool(NodeRepr, NamespaceOwner):
             tolerance = GapTolerance.samples(size + 1)  # a gap's spacing in steps
         else:
             tolerance = GapTolerance.absolute(size)  # past one step
-        source_rows, working = self._plan_frames(dim)
-        plan = build_chunk_plan(
-            working,
-            tolerance=tolerance,
-            conflict=conflict,
-            fill_value=fill_value,
-            **cast("dict[str, Any]", {dim: None}),
-        )
-        return self._chunked(source_rows, coalesce_runs(plan, working))
+        merge = dict(tolerance=tolerance, conflict=conflict, fill_value=fill_value)
+        pending = _PendingFill(self, dim, merge)
+        return self._new_from_catalog(pending)
 
     def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=False):
         """
@@ -2764,14 +2795,19 @@ class Spool(NodeRepr, NamespaceOwner):
 
         # read from the plan: its values are normalized (eg a dimensionless
         # tolerance is a plain multiple)
-        names = ("conflict", "fill_value", "tolerance", "max_shift")
+        names = ("conflict", "fill_value", "tolerance", "max_shift", "windows")
+        merge = {x: plan.params[x] for x in names if x in plan.params}
+        # windows over a fill's outputs load from its files, in one layer
+        base, fill = self, self._catalog
+        if isinstance(fill, _PendingFill) and "windows" in merge:
+            base = fill.spool
         catalog = derived_catalog(
             source_rows=source_rows,
             plan=replace(plan, outputs=plan.outputs.assign(**(stamp or {}))),
-            parent=self._catalog,
-            merge_kwargs={x: plan.params[x] for x in names if x in plan.params},
+            parent=base._catalog,
+            merge_kwargs=merge,
             mode="chunk",
-            origin_path=self.spool_path,
+            origin_path=base.spool_path,
             stamped=dtypes or tuple(stamp or ()),
             lossy=lossy,
         )

@@ -534,6 +534,37 @@ class TestSpoolFillGaps:
         (out,) = filled.cut(time=window)
         assert len(reads) == 1 and not np.isnan(out.data).any()
 
+    def test_chunk_plans_once_onto_the_files(self, gappy_spool):
+        """A chunk of a fill is one plan, its windows loading from the files."""
+        filled = gappy_spool.fill_gaps("time")
+        chunked = filled.chunk(time=4)
+        assert filled._catalog._built is None  # the fill's own was never built
+        paths = chunked._catalog.resolver.member_rows["source_path"].astype(str)
+        assert not paths.str.startswith("plan://").any()
+        assert len(chunked) == len(filled.chunk_plan(time=4).outputs)
+
+    @pytest.mark.parametrize("start", [0.0, 1e9])
+    def test_float_grid_windows(self, start):
+        """Windows of a float grid whose step no float holds keep its samples."""
+        full = get_coord(start=start, step=0.1, shape=(60,))
+
+        def make(part):
+            coords = {"distance": [0], "x": full[part]}
+            return dc.Patch(
+                data=np.arange(60.0)[part][None], coords=coords, dims=("distance", "x")
+            )
+
+        filled = dc.spool([make(slice(0, 20)), make(slice(25, 60))]).fill_gaps("x")
+        chunks = filled.chunk(x=1.0, keep_partial=True)
+        data = np.concatenate([x.data[0] for x in chunks])
+        labels = np.concatenate([x.get_coord("x").values for x in chunks])
+        np.testing.assert_allclose(labels, full.values, rtol=0, atol=1e-6)
+        assert np.isnan(data[20:25]).all() and np.array_equal(
+            data[25:], np.arange(25.0, 60)
+        )
+        (cut,) = filled.cut(x=np.array([[full[18], full[27]]]))
+        assert cut.shape == (1, 10) and np.isnan(cut.data[0, 2:7]).all()
+
     @pytest.mark.parametrize("kwargs", [{}, {"time": 1, "distance": 1}])
     def test_one_dimension(self, gappy_spool, kwargs):
         """Filling names exactly one dimension."""

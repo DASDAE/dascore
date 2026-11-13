@@ -92,12 +92,7 @@ def _layout(coord) -> tuple:
 
 
 def written_step(name: str, coord, why: str):
-    """
-    The step to write beside a coordinate's labels, or None if they need none.
-
-    Labels read back as they are alone, or with the step all segments share;
-    otherwise the writer refuses them (rule 13 of the coordinate notes).
-    """
+    """The step the labels read back with: none, their segments' one, or refused."""
     if coord.ndim != 1 or coord._partial or not hasattr(coord, "segments"):
         return None
     layout = _layout(coord)

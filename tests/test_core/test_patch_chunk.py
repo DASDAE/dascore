@@ -2378,6 +2378,44 @@ class TestRegularChunkPartition:
         assert sum(x.shape[0] for x in out) == 600
 
 
+class TestFilledWindows:
+    """Windows of a fill, planned straight onto the files."""
+
+    @pytest.mark.parametrize("route", ["memory", "disk"])
+    def test_fill_windows(self, tmp_path, route):
+        """Filled windows hold the same samples, ending at the last one."""
+        whole, *spools = _cut_spools(tmp_path, _exact_values(), [300, 300])
+        filled = spools[route == "disk"].fill_gaps("x", fill_value=0)
+        out = filled.chunk(x=0.1, keep_partial=True)
+        expected = _half_open_windows(whole, 0.1, None)
+        assert _labels(out) == [(y.tolist(), x.tolist()) for x, y in expected]
+
+    def test_fill_off_grid_selection(self):
+        """A filled window of a view starting between samples starts on one."""
+        whole, mem, _ = _cut_spools(None, np.arange(100.0), [50, 50])
+        view = mem.select(x=(10.5, 90.2))
+        out = view.fill_gaps("x", fill_value=0).chunk(x=10, keep_partial=True)
+        bounds = out.get_contents()[["x_min", "x_max"]].to_numpy().tolist()
+        assert bounds == [[x, x + 9.0] for x in range(11, 90, 10)]
+        joined = np.concatenate([x.data for x in out], axis=1)
+        assert np.array_equal(joined, whole.select(x=(11, 90)).data)
+
+    def test_window_holding_no_position_is_skipped(self):
+        """A selection between two samples leaves no position to fill."""
+        time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
+        coords = {"distance": [0], "time": time}
+        patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
+        view = dc.spool([patch]).select(time=(0.8, -0.1), relative=True)
+        with pytest.raises(ChunkError, match="chunk"):
+            view.fill_gaps("time").chunk(time=2.0, keep_partial=True)
+
+    def test_pickles_unbuilt(self, random_spool):
+        """A fill pickles before anything built its catalog, and loads after."""
+        filled = random_spool.fill_gaps("time")
+        back = pickle.loads(pickle.dumps(filled))
+        assert [x.shape for x in back] == [x.shape for x in filled]
+
+
 class TestLongFractionalGrid:
     """An exact 3000 Hz grid long enough that whole-ns steps miscount it."""
 
@@ -3948,10 +3986,9 @@ class TestChunkFillWindows:
         for windowed in chunked:
             coord = windowed.get_coord("distance")
             assert coord.values[0] > coord.values[-1]
-        # windows run from the top, as chunk's do, and the hole spans 101
-        # to 199, so the four from 199 to 120 hold nothing else
+        # the hole spans 101 to 199, so those windows hold nothing else
         all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
-        assert all_fill == [False] * 5 + [True] * 4 + [False] * 6
+        assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
 
     def test_window_shorter_than_a_step_is_refused(self, random_patch):
         """A window holding no sample position is no output at all."""

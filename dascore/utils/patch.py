@@ -1739,8 +1739,9 @@ def _chains(coords) -> bool:
     """Whether coordinates follow one another in order, without overlap."""
     pairs = list(itertools.pairwise(coords))
     try:
-        up = all(a.max() < b.min() for a, b in pairs)
-        return up or all(a.min() > b.max() for a, b in pairs)
+        return all(a.max() < b.min() for a, b in pairs) or all(
+            a.min() > b.max() for a, b in pairs
+        )
     except TypeError:  # labels of kinds which do not compare, as a blank's
         return False
 

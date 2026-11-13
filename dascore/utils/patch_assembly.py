@@ -17,7 +17,6 @@ row becomes a Patch.
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate
@@ -595,52 +594,33 @@ def _fill_limit(tolerance) -> tuple:
     return tolerance, False
 
 
-def fill_on_grid(patch: dc.Patch, dim: str, window, fill_value, tolerance):
+def fill_on_grid(patch, dim: str, grid, fill_value, tolerance, dtype=None):
     """
-    Fill a fill plan's assembled members, out to a ``(low, high)`` window.
-
-    They fill as `Patch.fill_gaps` fills, within the tolerance which joined
-    them; their grid runs on, exactly, to cover a window past them, which
-    the fill pads.
+    Fill a fill plan's assembled members, as `Patch.fill_gaps` does, onto the
+    nearest positions of ``grid``; the fill, in ``dtype``, pads the rest.
     """
-    # the placement and the cast check live with fill_gaps, which proc
-    # imports from utils
+    # proc imports from utils, so this is imported here
     from dascore.proc.coords import _fill_scalar, _place_blocks  # noqa: PLC0415
 
     limit, samples = _fill_limit(tolerance)
     patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
     coord: Any = patch.get_coord(dim)  # numeric, as only those fill
-    if window is None or (grid := coord._grid) is None:
+    if grid is None or coord == grid:
         return patch
-    low, high = (_as_numpy(x) for x in window)
-    ends = (low, high) if coord.sorted else (high, low)
-    # the positions the window spans on the grid, counted from its first
-    if grid.exact:  # by the labels themselves, which floor ideal positions
-        first, last = (
-            int(grid.index_of(coord._bound_ticks(x, forward), forward)[0])
-            for x, forward in zip(ends, (True, False))
-        )
-    else:  # a float count forgives its last bits, as a float grid does
-        sign = 1 if coord.sorted else -1
-        first, last = (
-            round(float(coord._samples_in((x - coord[0]) * sign)), 9) for x in ends
-        )
-        first, last = math.ceil(first), math.floor(last)
-    if (first, last) == (0, len(coord) - 1):
-        return patch
-    target = coord._with_runs((grid.sliced(first, 1, last - first + 1),))
-    data = to_numpy(patch.data)
-    start, stop = max(first, 0), min(len(coord), last + 1)
-    blocks = ((start, stop, start - first),) if stop > start else ()
+    sign = 1 if grid.sorted or len(grid) < 2 else -1
+    first = round(grid._samples_in((coord[0] - grid[0]) * sign)) if len(grid) else 0
+    start, stop = max(-first, 0), min(len(coord), len(grid) - first)
+    blocks = ((start, stop, first + start),) if stop > start else ()
+    data = to_numpy(patch.data).astype(dtype or patch.data.dtype, copy=False)
     fill = _fill_scalar(fill_value, data.dtype)
-    data = _place_blocks(data, patch.get_axis(dim), len(target), blocks, fill)
+    data = _place_blocks(data, patch.get_axis(dim), len(grid), blocks, fill)
     coords = drop_associated_coords(patch.coords, dim, "Filling the gaps along")
     # where the members went in the window, so loading twice gives one id
-    params = {"dim": dim, "value": fill_value, "first": first, "last": last}
+    params = {"dim": dim, "value": fill_value, "first": first, "grid": grid}
     attrs = stamp(patch.attrs, [patch.attrs], try_operation_id("Fill", params))
     with operation_context():
         return patch.new(
-            data=data, coords=coords._update_grid(dim, **{dim: target}), attrs=attrs
+            data=data, coords=coords._update_grid(dim, **{dim: grid}), attrs=attrs
         )
 
 

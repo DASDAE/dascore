@@ -2577,25 +2577,19 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     dtype: Any = ""
 
     def __eq__(self, other) -> bool:
-        """
-        Whether two coordinates hold the same labels, with the same units.
-
-        Equal labels are equal coordinates however they are split into
-        segments, or whether a step is stated for them.
-        """
+        """Whether two coordinates hold equal labels and units, however split."""
         if not isinstance(other, NumericCoord):
             return sensible_model_equals(self._label_fields(), other)
         mine, theirs = self._label_fields(), other._label_fields()
         if sensible_model_equals(mine, theirs):
             return True
+        labels = self.values, other.values
         grids = self._grid is not None and other._grid is not None
         if grids or self._partial or other._partial:
             return False  # one grid each says all of its labels
-        rest = [
-            {k: v for k, v in x.items() if k not in ("runs", "step")}
-            for x in (mine, theirs)
-        ]
-        return sensible_model_equals(*rest) and values_equal(self.values, other.values)
+        for fields in (mine, theirs):  # the labels say all a step or runs do
+            fields.pop("runs"), fields.pop("step")
+        return sensible_model_equals(mine, theirs) and values_equal(*labels)
 
     # Defined together, as the base class defines them: a class which states
     # __eq__ and not __hash__ is unhashable by a rule of python's, which
@@ -3558,10 +3552,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if tol is not None and deviation > tol:
             return None
         if keep_step:
-            # A spacing of two steps or more skips a position, a hole which
-            # re-fitting would spread over the run; two labels within half a
-            # step would share one, pushing every later sample a step along.
-            # The slack absorbs nanosecond rounding of fractional steps.
+            # a spacing of two steps skips a position, which a re-fit would
+            # spread; one under half a step would crowd two onto one
             ref = abs(step if _is_null(self.step) else self.step)
             spacings = np.abs(np.diff(actual))
             if np.any(spacings >= (2 - 1e-3) * ref) or np.any(spacings * 2 < ref):
@@ -3940,11 +3932,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
 def _runs_step(runs, declared, dtype, sources):
     """
-    The step of a coordinate's labels, or None.
-
-    One grid states its own step. Segments share no grid, so a coordinate
-    of several states none. One run of stored labels keeps a declared step,
-    which is checked against every label and raises where it does not hold.
+    One grid's own step, none for segments, or one run of labels' declared
+    step, checked against every label.
     """
     if len(runs) == 1 and isinstance(runs[0], Grid):
         return runs[0].step(dtype)
@@ -3981,11 +3970,8 @@ def _runs_step(runs, declared, dtype, sources):
 
 def _skips(values, step):
     """
-    Yield ``(index, label before, count)`` per stretch of positions skipped.
-
-    ``index`` is the first sample after the stretch. Raises where a spacing
-    is not a whole number of steps: each is the nearest whole number of
-    steps, missed by under half a step, as stored labels may be jittered.
+    Yield ``(index after, label before, count)`` per stretch of positions
+    skipped, raising where a spacing misses a whole number of steps by half.
     """
     if len(values) < 2:
         return
@@ -4085,9 +4071,7 @@ def concat_coords(*coords, units=None) -> NumericCoord:
     )
     _check_chain(parts, ascending)
     runs = tuple(itertools.chain.from_iterable(x.runs for x in parts))
-    # Segments share no grid; a grid states its own step. Stored labels
-    # stating one step are placed on it as get_coord places them, so they
-    # are segments only where they skip positions of it.
+    # segments share no grid; stored labels stating one step go onto it
     stored = all(x._grid is None for x in flat)
     step = flat[0].step if len(steps) == 1 and stored else None
     if step is not None and len(runs) > 1:
@@ -4211,13 +4195,10 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     """
     Join a coordinate's segments onto one grid, filling the gaps between.
 
-    Returns the filled coordinate, per piece its ``(source start, source
-    stop, target start)``, and the furthest a piece moved, in steps; or
-    None when there is nothing to fill. A gap up to `limit` (read as in
-    `Patch.fill_gaps`) joins the piece after it onto the earlier piece's
-    grid, at the positions nearest its labels; a piece whose labels are
-    half a step or more off them (another step, or none) raises. Wider
-    gaps stay segment boundaries.
+    Returns the filled coordinate, each piece's ``(source start, source stop,
+    target start)`` and the furthest move, in steps; None with nothing to
+    fill. A gap up to `limit` joins the piece after it onto the grid before
+    it, at its nearest positions, raising if they are half a step off.
     """
     if (
         not isinstance(coord, NumericCoord)
@@ -4237,19 +4218,13 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
             missing = position - length
             max_missing = _fill_limit(coord, anchor, limit, samples)
             if max_missing is None or missing <= max_missing:
-                label = coord._run_labels(piece, [0])[0]
-                if missing < 0:
+                if missing < 0 or shift >= 0.5:
+                    label = coord._run_labels(piece, [0])[0]
                     msg = (
-                        f"Samples near {label} land on the same grid position "
-                        f"as the ones before them, so the gap cannot be filled."
-                    )
-                    raise CoordError(msg)
-                if shift >= 0.5:
-                    msg = (
-                        f"Cannot fill the gap before {label}: the samples after "
-                        "it are not within half a step of consecutive positions "
-                        f"of the grid before it (step {anchor.step(coord.dtype)})."
-                        " Resample or snap_coords them onto one step first."
+                        f"Cannot fill the gap before {label}: its samples "
+                        "land on the same grid position as those "
+                        "before, or are not within half a step of new ones "
+                        f"(step {anchor.step(coord.dtype)}). Resample or snap first."
                     )
                     raise CoordError(msg)
                 moved = max(moved, shift)
@@ -4257,11 +4232,7 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
                 groups[-1][1] = position + len(piece)
                 continue
         if isinstance(piece, Labels):  # no grid to fill onto
-            msg = (
-                "Filling gaps needs each segment it fills after to be a grid; "
-                "this coordinate has labels with no step. Use snap_coords or "
-                "resample to put them on a grid first."
-            )
+            msg = "Filling gaps after labels with no step needs a grid; snap first."
             raise CoordError(msg)
         groups.append([piece, len(piece), [(source, stop, 0)]])
     if all(len(blocks) == 1 for *_, blocks in groups):
@@ -4280,12 +4251,7 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
 
 
 def _fill_pieces(coord: NumericCoord) -> list[tuple[int, Any]]:
-    """
-    The pieces of consecutive grid positions, each with its source offset.
-
-    A segment of labels is one piece, unless the coordinate's one run of
-    labels states a step, which cuts it at its holes.
-    """
+    """Each piece of consecutive positions (a labels segment is one), with offset."""
     if coord.jittered:
         msg = (
             "Filling gaps needs labels on their step's grid; these sit off it. "
@@ -4308,12 +4274,7 @@ def _fill_pieces(coord: NumericCoord) -> list[tuple[int, Any]]:
 
 
 def _fill_same_step(coord: NumericCoord, first: Grid, other: Grid) -> bool:
-    """
-    Whether a grid shares the first grid's step.
-
-    Exactly for ticks; for floats, closely enough that the grid drifts from
-    the first's by a negligible fraction of a step.
-    """
+    """Whether a grid shares the first's step: exactly, or for floats no drift."""
     if first.exact and other.exact:
         return first.step_exact(coord.dtype) == other.step_exact(coord.dtype)
     ratio = float(np.divide(other.step(coord.dtype), first.step(coord.dtype)))
@@ -4321,13 +4282,7 @@ def _fill_same_step(coord: NumericCoord, first: Grid, other: Grid) -> bool:
 
 
 def _fill_position(coord: NumericCoord, anchor: Grid, piece) -> tuple[int, float]:
-    """
-    The anchor's position nearest a piece's first label, and the move, in steps.
-
-    The move is infinite where the piece's labels cannot sit on consecutive
-    positions of the anchor's grid: a grid of another step, or labels which
-    skip or share a position.
-    """
+    """The anchor position nearest a piece, and its move in steps (inf: no fit)."""
     labels = coord._run_labels(piece, None if isinstance(piece, Labels) else [0])
     step = anchor.step(coord.dtype)
     fits = isinstance(piece, Labels) or _fill_same_step(coord, anchor, piece)

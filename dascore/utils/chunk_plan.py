@@ -2779,9 +2779,9 @@ def build_chunk_plan(
     Parameters mirror `Spool.chunk` (see the chunking formalities spec);
     one keyword names the dimension to chunk and its length (`None`/`...`
     merges). Patches join under the seam test (`_cell_seams`) and each
-    stretch gets one grid (`_fit_grids`), which windows are cut from.
-    ``fill_value``, which only `Spool.fill_gaps` passes and only to merge,
-    instead fills the seams `tolerance` joins, keeping each source's labels.
+    stretch gets one grid (`_fit_grids`), which windows are cut from;
+    ``fill_value``, which only `Spool.fill_gaps` passes, instead fills the
+    seams `tolerance` joins, keeping each source's labels.
     """
     if len(kwargs) != 1:
         msg = (
@@ -2809,7 +2809,6 @@ def build_chunk_plan(
     for label, quant in (("chunk value", value), ("overlap", overlap)):
         _validate_quantity(label, quant, name)
     merge_mode = bool(pd.isnull(value))
-    assert merge_mode or fill_value is None, "a fill plan merges"
     if merge_mode and (keep_partial or overlap):
         msg = (
             "When chunk value is None (ie chunking is used for merging) "
@@ -2913,6 +2912,8 @@ def build_chunk_plan(
         _, stride, *_, width, own_min, own_max = lattice
         plain = (stride == 0) | ((src1 == own_min) & (src2 == own_max))
         edge = src2 + 2 * _GRID_SNAP_RTOL * width if src2.dtype.kind == "f" else src2
+        # the kept source holding each partition's last sample
+        end_rows = pd.Series(src2).groupby(kcodes).idxmax().to_numpy()
     has_dtype = "_dtype" in sorted_df.columns
     if has_dtype:
         # The element dtype resolves per *output*, not per partition: a
@@ -2938,6 +2939,9 @@ def build_chunk_plan(
         # per-output dtype pools are simple slices
         kdt = kdtypes[koffsets[part] : koffsets[part + 1]]
         bounds = np.cumsum(m_counts) - m_counts
+        # an all-fill output draws from no member, so it is the
+        # partition, not its own pool, which names its dtype
+        whole = _combined_dtype(pd.Series(part_dtypes, dtype=object))
         combined = [
             _combined_dtype(
                 pd.Series(
@@ -2945,6 +2949,8 @@ def build_chunk_plan(
                     dtype=object,
                 )
             )
+            if m_counts[out]
+            else whole
             for out in np.flatnonzero(fed)
         ]
         return np.array(["" if x is None else str(x) for x in combined], dtype=object)
@@ -3019,7 +3025,11 @@ def build_chunk_plan(
             stops_p = g_stops[part : part + 1]
         else:
             sub_sample[part] = not pd.isnull(part_step) and value_c < abs(part_step)
-            cell = abs(part_step)
+            cell, row = abs(part_step), end_rows[part]
+            if lattice[2][row] > 1:  # a fractional grid's gap to its next label
+                stop = to_int(g_stops[part : part + 1])
+                gap = (_lattice_label(stop + 1, [x[row] for x in lattice]) - stop)[0]
+                cell = np.timedelta64(gap, "ns") if g_stops.dtype.kind in "Mm" else gap
             try:
                 start_stop = get_intervals(
                     g_starts[part],
@@ -3040,6 +3050,19 @@ def build_chunk_plan(
                 break
             starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
             ends_p = stops_p
+            if fill_value is not None:
+                # filled windows hold the first source's grid, else the partition's
+                grid = [x[koffsets[part]][None] for x in lattice]
+                if not grid[1][0]:
+                    grid[0][:] = to_int(g_starts[part])
+                    grid[1][:] = to_int(abs(part_step))
+                edges = g_starts[part : part + 1], g_stops[part : part + 1]
+                starts_p, stops_p = _member_samples(*edges, starts_p, ends_p, grid)
+                keep = starts_p <= stops_p
+                starts_p, stops_p, ends_p = starts_p[keep], stops_p[keep], ends_p[keep]
+            # A filled window can hold no sample at all, nor then a partition.
+            if not len(starts_p):
+                continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -3075,18 +3098,24 @@ def build_chunk_plan(
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
-        # runtime error; it is not surfaced at all.
-        fed = m_counts > 0
+        # runtime error; it is not surfaced at all. A fill value lifts
+        # that: a window lying wholly inside a bridged hole has no source
+        # to draw from and is assembled from fill alone, so the outputs
+        # cover the partition evenly instead of skipping the hole.
+        fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
         fed_counts[part] = int(fed.sum())
         if regular and total:
-            # an output's envelope is its members' first and last samples
-            if total == n_out and fed.all():  # one member each
-                starts_p, stops_p = lo, hi
-            else:
-                firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
-                starts_p, stops_p = np.array(starts_p), np.array(stops_p)
-                starts_p[rel_out[firsts]] = np.minimum.reduceat(lo, firsts)
-                stops_p[rel_out[firsts]] = np.maximum.reduceat(hi, firsts)
+            # an output's envelope is its members' first and last samples, or
+            # with a fill, those beside its window's, which float rounding of
+            # the window's edges can leave short of them
+            firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
+            starts_p, stops_p = np.array(starts_p), np.array(stops_p)
+            held = rel_out[firsts]
+            low, high = np.minimum.reduceat(lo, firsts), np.maximum.reduceat(hi, firsts)
+            if fill_value is not None:
+                low = np.minimum(low, starts_p[held])
+                high = np.maximum(high, stops_p[held])
+            starts_p[held], stops_p[held] = low, high
         out_grids.append([None] * int(fed.sum()))
         out_starts.append(starts_p[fed])
         out_stops.append(stops_p[fed])

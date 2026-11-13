@@ -26,7 +26,7 @@ import pandas as pd
 from upath import UPath
 
 import dascore as dc
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary, get_coord
 from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO
@@ -69,6 +69,8 @@ from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     SOURCE_RANGE_ENDS,
     PatchAssembler,
+    _row_values,
+    coord_from_row,
     fill_on_grid,
     source_range_column,
 )
@@ -696,6 +698,7 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
+        output_rows: pd.DataFrame | None = None,
         trim_dims: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
@@ -730,6 +733,11 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
+        # the outputs a fill plan fills to, for the grid each fills onto
+        self._output_rows: dict[int, Mapping] = {}
+        if merge_kwargs.get("fill_value") is not None and output_rows is not None:
+            records = output_rows.to_dict("records")
+            self._output_rows = {int(x["output_id"]): x for x in records}
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -744,7 +752,8 @@ class PlanResolver(PatchResolver):
     def _assembler(self):
         # the fill is written once the members merge (`_filled`), so the
         # merge, and the ids it stamps, never see it
-        merge = {k: v for k, v in self.merge_kwargs.items() if k != "fill_value"}
+        skip = ("fill_value", "windows")
+        merge = {k: v for k, v in self.merge_kwargs.items() if k not in skip}
         return PatchAssembler(
             load_patch=self._load_member,
             merge_kwargs=merge,
@@ -993,7 +1002,7 @@ class PlanResolver(PatchResolver):
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         if self.merge_kwargs.get("fill_value") is not None:
-            return self._stamp(self._filled(output_id, members, trim), row)
+            return self._stamp(self._filled(output_id, members, row, trim), row)
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
@@ -1021,39 +1030,36 @@ class PlanResolver(PatchResolver):
         (patch,) = self._assembler()._patch_from_instruction_df(joined)
         return patch
 
-    def _filled(self, output_id: int, members: pd.DataFrame, trim) -> dc.Patch:
-        """
-        A fill plan's output, loading only the members a trim reaches.
-
-        Members within half a step of it are read too; a trim inside a gap
-        reads one sample of the nearest, for the other dimensions.
-        """
-        dim, window = self.dim, trim.get(self.dim)
-        if window is not None:
-            low, high = members[f"{dim}_min"], members[f"{dim}_max"]
-            start = low.min() if window[0] is None else window[0]
-            stop = high.max() if window[1] is None else window[1]
-            half = members[f"{dim}_step"].abs().max() / 2
-            reach = (high >= start - half) & (low <= stop + half)
-            if not reach.any():  # one sample of the nearest member
-                near = (low - start).abs().to_numpy().argmin()
-                one = {f"{dim}_max": low.iloc[near], "_modified": True}
-                members = members.iloc[[near]].assign(**one)
-            else:
-                members = members[reach].assign(
-                    **{
-                        f"{dim}_min": low[reach].clip(lower=start - half),
-                        f"{dim}_max": high[reach].clip(upper=stop + half),
-                    },
-                    _modified=True,
-                )
-            window = (start, stop)
+    def _filled(self, output_id: int, members, row, trim) -> dc.Patch:
+        """A fill plan's output, or the window of its grid a trim or row asks."""
+        dim, merge = self.dim, self.merge_kwargs
+        # a window of a fill is its own row, its members trimmed to it
+        planned = merge.get("windows") and trim.get(dim) is None
+        if merge.get("windows"):
+            ends = (
+                (row[f"{dim}_min"], row[f"{dim}_max"]) if dim not in row else row[dim]
+            )
+            trim = {dim: trim.get(dim) or ends}
+        out, grid = self._output_rows[output_id], None
+        if (window := trim.get(dim)) is not None:
+            members = members if planned else reached(members, dim, *window)
+            units = _stated_units(out.get(f"_{dim}_units"))
+            if isinstance(out.get(f"_{dim}_grid"), tuple):  # exact, from the row
+                grid = coord_from_row(out, dim, units)
+            elif (ends := _row_values(out, dim)) is not None:  # nearest positions
+                low, high, step = ends
+                count = round(to_float(high - low) / abs(to_float(step))) + 1
+                start = high if step < step * 0 else low
+                grid = get_coord(start=start, step=step, shape=(count,), units=units)
+            if grid is not None:
+                grid = grid.select(tuple(window))[0]
         patch = self._assembled(output_id, members)
-        fill, tolerance = (
-            self.merge_kwargs["fill_value"],
-            self.merge_kwargs["tolerance"],
+        fill, tolerance, dtype = (
+            merge["fill_value"],
+            merge["tolerance"],
+            out.get("_dtype"),
         )
-        return fill_on_grid(patch, dim, window, fill, tolerance)
+        return fill_on_grid(patch, dim, grid, fill, tolerance, dtype or None)
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -1282,6 +1288,7 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
+        output_rows=plan.outputs,
         trim_dims=plan.trim_dims,
     )
     backend = get_backend(":memory:")
@@ -1383,21 +1390,10 @@ def _segment_runs(coord, members, runs, index_rows, name: str):
         if pd.isnull(step):  # its count is unknown, so its runs are too
             return coord
         count = round(to_float(high - low) / abs(to_float(step))) + 1
-        record = RunRecord(count, low, high, step)
-        prev = records[-1] if records else None
-        if (
-            prev is not None
-            and step == prev.step
-            and abs(step)
-            in (
-                low - prev.max,
-                prev.min - high,
-            )
-        ):  # it continues the grid before it exactly, so it is part of it
-            low, high = min(low, prev.min), max(high, prev.max)
-            record = RunRecord(prev.count + count, low, high, step)
-            records.pop()
-        records.append(record)
+        if records and records[-1].step == step and low - records[-1].max == step:
+            prev = records.pop()  # it continues the grid before it exactly
+            count, low = prev.count + count, prev.min
+        records.append(RunRecord(count, low, high, step))
     if len(records) < 2:
         return coord
     grid = dict.fromkeys(("step_float", "step_int", *_EXACT_GRID_FIELDS))
@@ -1421,6 +1417,18 @@ _CARRIED_RUN_FIELDS = (
     "run_count",
     "runs",
 )
+
+
+def reached(members: pd.DataFrame, dim: str, start, stop) -> pd.DataFrame:
+    """The fill members within half a step of a window, or else the nearest."""
+    low, high = members[f"{dim}_min"], members[f"{dim}_max"]
+    start, stop = (
+        x if y is None else y for x, y in ((low.min(), start), (high.max(), stop))
+    )
+    half = members[f"{dim}_step"].abs().max() / 2
+    if not (reach := (high >= start - half) & (low <= stop + half)).any():
+        reach = (low - start).abs() == (low - start).abs().min()
+    return members[reach]
 
 
 def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:

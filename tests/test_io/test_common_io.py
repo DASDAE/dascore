@@ -1124,6 +1124,15 @@ class TestSnapConformance:
         explicit = dc.read(path, snap=default)
         assert [x.coords for x in implicit] == [x.coords for x in explicit]
 
+    def test_coordinates_are_one_segment(self, io_path_tuple):
+        """Under the default snap, a reader splits no coordinate into segments."""
+        _, path = io_path_tuple
+        with skip_missing():
+            spool = dc.read(path)
+        for patch in spool:
+            for name, coord in patch.coords.coord_map.items():
+                assert getattr(coord, "runs_count", 1) == 1, name
+
     def test_snap_false_moves_no_label(self, io_path_tuple, monkeypatch):
         """Nothing which puts labels on a grid runs under snap=False."""
         _, path = io_path_tuple
