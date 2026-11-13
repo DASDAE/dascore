@@ -23,6 +23,7 @@ import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
+from dascore.lazy.contract import Halo, WholeAxis
 from dascore.proc.basic import Real
 from dascore.transform.fourier import Dft, Idft, _dft_kernel, _idft_kernel
 from dascore.units import (
@@ -42,7 +43,7 @@ from dascore.utils.misc import (
     check_filter_range,
 )
 from dascore.utils.patch import (
-    _require_evenly_sampled,
+    _refuse_holes_and_jitter,
     get_dim_axis_value,
     get_dim_sampling_rate,
 )
@@ -62,6 +63,23 @@ np_savgol_filter = lazy_import("scipy.signal", "savgol_filter")
 _NDIMAGE_MODES = frozenset(
     "constant grid-constant grid-mirror grid-wrap mirror nearest reflect wrap".split()
 )
+
+
+# The dtypes these filters hand back as they were given, so the metadata,
+# which keeps the input's dtype, states what the kernel returns.
+_KEPT_DTYPES = frozenset({np.dtype("float32"), np.dtype("float64")})
+# The boundary modes which read the far end of the array.
+_WRAPPING = frozenset({"wrap", "grid-wrap"})
+
+
+def _reach(mode, widths: dict[int, int], dtype):
+    """Return the contract of a filter reading `widths` samples either side."""
+    # A mode for each axis is refused rather than worked out axis by axis.
+    if dtype not in _KEPT_DTYPES or not isinstance(mode, str):
+        return None
+    reach = {axis: (width, width) for axis, width in widths.items() if width}
+    # A wrapping edge is filled from the other end, so no halo holds it.
+    return WholeAxis(tuple(reach)) if mode in _WRAPPING else Halo(reach)
 
 
 def _get_sos(sr, filt_min, filt_max, corners):
@@ -154,6 +172,10 @@ class PassFilter(PatchProcessor):
             sos = sos.astype(np.float32, copy=False)
         return meta, {"axis": axis, "sos": sos}
 
+    def chunk_contract(self, dtype, plan):
+        """Return the filtered axis as needed whole: the filter is recursive."""
+        return WholeAxis((plan["axis"],)) if dtype in _KEPT_DTYPES else None
+
     def numpy_kernel(self, data, *, axis, sos):
         """Return the data filtered along the axis."""
         apply_sos = sosfiltfilt if self.zerophase else sosfilt
@@ -179,9 +201,11 @@ class SobelFilter(PatchProcessor):
     Notes
     -----
     The kernel smooths along every dimension, so missing samples (holes
-    in a step) in any of them raise; use
-    [split_gaps](`dascore.Patch.split_gaps`) or
-    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+    in a step) or labels off a step's grid (jitter) in any of them raise;
+    use [split_gaps](`dascore.Patch.split_gaps`),
+    [fill_gaps](`dascore.Patch.fill_gaps`) or
+    [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with no
+    step is filtered sample by sample, as an irregular axis.
 
     Examples
     --------
@@ -215,7 +239,7 @@ class SobelFilter(PatchProcessor):
             )
             raise FilterValueError(msg)
         # the kernel smooths along every other axis too
-        _require_evenly_sampled(meta, meta.dims, "sobel_filter")
+        _refuse_holes_and_jitter(meta, meta.dims, "sobel_filter")
         return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):
@@ -295,6 +319,11 @@ class MedianFilter(_WindowFilter):
     samples: Any = False
     mode: Any = "reflect"
     cval: Any = 0.0
+
+    def chunk_contract(self, dtype, plan):
+        """Return a reach of half the window along each axis."""
+        widths = {axis: size // 2 for axis, size in enumerate(plan["size"])}
+        return _reach(self.mode, widths, dtype)
 
     def numpy_kernel(self, data, *, size, axes):
         """Return the median of the window around each sample."""
@@ -440,6 +469,15 @@ class SavgolFilter(_WindowFilter):
     mode: Any = "interp"
     cval: Any = 0.0
 
+    def chunk_contract(self, dtype, plan):
+        """Return a reach of half the window along each filtered axis."""
+        widths = {axis: plan["size"][axis] // 2 for axis in plan["axes"]}
+        # The default mode fits a polynomial to each end of whatever it is
+        # given, and refuses a NaN there, so a cut end is not one it can be
+        # handed: it needs the axis whole, as a wrapping mode does.
+        mode = "wrap" if self.mode == "interp" else self.mode
+        return _reach(mode, widths, dtype)
+
     def numpy_kernel(self, data, *, size, axes):
         """Return the data filtered along each axis in turn."""
         for ax in axes:
@@ -531,6 +569,14 @@ class GaussianFilter(_WindowFilter):
             axes.append(axis)
             size[axis] = count
         return meta, {"size": tuple(size), "axes": tuple(axes)}
+
+    def chunk_contract(self, dtype, plan):
+        """Return a reach of the truncated kernel's radius along each axis."""
+        # The radius scipy cuts the kernel off at.
+        widths = {
+            axis: int(self.truncate * plan["size"][axis] + 0.5) for axis in plan["axes"]
+        }
+        return _reach(self.mode, widths, dtype)
 
     def numpy_kernel(self, data, *, size, axes):
         """Return the data smoothed along the axes."""

@@ -214,6 +214,12 @@ def resolve_selector_namespaces(
                 f"spool. Attributes: {sorted(known_attrs)}; "
                 f"coordinates: {sorted(known_coords)}."
             )
+            if name in {"network", "station", "instrument_id"}:  # 0.1.x attrs
+                msg += (
+                    f" {name!r} moved into acquisition_key "
+                    "(network.fiber_array.location.acquisition); select on "
+                    "that, e.g. acquisition_key='NET.*'."
+                )
             raise InvalidSpoolQueryError(msg)
     return attrs, coords
 

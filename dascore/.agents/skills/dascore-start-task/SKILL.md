@@ -1,5 +1,5 @@
 ---
-name: start-task
+name: dascore-start-task
 description: DASCore development. Set up an isolated task worktree and environment when starting work on DASCore itself.
 ---
 

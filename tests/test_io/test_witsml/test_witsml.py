@@ -334,11 +334,16 @@ class TestSpool:
     """Scans of one fiber at different times."""
 
     def test_chunk_keeps_curves_apart(self, tmp_path):
-        """Chunking along time joins each curve and never merges two curves."""
+        """Chunking along time joins each curve and never merges two curves.
+
+        Each scan is one sample with no step, which joins only by distance.
+        """
         times = ("2016-03-17T21:08:21.181Z", "2016-03-17T21:10:51.362Z")
         (tmp_path / "a.xml").write_text(_BRADY)
         (tmp_path / "b.xml").write_text(brady_like(*times))
-        chunked = dc.spool(tmp_path).update().chunk(time=None)
+        spool = dc.spool(tmp_path).update()
+        assert len(spool.chunk(time=None)) == 10
+        chunked = spool.chunk(time=None, tolerance=np.timedelta64(10, "m"))
         assert len(chunked) == 5
         assert all(x.shape == (6, 2) for x in chunked)
         patches = _by_tag(chunked)

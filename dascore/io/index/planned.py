@@ -54,9 +54,10 @@ from dascore.units import get_quantity
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
+    PIECE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
-    _trim_shared_dims,
+    _SampleTracker,
     grid_fits,
     patch_local_adjusted_envelopes,
 )
@@ -355,7 +356,9 @@ def _trim_to_member_windows(
             column = f"{name}_{end}"
             window = pd.Series(members[column].to_numpy(), index=joined.index)
             cut[column] = window.where(same, joined[column])
-    return _trim_shared_dims(joined, joined, cut, windows)
+    tracker = _SampleTracker(joined)
+    tracker.follow_values(joined, cut, dict.fromkeys(windows), False, {})
+    return tracker.trim(cut, windows)
 
 
 def _aux_coord_info(
@@ -365,6 +368,7 @@ def _aux_coord_info(
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str] = frozenset(),
     concat: bool = False,
+    conflict: str | None = None,
     source_trimmed: frozenset[str] = frozenset(),
 ) -> dict[int, dict[str, dict]]:
     """
@@ -386,6 +390,9 @@ def _aux_coord_info(
     a rider whose members share one step and meet end to end keeps that
     step (its values still differ member by member, so not its identity).
 
+    A merge's `conflict` settles a coordinate the members do not hold
+    alike (see `merge_coord_managers`): "drop", or a rider some member
+    lacks, leaves it out; "keep_first" describes the first member's.
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -469,10 +476,26 @@ def _aux_coord_info(
         # a coordinate no member holds contributes nothing; one the members
         # do hold is always named, even when nothing about its values can
         # be stated — the patch will have it, so the catalog says so
-        held = grouped[cmin].count().to_numpy() > 0
+        holds = joined[cmin].notna()
         if key_col in joined.columns:
-            held = held | (grouped[key_col].count().to_numpy() > 0)
-        absent = ~held
+            holds = holds | joined[key_col].notna()
+        by_output = holds.groupby(joined["output_id"], sort=True)
+        absent = ~by_output.any().to_numpy()
+        if conflict in ("keep_first", "drop") and not concat:
+            ends = [c for c in (cmin, cmax, key_col, unit_col) if c in joined]
+            lacking = ~by_output.all().to_numpy()
+            differs = (grouped[ends].nunique(dropna=False) > 1).any(axis=1)
+            settled = lacking if rides else lacking | np.asarray(differs)
+            heads = joined.drop_duplicates("output_id").sort_values("output_id")
+            first = heads[ends].to_numpy().T
+            gone = ~holds[heads.index].to_numpy() | (conflict == "drop") | rides
+            absent |= settled & gone
+            lows = np.where(settled, first[0], lows)
+            highs = np.where(settled, first[1], highs)
+            keep, step_ok = keep & ~settled, step_ok & ~settled
+            if unit_col in joined:  # the kept coordinate carries its units
+                unit_first = np.where(settled, first[-1], unit_first)
+                unit_ok = unit_ok | settled
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -761,7 +784,7 @@ class PlanResolver(PatchResolver):
                     return False
         return self._array_read_info(row) is not None
 
-    def _sources_unchanged(self, rows: pd.DataFrame) -> bool:
+    def _sources_unchanged(self, rows: pd.DataFrame, strict=True) -> bool:
         """
         Whether every member source still is what the index recorded.
 
@@ -770,9 +793,10 @@ class PlanResolver(PatchResolver):
         back the shape its row predicted and go unnoticed. Only a source
         measured now and found to be what was recorded keeps the recipe:
         a source `changed_sources` cannot measure refuses it too, and sends
-        the merge down the patch path.
+        the merge down the patch path. Unless ``strict``, only a source
+        measured and found changed counts.
         """
-        return self.changed_sources(rows) == []
+        return self.changed_sources(rows, skip_unmeasured=not strict) == []
 
     def changed_sources(self, rows: pd.DataFrame, skip_unmeasured=False):
         """
@@ -1213,9 +1237,11 @@ def derived_catalog(
     # a plan over stamped rows keeps stating the stamps
     stamps = dict(parent._stamps) if parent is not None else {}
     stamps |= stamped if isinstance(stamped, Mapping) else {}
-    trims = plan.members
+    # a plan's diagnostics describe it; loading never reads them
+    trims = plan.members.drop(columns=list(PIECE_COLUMNS), errors="ignore")
     trim_cols = [c for c in trims.columns if c not in ("_patch_row",)]
-    sources = source_rows.copy(deep=False)
+    # rows re-planned from an earlier chunk's members carry its grid slices
+    sources = source_rows.drop(columns=[f"_{name}_stretch"], errors="ignore")
     if "_patch_row" not in sources.columns:
         sources = _ensure_patch_row(sources)
     # Trim magnitudes are in the plan's (partition-normalized) unit; the
@@ -1316,11 +1342,12 @@ def derived_catalog(
         coord_dims_map,
         trimmed_dims,
         concat=mode == "concat",
+        conflict=merge_kwargs.get("conflict"),
         source_trimmed=_trimmed_dims(parent_residuals, coord_dims_map),
     )
     if merge_kwargs.get("fill_value") is not None:
         aux_info = _aux_info_for_unfed(
-            aux_info, outputs, sources, name, coord_dims_map, trimmed_dims
+            aux_info, outputs, sources, name, coord_dims_map, trimmed_dims, trims
         )
     outputs = _with_windowed_dims(outputs, aux_info, name)
     records = _output_records(
@@ -1400,14 +1427,17 @@ def _aux_info_for_unfed(
     plan_dim: str,
     coord_dims_map: Mapping[str, str],
     trimmed_dims: frozenset[str],
+    members: pd.DataFrame,
 ) -> dict:
     """Describe fill-only outputs from a sibling or their metadata anchor."""
     out = dict(aux_info)
     known = np.array(sorted(aux_info))
+    fed = set(members["output_id"])
     by_id = sources.set_index("_patch_row", drop=False)
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
-        if output_id in out:
+        # a fed output is described by its members, even with nothing left
+        if output_id in out or output_id in fed:
             continue
         anchor_id = row.get("_anchor_patch_row")
         if anchor_id in by_id.index:

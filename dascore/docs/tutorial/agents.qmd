@@ -1,43 +1,68 @@
 ---
 title: Agent onboarding
+execute:
+  warning: false
 description: Install the DASCore skills and browse the included workflows.
-keywords: [agents, skills, cli]
 ---
+
+DASCore provides several tools to help coding agents use it more effectively. Start by installing the skills and have your agent explore the API.
 
 ## Install the skills
 
-Ask your agent:
+### With library-skills
 
-> Run `dascore skills --install <directory>`, giving your personal skills directory, to install every DASCore skill.
+DASCore ships its skills in `dascore/.agents/skills/`, the layout [library-skills](https://pypi.org/project/library-skills/) reads. From a project whose environment has DASCore installed, run:
 
-Reload the agent if needed, then ask it to use DASCore on your data. If `dascore` is not on your path, run `python -m dascore` with the project's Python; see [Local documentation](local_documentation.qmd).
+```bash
+uvx library-skills
+```
 
-For most skills the command writes a short entry: the skill's name, what it is for, and an instruction to read the current procedure with `dascore skill <name>`. These entries follow the DASCore in each project and do not go stale. Four skills are copied whole because they must work where the project's DASCore has no command line (an older release, or no environment yet): `dascore`, `migrate-to-v1`, `test-beta`, and `start-task`. Run the command again after upgrading DASCore to refresh those four and pick up new skills. It replaces any skill of the same name already in that directory, so move aside your own skill if one shares a name.
+It finds the skills of the project's dependencies and asks which to link into `.agents/skills`. Claude Code reads only `.claude/skills`, so add `--claude` for it.
+
+Or just ask your agent:
+
+> Run `uvx library-skills --claude --all -y` to install the DASCore skills into this project.
 
 ## Included skills
 
 `dascore` is the entry point: it finds the APIs and workflows of the DASCore installed in your project.
 
-| Skill | Documentation | Purpose |
-| --- | --- | --- |
-| `dascore` | [Choose a DASCore workflow](../recipes/dascore.qmd) | Find APIs, inspect data, and choose a procedure. |
-| `make-inventory` | [Create an inventory](../recipes/tunnel_inventory.qmd) | Create, validate, repair, and attach observing-system metadata. |
-| `make-annotations` | [Annotations](annotations.qmd) | Turn a table of picks, ranges, or shapes into an annotation set. |
-| `make-namespace` | [Extending DASCore](../contributing/extending_dascore.qmd) | Add methods to DASCore objects from a namespace or plugin package. |
-| `migrate-to-v1` | [Migrate to DASCore 1.0](../migrations/dascore_1.0_migration.qmd) | Update projects using the 0.1.x APIs. |
-| `test-beta` | [Test the latest pre-release](../migrations/test_latest_beta.qmd) | Try a pre-release in isolation and draft problem reports. |
+```{python}
+#| echo: false
+#| output: asis
+from dascore.utils.doc_skills import get_skills
 
-Run `dascore skills` to list available workflows, or `dascore skill <name>` to read one. Each linked page is the same procedure served by the CLI. The migration and beta-testing pages can also be given directly to an agent without installing the skill.
+DEVELOPMENT = "DASCore development. "
+SKILL_FILES = "https://github.com/DASDAE/dascore/blob/dev/dascore/.agents/skills"
+
+
+def skill_table(development):
+    """Print the user or development skills as a table, from the skill files."""
+    print("| Skill | Documentation | Purpose |\n| --- | --- | --- |")
+    for name, info in get_skills().items():
+        purpose = info["description"]
+        if purpose.startswith(DEVELOPMENT) != development:
+            continue
+        target = info["target"]
+        href = f"../{target}.qmd" if target else f"{SKILL_FILES}/{name}/SKILL.md"
+        purpose = purpose.removeprefix(DEVELOPMENT)
+        print(f"| `{name}` | [{info['title']}]({href}) | {purpose} |")
+
+
+skill_table(development=False)
+```
+
+Run `dascore skills` to list available workflows, or `dascore skill <name>` to read one. Each link is the same procedure served by the CLI. The annotation and beta-testing skills are written for agents and have no docs page, so their links go to the skill files; the [annotations tutorial](annotations.qmd) covers the same tools for people. The migration and beta-testing skill files can also be given directly to an agent without installing the skill.
 
 ## Development skills
 
-These are for work on DASCore itself. Their descriptions begin with "DASCore development".
+These are for work on DASCore itself; their descriptions begin with "DASCore development".
 
-| Skill | Documentation | Purpose |
-| --- | --- | --- |
-| `add-format` | [Adding a New Format](../contributing/new_format.qmd) | Read or write a new file format. |
-| `start-task` | [Start a task](../contributing/start_task.qmd) | Set up a worktree and environment for a change. |
-| `draft-release` | [Draft a release](../contributing/draft_release.qmd) | Propose the next version and its release notes. |
+```{python}
+#| echo: false
+#| output: asis
+skill_table(development=True)
+```
 
 ## Where skills live
 

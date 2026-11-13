@@ -341,6 +341,22 @@ def _bounds(contents, spool, name):
     return advertised, loaded
 
 
+def _assert_holds(advertised, loaded, tolerance=1e-5):
+    """
+    Each advertised range holds what loads, and no more than float rounding.
+
+    A float range may pass the loaded one by the float exactness of the
+    coordinate contract; anything else matches exactly.
+    """
+    assert len(advertised) == len(loaded)
+    for (low, high), (first, last) in zip(advertised, loaded, strict=True):
+        if np.asarray(first).dtype.kind != "f":
+            assert (low, high) == (first, last)
+            continue
+        assert 0 <= first - low <= tolerance
+        assert 0 <= high - last <= tolerance
+
+
 class TestWindowedRiders:
     """A window on one coordinate trims every coordinate on its dimension."""
 
@@ -374,8 +390,7 @@ class TestWindowedRiders:
         out = derive(sensor_spool)
         contents = out.get_contents()
         for name in ("distance", "sensor"):
-            advertised, loaded = _bounds(contents, out, name)
-            assert advertised == loaded
+            _assert_holds(*_bounds(contents, out, name))
 
     def test_windowed_identity(self, sensor_spool):
         """A trimmed coordinate no longer claims its source's identity."""
@@ -390,7 +405,8 @@ class TestWindowedRiders:
         """Sources already trimmed on the dimension keep their envelopes."""
         out = sensor_spool.select(distance=(10.5, 200)).chunk(distance=50)
         advertised, loaded = _bounds(out.get_contents(), out, "sensor")
-        assert set(advertised) == {(1022.0, 1400.0)}
+        assert len(set(advertised)) == 1
+        assert advertised[0] == pytest.approx((1022.0, 1400.0), abs=1e-5)
         assert all(a[0] <= b[0] and b[1] <= a[1] for a, b in zip(advertised, loaded))
 
     def test_window_in_another_unit_keeps_superset(self, sensor_patch):

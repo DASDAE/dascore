@@ -1,11 +1,12 @@
 ---
-name: migrate-to-v1
+name: dascore-migrate-to-v1
 description: Update code, files, and indexes written for DASCore 0.1.x to the DASCore 1.0 APIs, including behavior that changed without raising.
 ---
 
-This guide covers the changes between DASCore 0.1.24 and 1.0 which can break existing code. Most of them raise a clear error, but a few change results without one; those are marked **silent** below and deserve a search of your code even if it runs. See the [announcement](dascore_1.0_announcement.qmd) for what is new.
+This guide covers the changes between DASCore 0.1.24 and 1.0 which can break existing code. Most of them raise a clear error, but a few change results without one; those are marked **silent** below and deserve a search of your code even if it runs. See the [announcement](https://dascore.netlify.app/migrations/dascore_1.0_announcement.html) for what is new.
 
-An agent can follow this guide directly from this page; the project does not need DASCore 1.0 installed first, and 0.1.x has no skills command to load it from. Substitute the project environment's Python executable for `python` in the commands below.
+::: {.content-hidden when-format="html"}
+An agent can follow this guide directly from this file; the project does not need DASCore 1.0 installed first, and 0.1.x has no skills command to load it from. Substitute the project environment's Python executable for `python` in the commands below.
 
 ## Workflow
 
@@ -14,6 +15,18 @@ An agent can follow this guide directly from this page; the project does not nee
 3. Search separately for the **silent** changes: coordinate fields written through attrs, `attrs.get` of coordinate fields, gap merging in `chunk`, glob negation, STFT time values, and correlation units.
 4. Plan for existing files: 0.1.x DASDAE files need an explicit opt-in to read, old spool indexes are replaced, and DASDAE files written by 1.0 cannot be read by 0.1.x.
 5. Run the project's tests. Treat new `ParameterError`, `UnitError`, `CoordError`, `PatchCoordinateError`, and `InvalidSpoolQueryError` exceptions as places where 0.1.x computed something questionable, not as noise to suppress.
+:::
+
+## Summary
+
+The sections after this summary list every change.
+
+- **Coordinates belong to coordinates.** `patch.attrs` no longer repeats coordinate information such as `time_min`, `time_step`, or `distance_units`; use `patch.get_coord("time").min()`, `.step`, or `.units`, and change coordinates with `update_coords`. Empty `network`, `station`, `instrument_id`, and `acquisition_id` fields are gone.
+- **Renamed and removed APIs.** `assign_coords` → `update_coords`, `iselect` → `select(..., samples=True)` or `isel`, `Patch.from_parts` → `dc.Patch(...)`. The `patch.tran` namespace is gone, `rfft` becomes `dft(dim, real=True)`, and `spectrogram` becomes `stft`. `MemorySpool`, `DirectorySpool`, and `FileSpool` are replaced by `dc.spool(...)`.
+- **Spools.** Directory indexes are SQLite files; old `.dascore_index.h5` files can be deleted. `Spool.select` raises on unknown keywords, and `chunk` combines only patches of the same kind.
+- **Coordinates and processing.** The coordinate classes are unified behind `dc.get_coord(...)`. Operations that need evenly sampled data raise on coordinates with gaps; use `fill_gaps`, `split_gaps`, or `snap_coords` first.
+- **Files.** 0.1.x DASDAE files need an opt-in to read, 1.0 DASDAE files need `file_version="1"` for 0.1.x readers, and the PICKLE format is disabled by default. Format authors implement `get_version`, `get_metadata`, and `read_array`; see [adding a new format](https://dascore.netlify.app/contributing/new_format.html).
+- **Silent changes.** Coordinate fields set or read through attrs, numeric attribute units, gap merging in `chunk`, label snapping in `dc.get_coord`, glob negation, `stft` windows, `correlate` units, `taper` edges, and `Spool.stack` labels.
 
 ## Requirements
 
@@ -46,7 +59,7 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `dascore.utils.array.hash_numpy_array` | `dascore.utils.array.hash_array` |
 | `to_float.register`, `to_int.register` | register on the private `_to_float`, `_to_int` |
 | `dc.proc.align_patch_coords` | `dascore.utils.patch.align_patch_coords` |
-| `DEFAULT_ATTRS_TO_IGNORE`, `PATCH_MERGE_ATTRS`, `attrs_to_ignore=` | the `patch_kind_attrs` config option; see [Patch compatibility](../notes/patch_compatibility.qmd) |
+| `DEFAULT_ATTRS_TO_IGNORE`, `PATCH_MERGE_ATTRS`, `attrs_to_ignore=` | the `patch_kind_attrs` config option; see [Patch compatibility](https://dascore.netlify.app/notes/patch_compatibility.html) |
 | `dascore.utils.patch.merge_patches(patches)` | `dc.spool(patches).chunk(time=None)` |
 | `dascore.utils.patch.concatenate_patches(patches, time=None)` | `dc.spool(patches).concatenate(time=None)`, which puts patches that cannot be concatenated together in separate outputs rather than skipping them |
 | `dascore.utils.patch.get_patch_window_size`, `get_window_axis_step` | `dascore.utils.window.resolve_window(...)`; `.full_size()` gives the window along every axis |
@@ -92,7 +105,9 @@ An extra attribute holds one value. An array belongs on the patch as a coordinat
 - **`update`** is allowed only on the spool returned by `dc.spool(path)`, not on one derived from it by `select`, `chunk`, slicing, or `+`. Call `update()` first.
 - **Unknown attributes.** `Spool.select` raises `InvalidSpoolQueryError` for a keyword which is neither a coordinate nor an attribute some patch states; 0.1.x ignored unknown names and treated the standard attributes as present but empty. Check `spool.get_contents().columns` before selecting on an optional attribute.
 - **Contents.** `get_contents()` and `scan_to_df()` have no `patch`, `history`, or `{dim}_dtype` columns, and leave out attributes no patch states, such as an empty `station` or `data_units`. The `path`, `file_format`, and `file_version` columns are now `source_path`, `source_format`, and `source_version`.
-- **Silent: gaps.** `chunk(..., tolerance=...)` no longer merges patches across a gap. 0.1.x joined them and stretched the sampling step over the missing samples; 1.0 returns the pieces separately and keeps the declared step. Pass `fill_value=` together with a `tolerance` wide enough to admit the gap, e.g. `chunk(time=None, tolerance=5, fill_value=np.nan)`; with the default tolerance of 1.5 steps a missing sample is still a gap.
+- **Silent: joining.** `chunk` joins two patches only where the later starts one step after the earlier ends, give or take `max_shift` (0.2 of a step by default, from `dascore.config.max_shift`), where 0.1.x joined any seam up to `tolerance=1.5` steps wide. Seams 1.2 to 1.5 steps wide, and later patches more than 0.2 step off the earlier one's grid (including overlaps half a step off it), now start a new patch. Pass `tolerance=1.5` for the 0.1.x joining; `tolerance` is now off by default, a number is still a seam width in steps, and a quantity or timedelta is now the seam's width rather than the excess over one step. Each stretch of joined patches gets one evenly sampled grid: the roundest step its files state that keeps every file's ends within `max_shift`, else its span spread evenly as 0.1.x did, so `chunk(time=...)` windows rejoin exactly. Labels with no step join where they overlap or touch, and across a seam only under a quantity or timedelta `tolerance`. `get_gaps` and `get_coverage` take the same `tolerance` and `max_shift` and list where `chunk` splits, with a `missing` sample count.
+- **Silent: gaps.** A `tolerance` wide enough to span a gap joins the patches and spreads their labels evenly over it, as 0.1.x did, with the same warning above 1.5 steps. Pass `fill_value=` as well to keep the declared step and write the missing samples instead, e.g. `chunk(time=None, tolerance=5, fill_value=np.nan)`.
+- **`chunk(snap_coords=...)`** is deprecated and ignored, with a warning: `chunk` always fits one grid per stretch. Use `Spool.concatenate` to join patches keeping their recorded labels, and `Patch.snap_coords` to regularize labels.
 - **Kinds.** `chunk`, `concatenate`, and `stack` combine only patches of the same kind, decided by the `patch_kind_attrs` config option; patches of other kinds come out separately, and `stack` warns. `data_type` is no longer part of a patch's kind, so chunking a spool which mixes, say, strain rate and velocity raises `CoordMergeError`, or merges them under `conflict="drop"`. Pass `group="data_type"` to keep them apart as 0.1.x did.
 - **Directory names.** Hive-style `key=value` directory names become string attributes of the patches beneath them.
 
@@ -114,7 +129,7 @@ The coordinate classes were unified into one run-based [`NumericCoord`](`dascore
 
 `dc.get_coord(data=..., step=...)` now checks that the values sit on the stated grid and raises when they do not; 0.1.x ignored the step.
 
-Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. Operations which need evenly sampled data (`differentiate`, `integrate`, `taper`, `sobel_filter`, filtered `decimate`) raise `CoordError` on a coordinate with holes, jitter, or no step, where 0.1.x computed on the labels. Use `fill_gaps` or `split_gaps`, or `snap_coords`, first.
+Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. `differentiate`, `integrate`, `taper`, `sobel_filter`, and filtered `decimate` raise `CoordError` on a coordinate with holes or with labels off its step's grid (jitter), where 0.1.x computed on the labels. Use `fill_gaps`, `split_gaps`, or `snap_coords` first. A coordinate with no step, such as irregular sensor positions, is still an irregular axis these operations compute on by its labels, as in 0.1.x.
 
 **Silent:** `dc.get_coord(data=...)` without a `step` reads labels exactly by default: labels within 0.1% of one spacing of a grid, which 0.1.x snapped onto it, are now jittered or have no step. Pass `snap=True` for the 0.1.x result, or call `snap_coords` on the patch. A stated `step` still absorbs float rounding unless `snap=False`.
 
@@ -131,6 +146,7 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 - **Silent: STFT.** `Patch.stft` places its windows differently, so depending on window length and overlap the output `time` values, and the number of windows, can differ from 0.1.x. The output also carries `{dim}_start` and `{dim}_stop` coordinates giving each window's edges.
 - **Silent: correlation units.** `correlate` reports the square of the input data units.
 - **Silent: taper.** `taper` builds its ramp from `2n + 1` samples rather than `2n`, changing edge values slightly.
+- **Inventory enrichment.** `Patch.enrich` and `Spool.enrich` raise `PatchError` when a value the file header states disagrees with the inventory; 0.1.x kept the header value. Fix the inventory, or pass `enrich(conflict="keep_first")` for the old behaviour (`"keep_last"` lets the inventory win).
 
 ## Units and time
 
@@ -149,4 +165,4 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 
 ## Format authors
 
-A 0.1.x `FiberIO` overrode `get_format`, `scan`, and `read`. In 1.0 a format implements `get_version`, `get_metadata`, and `read_array`, and detection, scanning, and reading are derived from them; a reader overriding only the old methods still works but warns. Write options are declared as named parameters of `write` rather than read from `**kwargs`. See [Adding a new format](../contributing/new_format.qmd).
+A 0.1.x `FiberIO` overrode `get_format`, `scan`, and `read`. In 1.0 a format implements `get_version`, `get_metadata`, and `read_array`, and detection, scanning, and reading are derived from them; a reader overriding only the old methods still works but warns. Write options are declared as named parameters of `write` rather than read from `**kwargs`. See [Adding a new format](https://dascore.netlify.app/contributing/new_format.html).

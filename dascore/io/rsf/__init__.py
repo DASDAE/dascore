@@ -14,6 +14,9 @@ import dascore as dc
 patch = dc.get_example_patch()
 patch.io.write("test_out.rsf","rsf",data_path="test_out.rsf")
 
+# read it back; the binary is memory-mapped, so windows load lazily.
+spool = dc.spool("test_out.rsf")
+
 """
 
 from .core import RSFV1

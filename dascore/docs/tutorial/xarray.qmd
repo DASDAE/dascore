@@ -1,0 +1,91 @@
+---
+title: Xarray
+execute:
+  warning: false
+---
+
+DASCore supports users who prefer to work with [xarray](https://docs.xarray.dev/). Spools become lazy `DataTree`s, patches convert to `DataArray`s and back, patch methods run directly on `DataArray`s, and patches index, compute, and write the way xarray users expect. Xarray is optional; install it with [DASCore's extras](../installation.qmd#optional-extras).
+
+## Spools as lazy DataTrees
+
+[`Spool.io.to_xarray`](`dascore.io.SpoolIO.to_xarray`) turns a whole spool into a [dask](https://docs.dask.org/)-backed [`DataTree`](https://docs.xarray.dev/en/stable/user-guide/hierarchical-data.html), with one node per group of related patches and one child node per merged segment. Building the tree reads no data; computing a selection reads only the patches it touches.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+
+spool = dc.get_example_spool("diverse_das")
+tree = spool.io.to_xarray()
+
+first = next(node for node in tree.subtree if "data" in node.dataset)
+small = first.dataset["data"].isel(time=slice(0, 100)).compute()
+small.shape
+```
+
+## Patches and DataArrays
+
+[`Patch.io.to_xarray`](`dascore.io.PatchIO.to_xarray`) converts a patch to a `DataArray`, and [`dc.io.xarray_to_patch`](`dascore.io.xarray_to_patch`) converts it back without loss:
+
+```{python}
+patch = dc.get_example_patch()
+dar = patch.io.to_xarray()
+assert dc.io.xarray_to_patch(dar) == patch
+dar
+```
+
+`lazy_coords=True` keeps DASCore's coordinates as the index, computing labels only for the samples selected, so converting back is exact even for fractional sampling rates and gaps. Use it to keep the sampling step of a dimension with one sample, which materialized labels cannot record:
+
+```{python}
+lazy = patch.io.to_xarray(lazy_coords=True)
+type(lazy.xindexes["time"]).__name__
+```
+
+## The dc accessor
+
+DataArrays from DASCore have a `dc` accessor with every `Patch` method; methods that return a patch return a DataArray. For other DataArrays, `import dascore.xarray.accessor` first.
+
+```{python}
+filtered = dar.dc.pass_filter(time=(1, 10))
+```
+
+## Xarray-style indexing
+
+[`Patch.sel`](`dascore.Patch.sel`) indexes by label and [`Patch.isel`](`dascore.Patch.isel`) by position, as in xarray:
+
+```{python}
+label_window = patch.sel(distance=slice(10, 20))
+sample_window = patch.isel(time=slice(0, 100, 2))
+nearest_channel = patch.sel(distance=10.2, method="nearest", tolerance=0.5)
+channel = patch.isel(distance=3)  # drops the distance dimension
+```
+
+Their docstrings give the exact rules and what is unsupported. Patches have no `.loc` or `.iloc`. For DASCore's range tuples and relative selections, use [`Patch.select`](`dascore.Patch.select`).
+
+## Familiar methods
+
+Many patch methods share xarray's names: `transpose`, `squeeze`, `where`, `fillna`, `dropna`, `pipe`, `rolling`, `idxmax`, and the reductions (`mean`, `max`, `std`, ...). Reductions keep the reduced dimension with length one unless given `dim_reduce="squeeze"`. NumPy functions also return patches.
+
+```{python}
+positive = patch.where(patch > 0, 0)
+channel_mean = patch.mean("time", dim_reduce="squeeze")
+differenced = np.diff(patch, axis=1)
+```
+
+## Writing with encodings
+
+The NetCDF, Zarr, and DASDAE writers accept xarray's `encoding`, and their files open in xarray:
+
+```{python}
+import tempfile
+from pathlib import Path
+
+import xarray as xr
+
+path = Path(tempfile.mkdtemp()) / "patch.nc"
+encoding = {"data": {"zlib": True, "complevel": 4, "chunksizes": (50, 1000)}}
+patch.io.write(path, "NETCDF_CF", encoding=encoding)
+xr.open_dataset(path)["data"].encoding["chunksizes"]
+```
+
+See [File formats in depth](file_formats.qmd) for Zarr and other options, and the [external conversion recipe](../recipes/external_conversion.qmd) for index alignment and dask details.

@@ -41,12 +41,13 @@ def get_asdf_version(h5) -> str | None:
 
 def _parse_name(name: str) -> tuple[str, list[str], str]:
     """Split a waveform name into its source ID, codes and tag."""
-    # Tags may hold "__"; codes and times cannot.
+    # Tags may hold "__"; codes and times cannot. A location may hold dots.
     parts = name.split("__", 3)
     codes = parts[0].split(".")
-    if len(parts) != 4 or len(codes) != 4:
+    if len(parts) != 4 or len(codes) < 4:
         msg = f"ASDF waveform name {name!r} is not NET.STA.LOC.CHA__start__end__tag"
         raise InvalidFiberFileError(msg)
+    codes[2:-1] = [".".join(codes[2:-1])]
     return parts[0], codes, parts[3]
 
 

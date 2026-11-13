@@ -24,7 +24,7 @@ from dascore.core.coords import (
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.io.dasdae import DASDAEV2
-from dascore.io.dasdae.utils import _read_coord
+from dascore.io.dasdae.utils import _read_stored_coord
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance, get_gap_edges, run_holes
 
@@ -169,6 +169,26 @@ class TestDeclaredStep:
         assert coord.step is None and coord.missing().complete
 
 
+class TestLongExactGrid:
+    """An exact grid whose count times numerator passes int64 still labels."""
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_labels_index_and_slice(self, sign):
+        """Labels match Python ints; index_of and slices agree with them."""
+        count, num, den, phase = 10**7, sign * (10**12 + 7), 10**6, 999_999
+        origin = 0 if sign > 0 else 2 * 10**13
+        assert abs(count * num) >= 2**63 > count * den
+        grid = Grid(origin, num, den, count, phase=phase)
+        index = [0, count // 2 + 1, count - 1]
+        expected = [origin + (phase + i * num) // den for i in index]
+        assert grid.labels(np.array(index, dtype=np.int64), "i8").tolist() == expected
+        assert [int(grid.index_of(x, True)) for x in expected] == index
+        piece = grid.sliced(index[1], 1, count - index[1])
+        assert piece.labels([0, count - index[1] - 1], "i8").tolist() == expected[1:]
+        coord = get_coord(runs=(grid,), dtype="int64")
+        assert int(coord.values[-1]) == expected[-1]
+
+
 class TestFusion:
     """Array segments fuse only when nothing says they should not."""
 
@@ -300,8 +320,13 @@ class TestFractionalGaps:
             full = full[2:-2]
         assert spool.get_gaps(tolerance=2).empty
         assert spool.get_gaps(tolerance=np.inf).empty
+        # a GapTolerance's excess is past one step; a bare one is the width
         absolute = GapTolerance.absolute(float(full.step_exact))
         assert spool.get_gaps(tolerance=absolute).empty
+        narrow = GapTolerance.absolute(float(0.5 * full.step_exact))
+        assert len(spool.get_gaps(tolerance=narrow)) == 1
+        width = float(2 * full.step_exact) * dc.get_quantity("s")
+        assert spool.get_gaps(tolerance=width).empty
         assert len(spool.get_gaps(tolerance=1.5)) == 1
         assert len(spool.chunk(time=None, tolerance=1.5)) == 2
         out = spool.chunk(time=None, tolerance=2, fill_value=np.nan)
@@ -488,8 +513,10 @@ class TestOneVerdict:
         return base, second, third
 
     def test_chunk_and_coordinate_agree(self, patches):
-        """The default tolerance splits at 1.6 steps and merges 1.4."""
-        merged = dc.spool(patches).chunk(time=None)
+        """A tolerance of 1.5 splits at 1.6 steps and merges 1.4."""
+        # by default both seams are wider than max_shift allows
+        assert len(dc.spool(patches).chunk(time=None)) == 3
+        merged = dc.spool(patches).chunk(time=None, tolerance=1.5)
         assert len(merged) == 2
         values = np.concatenate([p.get_coord("time").values for p in patches])
         coord = get_coord(data=values, snap=False)
@@ -501,10 +528,10 @@ class TestOneVerdict:
         assert np.flatnonzero(mask)[0] + 1 == gaps["index"].iloc[0]
 
     def test_absolute_tolerance_agrees(self, patches):
-        """An absolute excess reads the same at both sites."""
+        """A chunk's seam width is a coordinate's excess plus one step."""
         step = patches[0].get_coord("time").step
         excess = 0.5 * step
-        merged = dc.spool(patches).chunk(time=None, tolerance=excess)
+        merged = dc.spool(patches).chunk(time=None, tolerance=step + excess)
         assert len(merged) == 2
         values = np.concatenate([p.get_coord("time").values for p in patches])
         coord = get_coord(data=values, snap=False)
@@ -662,8 +689,8 @@ class TestLegacySnapStep:
         with h5py.File(tmp_path / "legacy.h5", "w") as h5:
             h5.create_dataset("_coord_x", data=np.array([5.0]))
             h5.create_dataset("_coord_y", data=np.array([0.0, 1.0, 2.05]))
-            single = _read_coord(h5["_coord_x"], "x", {"x_step": 2.0}, snap=False)
-            jittered = _read_coord(h5["_coord_y"], "y", {"y_step": 1.0}, snap=False)
+            single = _read_stored_coord(h5["_coord_x"], "x", {"x_step": 2.0})
+            jittered = _read_stored_coord(h5["_coord_y"], "y", {"y_step": 1.0})
         assert single.evenly_sampled and single.step == 2.0
         # longer values are read as they are; the nominal step is not a
         # claim they must meet, and they are jittered on their own step

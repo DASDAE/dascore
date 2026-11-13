@@ -22,7 +22,6 @@ from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity_str
 from dascore.utils.patch_assembly import PatchAssembler
 from dascore.xarray.patch import _cf_unit_str
-from tests.conftest import join_patches
 
 
 @pytest.fixture
@@ -57,6 +56,19 @@ class TestSpoolToXarray:
     def _leaves(self, tree):
         """Return the datasets holding a data variable."""
         return [node for node in tree.subtree if "data" in node.dataset]
+
+    def test_seams_join_as_chunk_joins(self):
+        """A 1.3-step seam splits segments unless tolerance or max_shift joins it."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        later = first.update_coords(time_min=time.max() + 1.3 * time.step)
+        spool = dc.spool([first, later])
+        assert len(self._leaves(spool.io.to_xarray())) == 2
+        for kwargs in (dict(tolerance=1.5), dict(max_shift=0.4)):
+            (leaf,) = self._leaves(spool.io.to_xarray(**kwargs))
+            expected = spool.chunk(time=None, **kwargs)[0].get_coord("time")
+            values = leaf.dataset["time"].values
+            np.testing.assert_array_equal(values, expected.values)
 
     def test_tree_structure(self, diverse_tree):
         """Each leaf holds one lazy data variable with dim coordinates."""
@@ -349,7 +361,10 @@ class TestSpoolToXarray:
         )
         spool = dc.spool([random_patch, gap])
         tol = dc.get_quantity("10 m")
-        merged = join_patches([random_patch, gap], "distance")
+        # a spread under 100 ticks keeps the recorded labels (rule 6)
+        (merged,) = spool.chunk(distance=None, tolerance=tol)
+        recorded = np.concatenate([x.get_array("distance") for x in spool])
+        assert np.array_equal(merged.get_array("distance"), recorded)
         tree = spool.io.to_xarray(dim="distance", tolerance=tol)
         leaves = self._leaves(tree)
         assert len(leaves) == 1
@@ -778,7 +793,7 @@ class TestToXarrayLazyCoords:
         np.testing.assert_array_equal(sub.compute().values, expected.data)
 
     def test_segmented_time_stays_lazy(self, random_patch):
-        """A jittered merge is not one range; it is served as its segments."""
+        """A merge of drifting steps is one range, still served lazily."""
         from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         coord = random_patch.get_coord("time")
@@ -790,7 +805,8 @@ class TestToXarrayLazyCoords:
         data = self._leaf(spool.io.to_xarray())["data"]
         index = data.xindexes["time"]
         assert isinstance(index, CoordIndex)
-        assert index.coordinate.runs_count > 1
+        # no stated step fits both, so the merge spreads them evenly
+        assert index.coordinate.runs_count == 1
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values
@@ -1361,13 +1377,14 @@ class TestTreeMatchesChunk:
         spool = dc.spool(members).chunk(time=None)
         return spool.select(distance=(1, None), samples=True)
 
-    @pytest.mark.parametrize("starts", [(0, 20), (0, 10)])
+    # (0, 20.5, 41): seams 1.5 steps wide are gaps, so nothing is snapped
+    @pytest.mark.parametrize("starts", [(0, 20), (0, 10), (0, 20.5, 41)])
     def test_selection_of_an_exact_chunk(self, starts):
         """A selected chunk whose envelope is its merged grid converts as chunk."""
         spool = self._selected_chunk(starts)
         self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
 
-    @pytest.mark.parametrize("starts", [(0, 15.2), (0, 20.5, 41)])
+    @pytest.mark.parametrize("starts", [(0, 15.2)])
     def test_selection_of_a_snapped_chunk_refused(self, starts):
         """
         A selected chunk which snapped its members is refused when built.

@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from tempfile import gettempdir
 from threading import Lock
 from typing import Literal
 
@@ -21,8 +20,9 @@ def _get_cache_root() -> Path:
 
 
 def _get_remote_cache_root() -> Path:
-    """Return the OS-appropriate temp directory used for remote-file caching."""
-    return Path(gettempdir()) / "dascore" / "remote_cache"
+    """Return the per-user directory used for remote-file caching."""
+    # Not the shared temp dir, where another user could claim the name first.
+    return _get_cache_root() / "remote_cache"
 
 
 class DascoreConfig(BaseModel):
@@ -179,7 +179,7 @@ class DascoreConfig(BaseModel):
     # Remote IO and local materialization policy.
     remote_cache_dir: Path = Field(
         default_factory=_get_remote_cache_root,
-        description="Temporary directory used to materialize remote files locally.",
+        description="Private directory used to materialize remote files locally.",
     )
     allow_remote_cache: bool = Field(
         default=True,
@@ -231,6 +231,16 @@ class DascoreConfig(BaseModel):
             "merged dimension rather than whole. A selection reads only "
             "what it asks for whatever this is. Zero makes each source "
             "patch one block."
+        ),
+    )
+    lazy_block_size: int = Field(
+        default=268_435_456,  # 256 MiB
+        ge=0,
+        description=(
+            "Most any one array should hold, in bytes, while the operations "
+            "pending on lazy patch data are run. Data which would need a "
+            "larger one are computed a chunk at a time, where the operations "
+            "allow it. Zero computes everything in one piece."
         ),
     )
     remote_hdf5_max_blocks: int = Field(

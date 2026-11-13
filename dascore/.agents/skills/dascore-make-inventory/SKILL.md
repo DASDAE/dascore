@@ -1,5 +1,5 @@
 ---
-name: make-inventory
+name: dascore-make-inventory
 description: Create, validate, repair, serialize, and attach a DASCore inventory of a fiber deployment, following a worked tunnel example.
 ---
 
@@ -13,7 +13,7 @@ Use an inventory to describe the observing system independently of the files con
 
 1. Gather known identity, resource, survey, coupling, acquisition, and validity-time information. Keep unknown deployment facts explicit. Do not invent serial numbers, coordinates, dates, or installation details to fill a schema.
 2. Separate owned resources from components on the optical path, geometry, coupling, labels, and acquisition configuration. Model a continuous run with a shared break history as one fiber array and path.
-3. Use the installed schema's canonical attributes and declared units. Distinguish instrument distance, optical distance, and survey coordinates, including their reference frame. Represent winding and other geometry through coordinate mappings rather than ad hoc corrections.
+3. Use the installed schema's canonical attributes and declared units. Distinguish acquisition distance, optical distance, and survey coordinates, including their reference frame. Represent winding and other geometry through coordinate mappings rather than ad hoc corrections.
 4. Load the authored description with `dc.inventory(...)` to validate schemas, references, and track bounds. Repair source mistakes using evidence; represent a changed deployment with a new dated epoch rather than overwriting its history.
 5. Serialize with `inventory.io.to_yaml()`, reload with `dc.inventory(text)`, and compare the result. The final example below performs this round trip.
 6. Attach the inventory to a small representative spool with matching acquisition keys and recording times. Check selected regions and enriched coordinates, including unknown positions. Test epoch boundaries when configuration or geometry changes during the data.
@@ -177,7 +177,7 @@ Each label group must use one value type.
 
 ## How the instrument was set up
 
-An acquisition describes an instrument configuration on the path. Its filename yields acquisition key `XT.TUN1.00.DAS`; `distance_map` maps instrument distance to optical distance and remains explicit even when it is the identity.
+An acquisition describes an instrument configuration on the path. Its filename yields acquisition key `XT.TUN1.00.DAS`; `distance_map` maps acquisition distance to optical distance and remains explicit even when it is the identity.
 
 ```{python}
 show("acquisitions/XT.TUN1.00.DAS.yaml")

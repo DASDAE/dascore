@@ -1,6 +1,12 @@
 ---
 title: Extending DASCore
-keywords: [namespace, plugin, entry point, processor, backend]
 engine: jupyter
 ---
-{{< include ../../.agents/skills/make-namespace/SKILL.md >}}
+{{< include ../../.agents/skills/dascore-make-namespace/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+---
+# After the include, so this description replaces the skill file's.
+description: Add your own methods to DASCore objects from a local namespace or a plugin package.
+---
+:::

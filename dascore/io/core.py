@@ -65,6 +65,7 @@ from dascore.exceptions import (
     PickleFormatDisabledError,
     RemoteCacheError,
     UnknownFiberFormatError,
+    UnknownFiberVersionError,
 )
 from dascore.io.utils import (
     _DASCORE_DIR,
@@ -500,7 +501,7 @@ class _FiberIOManager:
                     f"Format {format} has no version: [{version}] "
                     f"known versions of this format are: {list(fiber_ios)}"
                 )
-                raise UnknownFiberFormatError(msg)
+                raise UnknownFiberVersionError(msg)
             yield fiber_io
             return
         # reverse sort fiber_ios and yield latest version first.
@@ -749,6 +750,12 @@ def _returns_stored_bytes(func: Callable) -> Callable:
     """
     _BYTE_HOOKS.add(func)
     return func
+
+
+def _version_sort_key(version: str) -> list[tuple[int, int | str]]:
+    """Order version strings numerically, e.g. 0.100 after 0.0 and 10 after 9."""
+    # Tag each part so numbers and text never compare directly.
+    return [(0, int(x)) if x.isdigit() else (1, x) for x in version.split(".")]
 
 
 class FiberIO:
@@ -1065,15 +1072,34 @@ class FiberIO:
         return not _is_wrapped_func(self.write, FiberIO.write)
 
     @classmethod
-    def get_supported_io_table(cls):
-        """Return the supported formats, versions, and optional write capability."""
+    def get_supported_io_table(cls, combine_versions: bool = False):
+        """
+        Return the supported formats, versions, and optional write capability.
+
+        Parameters
+        ----------
+        combine_versions
+            If True, return one row per format, sorted by name: its versions
+            joined in numeric order, and `write` True if any version writes.
+        """
         cls.manager.load_plugins()
-        return pd.DataFrame(
+        table = pd.DataFrame(
             [
                 {"name": name, "version": version, "write": io.implements_write}
                 for name, versions in cls.manager._format_version.items()
                 for version, io in versions.items()
             ]
+        )
+        if not combine_versions:
+            return table
+
+        def _join(versions):
+            return ", ".join(sorted(map(str, versions), key=_version_sort_key))
+
+        return (
+            table.groupby("name", sort=True)
+            .agg(version=("version", _join), write=("write", "any"))
+            .reset_index()
         )
 
     def _updated_after(self, resource, timestamp):
@@ -1285,6 +1311,12 @@ def _reinit_manager_lock():
 # What a reader which keeps its own patch ids leaves behind for `read` to
 # find. Only a format which stores an id sets it; see the DASDAE reader.
 STORED_ORIGIN_ID = "_stored_origin_id"
+# A reader which knows exactly which dimensions it snapped states them in
+# this private attr, comma-separated ("" for none, and stated even then).
+# The read then derives an id only where labels moved: nothing moved reads
+# the stored thing however `snap` was spelled, and moved labels are an
+# operation on it. Attrs hold no sequences, hence the text.
+SNAPPED_DIMS = "_snapped_dims"
 
 
 def _source_stats(source) -> tuple[int | None, int | None]:
@@ -1666,6 +1698,12 @@ def _stamp_source_ids(
     for index in indices:
         patch = patches[index]
         origin = patch._source or ArraySource()
+        snapped = patch.attrs.get(SNAPPED_DIMS)
+        patch_decode = (
+            decode
+            if snapped is None
+            else read_operation_id(filter(None, snapped.split(",")), default=False)
+        )
         stated = (tuple(patch.shape), size_bytes, mtime_ns)
         if (
             origin.offsets
@@ -1693,8 +1731,8 @@ def _stamp_source_ids(
             # was done before it was written, or it was decoded some other
             # way than the stored thing itself.
             data_id = (attrs.data_id if stored else "") or origin_id
-            if decode is not None:
-                data_id = derive([data_id], decode)
+            if patch_decode is not None:
+                data_id = derive([data_id], patch_decode)
             ids = {"origin_id": origin_id, "data_id": data_id}
             # Validate IDs supplied by a reader; derived IDs are trusted strings
             # and need no second validation of every scientific attribute.
@@ -1702,8 +1740,10 @@ def _stamp_source_ids(
             # The array the source loads is the one the patch holds, so a
             # window of it builds on that rather than on the whole file.
             origin = replace(origin, origin_id=data_id)
-        if hasattr(attrs, STORED_ORIGIN_ID):
-            attrs = attrs.drop(STORED_ORIGIN_ID)
+        if present := [
+            x for x in (STORED_ORIGIN_ID, SNAPPED_DIMS) if hasattr(attrs, x)
+        ]:
+            attrs = attrs.drop(*present)
         # Expose positional keys after deriving IDs with the original ordinal.
         if len(patches) > 1 and not origin.key:
             origin = replace(origin, key=str(index))
@@ -2148,6 +2188,12 @@ def _iter_scan_results(
                         )
                     except PickleFormatDisabledError as exc:
                         warnings.warn(f"Skipping {patch_source}: {exc}", UserWarning)
+                        continue
+                    except UnknownFiberVersionError as exc:
+                        # Only a version read from the file is news to the caller.
+                        if file_version is None:
+                            msg = f"Skipping {patch_source}: {exc}"
+                            warnings.warn(msg, UserWarning)
                         continue
                     except UnknownFiberFormatError:  # skip bad entities
                         continue

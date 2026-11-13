@@ -1010,7 +1010,7 @@ class TestDASDAEInternalHelpers:
                 raise AssertionError("full coord reads should be skipped")
 
             monkeypatch.setattr(dasdae_utils, "_read_array", _forbid_full_read)
-            coords = _get_coords(group, ("time",), {})
+            coords, _ = _get_coords(group, ("time",), {})
 
         coord = coords.get_coord("time")
         assert coord.evenly_sampled
@@ -1038,7 +1038,7 @@ class TestDASDAEInternalHelpers:
                 raise AssertionError("full coord reads should be skipped")
 
             monkeypatch.setattr(dasdae_utils, "_read_array", _forbid_full_read)
-            coords = _get_coords(group, ("time",), {})
+            coords, _ = _get_coords(group, ("time",), {})
 
         coord = coords.get_coord("time")
         assert coord.values[0] == np.timedelta64(1, "ns")

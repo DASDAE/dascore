@@ -364,3 +364,14 @@ class TestRadiansToStrainScale:
         rad = patch.update_attrs(data_units="rad").radians_to_strain()
         mrad = patch.update_attrs(data_units="mrad").radians_to_strain()
         assert np.allclose(mrad.data, np.asarray(rad.data) / 1000)
+
+    @pytest.mark.parametrize("units", ["Radians", "RADIANS", "Radian", "Radians/s"])
+    def test_radian_spellings(self, units):
+        """Other spellings of the radian convert as rad does."""
+        patch = dc.get_example_patch().update_attrs(gauge_length=10)
+        expected = patch.update_attrs(
+            data_units=units.lower().replace("radians", "rad").replace("radian", "rad")
+        ).radians_to_strain()
+        out = patch.update_attrs(data_units=units).radians_to_strain()
+        assert out.attrs.data_units == expected.attrs.data_units
+        np.testing.assert_array_equal(out.data, expected.data)

@@ -1984,8 +1984,10 @@ class Grid:
         """The labels at these indices, which may lie outside the run."""
         indices = np.asarray(indices)
         if self.exact:
-            offset = self.phase
-            ticks = (offset + indices.astype(np.int64) * self.step_num) // self.step_den
+            # whole and fractional parts, so only count * den need fit int64
+            whole, part = divmod(self.step_num, self.step_den)
+            indices = indices.astype(np.int64)
+            ticks = indices * whole + (self.phase + indices * part) // self.step_den
             return _ticks_as(self.origin + ticks, dtype)
         indices = self.k0 + indices * self.stride
         start, step = self.origin, self.step_num
@@ -2220,7 +2222,7 @@ def _check_grid(grid: Grid, dtype) -> None:
     num, den, count = grid.step_num, grid.step_den, grid.count
     first, last = grid.end_ticks
     wraps = min(first, last) < info.min or max(first, last) > info.max
-    if abs(count * num) + den >= 2**63 or wraps:
+    if count * den >= 2**63 or wraps:
         msg = (
             f"A grid of {count} samples with step {num}/{den} ticks from "
             f"{grid.origin} exceeds the {dtype} range."
@@ -3306,7 +3308,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             fraction = func(
                 np.round((np.atleast_1d(value) - start) / step, decimals=10)
             )
-            return fraction.astype(np.int64)
+            return self._include_reached(
+                grid, value, fraction.astype(np.int64), forward
+            )
         # Scalar fast path. A zero step is caught after the division: python
         # scalars raise, numpy scalars give inf/nan, and testing a numpy step
         # for truthiness up front costs ~10x more on this hot path.
@@ -3321,9 +3325,26 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             out = len(self) if fraction > 0 else -1
         else:
             out = math.ceil(fraction) if forward else math.floor(fraction)
+            # Drift under one sample cannot round onto the wrong whole index,
+            # so only a fractional estimate needs its neighbor checked.
+            if fraction != out:
+                out = int(self._include_reached(grid, value, out, forward))
         if (forward and out < 0) or (not forward and out >= len(self)):
             return None
         return out
+
+    def _include_reached(self, grid: Grid, value, out, forward):
+        """
+        Step an index one sample toward the bound if that label meets it.
+
+        Corrects index-arithmetic drift on long or float32 grids.
+        """
+        neighbor = out - 1 if forward else out + 1
+        labels = grid.labels(neighbor, self.dtype)
+        reached = labels >= value if forward != self.reverse_sorted else labels <= value
+        # labels past either end are extrapolated and may round onto an end
+        inside = (neighbor >= 0) & (neighbor < len(self))
+        return np.where(reached & inside, neighbor, out)
 
     def _samples_in(self, duration):
         """How many steps a duration spans, unrounded."""
@@ -4405,9 +4426,11 @@ def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
         if is_timedelta64(excess):
             # the limit was rounded to whole nanoseconds; allow that rounding
             excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
-        return int(Fraction(excess) // abs(exact))
-    scalar = step.step(coord.dtype)
-    return math.floor(float(np.divide(excess, np.abs(scalar))) * (1 + _GRID_RTOL))
+        whole = int(Fraction(excess) // abs(exact))
+    else:
+        ratio = float(np.divide(excess, np.abs(step.step(coord.dtype))))
+        whole = math.floor(ratio * (1 + _GRID_RTOL))
+    return max(whole - tolerance.seam, 0)  # a seam's width includes its step
 
 
 def _raise_string_coord_error(operation: str) -> NoReturn:

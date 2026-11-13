@@ -17,7 +17,6 @@ from dascore.utils.doc_corpus import (
     PACKAGE_PATH,
     SKILL_PATH,
     DocumentationError,
-    _read_readme,
     source_paths,
     write_corpus,
 )
@@ -37,7 +36,6 @@ def _source_identity():
             paths.extend(child.rglob("*.py"))
     paths.extend(source_paths())
     paths.extend(SKILL_PATH.rglob("*.md"))
-    digest.update(_read_readme().encode())
     for entry in sorted(
         metadata.distribution("dascore").entry_points,
         key=lambda x: (x.group, x.name, x.value),

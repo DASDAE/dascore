@@ -12,6 +12,7 @@ from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import CoordError, InvalidFiberFileError
+from dascore.io.dasdae.utils import read_grid_fields
 from dascore.io.utils import (
     resolve_keyed_source,
     should_snap,
@@ -27,6 +28,10 @@ XDAS_PAYLOAD_VARIABLE = "__values__"
 # The attribute holding the step of labels which are not one grid, so they
 # read back with their holes and jitter (in nanoseconds for times).
 STEP_ATTR = "dascore_step"
+# The prefix of the attributes describing labels which are one grid, one per
+# field of a DASDAE ``CoordRange`` node (``_dascore_coord_start``, ...), so a
+# scan rebuilds them without reading them.
+COORD_PREFIX = "_dascore_coord_"
 
 
 def get_xarray_data_var_name(dataset) -> str | None:
@@ -59,6 +64,26 @@ def get_shared_payload_names(dataset) -> list[str]:
     tops = [x for x in variables.values() if x.ndim == rank]
     dims = set(max(tops, key=lambda x: x.size).dims)
     return [name for name, var in variables.items() if set(var.dims) == dims]
+
+
+def payload_datasets(dataset) -> dict:
+    """Map each payload's name to a dataset holding it as the only payload."""
+    try:
+        return {get_xarray_data_var_name(dataset): dataset}
+    except ValueError:
+        names = get_shared_payload_names(dataset)
+    # Siblings differ only by name, so it tags them unless their own tags
+    # already tell them apart; otherwise chunking would merge them.
+    tags = {x: dataset[x].attrs.get("tag") or x for x in names}
+    if len(set(tags.values())) < len(tags):
+        tags = {x: x for x in names}
+    out = {}
+    for name in names:
+        sub = dataset[[name]]
+        if len(names) > 1:
+            sub[name] = sub[name].assign_attrs(tag=tags[name])
+        out[name] = sub
+    return out
 
 
 def parse_cf_version(cf_version: str) -> tuple[int, int]:
@@ -134,8 +159,29 @@ def _get_dim_coord(dataset, coord_name: str, coord_len: int) -> np.ndarray:
     return np.arange(coord_len)
 
 
+def stated_range(variable) -> dict | None:
+    """
+    Return the grid a variable's (xarray's or zarr's) attrs describe, else None.
+
+    A description of another length than the labels is stale (they were
+    appended to by another tool) and is ignored, so the labels are read.
+    """
+    attrs = variable.attrs.items()
+    size = len(COORD_PREFIX)
+    fields = {k[size:]: v for k, v in attrs if k.startswith(COORD_PREFIX)}
+    if not fields or (fields.get("length"),) != tuple(variable.shape):
+        return None
+    return fields
+
+
 def get_scan_coord(coord, snap: snap_type = False, where=""):
     """Return a coordinate for scanning, on a grid if `snap` names it."""
+    if (fields := stated_range(coord)) is not None:
+        # Already a grid, so snapping changes nothing. A time's "units" are
+        # its CF encoding, left undecoded so its labels are never read.
+        time_like = np.dtype(fields["dtype"]).kind in "mM"
+        units = None if time_like else _cf_units(coord.attrs.get("units"), coord.name)
+        return read_grid_fields(fields, units)
     values = coord.values
     if values.dtype == object:
         # e.g. times on a non-standard calendar, decoded as cftime objects

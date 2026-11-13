@@ -15,7 +15,7 @@ DASCore plots are available from the object they describe: `Patch.viz`, `Spool.v
 ```{python}
 import dascore as dc
 
-patch = dc.get_example_patch("example_event_2")
+patch = dc.get_example_patch("deformation_rate_event_1")
 patch.viz.waterfall(show=True);
 ```
 
@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 
 _fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
 patch.viz.waterfall(scale=0.2, scale_type="relative", ax=ax1)
-patch.viz.waterfall(scale=(-50, 50), scale_type="absolute", ax=ax2)
+patch.viz.waterfall(scale=(-0.005, 0.005), scale_type="absolute", ax=ax2)
 ax1.set_title("Relative")
 ax2.set_title("Absolute")
 plt.tight_layout()

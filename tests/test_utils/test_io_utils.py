@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import gc
+import os
 import threading
 from contextlib import closing
 from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
+from tempfile import gettempdir
 
 import h5py
 import pytest
@@ -16,7 +18,7 @@ from upath import UPath
 import dascore as dc
 import dascore.utils.hdf5 as hdf5_module
 import dascore.utils.remote_io as remote_io
-from dascore.config import config_context
+from dascore.config import _get_remote_cache_root, config_context
 from dascore.exceptions import PatchConversionError, RemoteCacheError
 from dascore.utils.hdf5 import (
     H5Reader,
@@ -606,16 +608,18 @@ class TestGetHandleFromResource:
             get_handle_from_resource(bad_instance, H5Reader)
 
 
+@pytest.fixture
+def clear_remote_cache():
+    """Ensure remote cache state doesn't leak between tests."""
+    with config_context(warn_on_remote_cache=False):
+        clear_remote_file_cache()
+        yield
+        clear_remote_file_cache()
+
+
+@pytest.mark.usefixtures("clear_remote_cache")
 class TestIOResourceManager:
     """Tests for the IO resource manager."""
-
-    @pytest.fixture(autouse=True)
-    def clear_remote_cache(self):
-        """Ensure remote cache state doesn't leak between tests."""
-        with config_context(warn_on_remote_cache=False):
-            clear_remote_file_cache()
-            yield
-            clear_remote_file_cache()
 
     def test_basic_context_manager(self, tmp_path):
         """Ensure it works as a context manager."""
@@ -1094,6 +1098,143 @@ class TestIOResourceManager:
         with remote_cache_scope("metadata"):
             with pytest.warns(UserWarning, match="allow_remote_cache_for_metadata"):
                 _warn_remote_cache_download(resource, tmp_path / "metadata_warning.txt")
+
+
+def _new_session():
+    """Forget what this process knows of the cache, as a new session would."""
+    remote_io._materialize_remote_file.cache_clear()
+    remote_io._CURRENT_COPIES.clear()
+
+
+@pytest.mark.usefixtures("clear_remote_cache")
+class TestRemoteCacheTrust:
+    """Tests that a cached copy is used only while it matches its remote."""
+
+    @pytest.fixture
+    def remote(self):
+        """A remote file already copied into the cache."""
+        path = UPath("memory://dascore/cache_trust/data.bin")
+        path.write_bytes(b"old")
+        ensure_local_file(path)
+        return path
+
+    def test_rewritten(self, remote):
+        """A remote rewritten at the same size is downloaded again."""
+        remote.write_bytes(b"new")
+        _new_session()
+        assert _get_cached_local_file(remote) is None
+        assert ensure_local_file(remote).read_bytes() == b"new"
+
+    def test_unchanged(self, remote, monkeypatch):
+        """An unchanged remote is read from the cache without a download."""
+        _new_session()
+        monkeypatch.setattr(remote_io, "_download_remote_file", None)
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+        assert ensure_local_file(remote).read_bytes() == b"old"
+
+    @staticmethod
+    def _info_raises(monkeypatch, remote, error):
+        """Make the remote's info() raise, as a new session would see it."""
+        _new_session()
+
+        def _raise(*_args, **_kwargs):
+            raise error
+
+        monkeypatch.setattr(type(remote.fs), "info", _raise)
+
+    @staticmethod
+    def _unrecorded_copy(contents):
+        """Place a copy with no version record, as older DASCore left them."""
+        path = UPath("memory://dascore/cache_trust/unrecorded.bin")
+        path.write_bytes(b"real")
+        remote_id = remote_io.normalize_remote_id(path)
+        cache_root = get_remote_cache_path()
+        local = remote_io._remote_cache_local_path(remote_id, cache_root, path)
+        local.parent.mkdir(parents=True)
+        local.write_bytes(contents)
+        return path
+
+    def test_unreachable(self, remote, monkeypatch):
+        """A remote which cannot be asked keeps the copy it has."""
+        self._info_raises(monkeypatch, remote, OSError("offline"))
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+
+    @pytest.mark.parametrize("error", [FileNotFoundError, PermissionError])
+    def test_gone_or_forbidden(self, remote, monkeypatch, error):
+        """A remote which is gone or forbidden is not read from the cache."""
+        self._info_raises(monkeypatch, remote, error("nope"))
+        assert _get_cached_local_file(remote) is None
+
+    def test_extra_info_fields(self, remote, monkeypatch):
+        """Fields info() reports on only some calls do not force a download."""
+        _new_session()
+        info = type(remote.fs).info
+        monkeypatch.setattr(
+            type(remote.fs), "info", lambda *a, **k: {**info(*a, **k), "ETag": "x"}
+        )
+        assert _get_cached_local_file(remote).read_bytes() == b"old"
+
+    def test_unrecorded_same_size_adopted(self, monkeypatch):
+        """A copy from before records were kept is used if its size agrees."""
+        path = self._unrecorded_copy(b"same")
+        monkeypatch.setattr(remote_io, "_download_remote_file", None)
+        with config_context(allow_remote_cache=False):
+            assert ensure_local_file(path).read_bytes() == b"same"
+
+    def test_unrecorded_other_size_refetched(self):
+        """A copy with no record and a different size is downloaded again."""
+        path = self._unrecorded_copy(b"stale copy")
+        assert _get_cached_local_file(path) is None
+        assert ensure_local_file(path).read_bytes() == b"real"
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX owners and modes")
+class TestRemoteCacheDir:
+    """Tests that the remote cache directory is private to its user."""
+
+    def test_default_not_in_temp(self):
+        """The default directory is not in the shared temp directory."""
+        assert gettempdir() not in str(_get_remote_cache_root())
+
+    def test_created_private(self, tmp_path):
+        """A new cache directory is open to its owner alone."""
+        with config_context(remote_cache_dir=tmp_path / "new"):
+            assert not get_remote_cache_path().stat().st_mode & 0o077
+
+    @pytest.fixture(
+        params=[0o770, 0o707, "other_owner", "symlink"],
+        ids=["group_writable", "other_writable", "other_owner", "symlink"],
+    )
+    def refused_dir(self, request, tmp_path, monkeypatch):
+        """A cache directory which is not private to the current user."""
+        if isinstance(request.param, int):  # Writable by the group or others.
+            tmp_path.chmod(request.param)
+        elif request.param == "other_owner":
+            uid = tmp_path.stat().st_uid + 1
+            monkeypatch.setattr(os, "getuid", lambda: uid)
+        else:
+            (target := tmp_path / "target").mkdir(mode=0o700)
+            (tmp_path := tmp_path / "link").symlink_to(target)
+        return tmp_path
+
+    def test_readable_by_others(self, tmp_path):
+        """A directory others can read but not write to is accepted."""
+        tmp_path.chmod(0o755)
+        with config_context(remote_cache_dir=tmp_path):
+            assert get_remote_cache_path() == tmp_path
+
+    def test_refused(self, refused_dir):
+        """A directory which is not private is refused for caching."""
+        with config_context(remote_cache_dir=refused_dir):
+            with pytest.raises(RemoteCacheError, match="private directory"):
+                get_remote_cache_path()
+
+    def test_refused_probe_is_miss(self, refused_dir):
+        """Probing a refused directory is a cache miss, so reads can stream."""
+        path = UPath("memory://dascore/cache_dir/data.bin")
+        path.write_bytes(b"data")
+        with config_context(remote_cache_dir=refused_dir):
+            assert _get_cached_local_file(path) is None
 
 
 class TestRemoteIOFallback:

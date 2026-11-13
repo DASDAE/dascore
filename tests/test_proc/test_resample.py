@@ -425,10 +425,15 @@ class TestDecimateHoles:
         with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
             holed_patch.decimate(time=2)
 
-    def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels raise before filtering."""
+    def test_filtered_jitter_raises(self, jittered_patch):
+        """Labels off their step's grid raise before filtering."""
         with pytest.raises(CoordError, match="filtered decimate"):
-            stepless_seam_patch.decimate(time=2)
+            jittered_patch.decimate(time=2)
+
+    def test_stepless_runs(self, stepless_seam_patch):
+        """Step-less labels are an irregular axis, which still decimates."""
+        out = stepless_seam_patch.decimate(time=2)
+        assert out.shape == (1, 60)
 
     def test_raw_striding_runs(self, holed_patch):
         """Striding without a filter still takes every nth sample."""

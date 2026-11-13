@@ -36,6 +36,12 @@ def _get_attrs_coords_and_data(h5, snap):
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
     attr_names = set(attrs) - skip
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
+    # Some files state the data's units as a root ``units`` (as netCDF
+    # writers do). With no ``data_units``, units which parse become the data
+    # units; anything else, such as prose, stays a plain ``units`` attr.
+    units = attr_dict.get("units")
+    if "data_units" not in attr_dict and isinstance(units, str) and parse_units(units):
+        attr_dict["data_units"] = attr_dict.pop("units")
     # Some files describe their units in prose ("same as input DAS data");
     # keep that text, but leave the patch without units rather than fail.
     units = attr_dict.get("data_units")

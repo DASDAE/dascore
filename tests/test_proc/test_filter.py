@@ -282,17 +282,21 @@ class TestSobelFilter:
 
     def test_holes_raise(self, holed_patch):
         """Missing samples raise, naming the fixes."""
-        # the kernel smooths along every dimension, so each is checked
-        with pytest.raises(CoordError, match="not evenly sampled"):
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
         with pytest.raises(CoordError, match="not evenly sampled"):
             holed_patch.sobel_filter("distance")
 
+    def test_jitter_raises(self, jittered_patch):
+        """Labels off their step's grid raise."""
+        with pytest.raises(CoordError, match="off the grid"):
+            jittered_patch.sobel_filter("time")
+
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels raise."""
-        with pytest.raises(CoordError, match="sobel_filter"):
-            stepless_seam_patch.sobel_filter("time")
+        """Step-less labels are an irregular axis, which still filters."""
+        out = stepless_seam_patch.sobel_filter("time")
+        assert out.shape == stepless_seam_patch.shape
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

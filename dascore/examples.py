@@ -917,8 +917,8 @@ def inventory_patch_pair():
             manufacturer="Fake Interrogators", model="FI-1", serial_number="sn-1"
         ),
         distance_map=DistanceMap(
-            instrument_distance=(float(distance.min()), float(distance.max())),
-            distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+            acquisition_distance=(float(distance.min()), float(distance.max())),
+            optical_distance=(100.0, 100.0 + float(distance.max() - distance.min())),
         ),
     )
     path = OpticalPath(
@@ -930,7 +930,7 @@ def inventory_patch_pair():
         geometry=(
             Geometry(
                 name="trench",
-                distance=(100.0, 400.0),
+                optical_distance=(100.0, 400.0),
                 # The canonical axis names, so the segment states the CRS's
                 # axes whatever this inventory's CRS happens to call them.
                 columns={
@@ -1211,7 +1211,7 @@ def _tunnel_geometry(at, runs):
         first, last = at[name]
         rows.append((name, first, *start))
         rows.append((name, last, *end))
-    frame = pd.DataFrame(rows, columns=["name", "distance", "x", "y", "z"])
+    frame = pd.DataFrame(rows, columns=["name", "optical_distance", "x", "y", "z"])
     return frame.to_csv(index=False)
 
 
@@ -1347,8 +1347,8 @@ def tunnel_inventory_files(repaired: bool = True) -> dict[str, str]:
             "spatial_interval: 1.0\n"
             "sample_rate: 250.0\n"
             "distance_map:\n"
-            "  instrument_distance: [0.0, 2000.0]\n"
-            "  distance: [0.0, 2000.0]\n"
+            "  acquisition_distance: [0.0, 2000.0]\n"
+            "  optical_distance: [0.0, 2000.0]\n"
         ),
         f"{path}/attrs.yaml": "object_type: OpticalPath\n",
         f"{path}/optical_components.csv": _TUNNEL_COMPONENTS,
