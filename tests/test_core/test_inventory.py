@@ -20,7 +20,7 @@ from dascore.config import config_context
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
-from dascore.exceptions import InvalidInventoryError
+from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import InventoryModel, values_equal
 from dascore.utils.identity import encode
 from dascore.utils.mapping import FrozenDict
@@ -1355,6 +1355,68 @@ class TestPathOperations:
         """Empty selection raises."""
         with pytest.raises(Exception, match="Empty distance selection"):
             path.select(distance=(300.0, 400.0))
+
+
+class TestSelectByLabel:
+    """OpticalPath.select with a label group and value."""
+
+    @pytest.fixture()
+    def path(self):
+        """The tunnel path: a trench split by a coil, three boreholes."""
+        inventory = dc.get_example_inventory("tunnel")
+        return inventory.networks[0].fiber_arrays[0].optical_paths[0]
+
+    def test_label_equals_distance_selection(self, path):
+        """A label selects the same piece its distance range does."""
+        expected = path.select(distance=(1650.0, 1690.0))
+        assert path.select(borehole=2) == expected
+
+    def test_touching_intervals_are_one_stretch(self, path):
+        """Adjacent intervals with one value join into one range."""
+        out = path.select(section="trench", distance=(None, 1527.5))
+        assert out == path.select(distance=(1500.0, 1527.5))
+
+    def test_membership_group(self):
+        """True selects where a membership group holds, overlaps joined."""
+        path = inv.OpticalPath(
+            optical_components=(inv.FiberSegment(distance_min=0, distance_max=100),),
+            labels=(
+                inv.OpticalPathLabel(group="wet", distance_min=10, distance_max=30),
+                inv.OpticalPathLabel(group="wet", distance_min=20, distance_max=40),
+            ),
+        )
+        assert path.select(wet=True) == path.select(distance=(10.0, 40.0))
+
+    def test_unknown_group(self, path):
+        """A group the path lacks raises, listing its groups."""
+        with pytest.raises(ParameterError, match="'borehole', 'section'"):
+            path.select(zone="coil")
+
+    def test_unknown_value(self, path):
+        """A value the group never takes raises, listing its values."""
+        with pytest.raises(ParameterError, match="'trench', 'coil', 'borehole'"):
+            path.select(section="tunnel")
+
+    def test_disjoint_intervals_raise(self, path):
+        """A value in several places raises, naming the intervals."""
+        with pytest.raises(ParameterError, match=r"\(1580.0, 1620.0\)"):
+            path.select(section="borehole")
+
+    def test_distance_narrows_label(self, path):
+        """Distance and a label together select their intersection."""
+        out = path.select(section="borehole", distance=(1600.0, 1640.0))
+        assert out == path.select(distance=(1600.0, 1620.0))
+
+    def test_label_order_does_not_matter(self, path):
+        """Labels intersect before the one-range check, in either order."""
+        first = path.select(section="borehole", borehole=2)
+        assert first == path.select(borehole=2, section="borehole")
+        assert first == path.select(distance=(1650.0, 1690.0))
+
+    def test_label_outside_distance_is_empty(self, path):
+        """A label stated nowhere in the distance range is an empty selection."""
+        with pytest.raises(ParameterError, match="Empty distance selection"):
+            path.select(section="coil", distance=(0.0, 100.0))
 
 
 class TestInventory:
