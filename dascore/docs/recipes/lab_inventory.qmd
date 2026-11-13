@@ -1,0 +1,92 @@
+---
+title: A lab inventory
+execute:
+  warning: false
+---
+
+{{< include ../_experimental.qmd >}}
+
+A small [inventory](../tutorial/inventory.qmd) for a bench test: an interrogator, a 20 m patch cord, and a 1 km spool of fiber on a table, recorded by one acquisition. The [tunnel recipe](tunnel_inventory.qmd) covers a full deployment. `python -m dascore inventory init <directory>` writes a placeholder directory to start from; here the files are written directly.
+
+```{python}
+import tempfile
+from pathlib import Path
+from textwrap import dedent
+
+import numpy as np
+
+import dascore as dc
+
+files = {
+    # A local grid in meters, since a bench has no useful latitude.
+    "inventory.yaml": """
+        object_type: Inventory
+        coordinate_reference_system:
+          authority: local
+          code: lab
+          name: lab bench grid
+          coordinate_labels: [x, y, z]
+          units: [meter, meter, meter]
+    """,
+    "resources/bench-das.yaml": "object_type: Interrogator\nmodel: TODO\n",
+    "resources/patch-cord.yaml": "object_type: Cable\nname: 20 m patch cord\n",
+    # Network LB, fiber array SPOOL, blank location code, acquisition DAS.
+    "acquisitions/LB.SPOOL..DAS.yaml": """
+        object_type: Acquisition
+        data_category: DAS
+        interrogator: bench-das
+        gauge_length: 2.0
+        spatial_interval: 1.0
+        distance_map:
+          acquisition_distance: [0.0, 1020.0]
+          optical_distance: [0.0, 1020.0]
+    """,
+    "fiber_arrays/LB.SPOOL/attrs.yaml": "object_type: FiberArray\n",
+    "fiber_arrays/LB.SPOOL/path/attrs.yaml": "object_type: OpticalPath\n",
+    "fiber_arrays/LB.SPOOL/path/optical_components.csv": """
+        object_type,distance_min,distance_max,name,container
+        FiberSegment,0,20,lead-in,patch-cord
+        Connector,20,,spool connector,
+        FiberSegment,20,1020,spool,
+        Terminator,1020,,spool end,
+    """,
+    # The spool sits at one place: two rows with the same position.
+    "fiber_arrays/LB.SPOOL/path/geometry.csv": """
+        name,optical_distance,x,y,z
+        lead-in,0,0.0,0.0,1.0
+        lead-in,20,5.0,0.0,1.0
+        spool,20,5.0,0.0,1.0
+        spool,1020,5.0,0.0,1.0
+    """,
+    "fiber_arrays/LB.SPOOL/path/labels.csv": """
+        distance_min,distance_max,group,value
+        0,20,section,lead_in
+        20,1020,section,spool
+    """,
+}
+
+root = Path(tempfile.mkdtemp()) / "lab_inventory"
+for name, text in files.items():
+    (root / name).parent.mkdir(parents=True, exist_ok=True)
+    (root / name).write_text(dedent(text).lstrip())
+
+lab = dc.inventory(root)
+lab
+```
+
+Each file's name states its identity, and `dc.inventory` (or `python -m dascore inventory check`) validates the directory. A patch joins by its `acquisition_key`:
+
+```{python}
+patch = dc.get_example_patch(
+    "random_das", acquisition_key="LB.SPOOL..DAS", shape=(1021, 100)
+)
+spool = dc.spool(patch).attach_inventory(lab)
+
+on_spool = spool.select(section="spool")[0]
+enriched = spool.enrich().select(section="spool")[0]
+
+assert on_spool.get_coord("distance").min() == 20
+assert np.all(enriched.get_array("x") == 5.0)
+```
+
+Every channel on the spool gets the same position, since the fiber is wound in one place. The [inventory reference](../tutorial/inventory_reference.qmd) lists the other fields each file can hold.

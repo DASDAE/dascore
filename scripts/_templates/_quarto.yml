@@ -178,6 +178,9 @@ website:
             - text: Inventory
               href: tutorial/inventory.qmd
 
+            - text: Inventory Reference
+              href: tutorial/inventory_reference.qmd
+
             - text: Annotations
               href: tutorial/annotations.qmd
 
@@ -213,6 +216,7 @@ website:
           contents:
 
             - recipes/tunnel_inventory.qmd
+            - recipes/lab_inventory.qmd
 
         - section: "IO"
           contents:

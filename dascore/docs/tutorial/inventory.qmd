@@ -21,11 +21,11 @@ An [`Inventory`](`dascore.core.inventory.Inventory`) contains [`Network`](`dasco
 - [`Acquisition`](`dascore.core.inventory.Acquisition`) objects, which describe an interrogator stream and map acquisition distance onto an optical path.
 - [`OpticalPath`](`dascore.core.inventory.OpticalPath`) objects, which describe what the light travelled through.
 
-Shared objects such as interrogators, cables, enclosures, and measurements live under `Inventory.resources`. Other objects refer to them by `resource_id`; model constructors also accept the object itself.
+Shared objects such as interrogators, cables, enclosures, and measurements live under `Inventory.resources`. Other objects refer to them by `resource_id`; model constructors also accept the object itself. The [inventory reference](inventory_reference.qmd#how-the-files-fit-together) shows which file holds each object and how they refer to one another.
 
 ![Optical-path track concepts.](../_static/optical_path_concept.svg){width="100%" style="background-color: white" fig-alt="Four tracks share optical distance: contiguous optical components tile the complete fiber, geometry is a partially defined function, labels form independent interval groups, and coupling is stated only where known."}
 
-An optical path has four independent tracks along optical distance:
+An optical path has four independent tracks along optical distance. Think of optical distance as a ruler laid along the fiber and of each track as a separate table of notes against it:
 
 - `optical_components`: fiber segments, splices, connectors, amplifiers, and terminators. These tile the complete path and define its extent. A fiber segment's `buffer_type` is one of `tight_buffered`, `semi_tight`, `loose_tube`, `ribbon`, `bare`, or `other`, and empty when not stated.
 - `geometry`: measured quantities along the fiber, including coordinates named by the inventory's coordinate reference system.
@@ -58,7 +58,7 @@ inventory/
             └── labels.csv
 ```
 
-Each object file declares its `object_type`. An acquisition's filename gives its full identity, and its `distance_map` maps the interrogator's distance axis onto optical distance. Track files are CSV tables with one row per component or interval; a segment states `distance_min` and `distance_max`, and a point component, such as a splice, leaves `distance_max` blank. Rows are ordered by distance when loaded. The [tunnel inventory recipe](../recipes/tunnel_inventory.qmd) builds a complete directory, including resources, geometry, repairs, and multiple optical paths.
+Each object file declares its `object_type`. An acquisition's filename gives its full identity, and its `distance_map` maps the interrogator's distance axis onto optical distance. Track files are CSV tables with one row per component or interval; a segment states `distance_min` and `distance_max`, and a point component, such as a splice, leaves `distance_max` blank. Rows are ordered by distance when loaded. The [tunnel inventory recipe](../recipes/tunnel_inventory.qmd) builds a complete directory, including resources, geometry, repairs, and multiple optical paths; the [lab inventory recipe](../recipes/lab_inventory.qmd) is a smaller one. The [inventory reference](inventory_reference.qmd) lists every field with its default and the file or column it lives in.
 
 Authoring rules:
 
@@ -68,6 +68,8 @@ Authoring rules:
 - CSV columns beginning with `_` are ignored. Use `description` for notes that should survive serialization.
 - Quantities that interpolate belong in `geometry.csv`; interval values belong in `labels.csv`. Units may appear in geometry headers, for example `chainage (m)`.
 
+Position is ordinary geometry whose column names match the coordinate reference system, or the canonical aliases `x`, `y`, and `z`. Positional axes must be stated together and use the CRS units; a geometry segment may omit all of them and record another quantity such as chainage instead. Fiber gathered at one place, such as a spool, is a segment of two rows with the same position at the spool's start and end distances. Segments that place the axes may not overlap in optical distance. Rows of `geometry.csv` that share a `name` are one segment's control points; the name identifies the segment, is unrelated to labels, and becomes the `geometry` coordinate. The [lab inventory recipe](../recipes/lab_inventory.qmd) places a spool this way.
+
 An `@time` suffix, such as `path@2025-01-01/`, begins a new epoch. [`dc.inventory`](`dascore.core.inventory_loader.inventory`) validates identities, object types, references, track coverage, and epoch ranges when it reads the directory.
 
 ## Starting from the command line
@@ -75,8 +77,6 @@ An `@time` suffix, such as `path@2025-01-01/`, begins a new epoch. [`dc.inventor
 `python -m dascore inventory init <directory>` writes a minimal directory: one network, fiber array, acquisition, optical path, interrogator, and cable, with every value a placeholder to replace. It refuses a directory that already holds files.
 
 `python -m dascore inventory check <directory>` loads a directory with the same loader and prints a one-line summary when it is valid; otherwise it prints the loader's message, which names the file and field at fault, and exits with status 1.
-
-Position is ordinary geometry whose column names match the coordinate reference system, or the canonical aliases `x`, `y`, and `z`. Positional axes must be stated together and use the CRS units; a geometry segment may omit all of them and record another quantity such as chainage instead. Fiber gathered at one place, such as a spool, is a segment of two rows with the same position at the spool's start and end distances. Segments that place the axes may not overlap in optical distance.
 
 # Track semantics
 
@@ -105,7 +105,7 @@ import tempfile
 from pathlib import Path
 
 import dascore as dc
-from dascore.examples import inventory_patch_pair
+from dascore.examples import inventory_patch_pair, write_tunnel_inventory
 from dascore.exceptions import PatchError
 
 patch, inventory = inventory_patch_pair()
@@ -146,6 +146,20 @@ zones = spool.expand_by("zone")
 assert set(zones.get_contents()["zone"]) == {"north", "south"}
 ```
 
+A label group is a key and its values are the options, like a column of a table; groups do not nest. In the [tunnel inventory](../recipes/tunnel_inventory.qmd), `section` says what kind of installation a stretch of fiber is in and `borehole` says which hole, so one selection combines them:
+
+```{python}
+tunnel_root = Path(tempfile.mkdtemp()) / "tunnel"
+write_tunnel_inventory(tunnel_root)
+tunnel_patch = dc.get_example_patch(
+    "random_das", acquisition_key="XT.TUN1.00.DAS", time_min="2024-06-01", shape=(1776, 20)
+)
+tunnel_spool = dc.spool(tunnel_patch).attach_inventory(dc.inventory(tunnel_root))
+
+hole_2 = tunnel_spool.select(section="borehole", borehole=2)
+assert hole_2[0].get_coord("distance").min() == 1650
+```
+
 Selection trims channels, and a patch with no matching channels drops out silently. `unselect` removes the matching channels instead, so it can cut one patch into several pieces:
 
 ```{python}
@@ -156,6 +170,22 @@ assert len(quiet) == 2
 Selection and expansion judge whole patches, so they also drop a patch that no single inventory context describes: one straddling an acquisition or optical-path change, reaching outside every optical-path epoch, or not described at all. Each call warns once with the number dropped; `unselect` keeps them. To select within such patches, [conform the spool](#conforming-a-spool) first. Selecting on an inventory-backed attribute such as `gauge_length` behaves the same, unless the patch states it in its own header.
 
 Attaching a replacement inventory clears enrichment configured from the old one.
+
+## Supplying the acquisition key
+
+Only `acquisition_key` and time decide which acquisition and optical path describe a patch. Readers never derive the key from a file's own metadata (a DASDAE file keeps one the patch had when written), so supply it: set the attribute, pass `acquisition_key` to `Patch.enrich`, or store files under a folder named `acquisition_key=<key>`, which the spool index reads as an attribute; see [path attributes](../notes/spool_index.qmd#path-attributes).
+
+```{python}
+keyless = patch.update_attrs(acquisition_key="")
+assert keyless.enrich(inventory, acquisition_key="DAS.R2D1..RAW").attrs.gauge_length == 10.0
+
+hive_root = Path(tempfile.mkdtemp())
+keyed_folder = hive_root / "acquisition_key=DAS.R2D1..RAW"
+keyed_folder.mkdir()
+keyless.io.write(keyed_folder / "patch.h5", "DASDAE")
+hive_spool = dc.spool(hive_root).update().attach_inventory(inventory)
+assert hive_spool.enrich()[0].attrs.gauge_length == 10.0
+```
 
 ## Enriching patches
 
@@ -182,6 +212,15 @@ except PatchError as err:
     print(err)
 assert stale.enrich(inventory, conflict="keep_first").attrs.gauge_length == 99.0
 assert stale.enrich(inventory, conflict="keep_last").attrs.gauge_length == 10.0
+assert stale.enrich(inventory, conflict="drop").attrs.get("gauge_length") is None
+```
+
+Interrogator fields are not match keys: `interrogator.name`, `interrogator.instrument_type`, and the other `interrogator.*` fields are copied like any attribute. Several readers (TDMS, Silixa H5, DASVader, OptoDAS, and Febus, for example) set `interrogator.name`, often to the recording computer's host name, so an inventory whose `Interrogator.name` says something else raises under the default policy. A blank value on either side never conflicts, so leave `name` empty in the inventory unless it matches what the files report:
+
+```{python}
+from_host = patch.update_attrs(**{"interrogator.name": "host-7"})
+# This inventory's interrogator states no name, so the file's stands.
+assert from_host.enrich(inventory).attrs.get("interrogator.name") == "host-7"
 ```
 
 [`Patch.enrich`](`dascore.proc.inventory.enrich`) does the same for one patch, but raises on an unresolved patch.
