@@ -23,9 +23,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
@@ -47,6 +47,12 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+
+      - name: Load the agent guidelines as CLAUDE.md
+        if: steps.credentials.outputs.available == 'true'
+        # CLAUDE.md is gitignored so contributors can keep their own; in CI it
+        # carries the shared guidelines, which Claude Code loads automatically.
+        run: cp .agents/agents.md CLAUDE.md
 
       - name: Run Claude Code
         if: steps.credentials.outputs.available == 'true'
