@@ -357,7 +357,9 @@ class Correlate(PatchProcessor):
                     f"do not convert to the patch's {units[0]}."
                 )
                 raise UnitError(msg) from error
-        if not np.isclose(to_float(coords[0].step), to_float(other_step), rtol=1e-9):
+        if not np.isclose(
+            to_float(coords[0].step), to_float(other_step), rtol=1e-9, atol=0
+        ):
             shown = [
                 f"{x.step} {get_quantity_str(x.units) or ''}".strip()
                 if not isinstance(x.step, np.timedelta64)

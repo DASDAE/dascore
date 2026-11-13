@@ -642,6 +642,14 @@ class TestCorrelateOther:
         with pytest.raises(ParameterError, match=r"step is 0\.01 but other's is 0\.02"):
             patch.correlate(other=other)
 
+    def test_mismatched_small_step(self):
+        """Tiny steps that differ are refused too."""
+        coords = {"time": np.arange(10) * 1e-9}
+        patch = dc.Patch(data=np.ones(10), coords=coords, dims=["time"])
+        other = patch.update_coords(time=np.arange(10) * 2e-9)
+        with pytest.raises(ParameterError, match="step"):
+            patch.correlate(other=other)
+
     def test_transformed_refused(self):
         """A patch already transformed along lag_dim is refused."""
         patch = self._patch(np.ones(10))
