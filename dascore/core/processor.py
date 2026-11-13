@@ -106,6 +106,11 @@ if TYPE_CHECKING:
 # wraps; `run` spends it, so nothing further down is affected.
 _RECORD: ContextVar[bool] = ContextVar("dascore_record_call", default=True)
 
+# Where an operation is put instead of being run, when something wants the
+# operation a patch method builds rather than its result; see
+# `captured_operation`.
+_CAPTURE: ContextVar[list | None] = ContextVar("dascore_capture", default=None)
+
 
 class PatchProcessor(DascoreBaseModel):
     """
@@ -412,6 +417,10 @@ class PatchProcessor(DascoreBaseModel):
         the metadata nor the data hands back what it was given, and records
         nothing.
         """
+        if (captured := _CAPTURE.get()) is not None:
+            # Wanted as an operation, not run: see `captured_operation`.
+            captured.append(self)
+            return patch
         record = _RECORD.get()
         if not record:
             # Spent on this one call, which is the one a bypass wrapped: an
@@ -568,6 +577,35 @@ _MODULE_SPELLINGS = frozenset({"dascore.proc.aggregate"})
 _UNCHECKED: list[type[PatchProcessor]] = []
 # `[Patch, PatchMeta]`, once there are such classes to check against.
 _HOSTS: list[type] = []
+
+
+def captured_operation(method, patch, /, *args, **kwargs) -> PatchProcessor:
+    """
+    Return the operation a patch method would run, without running it.
+
+    A method's body resolves its arguments and builds its processor, so
+    calling it is the one way to get the processor a call means. Nothing is
+    computed and the patch is not changed.
+
+    Raises
+    ------
+    ParameterError
+        If the method is not one operation: a function which is not a
+        processor, or a method which runs several.
+    """
+    token = _CAPTURE.set(found := [])
+    try:
+        method(patch, *args, **kwargs)
+    finally:
+        _CAPTURE.reset(token)
+    if len(found) != 1:
+        name = getattr(method, "__name__", repr(method))
+        msg = (
+            f"{name} is not a single patch operation, so it cannot be taken "
+            f"as one: calling it ran {len(found)} operations."
+        )
+        raise ParameterError(msg)
+    return found[0]
 
 
 def _unrecorded_attrs(attrs: PatchAttrs) -> PatchAttrs:

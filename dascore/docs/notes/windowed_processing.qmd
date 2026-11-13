@@ -2,7 +2,7 @@
 title: Windowed and Lazy Processing
 ---
 
-This note is a plan: it states the API DASCore is building for processing a patch in windows and for processing data larger than memory, and the rules both keep. Nothing in it is implemented unless the note says so, and the code blocks are not executed. [Lazy Operations](lazy_operations.qmd) describes what exists today: the lazy array, the chunk contracts, and the executor which runs a chain a box at a time.
+This note is a plan: it states the API DASCore is building for processing a patch in windows and for processing data larger than memory, and the rules both keep. The first two steps of the [order of work](#order-of-work) are implemented, and each section says where what exists differs from the plan. The rest is not, and the code blocks are not executed. [Lazy Operations](lazy_operations.qmd) describes what exists today: the lazy array, the chunk contracts, and the executor which runs a chain a box at a time.
 
 The two subjects are one design. A lazy chain can be split into boxes only where each operation says how far it reaches, and a window is how a user says that for an operation which would otherwise need a whole axis.
 
@@ -55,7 +55,8 @@ w.apply(func)      # any function of a tile
 - **Size.** A keyword for each windowed dimension, in the coordinate's units or, with `samples=True`, in samples.
 - **Overlap or step.** `overlap` is how far each tile reaches into the next, and may be a percentage of the window. `step` is how far each tile advances, and may be longer than the window, which leaves gaps and is only meaningful for a reduction. Giving both is refused.
 - **Blending.** `taper` names the ramp the overlap is blended under: Hann by default, `"triang"` for a linear blend. The ramps are complementary, so an unchanged tile comes back exactly. `analysis` instead multiplies each tile by a window before the operation and blends under its dual.
-- **Ends.** `ends` says what becomes of a last tile which is short: `"pad"`, the default, fills it by an edge mode and cuts the result back; `"drop"` leaves it out; `"shift"` moves it back to end where the array ends. The output shape follows from the metadata for each.
+- **Ends.** For a reduction, `ends` says what becomes of a window which reaches past either end of the data: `"pad"`, the default, keeps it, with NaN unless a `fill` is given; `"drop"` leaves it out. Windows which are blended always reach past the ends, so every sample is under a whole taper, and hold `fill` there, zero by default. The output shape follows from the metadata for each.
+- **Labels.** For a reduction, `align` says which sample of a window labels it: `"center"`, `"right"` or `"left"`.
 - **Scope.** A window covers one operation. `patch.window(...).detrend("time").pass_filter(...)` detrends in windows and then filters the blended result. Several steps inside each tile are written as a function given to `apply`.
 
 `window` is defined on `Patch` only. A spool is already windowed by patch: `spool.chunk(time=10, overlap=2)` followed by an operation on each patch is a window whose tiles stay separate.
@@ -64,11 +65,11 @@ w.apply(func)      # any function of a tile
 
 Everything about a windowed operation is decided from metadata when it is called: the output shape and coordinates, how the plan is cut, and whether the tiling is allowed. A tiling which cannot work is refused at the call, never when the data are read.
 
-- **Shape.** An operation may change a tile's shape if the tiles still land on one output grid, which `get_metadata` on a tile's metadata decides. `decimate(time=10)` in a window and step which are multiples of 10 is blended as usual; in a window of 1005 samples it is refused. A reduction gives one value for each tile, on a coordinate of tile centres.
-- **Plan.** The plan is worked out from a tile's metadata, not the patch's. `taper` in a window therefore tapers each tile.
-- **Inputs.** A tile sees itself and the inputs given to the operation, and nothing else. An input shaped like the data, such as the mask of `where`, is tiled alongside the data. Any other input is handed to every tile whole. An operation which needs a channel the tile does not hold must be given it: `patch.window(distance=100).correlate(source)`.
+- **Shape.** An operation may change a tile's shape if the tiles still land on one output grid, which `get_metadata` on a tile's metadata decides. `decimate(time=10)` in a window and step which are multiples of 10 is blended as usual; in a window of 1005 samples it is refused. A reduction gives one value for each window, labelled by one of the input's samples. *Implemented so far:* only an operation which keeps a window's shape and coordinates is blended, and any other is refused.
+- **Plan.** The plan is worked out from a tile's metadata, not the patch's. `taper` in a window therefore tapers each tile. One plan serves every tile, so an operation whose plan differs between the first whole tile and the last is refused.
+- **Inputs.** A tile sees itself and the inputs given to the operation, and nothing else. An input shaped like the data, such as the mask of `where`, is tiled alongside the data. Any other input is handed to every tile whole. An operation which needs a channel the tile does not hold must be given it: `patch.window(distance=100).correlate(source)`. *Implemented so far:* an operation given another patch is refused.
 - **Blending.** The result is blended as it is. Blended phase angles are wrong and DASCore cannot know that an array holds angles, so the choice is the user's. Blending integer or boolean output warns.
-- **Kernel.** `window` is a declaration, and an operation needs no kernel written for it. The tile engine, which is today's `dascore.utils.tiles` and its numba drivers, cuts the data, works the plan out for a tile, runs the operation's ordinary kernel on each, and blends. Where an operation in some window is an operation DASCore already has, the window runs that one instead: `window(time=5, samples=True).median()` is `median_filter`, and a reduction with a step is what `rolling` computes.
+- **Kernel.** `window` is a declaration, and an operation needs no kernel written for it. The window takes the processor the patch method builds, works its plan out for a tile, runs its ordinary kernel on each tile, and blends. `apply` runs a function through `dascore.utils.tiles` and its numba drivers. A windowed median is not `median_filter`, whose ends reflect, so the two keep their own kernels.
 
 A windowed operation records its window in history, as `window(time=10.0, overlap=2.0).detrend(dim='time')`, and in its `data_id`.
 
@@ -136,6 +137,8 @@ A halo operation is a tiling whose overlap is discarded and whose tile size DASC
 - A box is grown outward to tile boundaries, the tiles are computed and blended, and the box is cut from the result.
 - An axis windowed this way can be cut, which a whole-axis operation's cannot.
 
+This is the `Tiles` contract, which [Lazy Operations](lazy_operations.qmd#the-contracts) describes. Along an axis which is not windowed, a box needs what the operation's own contract says, and the whole axis where it states none.
+
 ## Writing
 
 No new verb. A lazy patch is split through a spool and written as any spool is.
@@ -150,15 +153,15 @@ The writer drives one pass of the executor with the pieces as its boxes, so a st
 ## What this replaces
 
 - **`tile_apply`** becomes `window(...).apply(...)`. It has not been released, so it is removed outright.
-- **`rolling`** becomes a reduction in a window with a step. It is released, so it is deprecated and rebuilt on the same model, keeping its fast paths.
-- **`median_filter`** is `window(...).median()` with a step of one sample, and the same kernel answers for both.
+- **`rolling`** becomes a reduction in a window with a step. It is released, so it is deprecated; `window(..., align="right")` gives its values. It keeps its own implementation until it is removed.
+- **`median_filter`** stays as it is: its ends reflect, where a windowed median's are incomplete windows.
 
 These land before the public API is frozen for 1.0.
 
 ## Order of work
 
-1. `window` on in-memory patches: `apply`, reductions, the `ends` option, and `rolling` rebuilt on it. Useful with no lazy code at all.
-2. Operations which honour a window, and the window contract in the executor.
+1. `window` on in-memory patches: `apply`, reductions, the `ends` option, and `rolling` deprecated for it. Useful with no lazy code at all. *Done.*
+2. Operations which honour a window, and the window contract in the executor. *Done for operations which keep a window's shape and take no other patch.*
 3. `set_backend`, the lazy reader, and the merge which stays lazy.
 4. `impulse_window`.
 5. Writing in one pass, and zarr chunks.
@@ -167,4 +170,6 @@ These land before the public API is frozen for 1.0.
 ## Still to settle
 
 - The name of the fallback setting.
+- Operations in a window which change its shape, or which take another patch.
+- A contract for a reduction in a window, so one runs on a lazy patch.
 - Contracts for the operations a usual chain needs and which state none yet: `detrend`, `decimate`, `taper`, arithmetic with a scalar, the reductions and `sobel_filter`.

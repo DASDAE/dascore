@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import numpy as np
 import pytest
 
@@ -236,6 +238,70 @@ class TestLoad:
         assert (len(recipe_loads) > 1) == (rows > 0)
         assert loaded.attrs == expected.attrs
         np.testing.assert_allclose(loaded.data, expected.data, rtol=1e-12, atol=1e-12)
+
+
+class TestWindowed:
+    """An operation in a window is computed from the windows a box overlaps."""
+
+    CASES: ClassVar = {
+        # An operation with no contract, which eagerly needs its axis whole.
+        "detrend": lambda x: x.window(time=64, samples=True).detrend("time"),
+        "whole_axis": lambda x: x.window(distance=32, samples=True).pass_filter(
+            time=(10, 100)
+        ),
+        "halo_beside": lambda x: x.window(time=64, samples=True).median_filter(
+            distance=3, samples=True
+        ),
+        "halo_inside": lambda x: x.window(time=64, samples=True).median_filter(
+            time=3, samples=True
+        ),
+        "pointwise": lambda x: x.window(time=50, step=37, samples=True).abs(),
+        "two_dims": lambda x: x.window(time=64, distance=16, samples=True).detrend(
+            "time"
+        ),
+        "analysis": lambda x: x.window(
+            time=64, overlap=48, samples=True, analysis="hann"
+        ).abs(),
+        "fill": lambda x: x.window(time=64, samples=True, fill=3.0).abs(),
+        "in_a_chain": lambda x: (
+            x.select(time=(10, 1700), samples=True)
+            .window(time=64, samples=True)
+            .detrend("time")
+            .abs()
+        ),
+    }
+
+    @pytest.mark.parametrize("name", CASES)
+    @pytest.mark.parametrize("rows", (0, 60, 3, 1 / 8))
+    def test_any_block_size(self, lazy, eager, name, rows):
+        """However the work is cut, the result is the eager one exactly."""
+        out, expected = self.CASES[name](lazy), self.CASES[name](eager)
+        assert out.backend == "lazy"
+        with config_context(lazy_block_size=int(rows * ROW)):
+            loaded = out.load()
+        assert loaded.attrs == expected.attrs
+        assert np.array_equal(loaded.data, expected.data)
+
+    def test_windowed_axis_is_cut(self, lazy):
+        """A dimension detrend needs whole is cut once it is windowed."""
+        array = lazy.window(time=64, samples=True).detrend("time").data
+        boxes = chunk_boxes(array, block_size=ROW)
+        assert len({box[1] for box in boxes}) > 1
+        # Nothing says how far a detrend reaches along distance.
+        assert {box[0] for box in boxes} == {slice(0, lazy.shape[0])}
+
+    def test_reads_only_its_windows(self, lazy):
+        """A box reads the windows which overlap it, and no more."""
+        array = lazy.window(time=64, samples=True).abs().data
+        box = (slice(10, 20), slice(1000, 1010))
+        # Windows of 64 every 32, the first starting 32 before the array.
+        assert read_schedule(array, [box]) == [(slice(10, 20), slice(960, 1056))]
+
+    def test_reduction_still_refused(self, lazy, recipe_loads):
+        """A reduction in a window states no contract yet."""
+        with pytest.raises(LazyOperationError):
+            lazy.window(time=64, samples=True).mean()
+        assert not recipe_loads
 
 
 class TestFilterArguments:

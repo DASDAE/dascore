@@ -16,6 +16,7 @@ from dascore.lazy.contract import (
     ChunkContract,
     Halo,
     Pointwise,
+    Tiles,
     Unchanged,
     Window,
 )
@@ -92,6 +93,69 @@ def _dascore_imports(nodes) -> list[str]:
         elif isinstance(node, ast.Import):
             found.extend(x.name for x in node.names)
     return [x for x in found if x == "." or x.split(".")[0] == "dascore"]
+
+
+class TestTiles:
+    """A chunk of a tiled operation needs the tiles which overlap it."""
+
+    def test_tiles_overlapping_a_box(self):
+        """Tiles of 8 every 4 start 4 before the array; two reach [10, 12)."""
+        tiles = Tiles({0: (8, 4, 100)})
+        # Tile k covers [4k - 4, 4k + 4): tiles 2 and 3 hold samples 10 and 11.
+        assert tiles.tiles((slice(10, 12),)) == ((2, 4),)
+        assert tiles.needs((slice(10, 12),), (100,)) == (slice(4, 16),)
+
+    def test_stops_at_the_array(self):
+        """The first and last tiles reach past the array; what is read does not."""
+        tiles = Tiles({0: (8, 4, 10)})
+        assert tiles.tiles((slice(0, 10),)) == ((0, 4),)
+        assert tiles.needs((slice(0, 10),), (10,)) == (slice(0, 10),)
+
+    def test_abutting_tiles(self):
+        """With no overlap a box inside one tile needs that tile alone."""
+        tiles = Tiles({1: (10, 10, 95)})
+        box = (slice(0, 3), slice(12, 18))
+        assert tiles.tiles(box) == ((1, 2),)
+        assert tiles.needs(box, (3, 95)) == (slice(0, 3), slice(10, 20))
+
+    def test_every_sample_is_under_its_tiles(self):
+        """Each tile holding a sample of the box is among those named."""
+        size, stride, length = 7, 3, 40
+        tiles = Tiles({0: (size, stride, length)})
+        margin = (-(-size // stride) - 1) * stride
+        count = (length - 1 + margin) // stride + 1
+        for start in range(length):
+            for stop in range(start + 1, length + 1):
+                first, last = tiles.tiles((slice(start, stop),))[0]
+                holding = [
+                    k
+                    for k in range(count)
+                    if k * stride - margin < stop and k * stride - margin + size > start
+                ]
+                assert list(range(first, last)) == holding
+
+    def test_other_axes(self):
+        """An axis which is not tiled is read by its width, or whole."""
+        tiles = Tiles({0: (8, 4, 100)}, widths={1: (1, 2)}, whole=(2,))
+        box = (slice(10, 12), slice(5, 6), slice(3, 4))
+        expected = (slice(4, 16), slice(4, 8), slice(0, 9))
+        assert tiles.needs(box, (100, 20, 9)) == expected
+
+    def test_apply_names_the_tiles_and_cuts_the_box(self):
+        """The kernel is told its tiles, and the box is cut from what it made."""
+        tiles = Tiles({0: (8, 4, 100)})
+        box = (slice(10, 12),)
+        needed = tiles.needs(box, (100,))
+        seen = {}
+
+        def run(data, tiles):
+            """Note the tiles and hand the data back."""
+            seen["tiles"] = tiles
+            return data
+
+        out = tiles.apply(run, np.arange(4, 16), box, needed)
+        assert seen["tiles"] == ((2, 4),)
+        assert np.array_equal(out, [10, 11])
 
 
 class TestLeaf:

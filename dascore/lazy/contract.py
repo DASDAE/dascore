@@ -43,7 +43,8 @@ Examples
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 # One slice for each axis, each with an int start and stop and a step of one.
@@ -180,6 +181,80 @@ class WholeAxis(ChunkContract):
         for axis in self.axes:
             out[axis] = slice(0, shape[axis])
         return tuple(out)
+
+
+@dataclass(frozen=True)
+class Tiles(ChunkContract):
+    """
+    An output chunk needs the tiles which overlap it.
+
+    The operation cuts some axes into overlapping tiles, computes each tile
+    from itself alone, and blends them. The tiles are placed by the array,
+    not by the chunk: tile ``k`` of an axis starts at ``k * stride``, less
+    the whole strides it takes for a tile to reach back before the first
+    sample. A chunk is grown out to the edges of the tiles which overlap
+    it, so each of those tiles is computed whole and the chunk is the same
+    however the work is cut.
+
+    Along an axis which is not tiled a tile is computed from the chunk
+    alone, unless `widths` or `whole` say what else it reads.
+
+    The kernel is told which tiles it was given: it takes a ``tiles``
+    keyword holding, for each tiled axis in the order of `spans`, the first
+    tile and one past the last.
+
+    Parameters
+    ----------
+    spans
+        For each tiled axis, the tile's size, its stride, and the length
+        of the whole axis.
+    widths
+        For an axis which is not tiled, how many samples before and after
+        an output sample are read, as for
+        [`Halo`](`dascore.lazy.contract.Halo`).
+    whole
+        The axes which are not tiled and are needed whole.
+
+    Examples
+    --------
+    >>> from dascore.lazy.contract import Tiles
+    >>> # Tiles of 8 samples every 4, so one starts 4 before the array.
+    >>> tiles = Tiles({0: (8, 4, 100)})
+    >>> box = (slice(10, 20), slice(0, 5))
+    >>> assert tiles.tiles(box) == ((2, 6),)
+    >>> assert tiles.needs(box, (100, 5)) == (slice(4, 24), slice(0, 5))
+    """
+
+    spans: Mapping[int, tuple[int, int, int]]
+    widths: Mapping[int, tuple[int, int]] = field(default_factory=dict)
+    whole: tuple[int, ...] = ()
+
+    def tiles(self, box: Box) -> tuple[tuple[int, int], ...]:
+        """Return the first tile overlapping a box, and one past the last."""
+        out = []
+        for axis, (size, stride, length) in self.spans.items():
+            margin = (-(-size // stride) - 1) * stride
+            count = (length - 1 + margin) // stride + 1
+            first = max((box[axis].start + margin - size) // stride + 1, 0)
+            last = min((box[axis].stop - 1 + margin) // stride + 1, count)
+            out.append((first, last))
+        return tuple(out)
+
+    def needs(self, box: Box, shape: tuple[int, ...]) -> Box:
+        """Return the box grown to whole tiles, and by what else is read."""
+        out = list(
+            Halo(self.widths).needs(WholeAxis(self.whole).needs(box, shape), shape)
+        )
+        spans = zip(self.spans.items(), self.tiles(box), strict=True)
+        for (axis, (size, stride, length)), (first, last) in spans:
+            margin = (-(-size // stride) - 1) * stride
+            start = max(first * stride - margin, 0)
+            out[axis] = slice(start, min((last - 1) * stride - margin + size, length))
+        return tuple(out)
+
+    def apply(self, run: Callable[..., Any], data, box: Box, needed: Box):
+        """Return the output box, blended from the tiles which overlap it."""
+        return super().apply(partial(run, tiles=self.tiles(box)), data, box, needed)
 
 
 @dataclass(frozen=True)

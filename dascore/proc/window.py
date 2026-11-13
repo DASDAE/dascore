@@ -9,22 +9,28 @@ operation, which gives back a patch.
 from __future__ import annotations
 
 import math
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial, update_wrapper
+from itertools import product
 from typing import Any
 
 import numpy as np
 from pydantic import ConfigDict
 
-from dascore.core.processor import PatchProcessor
-from dascore.exceptions import ParameterError
+from dascore.core.processor import PatchProcessor, captured_operation
+from dascore.exceptions import ParameterError, PatchError
+from dascore.lazy.contract import Halo, Pointwise, Tiles, Unchanged, WholeAxis
 from dascore.proc.rolling import _pandas_agrees, _rolling_pandas
-from dascore.proc.tile_apply import TileApply
-from dascore.utils.patch import _call_str
-from dascore.utils.tiles import fill_dtype
+from dascore.proc.tile_apply import TileApply, _windows
+from dascore.utils.array_api import LAZY_BACKEND
+from dascore.utils.misc import suppress_warnings
+from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
+from dascore.utils.tiles import _taper_like, blend_dtype, fill_dtype, get_tile_plan
 from dascore.utils.window import resolve_window
 
-__all__ = ("PatchWindow", "WindowReduce")
+__all__ = ("PatchWindow", "WindowReduce", "Windowed")
 
 _ENDS = ("pad", "drop")
 # How many samples of a window come before the sample which labels it.
@@ -232,6 +238,262 @@ class WindowReduce(PatchProcessor):
         return out
 
 
+def _same(one, other) -> bool:
+    """Whether two plans hold the same values, arrays included."""
+    if isinstance(one, dict) and isinstance(other, dict):
+        return one.keys() == other.keys() and all(_same(one[x], other[x]) for x in one)
+    if isinstance(one, list | tuple) and isinstance(other, list | tuple):
+        return len(one) == len(other) and all(map(_same, one, other))
+    if isinstance(one, np.ndarray) or isinstance(other, np.ndarray):
+        return np.array_equal(one, other, equal_nan=np.asarray(one).dtype.kind in "fc")
+    return type(one) is type(other) and (
+        one == other or (one != one and other != other)
+    )
+
+
+class Windowed(PatchProcessor):
+    """
+    Run an operation in each window of a patch, and blend the windows.
+
+    The operation behind a patch method called on
+    [`Patch.window`](`dascore.Patch.window`), where the window's parameters
+    are described; the dimensions to window are given as keywords, such as
+    ``time=0.5``.
+
+    Parameters
+    ----------
+    operation
+        The operation each window is given, as a
+        [`PatchProcessor`](`dascore.core.processor.PatchProcessor`).
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.proc.window import Windowed
+    >>> patch = dc.get_example_patch()
+    >>> # A trend taken out of every second of the patch, not out of all of it.
+    >>> out = patch.window(time=1).detrend("time")
+    >>> same = Windowed(dc.proc.Detrend(dim="time"), time=1)(patch)
+    >>> assert out.equals(same)
+
+    Notes
+    -----
+    - Everything is decided from the metadata of one window before any
+      data are read: the operation must give back a window of the same
+      shape and coordinates, and must work the same way wherever the
+      window sits.
+    - On a lazy patch an output chunk needs only the windows which overlap
+      it, so a windowed dimension can be cut even where the operation
+      itself needs its dimension whole.
+    """
+
+    model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
+
+    # Reached through `Patch.window`, so it has no patch method of its own.
+    name = None
+
+    operation: Any
+    overlap: Any = None
+    step: Any = None
+    taper: Any = None
+    analysis: Any = None
+    fill: Any = None
+    samples: bool = False
+
+    _positional_fields = ("operation",)
+
+    def _spelled(self, name: str) -> str:
+        """Return the call as it is written: a window, then the operation."""
+        given = self._inputs()[0]
+        operation = given.pop("operation")
+        called = operation.name or type(operation).__name__
+        spelled = operation._spelled(called)
+        # An operation which records only its name is still a call here.
+        spelled = spelled if spelled.endswith(")") else f"{spelled}()"
+        return f"{_call_str('window', given)}.{spelled}"
+
+    def _tile(self, meta, window, starts):
+        """Return the metadata of the window which starts at `starts`."""
+        spans = zip(window.dims, starts, window.size, strict=True)
+        index = {dim: slice(at, at + size) for dim, at, size in spans}
+        coords, _ = meta.coords.isel(**index)
+        return meta.new(coords=coords)
+
+    def _made_dtype(self, meta, made, plan) -> np.dtype:
+        """Return the dtype the operation gives a window."""
+        kernel = type(self.operation).kernel_for("numpy")
+        if meta.backend != LAZY_BACKEND or kernel is None:
+            # In memory the array which comes back says what it is.
+            return np.dtype(made.dtype)
+        # A lazy patch states its dtype before anything is read, and an
+        # operation's metadata need not say what its kernel returns: a
+        # detrend of integers is float. A window of zeros is run to find out.
+        dtype = np.dtype(meta.dtype)
+        if self.fill is not None and self.fill != 0:
+            dtype = fill_dtype(dtype, self.fill)
+        if self.analysis is not None:
+            dtype = blend_dtype(dtype)
+        probe = np.zeros(made.shape, dtype)
+        with np.errstate(all="ignore"), suppress_warnings():
+            return np.asarray(kernel(self.operation, probe, **plan)).dtype
+
+    def _refuse(self, why: str):
+        """Raise for an operation which cannot run in a window."""
+        operation = self.operation
+        name = operation.name or type(operation).__name__
+        msg = (
+            f"{name} cannot run in a window: {why} A function of a window "
+            "given to Patch.window(...).apply can do anything."
+        )
+        raise ParameterError(msg)
+
+    def get_metadata(self, meta):
+        """Return the blended metadata, the tiling, and one window's plan."""
+        operation = self.operation
+        if not isinstance(operation, PatchProcessor):
+            msg = f"A window runs a PatchProcessor; got {operation!r}."
+            raise ParameterError(msg)
+        if type(operation).reconcile is not PatchProcessor.reconcile:
+            self._refuse("it settles its result from the data it computed.")
+        if operation._inputs()[1]:
+            self._refuse("it takes another patch, which a window cannot cut yet.")
+        window = resolve_window(
+            meta,
+            self.model_extra or {},
+            samples=self.samples,
+            overlap=self.overlap,
+            step=self.step,
+            # Half the window, the most the taper's ramps allow.
+            default_overlap=lambda size: size // 2,
+            min_samples=2,
+            enforce_lt_coord=True,
+        )
+        assert window.stride is not None
+        # In the patch's axis order, whatever order they were named in.
+        order = np.argsort(window.axes)
+        axes = tuple(int(window.axes[x]) for x in order)
+        size = tuple(int(window.size[x]) for x in order)
+        stride = tuple(int(window.stride[x]) for x in order)
+        dims = tuple(window.dims[x] for x in order)
+        length = tuple(meta.shape[x] for x in axes)
+        window = type(window)(dims, axes, size, stride, window.ndim)
+        # The first whole window, and the last, stand for every one.
+        tile = self._tile(meta, window, (0,) * len(axes))
+        check_patch_coords(
+            tile, dims=operation.required_dims, coords=operation.required_coords
+        )
+        check_patch_attrs(tile, operation.required_attrs)
+        made, plan = operation.get_metadata(tile)
+        if made.dims != tile.dims or made.shape != tile.shape:
+            self._refuse(
+                f"it turns a window of shape {tile.shape} into one of "
+                f"{made.shape}, and only windows which keep their shape are "
+                "blended."
+            )
+        if made is not tile and made.coords != tile.coords:
+            self._refuse("it changes the window's coordinates.")
+        last = tuple(n - z for n, z in zip(length, size, strict=True))
+        if any(last) and not _same(
+            plan, operation.get_metadata(self._tile(meta, window, last))[1]
+        ):
+            self._refuse("what it does depends on where the window sits.")
+        dtype = self._made_dtype(meta, made, plan)
+        if dtype.kind in "biu":
+            msg = (
+                f"Blending windows of {dtype} data gives {blend_dtype(dtype)}: "
+                "each sample is a weighted sum of the windows which hold it."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        out = meta.new(attrs=made.attrs, dtype=blend_dtype(dtype))
+        others = tuple(x for x in range(len(meta.shape)) if x not in axes)
+        return out, {
+            "axes": axes,
+            "size": size,
+            "stride": stride,
+            "length": length,
+            "others": others,
+            "inner": plan,
+        }
+
+    def chunk_contract(self, dtype, plan):
+        """Return the tiles a chunk needs, and what the operation reads besides."""
+        # Imported here: dascore.lazy.kernels imports the lazy array, which
+        # reads files through modules which import the processors.
+        from dascore.lazy.kernels import _contract  # noqa: PLC0415
+
+        axes, others = plan["axes"], plan["others"]
+        spans = dict(zip(axes, zip(plan["size"], plan["stride"], plan["length"])))
+        inner = _contract(self.operation, dtype, plan["inner"])
+        if isinstance(inner, Pointwise | Unchanged):
+            return Tiles(spans)
+        if isinstance(inner, Halo):
+            widths = {x: w for x, w in inner.widths.items() if x not in axes}
+            return Tiles(spans, widths=widths)
+        if isinstance(inner, WholeAxis):
+            return Tiles(spans, whole=tuple(x for x in inner.axes if x not in axes))
+        # Nothing says how far it reaches along the dimensions not windowed.
+        return Tiles(spans, whole=others)
+
+    def numpy_kernel(
+        self, data, *, axes, size, stride, length, others, inner, tiles=None
+    ):
+        """
+        Return the windows the operation made, blended.
+
+        `tiles`, given by a chunk, names the windows the data hold: for each
+        windowed axis the first and one past the last. Without it the data
+        are the whole array and hold every window.
+        """
+        operation = self.operation
+        kernel = type(operation).kernel_for("numpy")
+        plan = get_tile_plan(length, size, stride)
+        tiles = tiles or tuple((0, count) for count in plan.grid)
+        ndim = len(axes)
+        tail = tuple(range(-ndim, 0))
+        moved = np.moveaxis(data, axes, tail)
+        # The span of the windows given, and where the data sit inside it:
+        # a window reaching beyond the array holds the fill there.
+        spans = zip(tiles, size, stride, plan.margin, length, strict=True)
+        extent, inside = [], []
+        for (first, last), z, step, margin, n in spans:
+            low, high = first * step - margin, (last - 1) * step - margin + z
+            extent.append(high - low)
+            inside.append(slice(max(low, 0) - low, min(high, n) - low))
+        inside = (..., *inside)
+        fill = 0 if self.fill is None else self.fill
+        dtype = moved.dtype if fill == 0 else fill_dtype(moved.dtype, fill)
+        whole = np.zeros if fill == 0 else partial(np.full, fill_value=fill)
+        padded = whole((*moved.shape[:-ndim], *extent), dtype=dtype)
+        padded[inside] = moved
+        overlap = tuple(z - step for z, step in zip(size, stride, strict=True))
+        analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
+        out = None
+        # In one order always, so a sample's windows are summed the same
+        # way however the array was cut.
+        for index in product(*(range(first, last) for first, last in tiles)):
+            starts = ((k - t[0]) * step for k, t, step in zip(index, tiles, stride))
+            pick = (..., *(slice(at, at + z) for at, z in zip(starts, size)))
+            tile = padded[pick]
+            if analysis is not None:
+                tile = tile * _taper_like(analysis, tile)
+            tile = np.moveaxis(tile, tail, axes)
+            made = tile if kernel is None else kernel(operation, tile, **inner)
+            if np.shape(made) != tile.shape:
+                name = type(operation).__name__
+                msg = (
+                    f"{name} computed a window of shape {np.shape(made)} from "
+                    f"one of {tile.shape}; its get_metadata stated the same shape."
+                )
+                raise PatchError(msg)
+            made = np.moveaxis(made, axes, tail)
+            weights = _taper_like(synthesis, made)
+            if out is None:
+                out = np.zeros(padded.shape, dtype=np.result_type(made, weights))
+            out[pick] += made * weights
+        assert out is not None  # an axis with a sample has a window
+        return np.moveaxis(out[inside], tail, axes)
+
+
 @dataclass(frozen=True)
 class PatchWindow:
     """
@@ -239,6 +501,11 @@ class PatchWindow:
 
     What it does returns a patch, so a chain goes on
     from the patch: ``patch.window(time=1).mean().abs()``.
+
+    Besides the methods written here, a patch operation called on it runs
+    in each window and the windows are blended:
+    ``patch.window(time=1).detrend("time")``. See
+    [`Windowed`](`dascore.proc.window.Windowed`) for which operations can.
     """
 
     patch: Any
@@ -251,6 +518,46 @@ class PatchWindow:
     ends: str = "pad"
     align: str = "center"
     fill: Any = None
+
+    def __getattr__(self, name: str):
+        """Return a patch operation which runs in each window, then blends."""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        method = getattr(type(self.patch), name, None)
+        if method is None or getattr(method, "__processor__", None) is None:
+            what = "is not an operation" if method is not None else "does not exist"
+            msg = (
+                f"{name} {what} which can run in a window. A window runs the "
+                "patch operations written as processors, such as detrend, "
+                "taper or pass_filter; anything else is a function given to "
+                "apply."
+            )
+            raise AttributeError(msg)
+        return update_wrapper(partial(self._windowed, method), method)
+
+    def _windowed(self, method, /, *args, **kwargs):
+        """Run a patch method's operation in each window, and blend them."""
+        self._check_blended()
+        operation = captured_operation(method, self.patch, *args, **kwargs)
+        return Windowed(
+            operation=operation,
+            overlap=self.overlap,
+            step=self.step,
+            taper=self.taper,
+            analysis=self.analysis,
+            fill=self.fill,
+            samples=self.samples,
+            **self.dims,
+        ).run(self.patch)
+
+    def _check_blended(self):
+        """Refuse the options which only a reduction reads."""
+        if self.ends != "pad" or self.align != "center":
+            msg = (
+                "Windows which are blended are always padded at the ends and "
+                "have no label to align; ends and align apply to reductions."
+            )
+            raise ParameterError(msg)
 
     def __post_init__(self):
         """Refuse a window which could not be one, before anything is done."""
@@ -334,12 +641,7 @@ class PatchWindow:
           window's `fill` there, so every sample is under a whole taper. The
           function sees those values.
         """
-        if self.ends != "pad" or self.align != "center":
-            msg = (
-                "Windows which are blended are always padded at the ends and "
-                "have no label to align; ends and align apply to reductions."
-            )
-            raise ParameterError(msg)
+        self._check_blended()
         return TileApply(
             function=function,
             mode=mode,

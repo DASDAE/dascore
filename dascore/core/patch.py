@@ -891,14 +891,18 @@ class Patch(NamespaceOwner, PatchMeta):
         **kwargs,
     ) -> PatchWindow:
         """
-        Declare windows over the patch, to apply a function to or reduce.
+        Declare windows over the patch, to work in or to reduce.
 
         Nothing is computed. A call on what this returns is one operation,
-        and gives back a patch: see
-        [`PatchWindow`](`dascore.proc.window.PatchWindow`) for
-        [`apply`](`dascore.proc.window.PatchWindow.apply`), which blends or
-        stacks what a function makes of the windows, and for the
-        reductions, which give one value for each window.
+        and gives back a patch:
+
+        - a patch operation, such as ``window(time=10).detrend("time")``,
+          runs in each window and the windows are blended back;
+        - [`apply`](`dascore.proc.window.PatchWindow.apply`) does the same
+          with any function, or stacks the windows instead;
+        - a reduction, such as ``mean``, gives one value for each window.
+
+        See [`PatchWindow`](`dascore.proc.window.PatchWindow`).
 
         Parameters
         ----------
@@ -911,18 +915,20 @@ class Patch(NamespaceOwner, PatchMeta):
         samples
             If True, windows, overlaps and steps are sample counts.
         taper
-            For `apply`: the shape of the ramps neighbouring windows are
-            blended under -- any name `dascore.utils.signal.get_window`
-            knows. Hann when not given; ``"triang"`` blends linearly. The
-            ramps are made complementary, so windows left unchanged blend
-            back to the input exactly. Not applied in ``"stack"`` mode,
-            where `Patch.reassemble` takes the taper instead.
+            For windows which are blended: the shape of the ramps
+            neighbouring windows are blended under -- any name
+            `dascore.utils.signal.get_window` knows. Hann when not given;
+            ``"triang"`` blends linearly. The ramps are made complementary,
+            so windows left unchanged blend back to the input exactly. Not
+            applied in ``"stack"`` mode, where `Patch.reassemble` takes the
+            taper instead.
         analysis
-            For `apply`: a window each one is multiplied by before the
-            function sees it -- any name, ``(name, parameter)`` tuple, or
-            one-dimensional array `get_window` knows, applied along every
-            windowed dimension, or a list with one per windowed dimension
-            in the patch's dimension order. The windows are then blended
+            For windows which are blended: a window each one is multiplied
+            by before the operation or function sees it -- any name,
+            ``(name, parameter)`` tuple, or one-dimensional array
+            `get_window` knows, applied along every windowed dimension, or
+            a list with one per windowed dimension in the patch's dimension
+            order. The windows are then blended
             back under its dual, so the blend is still exact. Exclusive
             with `taper`.
         ends
@@ -935,9 +941,9 @@ class Patch(NamespaceOwner, PatchMeta):
             window); ``"right"``, the last; ``"left"``, the first.
         fill
             The value a window holds where it reaches beyond the data. For
-            `apply`, zero when not given. For a reduction, giving one has
-            the incomplete windows computed over data filled out with it,
-            rather than left as NaN.
+            windows which are blended, zero when not given. For a
+            reduction, giving one has the incomplete windows computed over
+            data filled out with it, rather than left as NaN.
         **kwargs
             The dimensions to window and the window along each, such as
             ``time=0.5`` (seconds) or ``time=64, distance=16, samples=True``.
@@ -959,12 +965,24 @@ class Patch(NamespaceOwner, PatchMeta):
         >>> # Windows overlapping by a quarter, blended linearly.
         >>> window = patch.window(time=0.5, overlap=25 * percent, taper="triang")
         >>> out = window.apply(lambda tiles: tiles - tiles.mean(axis=-1, keepdims=True))
+        >>>
+        >>> # A trend taken out of each second, not out of the whole patch.
+        >>> local = patch.window(time=1).detrend("time")
 
         Notes
         -----
-        A window chosen here changes the result: the mean of each window is
-        not the mean of the patch, and a function applied to each window
-        and blended is not that function applied to the patch.
+        - A window chosen here changes the result: the mean of each window
+          is not the mean of the patch, and an operation run in each window
+          and blended is not that operation run on the patch.
+        - A patch operation can run in a window if it is written as a
+          [`PatchProcessor`](`dascore.core.processor.PatchProcessor`),
+          gives back a window of the same shape and coordinates, takes no
+          other patch, and does the same thing wherever its window sits.
+          Anything else is refused when it is called; a function given to
+          `apply` has no such limits.
+        - On a lazy patch an operation in a window needs only the windows
+          a chunk overlaps, so a windowed dimension is computed in pieces
+          even where the operation alone would need it whole.
         """
         return PatchWindow(
             self,
