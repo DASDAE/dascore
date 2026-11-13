@@ -2425,9 +2425,11 @@ class TestPandasTimes:
         out = patch.select(time=(np.datetime64("2018-03-28T00:00:05"), None))
         assert out.shape == (4,)
 
-    def test_tz_series(self, tz_index):
-        """A tz-aware Series converts the same way."""
-        coord = get_coord(data=pd.Series(tz_index))
+    @pytest.mark.parametrize("container", [pd.Series, lambda index: index.array])
+    def test_tz_series_and_array(self, tz_index, container):
+        """A tz-aware Series or pandas array converts the same way."""
+        with suppress_warnings(action="error"):
+            coord = get_coord(data=container(tz_index))
         assert coord == get_coord(data=dc.to_datetime64(tz_index))
         assert coord.step == ONE_SECOND * 5
 

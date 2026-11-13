@@ -4856,7 +4856,8 @@ def get_coord(
     if isinstance(data, BaseCoord):  # just return coordinate
         return data
     if isinstance(getattr(data, "dtype", None), pd.DatetimeTZDtype):
-        data = to_datetime64(data)  # timezone-aware pandas times become UTC
+        # timezone-aware pandas times (index, series or array) become UTC
+        data = to_datetime64(pd.DatetimeIndex(data))
     released = snap is not False  # a declared step forgives float rounding
     # An exact read takes a squeezed sample as one label, as readers did
     if not isinstance(data, np.ndarray) or not (released or data.ndim):
