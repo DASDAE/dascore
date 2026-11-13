@@ -323,6 +323,10 @@ convention = "numpy"
 # same files: relative paths, with the separator differences mapped away.
 [tool.coverage.run]
 relative_files = true
+# Compiled dependencies (e.g. netCDF4) can report a relative Cython source
+# path, which resolves under dascore/ when a doc test runs from a docs folder;
+# dascore has no Cython, so never measure .pyx files.
+omit = ["*.pyx"]
 
 [tool.coverage.paths]
 source = ["dascore/", "*/dascore/"]

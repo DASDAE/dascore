@@ -37,6 +37,8 @@ _API_MODULES = (
 )
 _EXCLUDED = {"api", "filters", "_static", "_site", "site_libs", "marimo"}
 _LINK = re.compile(r"(!?\[[^\n]*?\])\(([^\s)]+)\)")
+# A div shown only on the website, which the Markdown corpus leaves out.
+_WEB_ONLY = re.compile(r"\.content-visible\b[^}]*when-format=\"?html")
 _INCLUDE = re.compile(r"\{\{<\s*include\s+([^>]+?)\s*>\}\}")
 
 
@@ -280,15 +282,6 @@ def _api_documents():
     return _APIDocumentCollector().collect()
 
 
-def _read_readme():
-    """Read the canonical README from the checkout or installed wheel metadata."""
-    path = PACKAGE_PATH.parent / "readme.md"
-    if path.is_file() and (PACKAGE_PATH.parent / "pyproject.toml").is_file():
-        return path.read_text(encoding="utf-8")
-    text = metadata.distribution("dascore").read_text("METADATA") or ""
-    return text.partition("\n\n")[2]
-
-
 def _read_source(path, stack=()):
     """
     Return a page's metadata and body, with packaged includes expanded.
@@ -302,8 +295,6 @@ def _read_source(path, stack=()):
 
     def include(match):
         target = (path.parent / match[1].strip().strip("\"'")).resolve()
-        if target == PACKAGE_PATH.parent / "readme.md":
-            return _read_readme()
         if not any(target.is_relative_to(x) for x in (DOC_PATH, SKILL_PATH)):
             raise DocumentationError(
                 f"Documentation include escapes its source directory: {target}"
@@ -394,7 +385,8 @@ def _markdown(text, path, aliases, authored):
             return f"{label}({external})"
         return match[0]
 
-    lines, fence = [], ""
+    # One entry per open div: whether it holds text only for the website.
+    lines, fence, divs = [], "", []
     for line in text.splitlines():
         stripped = line.lstrip()
         marker = re.match(r"(`{3,}|~{3,})", stripped)
@@ -404,14 +396,22 @@ def _markdown(text, path, aliases, authored):
                 line = re.sub(r"^(\s*`{3,})\{(\w+)[^}]*\}", r"\1\2", line)
             elif stripped.startswith(fence) and not stripped[len(fence) :].strip():
                 fence = ""
-            lines.append(line)
         elif fence:
-            lines.append(line)
+            pass
         elif stripped.startswith(":::"):
-            if callout := re.search(r"callout-(\w+)", stripped):
-                lines.append(f"**{callout[1].capitalize()}:**")
+            if re.fullmatch(r":{3,}", stripped.rstrip()):
+                if divs:
+                    divs.pop()
+                continue
+            divs.append(bool(_WEB_ONLY.search(stripped)))
+            callout = re.search(r"callout-(\w+)", stripped)
+            if not callout or any(divs):
+                continue
+            line = f"**{callout[1].capitalize()}:**"
         else:
-            lines.append(_LINK.sub(link, line))
+            line = _LINK.sub(link, line)
+        if not any(divs):
+            lines.append(line)
     return "\n".join(lines) + "\n"
 
 

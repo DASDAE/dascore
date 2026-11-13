@@ -15,7 +15,7 @@ import numpy as np
 
 import dascore as dc
 
-patch = dc.get_example_patch().set_units("m/s")
+patch = dc.get_example_patch("deformation_rate_event_1")
 transformed = patch.dft(dim="time", real=True)
 
 print(transformed.dims)

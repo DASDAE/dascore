@@ -1,9 +1,8 @@
 ---
 title: Local documentation
-keywords: [documentation, cli, agents, offline]
 ---
 
-Use the documentation that ships with the DASCore installed in your project's Python environment:
+Read the documentation for the DASCore installed in your project's Python environment:
 
 ```bash
 python -m dascore doc
@@ -13,49 +12,38 @@ python -m dascore doc Patch.viz.waterfall
 python -m dascore doc recipes/tunnel_inventory
 ```
 
-The equivalent console command is `dascore doc`. Running it without a target reports the DASCore version, Python executable, imported package location, and documentation directory. For repeated agent or notebook work, use the reported Python executable with `-m dascore` to keep using the same environment.
+`dascore doc` is the equivalent console command. Without a target it reports the DASCore version, Python executable, package location, and documentation directory. For repeated agent or notebook work, run the reported Python with `-m dascore` to stay in the same environment. [Agent onboarding](agents.qmd) covers the `dascore skills` and `dascore skill` commands.
 
-The first request prepares a directory of Markdown files from the packaged tutorials, recipes, and installed API docstrings. Examples remain unevaluated. Documentation text is available offline; images are excluded from package downloads and linked to hosted copies on GitHub. Image links use the installed release tag or development commit when available, falling back to the `dev` branch for development versions without commit metadata. API pages include their defining module and signatures when available; unbound method signatures include the instance parameter.
+## Targets
 
-DASCore stores this corpus below its OS-specific user cache, in a directory under `docs/<DASCore version>/`. Subsequent commands reuse it. Changes to an editable installation's source build a new corpus in a new directory even when its version string stays the same, so run `dascore doc` again to get the current directory. A request deletes the same version's corpora left unused for a day. To regenerate it explicitly:
+Use exact public names such as `Inventory`, `PatchAttrs.tag`, or `dascore.proc.coords.select`, and identifiers such as `tutorial/patch` for authored pages. Select a module page with `module:`, as in `dascore doc module:dascore.viz.waterfall`; when a module re-exports a same-named function, the plain name selects the function. Unknown or ambiguous names print an error and exit nonzero. Output is UTF-8, even when redirected to a file.
+
+## The Markdown corpus
+
+The first request builds a directory of Markdown files from the packaged tutorials, recipes, and API docstrings. Examples are not run. The text works offline; images link to copies hosted on GitHub for the installed release tag or development commit, or the `dev` branch when no commit is recorded. API pages include their defining module and signatures; unbound method signatures include the instance parameter.
+
+The API pages cover core objects, processing, transforms, visualization, built-in namespaces, and selected public utilities, but not external plugins or format-specific APIs. Building them imports the supported modules without creating data objects or running operations; missing optional modules are listed in the summary.
+
+The corpus lives under `docs/<DASCore version>/` in DASCore's user cache, which the `docs_cache_dir` [setting](configuration.qmd) can move, and later commands reuse it. In an editable install, source changes build a new corpus in a new directory even when the version string is unchanged, so run `dascore doc` again for the current path. Each request deletes corpora of the same version unused for a day. To rebuild explicitly:
 
 ```bash
 python -m dascore doc --rebuild
 ```
 
-The `docs_cache_dir` [configuration setting](configuration.qmd) controls the cache root for calls in a Python process. The default follows Pooch's OS-specific DASCore cache location. Generated Markdown can also be opened directly in a text editor.
-
-The local API corpus covers core objects, processing, transforms, visualization, built-in namespaces, and selected public utilities. External plugins and format-specific APIs are outside this initial corpus. Documentation generation inspects Python objects and imports the supported modules, but does not instantiate data objects or execute their operations. Missing optional modules are reported in the corpus summary.
-
-Module pages can be selected explicitly, for example `dascore doc module:dascore.viz.waterfall`. When a module re-exports a same-named function, its public attribute name selects the function.
-
-Use exact public names such as `Inventory`, `PatchAttrs.tag`, or `dascore.proc.coords.select`. Authored pages use identifiers such as `tutorial/patch`. Unknown or ambiguous names produce an error and a nonzero exit status. Document output uses UTF-8, including when redirected to a file.
-
 ## Search documentation
 
-Run `python -m dascore doc` with the project's Python executable to prepare the Markdown corpus and print its absolute directory. Point your editor or agent's file-search tool at that directory, which may be outside the project workspace.
-
-For example, with ripgrep installed, replace `/absolute/documentation/path` below with the reported documentation directory:
+Point your editor or agent's file search at the directory `python -m dascore doc` reports, which may be outside the project workspace. Titles, API names, body text, and keyword metadata are all searchable. For example, with ripgrep:
 
 ```bash
 rg -n -i -C 2 -g '*.md' 'filter|bandpass|low.?pass' "/absolute/documentation/path"
 rg -l -i -g '*.md' 'inventory|geometry' "/absolute/documentation/path"
 ```
 
-The first command shows matching lines with surrounding context; the second lists matching files. Read the relevant sections, then use `doc` for a known API name or open the Markdown page directly. Titles, API names, body text, and keyword metadata are all searchable with ordinary file tools. If a term finds little, try related scientific vocabulary.
+The first shows matching lines with context; the second lists matching files. Then use `doc` for a known API name or open the Markdown page. If a term finds little, try related scientific vocabulary.
 
 ## Author keyword tags
 
-Keep subject keywords with their source document. Authored pages use Quarto frontmatter:
-
-```yaml
----
-title: Filtering data
-keywords: [filtering, bandpass, low pass]
----
-```
-
-API docstrings use a `Keywords` section containing comma-separated terms:
+Keep subject keywords with their source. API docstrings list comma-separated terms in a `Keywords` section:
 
 ```text
 Keywords
@@ -63,4 +51,4 @@ Keywords
 filtering, bandpass, low pass
 ```
 
-The normal website renderer displays this section, and the local corpus preserves the terms as metadata. Use specific scientific terms and common task vocabulary; keyword tags describe subjects rather than classifying a page as an agent skill.
+The website displays this section, and the local corpus keeps the terms as metadata. Use specific scientific terms and common task vocabulary; keywords describe subjects, not whether a page is an agent skill.

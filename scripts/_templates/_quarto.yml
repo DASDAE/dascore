@@ -56,9 +56,8 @@ website:
     type: primary
     content: >-
       **DASCore 1.0 beta is out!**
-      Read the [announcement](/migrations/dascore_1.0_announcement.qmd),
-      check the [migration guide](/migrations/dascore_1.0_migration.qmd),
-      and [help us test it](/migrations/test_latest_beta.qmd).
+      Read the [announcement](/migrations/dascore_1.0_announcement.qmd)
+      and check the [migration guide](/migrations/dascore_1.0_migration.qmd).
 
   navbar:
     logo: _static/logo.png
@@ -104,6 +103,9 @@ website:
         - text: Introduction
           href: index.qmd
 
+        - text: Installation
+          href: installation.qmd
+
         - text: Formats
           href: supported_formats.qmd
 
@@ -121,9 +123,6 @@ website:
             - text: Migration Guide
               href: migrations/dascore_1.0_migration.qmd
 
-            - text: Test the Latest Beta
-              href: migrations/test_latest_beta.qmd
-
         - text: Contributors
           href: contributors.qmd
 
@@ -133,44 +132,54 @@ website:
     - id: tutorial
       title: "Tutorial"
       contents:
-        - text: DASCore Concepts
-          href: tutorial/concepts.qmd
+        - section: "Basic"
+          contents:
+            - text: DASCore Concepts
+              href: tutorial/concepts.qmd
 
-        - text: Patch
-          href: tutorial/patch.qmd
+            - text: Patch
+              href: tutorial/patch.qmd
 
-        - text: Spool
-          href: tutorial/spool.qmd
+            - text: File IO
+              href: tutorial/file_io.qmd
 
-        - text: Processing
-          href: tutorial/processing.qmd
+            - text: Spool
+              href: tutorial/spool.qmd
 
-        - text: Transformations
-          href: tutorial/transformations.qmd
+            - text: Processing
+              href: tutorial/processing.qmd
 
-        - text: Visualization
-          href: tutorial/visualization.qmd
+            - text: Transformations
+              href: tutorial/transformations.qmd
 
-        - text: File IO
-          href: tutorial/file_io.qmd
+            - text: Visualization
+              href: tutorial/visualization.qmd
 
-        - text: Working with Remote Patches
-          href: tutorial/remote_patches.qmd
+        - section: "Advanced"
+          contents:
+            - text: Coordinates
+              href: tutorial/coords.qmd
 
-        - text: Configuration
-          href: tutorial/configuration.qmd
+            - text: Xarray
+              href: tutorial/xarray.qmd
 
-        - text: Local Documentation
-          href: tutorial/local_documentation.qmd
+            - text: Large Archives
+              href: tutorial/large_archives.qmd
 
-        - text: Coordinates
-          href: tutorial/coords.qmd
+            - text: File Formats in Depth
+              href: tutorial/file_formats.qmd
 
-        - text: Inventory
-          href: tutorial/inventory.qmd
+            - text: Working with Remote Patches
+              href: tutorial/remote_patches.qmd
 
-        - text: Annotations
-          href: tutorial/annotations.qmd
+            - text: Configuration
+              href: tutorial/configuration.qmd
+
+            - text: Inventory
+              href: tutorial/inventory.qmd
+
+            - text: Annotations
+              href: tutorial/annotations.qmd
 
     - id: Recipes
       title: 'Recipes'
@@ -189,6 +198,7 @@ website:
 
             - recipes/despiking.qmd
             - recipes/smoothing.qmd
+            - recipes/whiten.qmd
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd
@@ -263,10 +273,8 @@ website:
       contents:
         - text: Agent onboarding
           href: tutorial/agents.qmd
-{% for name, target in skills.items() %}
-        - text: {{ name }}
-          href: {{ target }}.qmd
-{% endfor %}
+        - text: Local documentation
+          href: tutorial/local_documentation.qmd
 
     - id: Notes
       title: 'Notes'

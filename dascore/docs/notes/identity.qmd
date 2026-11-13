@@ -37,6 +37,20 @@ assert filtered.attrs.data_id != patch.attrs.data_id
 assert filtered.attrs.data_id == patch.pass_filter(time=(1, 10)).attrs.data_id
 ```
 
+An unprocessed patch's `data_id` is its `origin_id`. Every operation changes `data_id`, while `origin_id` changes only when data from more than one origin is combined. Repeating the same operations gives the same `data_id`; changing their order gives a different one:
+
+```{python}
+assert patch.attrs.data_id == patch.attrs.origin_id
+
+decimated = patch.pass_filter(time=(1, 10)).decimate(time=2)
+repeated = patch.pass_filter(time=(1, 10)).decimate(time=2)
+reordered = patch.decimate(time=2).pass_filter(time=(1, 10))
+assert decimated.attrs.data_id == repeated.attrs.data_id
+assert decimated.attrs.data_id != reordered.attrs.data_id
+```
+
+Patches built in memory receive process-local IDs. IDs do not participate in [`Patch.equals`](`dascore.Patch.equals`). Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. Indexed spools can find a patch by either ID; see [Finding a patch by ID](../tutorial/large_archives.qmd#finding-a-patch-by-id).
+
 Development versions briefly called the two patch IDs `patch_id` and `processing_id`. Attributes read under those names are taken as `origin_id` and `data_id`; only the current names are written.
 
 ## Weak and strong `data_id`
@@ -62,6 +76,10 @@ A **weak** ID is derived without reading data, so it is only as good as what it 
 - a window of a stored array is derived from the whole array's ID and the absolute sample windows, so slicing twice and slicing once agree; a window says nothing about a coordinate riding no dimension, so changing one is an operation rather than a window;
 - an operation's result is derived from the `data_id` of each input, in order, and the `operation_id`.
 
+Because a stored patch's ID comes from where it is stored, repeated reads and metadata scans agree without hashing the data, but copying the same bytes to another path gives a different ID, and so does overwriting a path. Formats which store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
+
+A window names the window, not the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)` and `spool.select(time=window)` all name one array. This holds only while the patch is still exactly what its source loads: once anything else has been done to it, or the selection is one the stored array cannot be sliced to, the result derives like any other operation's. Reading under a decode option other than the format's default, such as a `snap` which names other dimensions, is itself an operation, so it names a different array than the default read of the same file.
+
 Equal IDs mean the same array under either grade. Unequal IDs promise nothing: the same bytes reached two ways can carry two IDs. A strong ID only makes equal IDs more common, which is what lets identical coordinate arrays in thousands of files share one entry.
 
 An ID is never knowingly false. When an operation's parameters cannot be described faithfully (a closure, a lambda, an object of an unknown type), or an input carries no ID, the call still succeeds and its result receives a random `data_id` with a `DASCoreWarning`.
@@ -86,6 +104,18 @@ It reads the whole array, about a second per gigabyte, so it is a checkpoint rat
 
 `new`, `update`, `update_attrs`, `set_dims` and the `Patch` constructor replace what a patch is made of. Inside an operation — the body of a patch function or a `PatchProcessor`, and the routes which combine patches — they add nothing, because the operation stamps its own result. Called outside one they say what happened: an array the patch was handed gets a random `data_id` (nothing names it) with `origin_id` kept, while replaced coordinates or attributes are a describable change and get a derived one. Coordinates count as replaced unless the dims, in order, and every coordinate's own ID are the ones the patch already had. A call which changes nothing, and a call which states a `data_id` of its own, keep the IDs they were given; stating any other ID in the same call does not say which array the result is. `PatchMeta` holds no data, so replacing its metadata names nothing; giving it data with `to_patch` outside an operation makes an array of its own, with a random `data_id`.
 
+```{python}
+doubled = patch.new(data=patch.data * 2)
+assert doubled.attrs.origin_id == patch.attrs.origin_id
+assert doubled.attrs.data_id != patch.attrs.data_id
+
+tagged = patch.update_attrs(tag="cleaned")
+assert tagged.attrs.data_id == patch.update_attrs(tag="cleaned").attrs.data_id
+assert tagged.attrs.data_id != patch.attrs.data_id
+```
+
+Stating `origin_id` or `data_id` is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function which returns its input unchanged changes neither ID.
+
 ## Operations
 
 `operation_id` is `H("operation", {name, version, params})`. Patches among the arguments are inputs rather than parameters, numbered in one canonical walk, so which argument a patch filled is part of the operation. An argument which restates its default is left out, so adding a defaulted parameter changes no ID; changing what a default *does* requires raising the operation's version.
@@ -94,4 +124,4 @@ It reads the whole array, about a second per gigabyte, so it is a checkpoint rat
 
 Row numbers exist so tables can refer to each other: `patches.source_row` points at `sources.source_row`, and `patch_coords` joins `patch_row` to `coord_row`. They are assigned at ingest, differ between databases, and never enter an ID. A spool frame carries the patch's row as the private column `_patch_row`.
 
-See [Patch identity](../tutorial/patch.qmd#patch-identity) for the user-facing rules and [Spool Index](spool_index.qmd) for the tables.
+See [Spool Index](spool_index.qmd) for the tables.

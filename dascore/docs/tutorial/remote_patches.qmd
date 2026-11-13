@@ -4,12 +4,12 @@ execute:
   warning: false
 ---
 
-DASCore accepts remote resources through [`UPath`](https://pypi.org/project/universal-pathlib/) and tests backends including `memory://`, `s3://`, and `http://`.
+DASCore reads remote resources through [`UPath`](https://pypi.org/project/universal-pathlib/); tested backends include `memory://`, `s3://`, and `http://`.
 
 | Operation | Default behavior |
 |---|---|
 | `scan`, `get_format` | Avoid downloading a complete file |
-| `scan_payloads` | Same cache policy, but may transfer full coordinate arrays |
+| `scan_payloads` | Same cache policy, but may transfer and retain full coordinate arrays; prefer `scan` or `scan_to_df` for broad listings |
 | `read`, spool indexing/iteration | Perform the heavier I/O needed to load data |
 
 # Basic example
@@ -30,13 +30,11 @@ loaded = dc.read(remote_path)[0]
 spool = dc.spool(remote_path)
 ```
 
-Backends that support direct access may require no local cached copy.
-
-The summary contains compact coordinate envelopes and source fields. The payload includes the formatter's coordinate manager, and indexing the spool loads the patch array.
+The summary holds compact coordinate envelopes and source fields, the payload holds the format's full coordinate manager, and indexing the spool loads the patch array. Backends that support direct access may need no local cached copy.
 
 # Cache policy
 
-Remote behavior is controlled through `dascore.config`:
+These `dascore.config` settings control remote caching:
 
 | Setting | Purpose |
 |---|---|
@@ -59,7 +57,7 @@ with config_context(
     patch = dc.read(remote_path)[0]
 ```
 
-When a metadata query would require a full download and metadata caching is disabled, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`). Format detection passes over a reader which would need that download and raises the error only if no other reader claims the file. Detection reads only the header bytes of MiniSEED and SEG-Y files. SEG-Y's binary header sits past the first block, so on a server without byte-range support its detection also needs the opt-in. Scanning or reading either format needs a local copy, and a scan makes one only after the opt-in. Opt in only for a known operation:
+When a metadata query needs a full download and metadata caching is off, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`). Format detection skips a reader that would need the download and raises only if no other reader claims the file. Detection reads only the header bytes of MiniSEED and SEG-Y files, but SEG-Y's binary header sits past the first block, so on a server without byte-range support its detection also needs the opt-in. Scanning or reading either format needs a local copy, which a scan makes only after the opt-in. Opt in only for a known operation:
 
 ```python
 http_path = UPath("https://raw.githubusercontent.com/dasdae/test_data/master/das/example_dasdae_event_1.h5")
@@ -68,15 +66,11 @@ with config_context(allow_remote_cache_for_metadata=True):
     summary = dc.scan(http_path)[0]
 ```
 
-`scan_payloads` avoids the data array but may still transfer and retain exact coordinate arrays. Prefer `scan` or `scan_to_df` for broad directory listings.
-
-Warnings occur on the first materialization when `warn_on_remote_cache=True`, making an unexpected local download visible without repeating the message for every file.
-
-Once per session, a cached copy is checked against the remote's size and version fields (such as `ETag`) and downloaded again if the remote changed. Offline, the copy is kept; a remote which is gone or forbidden is never read from the cache.
+Once per session, a cached copy is checked against the remote's size and version fields (such as `ETag`) and downloaded again if the remote changed. Offline, the copy is kept; a remote that is gone or forbidden is never read from the cache.
 
 # Reads and spools
 
-`dc.read(...)` may materialize a remote file when `allow_remote_cache=True`. For a spool, `get_contents()` uses metadata while indexing and iteration load patch data. If a backend cannot provide spool metadata directly, enable metadata caching explicitly.
+`dc.read(...)` may download a remote file when `allow_remote_cache=True`. A spool's `get_contents()` uses only metadata, while indexing and iteration load data. If a backend cannot provide spool metadata directly, enable metadata caching.
 
 ```python
 remote_spool = dc.spool(http_path)
@@ -87,9 +81,7 @@ with config_context(allow_remote_cache=True):
 
 # Remote HDF5 and garbage collection
 
-Remote HDF5 file-like reads can deadlock if cyclic garbage collection runs on fsspec's event-loop thread while h5py holds its global lock, as described in [h5py's file-like object documentation](https://docs.h5py.org/en/stable/high/file.html#python-file-like-objects). DASCore therefore pauses cyclic garbage collection while remote HDF5 handles are open, restores it after the last handle closes, and warns once per process. Reference counting and local-file reads are unaffected.
-
-Only cyclic garbage accumulates during the pause, and only until the final remote HDF5 handle closes. Objects reclaimed through normal reference counting are still released immediately.
+Remote HDF5 reads can deadlock if cyclic garbage collection runs on fsspec's event-loop thread while h5py holds its global lock (see [h5py's file-like object documentation](https://docs.h5py.org/en/stable/high/file.html#python-file-like-objects)). DASCore therefore pauses cyclic garbage collection while remote HDF5 handles are open, restores it when the last one closes, and warns once per process. Only cyclic garbage accumulates meanwhile; reference counting still frees objects immediately, and local reads are unaffected. To silence the warning:
 
 ```python
 with config_context(warn_on_gc_pause=False):
@@ -105,9 +97,7 @@ Two settings control the remote HDF5 block cache:
 | `remote_hdf5_block_size` | 5 MiB | Larger blocks reduce requests but may over-fetch |
 | `remote_hdf5_max_blocks` | 8 | More blocks retain more data per open handle |
 
-Their product approximates memory retained per handle: about 40 MiB by default. For metadata scans, reduce both values; for sequential patch reads, use larger blocks and fewer of them. Concurrent handles multiply this memory. When reading complete files, local materialization is usually more efficient than repeated range requests.
-
-Small blocks reduce over-fetch during metadata scans but increase network round trips. Large blocks favor contiguous reads. Lower `remote_hdf5_max_blocks` first when many handles are open concurrently.
+Their product, about 40 MiB by default, approximates the memory each open handle retains. For metadata scans, reduce both, trading over-fetch for round trips; for sequential patch reads, use fewer, larger blocks. With many concurrent handles, lower `remote_hdf5_max_blocks` first. To read complete files, a local copy is usually faster than repeated range requests.
 
 ```python
 with config_context(remote_hdf5_block_size=262_144, remote_hdf5_max_blocks=4):

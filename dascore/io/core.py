@@ -752,6 +752,12 @@ def _returns_stored_bytes(func: Callable) -> Callable:
     return func
 
 
+def _version_sort_key(version: str) -> list[tuple[int, int | str]]:
+    """Order version strings numerically, e.g. 0.100 after 0.0 and 10 after 9."""
+    # Tag each part so numbers and text never compare directly.
+    return [(0, int(x)) if x.isdigit() else (1, x) for x in version.split(".")]
+
+
 class FiberIO:
     """
     Interface for a fiber data format; subclass it to add format support.
@@ -1066,15 +1072,34 @@ class FiberIO:
         return not _is_wrapped_func(self.write, FiberIO.write)
 
     @classmethod
-    def get_supported_io_table(cls):
-        """Return the supported formats, versions, and optional write capability."""
+    def get_supported_io_table(cls, combine_versions: bool = False):
+        """
+        Return the supported formats, versions, and optional write capability.
+
+        Parameters
+        ----------
+        combine_versions
+            If True, return one row per format, sorted by name: its versions
+            joined in numeric order, and `write` True if any version writes.
+        """
         cls.manager.load_plugins()
-        return pd.DataFrame(
+        table = pd.DataFrame(
             [
                 {"name": name, "version": version, "write": io.implements_write}
                 for name, versions in cls.manager._format_version.items()
                 for version, io in versions.items()
             ]
+        )
+        if not combine_versions:
+            return table
+
+        def _join(versions):
+            return ", ".join(sorted(map(str, versions), key=_version_sort_key))
+
+        return (
+            table.groupby("name", sort=True)
+            .agg(version=("version", _join), write=("write", "any"))
+            .reset_index()
         )
 
     def _updated_after(self, resource, timestamp):

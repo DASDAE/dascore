@@ -1,5 +1,7 @@
 ---
 title: Coordinate Internals
+execute:
+  warning: false
 ---
 
 This note explains the current internal coordinate model in DASCore, with particular attention to exact values, runs, summaries, and scan payloads.
@@ -30,7 +32,12 @@ The default, `snap=None`, reads labels without a stated step exactly, as `snap=F
 
 ## Cell convention
 
-Labels conventionally centre half-open cells one step wide; this is a recommendation for producers, not an enforced or stored property, and adds no coordinate method. The auxiliary names `{dim}_start` / `{dim}_stop` are reserved for explicit low and high cell edges, just as `{dim}_min` / `{dim}_max` / `{dim}_step` describe the envelope. This expresses CF cell bounds as two one-dimensional coordinates associated with the dimension. When both are attached, the manager validates their length, association, units, monotonic direction, and `start <= label < stop`; a lone name has no special meaning. STFT and stacked tiles emit physical bounds; this replaces their former unitless sample-index pair. Their private `_tile_index_{dim}` coordinate retains the original reconstruction indices. Old development-version stacks with sample-index public bounds cannot be read and must be regenerated. Arbitrary tile permutations require explicitly dropping the public pair to satisfy its monotonic-order contract; private indices still permit reconstruction. Spectrogram rendering omits source-window bounds and draws one cell per hop at the window-centre label. Selection and raw decimation select its rows; grid-building operations discard it through the manager's shared grid update; translation and conversion transform it with the labels. Waterfall uses explicit outer bounds when present and otherwise extends evenly sampled image extents by half the declared step. Label-based selection and coordinate summaries retain their existing meanings.
+The [Coordinates tutorial](../tutorial/coords.qmd#cells-and-their-centres) states the cell convention, the `{dim}_start` / `{dim}_stop` pair, and how operations treat it. Internally:
+
+- The coordinate manager validates the pair when both are attached, and grid-building operations discard it through the manager's shared grid update. It adds no coordinate method and leaves selection and coordinate summaries unchanged.
+- STFT and stacked tiles keep their reconstruction indices in a private `_tile_index_{dim}` coordinate, which follows reordered rows, so inverse STFT and reassembly work after the public pair is dropped.
+- The public pair replaced a unitless sample-index pair. Development-version stacks that stored sample indices there fail validation and must be regenerated from their source patches.
+- Spectrogram rendering omits source-window bounds and draws one cell per hop at the window-centre label.
 
 ## Segmented coordinates
 
@@ -41,11 +48,11 @@ There are two primary construction paths:
 - [`concat_coords(...)`](`dascore.core.coords.concat_coords`) combines already-known coordinate blocks, normalizes their ordering, and records non-contiguous boundaries.
 - `get_coord(data=..., snap=False)` keeps an array as one grid when it reproduces every label exactly, otherwise as one stored-label run, with a step only where it is jittered, so it reports no holes. Declaring `step` (`get_coord(data=..., step=...)`) places the labels on that grid, making each stretch of consecutive positions a grid of that step (one stored run if they are jittered), and `missing()` and the spool's gap methods then see the holes between them. Selecting samples by mask, array or position keeps the step the same way, so the removed samples are holes; only a stride gives a coarser step.
 
-[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports segment boundaries without materializing the full coordinate, and for a monotonic array every spacing that is not its declared step (its median spacing when it declares none). `kind="all"` returns every boundary and `kind="gaps"` keeps only the ones the tolerance calls gaps. The tolerance is a `GapTolerance` (`dascore.utils.gaps`): a bare number or quantity is an absolute excess over one step, `GapTolerance.samples(k)` counts steps. `waterfall(gap_factor=)` counts steps the same way. `Spool.chunk`, `get_gaps` and `get_coverage` judge the seams between patches by `max_shift` instead (rule 5 of `notes/coordinates.qmd`), and their `tolerance` is the widest seam joined, in steps for a number or as a width for a quantity, not an excess.
+[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports segment boundaries without materializing the full coordinate; the [tutorial](../tutorial/coords.qmd#declaring-a-grid-and-finding-missing-samples) describes what it reports and its `tolerance`, a `GapTolerance` (`dascore.utils.gaps`). `kind="all"` returns every boundary and `kind="gaps"` only those the tolerance calls gaps. `Spool.chunk`, `get_gaps` and `get_coverage` judge the seams between patches by `max_shift` instead (rule 5 of [the guidelines](coordinates.qmd)), and their `tolerance` is the widest seam joined, in steps for a number or as a width for a quantity, not an excess.
 
 [`fuse(...)`](`dascore.core.coords.BaseCoord.fuse`) and [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) make different promises. `fuse` may refit runs only when no value moves more than the supplied tolerance; `snap` forces one uniform grid and has no bound on interior movement. With `tolerance=None` or `0`, `fuse` performs lossless simplification only.
 
-A spool holds a patch whose dimensional coordinates have holes as one row; its index stores the coordinate's runs (see [the spool index](spool_index.qmd)), so reports and plans see the holes. `patch.split_gaps()` cuts such a patch into its contiguous pieces. [`write(...)`](`dascore.write`) hands a patch to its writer whole, which keeps its holes or refuses it.
+A spool holds a patch whose dimensional coordinates have holes as one row; its index stores the coordinate's runs (see [the spool index](spool_index.qmd)), so reports and plans see the holes. `patch.split_gaps()` cuts such a patch into its contiguous pieces, and [`write(...)`](`dascore.write`) keeps its holes or refuses it, as the [tutorial](../tutorial/coords.qmd#coordinates-with-holes) describes.
 
 ## String coordinates
 
@@ -86,6 +93,84 @@ DASDAE stores coordinates separately from patch data. Format version 2, the defa
 Full reads rebuild those descriptions into a `CoordManager` exactly as written; DASDAE snaps no dimension unless asked. Scans also construct a real `CoordManager`, but avoid loading the data array itself; explicit stored start/step metadata remains a range fast path.
 
 String-array serialization is separate from coordinate semantics. HDF5 backends cannot all store NumPy unicode arrays directly, so DASDAE encodes only arrays that are actually string-like and restores them before coordinate construction.
+
+## Coordinate managers
+
+A [`CoordManager`](`dascore.core.coordmanager.CoordManager`) groups a patch's coordinates and keeps their associated arrays aligned. Most code uses it through `Patch` methods; this section shows it directly.
+
+```{python}
+import numpy as np
+
+import dascore as dc
+from dascore.core import get_coord, get_coord_manager
+```
+
+### Creation and association
+
+[`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) creates a manager from coordinates and ordered dimensions. Tuple values specify `(associated_dimensions, coordinate)`; use `None` for an independent coordinate.
+
+```{python}
+distance = get_coord(start=0, stop=10, step=1)
+time = get_coord(start=0, stop=1, step=0.1)
+latitude = get_coord(data=np.linspace(41.5, 41.6, len(distance)))
+
+manager = get_coord_manager(
+    coords={
+        "distance": distance,
+        "time": time,
+        "latitude": ("distance", latitude),
+        "deployment": (None, get_coord(data=np.array(["A"]))),
+    },
+    dims=("distance", "time"),
+)
+```
+
+`manager.dims` stores dimension order, `coord_map` maps names to coordinates, and `dim_map` records dimensional associations.
+
+```{python}
+print(manager.dims)
+print(dict(manager.dim_map))
+```
+
+### Updating
+
+`CoordManager.update` replaces, adds, disassociates, or drops coordinates:
+
+```{python}
+new_distance = distance.update(data=distance.values + 10)
+updated = manager.update(distance=new_distance)
+detached = updated.update(latitude=(None, latitude))
+without_latitude = detached.update(latitude=None)
+```
+
+New coordinates use the same update form:
+
+```{python}
+quality = get_coord(data=np.linspace(0, 1, len(distance)))
+with_quality = manager.update(quality=("distance", quality))
+independent = manager.update(run=(None, get_coord(data=np.array([1]))))
+```
+
+Setting a dimension coordinate to `None` drops that dimension and every coordinate depending on it. Dropping a missing non-dimensional coordinate is a no-op.
+
+### Methods with data
+
+Operations that change array alignment accept the array and return an updated manager and array. Coordinate names are keyword arguments, as on `Patch`.
+
+```{python}
+patch = dc.get_example_patch()
+patch_manager, data = patch.coords, patch.data
+
+selected_manager, selected_data = patch_manager.select(array=data, distance=(..., 100))
+sorted_manager, sorted_data = patch_manager.sort("time", "distance", array=data, reverse=True)
+renamed = patch_manager.rename_coord(time="elapsed_time")
+```
+
+When several dimensions are sorted together, the returned data reflects each permutation in dimension order. Renaming a dimension also updates every coordinate association that refers to it.
+
+`select`, `order`, `sort`, and `snap` accept an associated array and return `(manager, array)`. Methods that do not change alignment, such as unit conversion, return only a manager.
+
+Prefer the corresponding Patch methods when operating on a patch; they keep data, coordinates, metadata, and provenance together.
 
 ## Practical guidance
 

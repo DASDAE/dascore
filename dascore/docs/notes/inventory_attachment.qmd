@@ -6,9 +6,7 @@ execute:
 
 {{< include ../_experimental.qmd >}}
 
-The [inventory tutorial](../tutorial/inventory.qmd) covers what an inventory says and the verbs which use it. This note is about the machinery in between: what happens when a spool has an inventory, when that inventory is read, and why several things which look like they should read it do not.
-
-The short version is that attaching an inventory and reading one are separate events, deliberately, and that most of what a spool does sits between them.
+The [inventory tutorial](../tutorial/inventory.qmd) covers what an inventory says and the methods that use it. This note covers the machinery in between: when a spool's inventory is read, and why several things that look like they should read it do not. In short, attaching an inventory and reading it are deliberately separate events, and most of what a spool does happens between them.
 
 ```{python}
 import tempfile
@@ -27,7 +25,7 @@ inventory.io.to_yaml(archive / ".inventory.yaml")
 
 ## Three moments, at three times
 
-A directory which carries its own inventory involves three separate events, and keeping them apart is most of the design.
+A directory that carries its own inventory involves three separate events:
 
 | Moment | When | Cost |
 |---|---|---|
@@ -52,7 +50,7 @@ _ = spool.get_contents()
 assert reference._inventory is None
 ```
 
-The consequence worth stating plainly: a malformed inventory cannot stop you loading data. Only the inventory-backed calls fail, and when they do they name the directory it came from and say the spool picked it up on opening — which is the part a reader needs, since nobody typed a path for it.
+So a malformed inventory cannot stop you loading data. Only inventory-backed calls fail, and their errors name the directory the inventory came from and say the spool found it on opening, since nobody typed its path.
 
 ## Deciding without reading
 
@@ -71,13 +69,13 @@ _ = spool.select(zone="north")
 assert reference._inventory is not None
 ```
 
-One rule inside that decision is worth its own sentence: **a name the index already carries keeps the index's meaning.** If an archive has a `latitude` coordinate of its own, attaching an inventory which could also place channels in latitude does not move that name into the inventory's namespace. The alternative — letting an attachment silently change what an existing name selects on — would make attaching an inventory a data-changing operation, which is exactly what it is designed not to be.
+**A name the index already carries keeps the index's meaning.** If an archive has its own `latitude` coordinate, attaching an inventory that could also place channels in latitude does not move that name into the inventory's namespace. Otherwise attaching an inventory would silently change what an existing name selects, making it a data-changing operation, which it is designed not to be.
 
 ## Comparison never reads either side
 
 Two spools compare equal on what they *are*, and an attachment is a place or a value rather than the document behind it. `InventoryRef.__eq__` compares paths; an `Inventory` compares as itself; a place is never equal to a value.
 
-Resolving both sides and comparing the documents was considered and rejected. It would mean `==` does file I/O, that comparing spools can raise out of an unreadable inventory, and — worst — that the answer depends on whether something happened to read one first. The same reasoning covers `+`: combining two spools compares their attachments, and combining must not be the thing which discovers that a file three directories away is malformed.
+Comparing the resolved documents was rejected: `==` would do file I/O, comparing spools could raise on an unreadable inventory, and the answer would depend on whether something had read one first. The same reasoning covers `+`: combining two spools compares their attachments, and combining must not be the thing which discovers that a file three directories away is malformed.
 
 ## Read once, with no modification time
 
@@ -96,7 +94,7 @@ This is the opposite of how the spool index behaves, and deliberately so. The in
 
 Refreshing is therefore something a program says, not something it gets. `attach_inventory()` with no argument means "the one this directory carries, read it again"; the same path again means the same thing for one named by hand. That is the whole authoring loop — edit the file, re-attach, see the change.
 
-One exception, and it is not really one: a read which *failed* is not a read, and is tried again next time. An unreadable inventory is a thing to go and fix, and holding on to the failure would mean the fix could not be seen without rebuilding the spool.
+A read that *failed* is not held, and is tried again next time, so fixing an unreadable inventory takes effect without rebuilding the spool.
 
 ## One holder, however the spool is sliced
 
@@ -114,4 +112,4 @@ assert sorted_spool._inventory is reference
 assert chunked._inventory is reference
 ```
 
-Two consequences follow from sharing rather than copying. A spool sliced any number of ways reads its inventory once, which is the point. And two views of one parent can never disagree about what it says — which matters more than the parse it saves, because two slices of one spool giving different metadata for one channel would be a hard bug to see and a harder one to believe.
+Sharing means a spool sliced any number of ways reads its inventory once. More importantly, two views of one parent can never disagree about it; two slices giving different metadata for one channel would be a hard bug to find.

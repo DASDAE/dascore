@@ -1,6 +1,12 @@
 ---
 title: Adding a New Format
-keywords: [io, file format, FiberIO, reader, writer]
 engine: jupyter
 ---
-{{< include ../../.agents/skills/add-format/SKILL.md >}}
+{{< include ../../.agents/skills/dascore-add-format/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+---
+# After the include, so this description replaces the skill file's.
+description: Add support for a new file format to DASCore.
+---
+:::

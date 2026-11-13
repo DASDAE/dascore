@@ -1,5 +1,5 @@
 ---
-name: make-inventory
+name: dascore-make-inventory
 description: Create, validate, repair, serialize, and attach a DASCore inventory of a fiber deployment, following a worked tunnel example.
 ---
 

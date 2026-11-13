@@ -50,6 +50,7 @@ from dascore.io.core import (
     _select_patch_from_spool,
     _size_and_mtime,
     _source_stats,
+    _version_sort_key,
     is_directory_format,
 )
 from dascore.io.dasdae.core import DASDAEV1
@@ -2074,6 +2075,24 @@ class TestGetSupportedIOTable:
         flags = table.groupby("name")["write"].any()
         assert flags["DASDAE"] and flags["PICKLE"]
         assert not flags["TDMS"]
+
+    def test_combine_versions(self):
+        """Combining gives one row per format, versions in numeric order."""
+        table = FiberIO.get_supported_io_table()
+        combined = FiberIO.get_supported_io_table(combine_versions=True)
+        assert list(combined["name"]) == sorted(table["name"].unique())
+        rows = combined.set_index("name")
+        versions = rows.loc["OPTODAS", "version"].split(", ")
+        assert versions == sorted(versions, key=_version_sort_key)
+        assert versions.index("9") < versions.index("10")
+        assert rows.loc["NETCDF_CF", "write"]
+        assert not rows.loc["TDMS", "write"]
+
+    def test_version_sort_key(self):
+        """Numeric and textual version parts sort without comparing across."""
+        versions = ["1.0rc1", "10", "1.0", "0.100", "9", "0.0"]
+        ordered = sorted(versions, key=_version_sort_key)
+        assert ordered == ["0.0", "0.100", "1.0", "1.0rc1", "9", "10"]
 
 
 class TestMissingInstallName:

@@ -4,6 +4,8 @@ execute:
   warning: false
 ---
 
+See [Installation](../installation.qmd) to install DASCore.
+
 # Data structures
 
 Most DASCore work uses two objects: a [Patch](patch.qmd), which holds one n-dimensional array with coordinates and metadata, and a [Spool](spool.qmd), which manages patches in memory, on disk, or remotely.
@@ -11,6 +13,12 @@ Most DASCore work uses two objects: a [Patch](patch.qmd), which holds one n-dime
 Patch operations are eager once a patch is loaded. Spool operations generally build lazy selections and chunking plans, loading patch arrays only when indexed, iterated, or mapped.
 
 ![Patch (blue) and Spool (red)](../_static/patch_n_spool.png){#fig-patch_n_spool}
+
+# Patch kind
+
+A patch's *kind* is its values for the attributes named by the `patch_kind_attrs` setting. Patches of different kinds are never combined: arithmetic between them raises, and [`Spool.concatenate`](`dascore.Spool.concatenate`), [`Spool.stack`](`dascore.Spool.stack`), and [`Spool.chunk`](`dascore.Spool.chunk`) keep them apart. Coordinates, units, and other attributes do not affect kind.
+
+See [Configuration](configuration.qmd) to change the attributes and [Patch compatibility](../notes/patch_compatibility.qmd) for how missing values are treated.
 
 # Time
 
