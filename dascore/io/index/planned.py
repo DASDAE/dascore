@@ -1391,7 +1391,7 @@ def _with_parent_runs(
                 planned = name in str(coord.coord_dims).split(",")
                 parent = held.get(coord.coord_name)
                 several = len(ids) > 1 and not coord.data_id
-                if concat and coord.coord_name == name and len(ids) > 1:
+                if concat and coord.coord_name == name:
                     group = rows.get_group(int(patch.source_patch_key))
                     coord = _segment_runs(coord, group, runs, index_rows, name)
                 if parent is None or planned or several:

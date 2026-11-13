@@ -2235,8 +2235,9 @@ class Spool(NodeRepr, NamespaceOwner):
         resolver = self._catalog.resolver
         same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
         base = collapse_working_df(self._catalog) if same_dim else None
-        # a collapsed re-plan's members are already cut at their holes
-        cut = base is None and runs
+        # a collapsed member is cut where its output's runs say (eg the
+        # segments a concatenation kept), else each row at its own holes
+        cut = runs
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
             if "_patch_row" in base.columns:
@@ -2265,8 +2266,9 @@ class Spool(NodeRepr, NamespaceOwner):
         if df.empty or "_patch_row" not in df.columns:
             return df
         catalog, files = self._catalog, {}
-        residuals = catalog.residuals
-        indexed = catalog.backend.coord_runs(dim, df["_patch_row"].dropna().unique())
+        residuals, key = catalog.residuals, "_index_row"
+        key = key if key in df.columns else "_patch_row"
+        indexed = catalog.backend.coord_runs(dim, df[key].dropna().unique())
         if any(samples or relative for _, samples, relative in residuals):
             # a sample or relative selection resolves against the loaded
             # coordinate, which the stored runs do not know, so it is read
@@ -2275,13 +2277,13 @@ class Spool(NodeRepr, NamespaceOwner):
         def read(row):
             """The row's coordinate, read from its source and selected as it loads."""
             rows = catalog.to_df()
-            (source,) = rows[rows["_patch_row"] == row["_patch_row"]].to_dict("records")
+            (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
             coords = _source_manager(catalog.resolver, source, files, projection=dim)
             if coords is None:
                 return None
             return _select_manager(coords, residuals).coord_map.get(dim)
 
-        return with_runs(df, dim, indexed, read, modified=modified)
+        return with_runs(df, dim, indexed, read, modified=modified, key=key)
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build one plan from this spool's current source rows."""

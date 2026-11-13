@@ -874,6 +874,23 @@ class TestConcatenatedRuns:
         assert len(merged.get_gaps()) == 2 * len(holed) - 1
         assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
 
+    @pytest.mark.parametrize("length", [None, 4])
+    def test_chunk_splits_at_members_gaps(self, length):
+        """A chunk of a concatenation splits where the joined patch's does."""
+        holed = concat_coords(
+            *(get_coord(start=x, step=1, shape=(5,)) for x in (0, 10))
+        )
+        coords = [holed, get_coord(start=20, step=1, shape=(5,))]
+        patches = [
+            dc.Patch(data=np.arange(float(len(x))), coords={"x": x}, dims=("x",))
+            for x in coords
+        ]
+        merged = dc.spool(patches).concatenate(x=None)
+        got = [x.get_coord("x").values.tolist() for x in merged.chunk(x=length)]
+        rebuilt = dc.spool([merged[0]]).chunk(x=length)
+        assert got == [x.get_coord("x").values.tolist() for x in rebuilt]
+        assert len(got) == 3
+
     def test_concatenating_chunks_keeps_each_sample_once(self):
         """Members a plan trimmed load trimmed, so no sample repeats."""
         spool = dc.get_example_spool("random_das")

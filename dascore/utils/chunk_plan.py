@@ -151,7 +151,7 @@ class ChunkPlan:
         return self.value is None
 
 
-def _stretches(df: pd.DataFrame, dim: str, indexed, read):
+def _stretches(df: pd.DataFrame, dim: str, indexed, read, key="_patch_row"):
     """
     The rows cut at their holes, and each stretch clipped to its row.
 
@@ -164,10 +164,10 @@ def _stretches(df: pd.DataFrame, dim: str, indexed, read):
     cut, out = [], []
     if not indexed or df.empty or not {lo, hi, "_patch_row"} <= set(df.columns):
         return cut, out
-    candidates = df["_patch_row"].isin(list(indexed)) & df[lo].notna()
+    candidates = df[key].isin(list(indexed)) & df[lo].notna()
     for index in np.flatnonzero(candidates.to_numpy()):
         row = df.iloc[index]
-        runs = indexed[row["_patch_row"]]
+        runs = indexed[row[key]]
         records = runs.records
         if records is None and (coord := read(row)) is not None:
             records = coord._run_records()
@@ -185,7 +185,7 @@ def _stretches(df: pd.DataFrame, dim: str, indexed, read):
     return cut, out
 
 
-def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
+def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
     """
     The relation with each row cut into the stretches its coordinate's runs leave.
 
@@ -197,9 +197,10 @@ def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
     envelope, so a selection trims it; a row none of whose stretches
     survive the clip lies in a hole and is dropped. ``modified`` marks the
     stretches to load as selections of their patch, and `coalesce_runs`
-    reads the stretches landing in one output back as one member.
+    reads the stretches landing in one output back as one member. ``key``
+    names the column ``indexed`` is keyed by.
     """
-    cut, stretches = _stretches(df, dim, indexed, read)
+    cut, stretches = _stretches(df, dim, indexed, read, key)
     if not cut:
         return df
     split = df.iloc[[x[0] for x in stretches]].copy()
