@@ -73,7 +73,9 @@ class _Envelope(PatchProcessor):
     def kernel(self, data, *, env):
         """Return the data times the envelope, keeping float data's dtype."""
         data = _as_float(data)
-        return array_namespace(data).astype(_scale_by(data, env), data.dtype)
+        return array_namespace(data).astype(
+            _scale_by(data, env), data.dtype, copy=False
+        )
 
 
 @compose_docstring(taper_type=sorted(WINDOW_NAMES))
