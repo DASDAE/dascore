@@ -33,16 +33,18 @@ def _quasi_mean(array):
 
 def _get_definite_coords(meta, dims):
     """Return coords with each dim collapsed to one sample, keeping its min and max."""
-    new_coords = {}
+    new_coords, coords = {}, meta.coords
     for name in dims:
         coord = meta.get_coord(name)
+        if len(coord) > 1:  # collapsed, so no warning
+            coords = coords.drop_associated(name, None)
         # the label and the bounds keep the dimension's units
         new_coords[name] = coord.update(values=_quasi_mean(coord.values))
         for end in ("min", "max"):
             value = np.asarray([getattr(coord.values, end)()])
             bound = get_coord(data=value, units=coord.units)
             new_coords[f"pre_integrate_{name}_{end}"] = (name, bound)
-    return meta.coords.update(**new_coords)
+    return coords.update(**new_coords)
 
 
 def _get_trapezoids(array, dx_or_val, ax):

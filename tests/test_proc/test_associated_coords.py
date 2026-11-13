@@ -1,9 +1,9 @@
 """
 What operations along a dimension do to the coordinates associated with it.
 
-The coordinate guidelines (`notes/coordinates.qmd`, Scope) ask that whatever
-an operation does along a dimension it does to its associated coordinates,
-or drops them with a warning, and that units survive.
+Whatever an operation does along a dimension it does to its associated
+coordinates, or drops them with a warning; operations which collapse the
+dimension drop them silently. Units survive.
 """
 
 from __future__ import annotations
@@ -77,26 +77,59 @@ class TestIndexed:
         _assert_rides(out, "tcoord", patch.get_array("tcoord")[:100])
 
 
+class TestDroppedSilently:
+    """Operations which collapse a dimension drop its riders without a warning."""
+
+    @pytest.mark.parametrize(
+        "func",
+        [
+            lambda x: x.mean("time"),
+            lambda x: x.sum("time"),
+            lambda x: x.median("time"),
+            lambda x: x.mean("time", dim_reduce="squeeze"),
+            lambda x: x.first("time"),
+            lambda x: x.idxmax("time"),
+            lambda x: x.integrate("time", definite=True),
+        ],
+    )
+    def test_reductions(self, patch, func):
+        """A dimension reduced drops what rode it, silently."""
+        with suppress_warnings(DASCoreWarning, action="error"):
+            out = func(patch)
+        assert "tcoord" not in out.coords.coord_map
+        _assert_rides(out, "dcoord", patch.get_array("dcoord"))
+
+    @pytest.mark.parametrize(
+        "func",
+        [
+            lambda x: x.mean("time"),
+            lambda x: x.first("time"),
+            lambda x: x.integrate("time", definite=True),
+        ],
+    )
+    def test_single_sample_keeps_riders(self, patch, func):
+        """A dimension already one sample long keeps what rides it."""
+        single = patch.select(time=(0, 1), samples=True)
+        out = func(single)
+        _assert_rides(out, "tcoord", single.get_array("tcoord"))
+
+
 class TestDroppedWithWarning:
     """Operations which cannot carry the riders drop them, saying so."""
 
     @pytest.mark.parametrize(
         "func",
         [
-            lambda x: x.mean("time"),
-            lambda x: x.mean("time", dim_reduce="squeeze"),
             lambda x: x.phase_weighted_stack(
                 "time", transform_dim="distance", dim_reduce="squeeze"
             ),
-            lambda x: x.first("time"),
-            lambda x: x.idxmax("time"),
-            lambda x: x.integrate("time", definite=True),
             lambda x: x.phase_weighted_stack("time", transform_dim="distance"),
+            lambda x: x.resample(time=x.get_coord("time").step * 2),
             lambda x: x.drop_data().update_coords(time=x.get_coord("time")[:10]),
         ],
     )
-    def test_reductions(self, patch, func):
-        """A dimension reduced or resized drops what rode it, with a warning."""
+    def test_resized(self, patch, func):
+        """A dimension stacked or resized drops what rode it, with a warning."""
         with pytest.warns(DASCoreWarning, match="tcoord"):
             out = func(patch)
         assert "tcoord" not in out.coords.coord_map
@@ -142,14 +175,12 @@ class TestUnits:
     @pytest.mark.parametrize("reduce", ["mean", "median", "first"])
     def test_aggregated_label(self, patch, reduce):
         """A label aggregated from the dimension keeps its units."""
-        with pytest.warns(DASCoreWarning):
-            out = patch.aggregate("distance", method="mean", dim_reduce=reduce)
+        out = patch.aggregate("distance", method="mean", dim_reduce=reduce)
         assert out.get_coord("distance").units == get_quantity("m")
 
     def test_definite_integral(self, patch):
         """The label a definite integral leaves keeps the dimension's units."""
-        with pytest.warns(DASCoreWarning):
-            out = patch.integrate("distance", definite=True)
+        out = patch.integrate("distance", definite=True)
         assert out.get_coord("distance").units == get_quantity("m")
 
     def test_coord_update_values(self, patch):

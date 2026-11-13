@@ -446,13 +446,14 @@ class CoordManager(RichRepr, DascoreBaseModel):
             **{name: value for name, value in kwargs.items() if name not in names}
         )
 
-    def drop_associated(self, dim: str, action: str) -> Self:
+    def drop_associated(self, dim: str, action: str | None) -> Self:
         """
         Drop, with a warning, the non-dimensional coordinates along a dimension.
 
         Use when an operation changes the dimension's samples in a way its
         associated coordinates cannot follow, leaving their values unknown;
-        `action` begins the warning, eg "Resampling". Cell edges are left
+        `action` begins the warning, eg "Resampling". None drops them
+        silently, for operations which collapse the dimension. Cell edges are left
         for the grid update, which drops them without a warning, and
         private coordinates belong to the operations which made them.
         """
@@ -464,7 +465,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
         ]
         if not names:
             return self
-        if public := [x for x in names if not x.startswith("_")]:
+        public = [x for x in names if not x.startswith("_")]
+        if public and action is not None:
             _warn_dropped(dim, public, action)
         return self.drop_coords(*names)[0]
 
