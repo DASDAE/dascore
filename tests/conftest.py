@@ -478,6 +478,18 @@ def random_patch() -> Patch:
 
 
 @pytest.fixture(scope="session")
+def channel_conflict_pair(random_patch):
+    """Consecutive patches whose distance `channel` coords differ by 1000."""
+    n = random_patch.shape[random_patch.get_axis("distance")]
+    time = random_patch.get_coord("time")
+    first = random_patch.update_coords(channel=("distance", np.arange(n)))
+    second = first.update_coords(
+        channel=("distance", np.arange(n) + 1000), time=time + time.coord_range()
+    )
+    return first, second
+
+
+@pytest.fixture(scope="session")
 @register_func(PATCH_FIXTURES)
 def random_dft_patch(random_patch) -> Patch:
     """Return the random patch with dft applied."""

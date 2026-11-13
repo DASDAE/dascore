@@ -55,6 +55,7 @@ from dascore.utils.patch_assembly import (
     _match_merge_units,
 )
 from dascore.utils.time import to_int, to_timedelta64
+from dascore.warnings import DASCoreWarning
 from tests.conftest import join_patches
 
 
@@ -610,6 +611,25 @@ class TestChunkMerge:
         out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
         assert len(out) == 1
         assert out[0].attrs.data_type == ""
+
+    def test_conflicting_coordinate_follows_conflict(self, channel_conflict_pair):
+        """
+        A non-dimensional coordinate on another dimension which differs
+        between members follows `conflict`: raise, keep the first patch's,
+        or drop it, the loosened policies warning by name at the caller.
+        """
+        first, _ = channel_conflict_pair
+        spool = dc.spool(list(channel_conflict_pair))
+        with pytest.raises(CoordMergeError, match="channel"):
+            spool.chunk(time=None)
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept") as record:
+            kept = spool.chunk(time=None, conflict="keep_first")[0]
+        assert record[0].filename == __file__
+        assert np.array_equal(kept.get_array("channel"), first.get_array("channel"))
+        assert kept.shape[1] == 2 * first.shape[1]
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] dropped"):
+            dropped = spool.chunk(time=None, conflict="drop")[0]
+        assert "channel" not in dropped.coords.coord_map
 
     def test_drop_required_subclass_attr(self):
         """
