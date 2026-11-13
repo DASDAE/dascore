@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import CoordError
 from dascore.io.febus.core import FebusG1CSV1, FebusMTXH5V1
 from dascore.io.febus.g1utils import _is_g1_file
 from dascore.utils.downloader import fetch
@@ -232,10 +231,15 @@ class TestMisc:
         spool = dc.spool(g1_two_file_directory)
         merged = spool.chunk(time=None, conflict="keep_first", tolerance=3)
         assert len(merged) == 1
-        # the files' steps differ, so a fill refuses the hole between them,
-        # as `Patch.fill_gaps` does
-        with pytest.raises(CoordError, match="smaller size, select first, or resamp"):
-            len(spool.fill_gaps(time=2, samples=True, conflict="keep_first"))
+        # each file is one sweep, so though their steps differ by 2.4% the
+        # later sits 0.44 step off the earlier's grid, and fills as a patch
+        with pytest.warns(UserWarning, match="0.441 of a step"):
+            (filled,) = spool.fill_gaps(time=2, samples=True, conflict="keep_first")
+        want = spool.concatenate(time=None, conflict="keep_first")[0]
+        with pytest.warns(UserWarning, match="0.441 of a step"):
+            want = want.fill_gaps(time=2, samples=True)
+        assert filled.get_coord("time") == want.get_coord("time")
+        assert filled.shape == want.shape != merged[0].shape  # one sample filled
 
     def test_mtx_read_raises(self, g1_mtx_buffer):
         """

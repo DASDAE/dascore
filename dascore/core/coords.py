@@ -4208,9 +4208,10 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     Join a coordinate's segments onto one grid, filling the gaps between.
 
     Returns the filled coordinate, each piece's ``(source start, source stop,
-    target start)`` and the furthest move, in steps; None with nothing to
-    fill. A gap up to `limit` joins the piece after it onto the grid before
-    it, at its nearest positions, raising if they are half a step off.
+    target start)`` and the furthest move beyond label rounding, in steps;
+    None with nothing to fill. A gap up to `limit` joins the piece after it
+    onto the grid before it, at its nearest positions, raising where they
+    are half a step off or either side has no step.
     """
     if (
         not isinstance(coord, NumericCoord)
@@ -4221,33 +4222,53 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
         return None
     # each group: its anchor grid, its filled length, and its pieces' blocks
     groups: list[list] = []
-    moved = 0.0
+    moved, ends = 0.0, np.array([coord.min(), coord.max()])
     for source, piece in _fill_pieces(coord, limit, samples):
-        stop = source + len(piece)
-        if groups and isinstance(groups[-1][0], Labels) and limit is None:
-            # without a step, only filling every gap reaches past labels
-            msg = "Filling gaps after labels with no step needs a grid; snap first."
-            raise CoordError(msg)
-        if groups and not isinstance(groups[-1][0], Labels):
+        stop = source + piece.count
+        before = groups[-1][0] if groups else None
+        gridded = Grid in (type(piece), type(before))
+        if before is not None and gridded:
             anchor, length, blocks = groups[-1]
+            if labels := not isinstance(anchor, Grid):
+                # labels state no step, so the gap counts on the later grid's,
+                # onto which a lone sample before it goes
+                start = coord._run_labels(anchor, [anchor.count - 1])[0]
+                spec = dict(start=start, step=piece.step(coord.dtype), shape=(1,))
+                anchor, length = _range_run(spec)[0], 1
             position, shift = _fill_position(coord, anchor, piece)
             missing = position - length
             max_missing = _fill_limit(coord, anchor, limit, samples)
             if max_missing is None or missing <= max_missing:
-                if missing < 0 or shift >= 0.5:
+                if missing < 0 or shift >= 0.5 or (labels and groups[-1][1] > 1):
                     label = coord._run_labels(piece, [0])[0]
                     msg = (
                         f"Cannot fill the gap before {label}: its samples "
                         "land on the same grid position as those "
                         "before, or are not within half a step of new ones "
-                        f"(step {anchor.step(coord.dtype)}). Resample or snap first."
+                        f"(step {anchor.step(coord.dtype)}), or follow labels "
+                        "with no step. Resample or snap first."
                     )
                     raise CoordError(msg)
-                moved = max(moved, shift)
+                step = abs(anchor.step(coord.dtype))
+                # a move within a float label's rounding is no move
+                floats = coord.dtype.kind == "f"
+                if shift > (
+                    _float_allowance(ends, step) / step if floats else _GRID_RTOL
+                ):
+                    moved = max(moved, shift)
+                groups[-1][0] = anchor
                 blocks.append((source, stop, position))
-                groups[-1][1] = position + len(piece)
+                groups[-1][1] = position + piece.count
                 continue
-        groups.append([piece, len(piece), [(source, stop, 0)]])
+        if before is not None and not gridded and (limit is None or not samples):
+            # no step on either side: the whole seam is the gap, as a spool
+            # measures one, and no count of samples is known
+            last = coord._run_labels(before, [before.count - 1])[0]
+            seam = abs(coord._run_labels(piece, [0])[0] - last)
+            if limit is None or seam <= coord._gap_tolerance(limit).excess:
+                msg = "Filling gaps after labels with no step needs a grid; snap first."
+                raise CoordError(msg)
+        groups.append([piece, piece.count, [(source, stop, 0)]])
     if all(len(blocks) == 1 for *_, blocks in groups):
         return None
     runs, out, offset = [], [], 0
@@ -4297,19 +4318,12 @@ def _fill_pieces(coord: NumericCoord, limit, samples) -> list[tuple[int, Any]]:
     return pieces
 
 
-def _fill_same_step(coord: NumericCoord, first: Grid, other: Grid) -> bool:
-    """Whether a grid shares the first's step: exactly, or for floats no drift."""
-    if first.exact and other.exact:
-        return first.step_exact(coord.dtype) == other.step_exact(coord.dtype)
-    ratio = float(np.divide(other.step(coord.dtype), first.step(coord.dtype)))
-    return bool(abs(ratio - 1) * max(len(other) - 1, 1) <= _GRID_RTOL)
-
-
 def _fill_position(coord: NumericCoord, anchor: Grid, piece) -> tuple[int, float]:
     """The anchor position nearest a piece, and its move in steps (inf: no fit)."""
-    labels = coord._run_labels(piece, None if isinstance(piece, Labels) else [0])
+    # a grid's offsets change evenly along it, so its ends bound them
+    ends = isinstance(piece, Grid)
+    labels = coord._run_labels(piece, [0, piece.count - 1] if ends else None)
     step = anchor.step(coord.dtype)
-    fits = isinstance(piece, Labels) or _fill_same_step(coord, anchor, piece)
     if anchor.exact:  # from the ideal positions, in ticks
         kind = labels.dtype.kind
         ticks = labels.astype(f"{kind}8[ns]").view(np.int64) if kind in "mM" else labels
@@ -4319,9 +4333,9 @@ def _fill_position(coord: NumericCoord, anchor: Grid, piece) -> tuple[int, float
         start = anchor.labels(0, coord.dtype)[()]
         rel = np.asarray((labels - start) / step, dtype=np.float64)
     positions = np.rint(rel)
-    offs = np.abs(rel - positions)
-    consecutive = np.all(np.diff(positions) == 1)
-    shift = float(np.max(offs)) if fits and consecutive else math.inf
+    index = [0, piece.count - 1] if ends else np.arange(piece.count)
+    consecutive = np.array_equal(positions - positions[0], index)
+    shift = float(np.max(np.abs(rel - positions))) if consecutive else math.inf
     return int(positions[0]), shift
 
 

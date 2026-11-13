@@ -14,13 +14,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import (
-    _GRID_RTOL,
-    BaseCoord,
-    _fill_layout,
-    _float_allowance,
-    concat_coords,
-)
+from dascore.core.coords import BaseCoord, _fill_layout, concat_coords
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -1673,11 +1667,7 @@ class FillGaps(PatchProcessor):
         if layout is None:
             return meta, {"axis": axis, "length": None, "blocks": None}
         coord, blocks, moved = layout
-        limit = _GRID_RTOL  # beyond the rounding a float label carries, in steps
-        if coord.dtype.kind == "f":
-            step = abs(coord.runs[0].step(coord.dtype))
-            limit = _float_allowance(np.array([coord.min(), coord.max()]), step) / step
-        if moved > limit:
+        if moved:
             msg = (
                 f"Filling gaps along {dim!r} moved the samples after a gap by "
                 f"up to {moved:.3g} of a step, onto the grid before it."

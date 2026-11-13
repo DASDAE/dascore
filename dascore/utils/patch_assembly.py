@@ -556,10 +556,11 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
 def _fuses(rows: Sequence[Mapping], dim: str) -> bool:
     """
     Whether a merge may fuse its members' labels: as the plan judged them,
-    every member states a step and the plan keeps no stretch's labels.
+    every member states one step and the plan keeps no stretch's labels.
     """
     keeps = (x.get(f"_{dim}_stretch") == "labels" for x in rows)
-    return not any(keeps) and not any(pd.isnull(x.get(f"{dim}_step")) for x in rows)
+    steps = {x.get(f"{dim}_step") for x in rows}
+    return not any(keeps) and len(steps) == 1 and not pd.isnull(steps.pop())
 
 
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:

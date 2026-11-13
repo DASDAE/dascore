@@ -1971,19 +1971,25 @@ def _fill_grids(rows, codes, n_parts, name, dtype, lattice):
     rows["_first"], rows["_last"] = first, last
     rows["_count"] = np.where(keep, np.nan_to_num(count, nan=-1), 0).astype(np.int64)
     heads = pd.Series(first).groupby(codes).idxmin().reindex(range(n_parts)).to_numpy()
-    head_own = own[heads[codes]]
+    head_own, head_first = own[heads[codes]], first[heads[codes]]
     with np.errstate(invalid="ignore"):
-        other = np.abs(own - head_own) > _GRID_RTOL * np.abs(head_own)
-    if other.any():  # as `Patch.fill_gaps` refuses samples on another step
+        rel = (first - head_first) / head_own
+        pos = np.rint(rel)
+        # as `Patch.fill_gaps` places segments: each row's ends within half
+        # a step of consecutive positions of the head's grid
+        end = (last - head_first) / head_own - (pos + rows["_count"].to_numpy() - 1)
+        other = (np.abs(rel - pos) >= 0.5) | (np.abs(end) >= 0.5)
+    # labels with no step, joined to others, cannot be placed either
+    other |= np.isnan(own) & (np.bincount(codes)[codes] > 1)
+    if other.any():
         steps, bad = rows[f"{name}_step"].to_numpy(), np.argmax(other)
         msg = (
             f"Cannot fill a gap along {name!r} between samples on step "
-            f"{steps[heads[codes]][bad]} and samples on step {steps[bad]}. "
-            "Fill with a smaller size, select first, or resample to one step."
+            f"{steps[heads[codes]][bad]} and samples on step {steps[bad]}, which "
+            "do not fit its grid within half a step. Fill with a smaller size, "
+            "select first, or resample to one step."
         )
         raise CoordError(msg)
-    with np.errstate(invalid="ignore"):
-        pos = np.rint((first - first[heads[codes]]) / head_own)
     pos = np.nan_to_num(pos).astype(np.int64)
     sizes = pd.Series(pos + rows["_count"].to_numpy()).groupby(codes).max()
     grids = [None] * n_parts

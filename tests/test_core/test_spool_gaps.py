@@ -732,6 +732,26 @@ class TestSpoolFillGaps:
         with pytest.raises(ParameterError, match="non-negative"):
             gappy_spool.fill_gaps(time=-1, samples=True)
 
+    @pytest.mark.parametrize("snap", [False, True])
+    def test_steps_parts_per_million_apart_fill(self, snap):
+        """Files whose steps differ by ppm fill on the first's, as a patch does."""
+        base, start, patches = dc.get_example_patch(), T0, []
+        for num, step in enumerate([4_000_000, 4_000_010, 3_999_990]):
+            coord = get_coord(start=start, step=step * ONE_NS, shape=(2000,))
+            if snap:  # jittered labels, each file snapped to its own step
+                jitter = np.random.default_rng(num).integers(-400_000, 400_000, 2000)
+                coord = get_coord(data=coord.values + jitter * ONE_NS)
+            patches.append(base.update_coords(time=coord))
+            start = coord.max() + step * ONE_NS
+        spool = dc.spool(patches).snap_coords("time") if snap else dc.spool(patches)
+        with suppress_warnings(UserWarning):
+            (out,) = spool.fill_gaps(time=1)
+            (whole,) = spool.fill_gaps("time")  # files chunk(time=None) joins
+            want = spool.concatenate(time=None)[0].fill_gaps("time")
+        assert out.shape == whole.shape == want.shape == (300, 6000)
+        assert out.get_coord("time") == want.get_coord("time")
+        assert out.get_coord("time").step == spool[0].get_coord("time").step
+
     def test_step_change_across_a_fill_raises(self):
         """Samples on another step across a filled gap raise, as on a patch."""
         coords = [

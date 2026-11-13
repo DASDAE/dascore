@@ -31,6 +31,7 @@ from dascore.exceptions import (
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
 from dascore.warnings import DASCoreWarning
+from tests.conftest import segment_layout
 
 
 class TestSortCoords:
@@ -2041,13 +2042,53 @@ class TestFillGapsSegments:
         with pytest.raises(CoordError, match="not within half a step"):
             patch.fill_gaps("x")
 
-    def test_labels_cannot_be_filled_after(self):
-        """A gap after labels with no step has no grid to fill onto."""
-        first = get_coord(data=np.array([0.0, 1.1, 2.5]))
-        later = get_coord(start=10.0, step=1.0, shape=(3,))
-        patch = _gapped_patch(concat_coords(first, later), dim="x")
-        with pytest.raises(CoordError, match="no step"):
-            patch.fill_gaps("x")
+    @pytest.mark.parametrize(
+        ("pieces", "size", "runs"),
+        [
+            ([[0.0, 1.1, 2.5], (10.0, 3)], 100.0, None),  # labels, then a grid
+            ([[0.0, 1.1, 2.5], (10.0, 3)], 6.0, 2),  # the gap is wider
+            ([(0.0, 4), [6.0, 7.0, 9.0]], 5.0, None),  # labels skip a position
+            ([(0.0, 4), [6.0, 7.0, 9.0]], 1.0, 2),
+            ([[0.0, 1.1, 3.0], (10.0, 3), (15.0, 3)], 2.0, 2),  # grids fill
+            ([[0.0, 1.1, 3.0], (10.0, 3), (15.0, 3)], 8.0, None),
+            ([[-3.0], (0.0, 5)], None, 1),  # a lone sample takes the grid's step
+            ([[0.0, 1.1, 1.9], [4.0, 5.5, 5.7]], 2.5, None),  # no step either side
+            ([[0.0, 1.1, 1.9], [4.0, 5.5, 5.7]], 2.0, 2),
+        ],
+    )
+    def test_gaps_beside_labels(self, pieces, size, runs):
+        """A gap within the size raises where it cannot fill, a wider one stays."""
+        coords = [
+            get_coord(data=np.array(x))
+            if isinstance(x, list)
+            else get_coord(start=x[0], step=1.0, shape=(x[1],))
+            for x in pieces
+        ]
+        patch = _gapped_patch(concat_coords(*coords), dim="x")
+        if runs is None:
+            with pytest.raises(CoordError, match=r"no step|half a step"):
+                patch.fill_gaps(x=size)
+            return
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = patch.fill_gaps(x=size)
+        assert out.get_coord("x").runs_count == runs
+        assert out.get_coord("x").values[0] == coords[0].values[0]
+
+    @pytest.mark.parametrize("start", [8, 9])  # contiguous, then a gap
+    def test_steps_parts_per_million_apart_fill(self, start):
+        """Segments whose steps differ by ppm fit the earlier grid, and fill."""
+        t0, step = np.datetime64("2020-01-01", "ns"), np.timedelta64(4_000_000, "ns")
+        first = get_coord(start=t0, step=step, shape=(2000,))
+        later = t0 + (1992 + start) * step
+        second = get_coord(start=later, step=step + 10, shape=(2000,))
+        patch = _gapped_patch(concat_coords(first, second))
+        with pytest.warns(UserWarning, match="0.005 of a step"):
+            out = patch.fill_gaps("time")
+        coord = out.get_coord("time")
+        assert coord.step == step and segment_layout(coord) == [
+            ("Grid", step, 4000 + start - 8)
+        ]
 
     def test_wider_gap_keeps_another_step(self):
         """A gap past the limit stays a boundary, whatever the step after it."""
@@ -2453,7 +2494,7 @@ class TestFillGaps:
     def test_float_step_drift_raises(self):
         """Steps close in ratio but drifting over a long run do not share a grid."""
         first = get_coord(start=0.0, step=1.0, shape=(5,))
-        second = get_coord(start=10.0, step=1.0000009, shape=(1000,))
+        second = get_coord(start=10.0, step=1.001, shape=(1000,))
         patch = _gapped_patch(concat_coords(first, second), dim="x")
         with pytest.raises(CoordError, match="not within half a step"):
             patch.fill_gaps("x")
