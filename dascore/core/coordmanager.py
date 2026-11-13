@@ -496,7 +496,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             """Coordinates should be one dimensional."""
             dims = [self.dim_map[x] for x in coords]
             if any(len(x) > 1 for x in dims):
-                bad_coord = [y for x, y in zip(dims, coords, strict=True) if len(y) > 1]
+                bad_coord = [y for x, y in zip(dims, coords, strict=True) if len(x) > 1]
                 msg = (
                     f"cannot simultaneously sort coordinate(s) {bad_coord}"
                     f" because they are associated with more than one dimension."

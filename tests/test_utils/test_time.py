@@ -246,6 +246,15 @@ class TestToDateTime64:
             out = to_datetime64(time_str)
         assert out == np.datetime64(expected, "ns")
 
+    def test_string_array_with_utc_offset(self):
+        """An array of offset strings converts like each string, without a warning."""
+        strs = np.array([["2019-10-10T15:58:50+01:00", "2019-10-10T23:30:00.5-0530"]])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = to_datetime64(strs)
+        expected = np.array([[to_datetime64(x) for x in strs[0]]])
+        assert np.array_equal(out, expected)
+
     @pytest.mark.parametrize(
         "time_str",
         [

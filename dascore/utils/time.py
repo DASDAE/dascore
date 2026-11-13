@@ -217,7 +217,12 @@ def _array_to_datetime64(array: np.ndarray) -> np.datetime64 | np.ndarray:
         array = np.asarray([to_datetime64(x) for x in array]).astype("datetime64[ns]")
     # dealing with a string
     if np.issubdtype(array.dtype, np.dtype(str)):
-        array = _parse_iso(array)
+        if any(_UTC_OFFSET.search(x) for x in array.flat):
+            # Offsets need the scalar parser; numpy deprecates parsing them.
+            parsed = [_str_to_datetime64(x) for x in array.flat]
+            array = np.array(parsed).reshape(array.shape)
+        else:
+            array = _parse_iso(array)
     # dealing with an array of datetime64 or empty array
     if np.issubdtype(array.dtype, np.datetime64):
         out = _as_ns(array, "M")

@@ -379,6 +379,12 @@ class TestTaperDtype:
         ramp = (out.data != patch.data).any(axis=1 - axis)
         assert ramp.any() and not ramp.all()
 
+    def test_taper_range_keeps_dtype(self, random_patch):
+        """Taper range keeps single precision data in its dtype."""
+        patch = random_patch.new(data=random_patch.data.astype("float32"))
+        out = patch.taper_range(time=(0.1, 0.2, 0.5, 0.6), relative=True)
+        assert out.dtype == np.float32
+
     @pytest.mark.parametrize("dtype", ["int16", "bool"])
     def test_non_float_becomes_float(self, patch_ones, dtype):
         """Integer and boolean data taper to float64 with the float ramp."""
