@@ -68,3 +68,12 @@ class TestDetrendNaN:
         out = patch.detrend("time", type=type).data
         assert out.dtype == np.float16
         np.testing.assert_allclose(out[1], 0, atol=0.1)
+
+    def test_narrow_float_residuals(self):
+        """The trend is subtracted before the result is narrowed to float16."""
+        data = np.array([[1000, 1000.5, np.nan, 1001]], dtype=np.float16)
+        coords = {"x": np.arange(1), "time": np.arange(4)}
+        patch = dc.Patch(data=data, coords=coords, dims=("x", "time"))
+        out = patch.detrend("time").data[0]
+        expected = [-0.0714, 0.1071, np.nan, -0.0357]
+        np.testing.assert_allclose(out, expected, atol=1e-3)

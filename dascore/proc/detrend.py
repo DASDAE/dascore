@@ -33,7 +33,7 @@ def _nan_detrend(data, axis, type):
             x_mean = total(x * valid) / total(valid)
             dx = np.where(valid, x - x_mean, 0)
             trend = trend + total(dx * y) / total(dx * dx) * (x - x_mean)
-    return data - trend.astype(data.dtype)
+    return (data - trend).astype(data.dtype)
 
 
 class Detrend(PatchProcessor):
