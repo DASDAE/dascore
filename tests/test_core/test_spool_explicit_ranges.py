@@ -1342,6 +1342,65 @@ class TestWindowsOverFilledGaps:
         (patch,) = filled.cut(distance=np.array([[3, 6]]))
         assert (patch.data == 1).all() and "reference_time" in patch.coords.coord_map
 
+    @pytest.mark.parametrize("unit", ["s", "ns"])
+    @pytest.mark.parametrize("length", [None, 5])
+    def test_fill_rows_state_the_riders_that_load(self, unit, length):
+        """Rows of a fill state a rider where, and as, the loaded patch has it."""
+        times = lambda a, b: np.arange(a, b).astype(f"datetime64[{unit}]")  # noqa
+
+        def make(start, stop, tag, gain=False):
+            coords = {"time": times(start, stop)}
+            if gain:
+                values = np.arange(start, stop, dtype=np.float64)
+                coords["gain"] = ("time", values)
+            data = np.ones(stop - start)
+            return dc.Patch(
+                data=data, coords=coords, dims=("time",), attrs={"tag": tag}
+            )
+
+        parts = [make(0, 5, "a", True), make(5, 10, "a", True), make(14, 16, "a", True)]
+        parts += [make(100, 105, "b"), make(115, 120, "b")]
+        filled = dc.spool(parts).fill_gaps(time=np.timedelta64(20, unit))
+        if length is not None:
+            filled = filled.chunk(time=np.timedelta64(length, unit), keep_partial=True)
+        rows = filled.get_contents()
+        loaded = list(filled)
+        assert rows["gain_min"].notna().tolist() == [
+            "gain" in x.coords.coord_map for x in loaded
+        ]
+        for (_, row), patch in zip(rows.iterrows(), loaded, strict=True):
+            if "gain" in patch.coords.coord_map:
+                gain = patch.get_array("gain")
+                # a rider's range is stated to float32 precision
+                assert np.isclose(np.nanmin(gain), row["gain_min"], rtol=1e-6)
+                assert np.isclose(np.nanmax(gain), row["gain_max"], rtol=1e-6)
+        tags = [x.attrs.tag for x in filled.select(gain=(0, 100))]
+        assert set(tags) == {"a"} and len(tags) == (1 if length is None else 4)
+        gain = np.concatenate([x.get_array("gain") for x in loaded[: len(tags)]])
+        expected = np.r_[np.arange(10.0), np.nan * np.ones(4), 14.0, 15.0]
+        np.testing.assert_array_equal(gain, expected)
+
+    @pytest.mark.parametrize("length", [None, 2])
+    def test_fill_rows_leave_out_riders_that_cannot_fill(self, length):
+        """A rider no fill value fits is gone exactly where the fill writes."""
+        times = lambda a, b: np.arange(a, b).astype("datetime64[s]")  # noqa
+
+        def make(start, stop):
+            gain = ("time", np.arange(start, stop))
+            coords = {"time": times(start, stop), "gain": gain}
+            return dc.Patch(data=np.ones(stop - start), coords=coords, dims=("time",))
+
+        spool = dc.spool([make(0, 4), make(10, 14)]).fill_gaps("time")
+        if length is not None:
+            spool = spool.chunk(time=length)
+        with pytest.warns(DASCoreWarning, match="dropped associated"):
+            held = ["gain" in x.coords.coord_map for x in spool]
+        rows = spool.get_contents()
+        stated = rows.get("gain_min", pd.Series(np.nan, index=rows.index))
+        assert stated.notna().tolist() == held
+        expected = [False] if length is None else [True] * 2 + [False] * 3 + [True] * 2
+        assert held == expected
+
     def test_window_inside_the_gap(self):
         """A window wholly inside a filled gap is all fill, reading one sample."""
         source, _ = _gapped_2d(0, 10, depth=True)

@@ -2412,6 +2412,22 @@ class TestFilledWindows:
         joined = np.concatenate([x.data for x in out], axis=1)
         assert np.array_equal(joined, whole.select(x=(11, 90)).data)
 
+    @pytest.mark.parametrize("route", ["memory", "disk"])
+    def test_cut_of_off_grid_selection(self, tmp_path, route):
+        """A cut of a fill of a view between samples keeps the samples' labels."""
+        full = np.datetime64("2020-01-01", "ns") + np.arange(105) * 2_000_000
+        values = np.delete(full.astype("datetime64[ns]"), np.s_[40:45])
+        _, *spools = _cut_spools(tmp_path, values, [40, 60])
+        spool = spools[route == "disk"]
+        ms = np.timedelta64(1, "ms")
+        view = spool.select(x=(values[5] + ms, values[90] + ms))
+        window = np.array([[full[20], full[60]]])
+        (got,) = view.fill_gaps("x").cut(x=window)
+        (want,) = spool.fill_gaps("x").cut(x=window)
+        assert got.get_coord("x") == want.get_coord("x")
+        assert np.array_equal(got.get_coord("x").values, full[20:61])
+        assert np.array_equal(got.data, want.data, equal_nan=True)
+
     def test_window_holding_no_position_is_skipped(self):
         """A selection between two samples leaves no position to fill."""
         time = dc.get_coord(start=2.0, step=1.0, shape=(2,))

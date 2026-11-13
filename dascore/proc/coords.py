@@ -36,7 +36,6 @@ from dascore.utils.misc import (
 )
 from dascore.utils.patch import (
     _uneven_message,
-    drop_associated_coords,
     get_dim_axis_value,
 )
 
@@ -1571,6 +1570,27 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
     return out
 
 
+def _fill_riders(coords, dim: str, length: int, blocks, action: str):
+    """
+    The coordinates with those along ``dim`` placed as the data is, and the
+    rider arrays to restate once the grid is: NaN or NaT fill between the
+    blocks, and riders of other dtypes are dropped with a warning.
+    """
+    riders = {}
+    if sum(stop - start for start, stop, _ in blocks) == length:  # none filled
+        return coords, riders
+    for name, dims in coords.dim_map.items():
+        kind = coords.coord_map[name].dtype.kind
+        edge = name in (f"{dim}_start", f"{dim}_stop")
+        if name == dim or dim not in dims or edge or kind not in "fcMm":
+            continue
+        values = coords.coord_map[name].values
+        fill = np.array("NaT", values.dtype) if kind in "Mm" else np.nan
+        placed = _place_blocks(values, dims.index(dim), length, blocks, fill)
+        riders[name] = (dims, placed)
+    return coords.drop_coords(*riders)[0].drop_associated(dim, action), riders
+
+
 class FillGaps(PatchProcessor):
     """
     Fill the gaps between a dimension's segments with a constant value.
@@ -1611,8 +1631,9 @@ class FillGaps(PatchProcessor):
     a step (another step, or labels with none) raises: resample or snap it
     first. So does a fill value the data's dtype cannot hold.
 
-    Non-dimensional coordinates along the dimension are dropped with a
-    warning, since their values at the filled positions are unknown.
+    Non-dimensional coordinates along the dimension take NaN (NaT for
+    times) at the filled positions; those of other dtypes are dropped with
+    a warning.
 
     Examples
     --------
@@ -1662,8 +1683,10 @@ class FillGaps(PatchProcessor):
                 f"up to {moved:.3g} of a step, onto the grid before it."
             )
             warnings.warn(msg, UserWarning, stacklevel=3)
-        coords = drop_associated_coords(meta.coords, dim, "Filling gaps along")
-        out = meta.new(coords=coords._update_grid(dim, **{dim: coord}))
+        coords, riders = _fill_riders(
+            meta.coords, dim, len(coord), blocks, "Filling gaps along"
+        )
+        out = meta.new(coords=coords._update_grid(dim, **{dim: coord}).update(**riders))
         return out, {"axis": axis, "length": len(coord), "blocks": blocks}
 
     def numpy_kernel(self, data, *, axis, length, blocks):

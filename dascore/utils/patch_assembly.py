@@ -58,7 +58,6 @@ from dascore.utils.patch import (
     _get_merge_dim,
     _get_merged_coord,
     _split_coord_merge_kwargs,
-    drop_associated_coords,
 )
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -600,7 +599,11 @@ def fill_on_grid(patch, dim: str, grid, fill_value, tolerance, dtype=None):
     nearest positions of ``grid``; the fill, in ``dtype``, pads the rest.
     """
     # proc imports from utils, so this is imported here
-    from dascore.proc.coords import _fill_scalar, _place_blocks  # noqa: PLC0415
+    from dascore.proc.coords import (  # noqa: PLC0415
+        _fill_riders,
+        _fill_scalar,
+        _place_blocks,
+    )
 
     limit, samples = _fill_limit(tolerance)
     patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
@@ -614,13 +617,17 @@ def fill_on_grid(patch, dim: str, grid, fill_value, tolerance, dtype=None):
     data = to_numpy(patch.data).astype(dtype or patch.data.dtype, copy=False)
     fill = _fill_scalar(fill_value, data.dtype)
     data = _place_blocks(data, patch.get_axis(dim), len(grid), blocks, fill)
-    coords = drop_associated_coords(patch.coords, dim, "Filling the gaps along")
+    coords, riders = _fill_riders(
+        patch.coords, dim, len(grid), blocks, "Filling the gaps along"
+    )
     # where the members went in the window, so loading twice gives one id
     params = {"dim": dim, "value": fill_value, "first": first, "grid": grid}
     attrs = stamp(patch.attrs, [patch.attrs], try_operation_id("Fill", params))
     with operation_context():
         return patch.new(
-            data=data, coords=coords._update_grid(dim, **{dim: grid}), attrs=attrs
+            data=data,
+            coords=coords._update_grid(dim, **{dim: grid}).update(**riders),
+            attrs=attrs,
         )
 
 

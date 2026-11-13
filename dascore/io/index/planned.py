@@ -352,6 +352,30 @@ def _trim_to_member_windows(
     return tracker.trim(cut, windows)
 
 
+def _fill_held(outputs: pd.DataFrame, members: pd.DataFrame, dim: str):
+    """
+    Each output of a fill: the samples its members hold in it, and its size.
+
+    None unless the plan fills. A member a window inside a gap reads lies
+    outside the window, so holds none of it.
+    """
+    if (spec := members.get(f"_{dim}_stretch")) is None or outputs.empty:
+        return None
+    ids = members["output_id"]
+    bounds = outputs.set_index("output_id").reindex(ids.to_numpy())
+    lows, highs = (members[f"{dim}_{x}"].to_numpy() for x in ("min", "max"))
+    low = np.maximum(lows, bounds[f"{dim}_min"].to_numpy())
+    high = np.minimum(highs, bounds[f"{dim}_max"].to_numpy())
+    steps = members[f"{dim}_step"]
+    if low.dtype.kind in "Mm":
+        steps = pd.to_timedelta(steps)
+    spans = pd.Series(high - low, index=members.index) / steps.abs()
+    held = np.where(high >= low, np.rint(spans.to_numpy(np.float64)) + 1, 0)
+    size = spec.map(lambda x: x[6] if isinstance(x, tuple) else np.nan)
+    held = pd.Series(held, index=members.index).groupby(ids, sort=True).sum()
+    return held.to_numpy(), size.groupby(ids, sort=True).first().to_numpy()
+
+
 def _aux_coord_info(
     source_rows: pd.DataFrame,
     members: pd.DataFrame,
@@ -361,6 +385,7 @@ def _aux_coord_info(
     concat: bool = False,
     conflict: str | None = None,
     source_trimmed: frozenset[str] = frozenset(),
+    filled=None,
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
@@ -384,6 +409,10 @@ def _aux_coord_info(
     A merge's `conflict` settles a coordinate the members do not hold
     alike (see `merge_coord_managers`): "drop", or a rider some member
     lacks, leaves it out; "keep_first" describes the first member's.
+
+    A fill (``filled``, from `_fill_held`) gives a rider NaN or NaT where
+    it fills, so one holding neither is left out of an output it fills,
+    and an output only of fill states no values for the rest.
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -487,6 +516,13 @@ def _aux_coord_info(
             if unit_col in joined:  # the kept coordinate carries its units
                 unit_first = np.where(settled, first[-1], unit_first)
                 unit_ok = unit_ok | settled
+        if rides and filled is not None:
+            held, size = filled
+            kind = joined.get(f"_{name}_coord_dtype", pd.Series(dtype=object))
+            unfillable = ~kind.dropna().map(lambda x: np.dtype(x).kind in "fcMm")
+            absent |= (held < size) & unfillable.any()
+            none = np.full(len(held), None, dtype=object)
+            lows, highs = (np.where(held > 0, x, none) for x in (lows, highs))
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -1281,6 +1317,7 @@ def derived_catalog(
     stale_keys = stale_def_keys(residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
+    fills = merge_kwargs.get("fill_value") is not None
     aux_info = _aux_coord_info(
         sources,
         trims,
@@ -1290,6 +1327,7 @@ def derived_catalog(
         concat=mode == "concat",
         conflict=merge_kwargs.get("conflict"),
         source_trimmed=_trimmed_dims(parent_residuals, coord_dims_map),
+        filled=_fill_held(outputs, trims, name) if fills else None,
     )
     outputs = _with_windowed_dims(outputs, aux_info, name)
     records = _output_records(

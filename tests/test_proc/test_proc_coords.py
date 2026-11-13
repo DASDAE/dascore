@@ -2278,8 +2278,20 @@ class TestFillGaps:
         out = patch.fill_gaps("time", fill_value=0)
         assert out.data.dtype == np.int32 and (out.data[:, 5:8] == 0).all()
 
+    def test_associated_coords_take_nan_or_nat(self, gapped):
+        """Float and time coordinates along the dimension fill as the data does."""
+        size = gapped.shape[1]
+        stamps = np.datetime64("2020-01-01") + np.arange(size).astype("m8[s]")
+        patch = gapped.update_coords(
+            gain=("time", np.arange(size) * 1.0), stamp=("time", stamps)
+        )
+        out = patch.fill_gaps("time")
+        gain, stamp = out.get_array("gain"), out.get_array("stamp")
+        np.testing.assert_array_equal(gain, np.r_[0:5, [np.nan] * 3, 5:9])
+        assert np.isnat(stamp[5:8]).all() and np.array_equal(stamp[8:], stamps[5:])
+
     def test_drops_associated_coords(self, gapped):
-        """A coordinate along the dimension is dropped, with a warning."""
+        """A coordinate along the dimension no NaN fits is dropped, with a warning."""
         size = gapped.shape[1]
         patch = gapped.update_coords(quality=("time", np.arange(size)))
         with pytest.warns(DASCoreWarning, match="Filling gaps.*quality"):
