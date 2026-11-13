@@ -2815,8 +2815,9 @@ class Spool(NodeRepr, NamespaceOwner):
         Lazily snap each patch alone, as `Patch.snap_coords` does as it loads.
 
         Takes `Patch.snap_coords`' arguments. Planning reads the coordinate
-        of each patch the index states no step for, to state the snapped
-        one, so a `max_shift` it breaks raises here.
+        of each patch the index states no step or a descending one for
+        (every patch, given `step` or `reverse`), to state the snapped one,
+        so a `max_shift` it breaks raises here.
 
         Examples
         --------

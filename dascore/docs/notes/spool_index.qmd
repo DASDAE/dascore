@@ -36,7 +36,7 @@ Matching ranges never imply matching values. Evenly spaced (range) coordinates a
 A `coord_defs` row describes a coordinate the same way the coordinate describes itself (rule 12 of the [coordinate guidelines](coordinates.qmd)):
 
 - its range and step;
-- whether its values are `jittered` (slightly off the step grid) or `gapped` (missing grid points);
+- whether its values are `jittered` (slightly off the step grid) or `gapped` (missing grid points of its one step; segments, which share none, are neither);
 - how far its values stray from the grid, in steps (`offset_min`, `offset_max`);
 - how many runs it has (`run_count`).
 

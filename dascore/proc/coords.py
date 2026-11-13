@@ -148,7 +148,7 @@ class SnapCoords(_Reorder):
     >>> # snap the distance dimension
     >>> dist_snap = patch.snap_coords("distance")
     >>>
-    >>> # put time on a 1 ms grid, refusing to move any label half a step
+    >>> # put time on the grid of its smallest spacing, refusing moves over half a step
     >>> import numpy as np
     >>> time = patch.get_coord("time")
     >>> step = np.diff(time.values).min()

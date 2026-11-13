@@ -4045,9 +4045,11 @@ def concat_coords(*coords, units=None) -> NumericCoord:
 
     This operation is truth-preserving: no value is ever altered, and every
     boundary between inputs that does not continue exactly is kept as a
-    boundary between segments, each on its own step. Equal labels make an
-    equal coordinate however they are split, so a gap is all segments
-    record; `Patch.fill_gaps` and `Patch.split_gaps` act on them.
+    boundary between segments; stored labels sharing one stated step are
+    instead read as `get_coord(data=..., step=...)` reads them. Segments say
+    where gaps are, never what the labels are, so equal labels make equal
+    coordinates however split; `Patch.fill_gaps` and `Patch.split_gaps` act
+    on the gaps.
 
     Parameters
     ----------

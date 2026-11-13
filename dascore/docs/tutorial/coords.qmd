@@ -34,7 +34,7 @@ assert regular == same
 |---|---|
 | `sorted` | Whether the coordinate reports ascending ordering |
 | `reverse_sorted` | Whether the coordinate reports descending ordering |
-| `step` | The spacing of the one grid the values follow, or `None` (labels, or several segments) |
+| `step` | The spacing of the one grid the values follow, or the step declared for one list of labels; `None` for labels with none, or several segments |
 | `segments` | The coordinate's segments, each one grid or one list of labels |
 | `evenly_sampled` | Whether the coordinate is one grid |
 | `dtype` | NumPy data type |
