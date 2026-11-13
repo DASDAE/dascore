@@ -590,11 +590,12 @@ def _fill_limit(tolerance) -> tuple:
     return tolerance, False
 
 
-def fill_on_grid(patch, dim: str, grid, fill_value, tolerance, dtype=None):
+def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     """
     Fill a fill plan's assembled members, as `Patch.fill_gaps` does, onto the
     nearest positions of ``grid``; the fill, in ``dtype``, pads the rest.
     """
+    fill_value = merge["fill_value"]
     # proc imports from utils, so this is imported here
     from dascore.proc.coords import (  # noqa: PLC0415
         _fill_riders,
@@ -602,7 +603,7 @@ def fill_on_grid(patch, dim: str, grid, fill_value, tolerance, dtype=None):
         _place_blocks,
     )
 
-    limit, samples = _fill_limit(tolerance)
+    limit, samples = _fill_limit(merge["tolerance"])
     patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
     coord: Any = patch.get_coord(dim)  # numeric, as only those fill
     if grid is None or coord == grid:

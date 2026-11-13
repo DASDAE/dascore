@@ -232,10 +232,7 @@ class _PendingFill:
     def _real(self):
         """The fill's catalog, merging each stretch, built when first asked for."""
         if self._built is None:
-            working = self.frames[1]
-            with _any_step():
-                plan = build_chunk_plan(working, **self.merge, **{self.dim: None})
-            plan = coalesce_runs(plan, working)
+            plan = self.windows(self.merge, {self.dim: None})
             self._built = self.spool._chunked(self.frames[0], plan)._catalog
         return self._built
 
@@ -253,15 +250,10 @@ class _PendingFill:
     def windows(self, params, dim_kwargs) -> ChunkPlan:
         """A chunk's windows over the fill, each fed by the files it reaches."""
         fill = {x: self.merge[x] for x in ("tolerance", "fill_value", "max_shift")}
-        working = self.frames[1]
-        with _any_step():
-            plan = build_chunk_plan(working, **(params | fill), **dim_kwargs)
-        return coalesce_runs(plan, working)
-
-
-def _any_step():
-    """Join patches whatever their steps, so a fill judges each, as a patch's."""
-    return dc.config_context(sampling_group_tolerance=np.inf)
+        # join patches whatever their steps, so a fill judges each, as a patch's
+        with dc.config_context(sampling_group_tolerance=np.inf):
+            plan = build_chunk_plan(self.frames[1], **(params | fill), **dim_kwargs)
+        return coalesce_runs(plan, self.frames[1])
 
 
 def _stamp_key(*stamps) -> tuple:
@@ -2176,9 +2168,7 @@ class Spool(NodeRepr, NamespaceOwner):
         catalog = self._catalog
         return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
-    def _materialize_lossy(
-        self, stamp=None, dtypes=None, rows=None, snapped=None, **merge
-    ):
+    def _materialize_lossy(self, stamp=None, dtypes=None, snapped=None, **merge):
         """
         Bake residual trims and presentation order into a derived catalog.
 
@@ -2190,7 +2180,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        rows = self._df.reset_index(drop=True) if rows is None else rows
+        rows = self._df.reset_index(drop=True)
         working = rows.reset_index(drop=True)
         ids = np.arange(len(working), dtype=np.int64)
         # outputs are not file rows: source bookkeeping stays on the
@@ -2768,11 +2758,8 @@ class Spool(NodeRepr, NamespaceOwner):
         if size is None:
             tolerance = GapTolerance(count=np.inf, nearest=True)
         elif samples:
-            if (
-                isinstance(size, bool)
-                or not isinstance(size, numbers.Integral)
-                or size < 0
-            ):
+            bad = isinstance(size, bool) or not isinstance(size, numbers.Integral)
+            if bad or size < 0:
                 msg = f"A sample count must be a non-negative integer, got {size!r}."
                 raise ParameterError(msg)
             # a gap's spacing in steps
@@ -2780,15 +2767,9 @@ class Spool(NodeRepr, NamespaceOwner):
         else:
             tolerance = GapTolerance(excess=size, nearest=True)  # past one step
         # a later segment moves onto the grid by under half a step
-        shift = np.nextafter(0.5, 0)
-        merge = dict(
-            tolerance=tolerance,
-            conflict=conflict,
-            fill_value=fill_value,
-            max_shift=shift,
-        )
-        pending = _PendingFill(self, dim, merge)
-        return self._new_from_catalog(pending)
+        merge = dict(tolerance=tolerance, conflict=conflict, fill_value=fill_value)
+        merge["max_shift"] = np.nextafter(0.5, 0)
+        return self._new_from_catalog(_PendingFill(self, dim, merge))
 
     def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=False):
         """
@@ -2836,16 +2817,15 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> snapped = spool.snap_coords("time")
         >>> assert snapped[0].get_coord("time").evenly_sampled
         """
-        rows, files = self._df.reset_index(drop=True).copy(), {}
+        rows, files = self._df.reset_index(drop=True), {}
         resolver, residuals = self._catalog.resolver, self._catalog.residuals
         kwargs = dict(reverse=reverse, step=step, max_shift=max_shift)
         dims = rows["dims"].fillna("").astype(str).str.split(",")
         snapped: dict[int, dict] = {}
         for dim in coords or sorted({x for row in dims for x in row if x}):
             if f"{dim}_step" not in rows:
-                raise CoordError(
-                    f"Coordinate {dim!r} is not a dimension of this spool."
-                )
+                msg = f"Coordinate {dim!r} is not a dimension of this spool."
+                raise CoordError(msg)
             # only labels change unless a step or a reversal is asked for
             moves = rows[f"{dim}_step"].isna() | reverse | (step is not None)
             for index in np.flatnonzero(dims.map(lambda x, d=dim: d in x) & moves):
@@ -2855,9 +2835,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 with suppress_warnings(UserWarning):  # warned as patches load
                     manager = manager.snap(dim, **kwargs)[0]
                 snapped.setdefault(int(index), {})[dim] = manager.coord_map[dim]
-        catalog = self._materialize_lossy(
-            rows=rows, snapped=snapped, snap=(coords, kwargs)
-        )
+        catalog = self._materialize_lossy(snapped=snapped, snap=(coords, kwargs))
         return self._new_from_catalog(catalog)
 
     @compose_docstring(experimental=experimental_note)

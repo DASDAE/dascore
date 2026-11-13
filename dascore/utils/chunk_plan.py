@@ -2000,36 +2000,9 @@ def _fill_grids(rows, codes, n_parts, name, dtype, lattice):
             grid = Grid(base, stride, den, size, phase=phase)
             grids[part] = grid.sliced(int(grid.index_of(int(origin), True)), 1, size)
         else:  # a half tick, as a 1024 Hz step has, is exact in a float
-            step = Fraction(own[head]).limit_denominator(1024)
-            grids[part] = Grid(
-                int(origin), int(sign[head] * step.numerator), step.denominator, size
-            )
+            num, den = Fraction(own[head]).limit_denominator(1024).as_integer_ratio()
+            grids[part] = Grid(int(origin), int(sign[head] * num), den, size)
     return grids, pos
-
-
-def _fed_gaps(windows, kept, kcodes, rel_out, rel_src, lo, hi):
-    """
-    Give each window no row reaches one sample of its stretch's nearest row.
-
-    A window inside a filled gap is all fill; the sample gives it the other
-    dimensions of its own stretch.
-    """
-    parts, firsts, _ = windows
-    lone = np.setdiff1d(np.arange(len(firsts)), rel_out)
-    if not len(lone):
-        return rel_out, rel_src, lo, hi
-    pos, first = kept["_pos"].to_numpy(), kept["_first"].to_numpy()
-    sign = kept["_forward"].to_numpy()
-    rows = []
-    for window in lone:
-        cands = np.flatnonzero(kcodes == parts[window])
-        rows.append(cands[np.argmin(np.abs(pos[cands] - firsts[window]))])
-    rows = np.asarray(rows, dtype=np.int64)
-    edge = first[rows] * sign[rows]
-    rel_out, rel_src = np.r_[rel_out, lone], np.r_[rel_src, rows]
-    lo, hi = np.r_[lo, edge], np.r_[hi, edge]
-    order = np.lexsort((rel_src, rel_out))
-    return rel_out[order], rel_src[order], lo[order], hi[order]
 
 
 def _grid_windows(grid, value, overlap, keep_partial):
@@ -2982,8 +2955,6 @@ def build_chunk_plan(
         if "_modified" in sorted_df.columns
         else np.zeros(len(sorted_df), dtype=bool)
     )
-    grids: list = []  # each stretch's grid (`_fit_grids`), if fitted
-    relabel = np.zeros(n_parts, dtype=bool)
     lo_all = sorted_df["_lo"].to_numpy().astype(start_all.dtype)
     hi_all = sorted_df["_hi"].to_numpy().astype(stop_all.dtype)
     mod_after = mod_after | (lo_all != start_all) | (hi_all != stop_all)
@@ -3001,7 +2972,6 @@ def build_chunk_plan(
     kadopted = adopted_all[keep_row]
     koffsets = np.r_[0, np.cumsum(np.bincount(kcodes, minlength=n_parts))]
     shift_all = np.zeros(len(kept_df))
-    gridded = np.zeros(n_parts, dtype=bool)
     lattice = _sample_lattices(kept_df, name)
     if fill_value is None:
         grids, relabel, shift_all = _fit_grids(
@@ -3220,9 +3190,20 @@ def build_chunk_plan(
         rel_out, rel_src, lo, hi = _grid_members(
             windows, kept_df, kcodes, offsets, lattice, ticks
         )
-        if fill_value is not None:  # a window in a gap reads a sample of its stretch
-            fed = (rel_out, rel_src, lo, hi)
-            rel_out, rel_src, lo, hi = _fed_gaps(windows, kept_df, kcodes, *fed)
+        # a window inside a filled gap reads one sample of its stretch's
+        # nearest row, which gives it the stretch's other dimensions
+        ids = np.arange(len(win_first))
+        lone = () if fill_value is None else np.setdiff1d(ids, rel_out)
+        if len(lone):
+            pos, rows = kept_df["_pos"].to_numpy(), np.empty(len(lone), np.int64)
+            for num, window in enumerate(lone):
+                cands = np.flatnonzero(kcodes == win_parts[window])
+                rows[num] = cands[np.argmin(np.abs(pos[cands] - win_first[window]))]
+            edge = (kept_df["_first"].to_numpy() * kept_df["_forward"].to_numpy())[rows]
+            rel_out, rel_src = np.r_[rel_out, lone], np.r_[rel_src, rows]
+            lo, hi = np.r_[lo, edge], np.r_[hi, edge]
+            order = np.lexsort((rel_src, rel_out))
+            rel_out, rel_src, lo, hi = (x[order] for x in (rel_out, rel_src, lo, hi))
         lo, hi = _as_values(lo, start_all.dtype), _as_values(hi, start_all.dtype)
         # every position belongs to a row, so every window is fed
         opens = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])

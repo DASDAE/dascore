@@ -779,7 +779,7 @@ class PlanResolver(PatchResolver):
         return nested
 
     def _assembler(self):
-        # the fill is written once the members merge (`_filled`), so the
+        # the fill is written once the members merge (`resolve`), so the
         # merge, and the ids it stamps, never see it
         merge = {k: v for k, v in self.merge_kwargs.items() if k != "fill_value"}
         if self.merge_kwargs.get("fill_value") is not None:
@@ -1032,13 +1032,12 @@ class PlanResolver(PatchResolver):
         """Assemble the output patch a plan row describes."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
-        if self.merge_kwargs.get("fill_value") is not None:
-            return self._stamp(self._filled(output_id, members, row, trim), row)
+        dim, merge = self.dim, self.merge_kwargs
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
             patch = self._load_member(members.iloc[0].to_dict())
-            if (snap := self.merge_kwargs.get("snap")) is not None:
+            if (snap := merge.get("snap")) is not None:
                 patch = patch.snap_coords(*snap[0], **snap[1])
         elif self.mode == "concat":
             # the plan decided what fits together; assembly executes it
@@ -1047,12 +1046,26 @@ class PlanResolver(PatchResolver):
             loaded = [load(x, members) for x in members.to_dict("records")]
             patch = concatenate_planned(
                 loaded,
-                self.dim,
-                count=self.merge_kwargs.get("count"),
-                conflict=self.merge_kwargs.get("conflict", "raise"),
+                dim,
+                count=merge.get("count"),
+                conflict=merge.get("conflict", "raise"),
             )
         else:
+            # a fill's members fill onto their output's slice of the
+            # stretch's grid, or the part a trim asks for, loading only
+            # the members reaching it
+            if fill := (merge.get("fill_value") is not None):
+                spec = members[f"_{dim}_stretch"].iloc[0]
+                units = _stated_units(members[f"_{dim}_units"].iloc[0])
+                # a whole stretch keeps the grid its members fill onto themselves
+                whole = not isinstance(spec, tuple) or spec[5:7] == (0, spec[3])
+                grid = None if whole and not trim else stretch_coordinate(spec, units)
+                if (window := trim.get(dim)) is not None:
+                    members = reached(members, dim, *window)
+                    grid = None if grid is None else grid.select(tuple(window))[0]
             patch = self._assembled(output_id, members)
+            if fill:
+                patch = fill_on_grid(patch, dim, grid, merge, row.get("_dtype"))
         return self._stamp(patch, row)
 
     def _assembled(self, output_id: int, members: pd.DataFrame) -> dc.Patch:
@@ -1060,28 +1073,6 @@ class PlanResolver(PatchResolver):
         joined = members.assign(current_index=output_id)
         (patch,) = self._assembler()._patch_from_instruction_df(joined)
         return patch
-
-    def _filled(self, output_id: int, members, row, trim) -> dc.Patch:
-        """
-        A fill plan's output on its stretch's grid, or the part a trim asks for.
-
-        Each member carries its output's slice of the stretch's grid, which
-        the members fill onto; a trim loads only the members reaching it.
-        """
-        dim, merge = self.dim, self.merge_kwargs
-        spec = members[f"_{dim}_stretch"].iloc[0]
-        units = _stated_units(members[f"_{dim}_units"].iloc[0])
-        # a whole stretch keeps the grid its members fill onto themselves
-        whole = not isinstance(spec, tuple) or (spec[5], spec[6]) == (0, spec[3])
-        grid = None if whole and not trim else stretch_coordinate(spec, units)
-        if (window := trim.get(dim)) is not None:
-            members = reached(members, dim, *window)
-            grid = None if grid is None else grid.select(tuple(window))[0]
-        patch = self._assembled(output_id, members)
-        fill, tolerance = merge["fill_value"], merge["tolerance"]
-        return fill_on_grid(
-            patch, dim, grid, fill, tolerance, row.get("_dtype") or None
-        )
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -1365,13 +1356,8 @@ def _with_snapped(records, snapped) -> list:
             for coord in patch.coords:
                 if (snap := new.get(coord.coord_name)) is not None:
                     restated = _coord_record(coord.coord_name, snap.to_summary())
-                    keep = ("coord_name", "coord_dims")
-                    fields = {
-                        x: getattr(restated, x) for x in coord.__dataclass_fields__
-                    }
-                    coord = replace(
-                        coord, **{k: v for k, v in fields.items() if k not in keep}
-                    )
+                    assert restated is not None  # a snapped coordinate has a dtype
+                    coord = replace(restated, coord_dims=coord.coord_dims)
                 coords.append(coord)
             patches.append(replace(patch, coords=tuple(coords)))
         out.append(replace(source, patches=tuple(patches)))
