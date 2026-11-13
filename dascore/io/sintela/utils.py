@@ -5,8 +5,10 @@ Notes
 -----
 - A file holds one or more contiguous runs of packets; a dropped,
   repeated, or concatenated packet starts a new run, and each run is one
-  patch. Within a run, each packet header's start time must stay on the
-  grid the run's first packet sets.
+  patch. Within a run, the time coordinate follows the sample counts from
+  the run's first packet's start time. A packet start time more than half
+  a packet off that grid gives a SnapWarning naming the largest offset; a
+  scan checks each run's end packets, reading the data checks every packet.
 
 - We only support v3 for now, though some commented out code here has the
   start for version 4 support.
@@ -15,6 +17,7 @@ Notes
 from __future__ import annotations
 
 import re
+import warnings
 from itertools import pairwise
 
 import numpy as np
@@ -23,8 +26,9 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
-from dascore.io.utils import step_from_rate
+from dascore.io.utils import _DASCORE_DIR, _resource_name, step_from_rate
 from dascore.utils.misc import get_buffer_size, maybe_mem_map
+from dascore.warnings import SnapWarning
 
 SYNC_WORD = 0x11223344
 _RUN_KEY = re.compile(r"packets_(\d+)_(\d+)")
@@ -168,13 +172,13 @@ def _read_stamps(fid, header, indices):
 
 def _off_grid(stamps, base, offsets, header):
     """
-    Return whether each packet's sample count and start time are off grid.
+    Return whether each packet's sample count is off grid, and its clock offset.
 
     A packet ``offsets`` packets after ``base`` must hold the samples
     ``offsets * num_samples`` onward from it, so its header's sample count
-    must match that exactly and its start time to within half a packet;
-    the tolerance absorbs clock jitter while catching a dropped, repeated,
-    or concatenated packet.
+    must match that exactly; a dropped, repeated, or concatenated packet
+    breaks it. The clock offset is the start time's distance, in ns, from
+    where the sample count puts it.
     """
     num_samples = int(header["num_samples"])
     # Unrounded, so the expected offsets do not drift over a long file.
@@ -183,28 +187,37 @@ def _off_grid(stamps, base, offsets, header):
     # the int64 view gives signed time offsets.
     count_off = (stamps[:, 0] - base[0]).astype(np.int64)
     time_off = (stamps[:, 1] - base[1]).view(np.int64)
-    bad_time = np.abs(time_off - offsets * packet_ns) > packet_ns / 2
-    return count_off != offsets * num_samples, bad_time
+    return count_off != offsets * num_samples, time_off - offsets * packet_ns
 
 
-def _check_run(stamps, header, first=0, offsets=None):
+def _check_run(stamps, header, where, first=0, offsets=None):
     """
-    Raise unless packets sit on the grid packet ``first`` starts.
+    Raise unless packets' sample counts sit on the grid packet ``first`` starts.
 
     ``stamps`` belong to the packets ``offsets`` after ``first``, by
-    default every packet of the run in order.
+    default every packet of the run in order. Start times within half a
+    packet of the grid are clock jitter; beyond that, warn once with the
+    largest offset.
     """
     offsets = np.arange(len(stamps)) if offsets is None else np.asarray(offsets)
-    bad_count, bad_time = _off_grid(stamps, stamps[0], offsets, header)
-    if np.any(bad := bad_count | bad_time):
-        row = int(np.flatnonzero(bad)[0])
-        field = "sample count" if bad_count[row] else "start time"
+    bad_count, clock = _off_grid(stamps, stamps[0], offsets, header)
+    if np.any(bad_count):
+        row = int(np.flatnonzero(bad_count)[0])
         msg = (
             f"Sintela binary packet {first + int(offsets[row])} (0-based) has "
-            f"a {field} off the grid set by packet {first}, so the packets "
+            f"a sample count off the grid set by packet {first}, so the packets "
             "between are not one contiguous recording."
         )
         raise InvalidFiberFileError(msg)
+    half_packet = int(header["num_samples"]) / float(header["sample_rate"]) * 5e8
+    worst = np.max(np.abs(clock))
+    if worst > half_packet:
+        msg = (
+            f"{_resource_name(where)}: Sintela binary packet start times sit up "
+            f"to {worst / 1e9:.6g} s off the grid the sample counts set from "
+            f"packet {first}; the time coordinate follows the sample counts."
+        )
+        warnings.warn(msg, SnapWarning, skip_file_prefixes=(_DASCORE_DIR,))
 
 
 def _find_run_starts(rid, header, count) -> tuple[list[int], dict]:
@@ -306,9 +319,8 @@ def _run_blocks(fid, header, key=""):
             msg = f"No patch named '{key}' in the Sintela binary file."
             raise PatchAttributeError(msg)
     run = blocks[start:stop]
-    _check_run(
-        run[:, _STAMP_OFFSET : _STAMP_OFFSET + 16].copy().view("<u8"), header, start
-    )
+    stamps = run[:, _STAMP_OFFSET : _STAMP_OFFSET + 16].copy().view("<u8")
+    _check_run(stamps, header, fid, start)
     return run
 
 
@@ -349,7 +361,7 @@ def _scan_runs(rid, attr_class=PatchAttrs):
         # Only the run's ends are checked here; read_array checks every packet.
         # Bisection read both packets either side of each break.
         ends = np.stack([stamps[start], stamps[stop - 1]])
-        _check_run(ends, header, start, [0, stop - 1 - start])
+        _check_run(ends, header, rid, start, [0, stop - 1 - start])
         key = _run_key(start, stop) if len(runs) > 1 else ""
         time = _get_time_coord(header, stamps[start][1], stop - start)
         coords = {"time": time, "distance": _get_dist_coord(header)}
