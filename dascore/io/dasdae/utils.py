@@ -262,7 +262,7 @@ def _save_coord(coord, name, group, compact: bool, options=None):
             node.attrs["step_is_timedelta64"] = is_td
         if compact and getattr(coord, "runs_count", 1) > 1:
             try:  # runs read back as they are; HDF5 holds ~8,000 lengths
-                node.attrs[_EXACT] = [len(x) for x in coord.runs]
+                node.attrs[_EXACT] = np.array([x.count for x in coord.runs], np.int64)
             except OSError:
                 why = "DASDAE, which records up to about 8,000 segments"
                 raise CoordError(_uneven_message(name[7:], coord, why)) from None
