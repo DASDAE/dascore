@@ -122,12 +122,12 @@ def _shift_lags(data, *, axis, step):
 
 class Correlate(PatchProcessor):
     """
-    Correlate source row/columns in a 2D patch with all other row/columns.
+    Correlate source row/columns in a patch with all other row/columns.
 
     The correlation runs in the frequency domain, transforming the target
     dimension when needed. For an already transformed patch, apply
     [`Patch.correlate_shift`](`dascore.Patch.correlate_shift`) after
-    the inverse transform. The 2D input becomes 3D, with one new source
+    the inverse transform. The output gains one new, last source
     dimension; [`Patch.squeeze`](`dascore.Patch.squeeze`) removes it for a
     single source.
 
@@ -136,6 +136,10 @@ class Correlate(PatchProcessor):
     samples
         Interpret source selectors as sample indices rather than coordinate
         values.
+    lag_dim
+        The dimension to correlate along. A 2D patch defaults to the
+        dimension not named in ``kwargs``; a patch with more dimensions
+        must name it, and every other dimension is correlated separately.
     **kwargs
         Source dimension mapped to one or more source values or indices.
 
@@ -173,6 +177,15 @@ class Correlate(PatchProcessor):
     >>> dft_patch = padded_patch.dft("time", real=True)
     >>> cc_patch = dft_patch.correlate(distance=[1, 3, 7], samples=True)
     >>> cc_out = cc_patch.idft().correlate_shift("time")
+    >>>
+    >>> # Correlate along time separately for each source of a 3D patch.
+    >>> import numpy as np
+    >>> patch_3d = dc.Patch(
+    ...     data=np.random.rand(3, 2, 400),
+    ...     coords={"source": [0, 1, 2], "distance": [0.0, 1.0], "time": range(400)},
+    ...     dims=("source", "distance", "time"),
+    ... )
+    >>> cc_patch = patch_3d.correlate(distance=0, samples=True, lag_dim="time")
 
     Notes
     -----
@@ -180,13 +193,14 @@ class Correlate(PatchProcessor):
     (m/s)**2 for velocity), as each value is a sum of products of the data.
     Single-precision data are correlated in single precision.
 
-    Correlation runs along the dimension not named in ``kwargs``. That dimension
+    Correlation runs along ``lag_dim``. That dimension
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a
     ``distance`` source transforms ``time`` into ``lag_time``.
     """
 
     __version__ = "1.3"
     samples: Any = False
+    lag_dim: Any = None
 
     model_config = ConfigDict(extra="allow")
     data_type = "correlation"
@@ -199,13 +213,16 @@ class Correlate(PatchProcessor):
                 "The 'lag' parameter was removed. Select on the lag coordinate instead."
             )
             raise TypeError(msg)
-        if len(meta.dims) != 2:
-            msg = "must be a 2D patch."
+        if len(meta.dims) < 2:
+            msg = "must be at least a 2D patch."
             raise ParameterError(msg)
         dim, source_axis, source = get_dim_axis_value(meta, kwargs=extras)[0]
-        # Get the axis and coord over which fft should be calculated.
-        fft_axis = next(iter(set(range(len(meta.dims))) - {source_axis}))
-        fft_dim = meta.dims[fft_axis]
+        # Get the dim along which the fft should be calculated.
+        others = [x for x in meta.dims if x != dim]
+        fft_dim = others[0] if self.lag_dim is None else self.lag_dim
+        if fft_dim not in others or (self.lag_dim is None and len(others) > 1):
+            msg = f"lag_dim must be one of {others}, not {self.lag_dim!r}."
+            raise ParameterError(msg)
         # Determine if the input patch has already been transformed.
         transform = not fft_dim.startswith("ft_")
         plan: dict[str, Any] = {"transform": transform, "source_axis": source_axis}
@@ -237,7 +254,7 @@ class Correlate(PatchProcessor):
             out = out.update_attrs(data_units=units**2)
         # Undo fft if this function did one, shift, and update coord.
         if transform:
-            out, idft = Idft().get_metadata(out)
+            out, idft = Idft(dim=fft_dim).get_metadata(out)
             out, shift = CorrelateShift(dim=fft_dim).get_metadata(out)
             plan |= {"idft": idft, "shift": shift}
         return out, plan
@@ -247,8 +264,8 @@ class Correlate(PatchProcessor):
         if transform:
             data = np.pad(data, plan["pad_width"])
             data = _dft_kernel(data, np, sft, cast=False, **plan["dft"])
-        # The sources, along a third axis so they broadcast with the data.
-        selector: list[Any] = [slice(None), slice(None), None]
+        # The sources, along a new last axis so they broadcast with the data.
+        selector: list[Any] = [slice(None)] * data.ndim + [None]
         selector[source_axis] = index
         source = np.swapaxes(data[tuple(selector)], source_axis, -1)
         data = data[..., None] * np.conj(source)

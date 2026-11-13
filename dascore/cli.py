@@ -9,6 +9,19 @@ import sys
 from pathlib import Path
 
 import dascore as dc
+from dascore.core.inventory import (
+    Acquisition,
+    Cable,
+    DistanceMap,
+    FiberArray,
+    FiberSegment,
+    Interrogator,
+    Inventory,
+    Network,
+    OpticalPath,
+)
+from dascore.core.inventory_loader import load_directory
+from dascore.exceptions import InvalidInventoryError
 from dascore.utils.doc_cache import documentation_cache, read_document
 from dascore.utils.doc_corpus import DocumentationError
 from dascore.utils.doc_skills import (
@@ -17,6 +30,10 @@ from dascore.utils.doc_skills import (
     read_bootstrap,
     read_skill,
 )
+from dascore.utils.documents import write_document
+
+# Stands in for every descriptive value the user should replace.
+_PLACEHOLDER = "TODO"
 
 
 def _doc(args: argparse.Namespace) -> None:
@@ -54,6 +71,75 @@ def _skill(args: argparse.Namespace) -> None:
         sys.stdout.write(read_skill(args.name))
     else:
         args.error("Provide a skill name or use --bootstrap.")
+
+
+def _skeleton() -> dict[str, tuple]:
+    """Map each skeleton file to the object it holds and the fields it leaves out."""
+    span = (0.0, 1000.0)
+    path = OpticalPath(
+        optical_components=(
+            FiberSegment(distance_min=0.0, distance_max=1000.0, container="cable"),
+        )
+    )
+    acquisition = Acquisition(
+        code="DAS",
+        location_code="00",
+        data_category="DAS",
+        data_type="strain_rate",
+        interrogator="interrogator",
+        gauge_length=10.0,
+        spatial_interval=1.0,
+        sample_rate=1000.0,
+        distance_map=DistanceMap(acquisition_distance=span, optical_distance=span),
+    )
+    collections = {"networks", "resources", "fiber_arrays", "stations"}
+    return {
+        "inventory.yaml": (Inventory(), collections),
+        "resources/interrogator.yaml": (
+            Interrogator(model=_PLACEHOLDER),
+            {"resource_id"},
+        ),
+        "resources/cable.yaml": (Cable(model=_PLACEHOLDER), {"resource_id"}),
+        "networks/XX.yaml": (Network(code="XX"), collections),
+        "fiber_arrays/XX.STA/attrs.yaml": (
+            FiberArray(code="STA"),
+            {"acquisitions", "optical_paths"},
+        ),
+        "fiber_arrays/XX.STA/path.00/attrs.yaml": (path, set()),
+        "acquisitions/XX.STA.00.DAS.yaml": (acquisition, set()),
+    }
+
+
+def _inventory_init(args: argparse.Namespace) -> None:
+    """Write a minimal inventory directory to fill in."""
+    if args.directory.exists() and any(args.directory.iterdir()):
+        args.error(f"{args.directory} exists and is not empty.")
+    for name, (model, leave_out) in _skeleton().items():
+        # Unbounded times dump as NaT, which a person filling in should not meet.
+        leave_out |= {"time_min", "time_max"}
+        data = model.model_dump(mode="json", exclude_defaults=True, exclude=leave_out)
+        sys.stdout.write(f"{write_document(data, args.directory / name, 'yaml')}\n")
+    sys.stdout.write(
+        f"Replace {_PLACEHOLDER!r}, the codes XX, STA, 00 and DAS, and every "
+        "number with your deployment's values.\n"
+    )
+
+
+def _inventory_check(args: argparse.Namespace) -> None:
+    """Load an inventory directory and report what is wrong with it."""
+    if not args.directory.is_dir():
+        args.error(f"{args.directory} is not a directory.")
+    inventory = load_directory(args.directory)
+    arrays = [x for net in inventory.networks for x in net.fiber_arrays]
+    counts = {
+        "networks": len(inventory.networks),
+        "fiber arrays": len(arrays),
+        "acquisitions": sum(len(x.acquisitions) for x in arrays),
+        "optical paths": sum(len(x.optical_paths) for x in arrays),
+        "resources": len(inventory.resources),
+    }
+    summary = ", ".join(f"{value} {key}" for key, value in counts.items())
+    sys.stdout.write(f"OK: {summary}\n")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -94,6 +180,14 @@ def _parser() -> argparse.ArgumentParser:
         "--bootstrap", action="store_true", help="Print the native agent bootstrap"
     )
     skill.set_defaults(run=_skill, error=skill.error)
+    inventory = commands.add_parser(
+        "inventory", help="Start or check an inventory directory."
+    )
+    actions = inventory.add_subparsers(required=True, metavar="ACTION")
+    for name, run in (("init", _inventory_init), ("check", _inventory_check)):
+        action = actions.add_parser(name, help=run.__doc__, description=run.__doc__)
+        action.add_argument("directory", type=Path, help="The inventory directory")
+        action.set_defaults(run=run, error=action.error)
     return parser
 
 
@@ -117,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         os.dup2(devnull, sys.stdout.fileno())
         os.close(devnull)
         return 1
-    except (DocumentationError, OSError) as exc:
+    except (DocumentationError, InvalidInventoryError, OSError) as exc:
         sys.stderr.write(f"dascore: {exc}\n")
         return 1
     return 0
