@@ -912,7 +912,7 @@ class PatchCatalog:
         # the format's default named, so a union can compare two spools;
         # keyed as the rows store the path, which is POSIX
         snaps = {
-            str(x.source_path).replace("\\", "/"): _resolve_snap(
+            str(x.source_path).replace(os.sep, "/"): _resolve_snap(
                 FiberIO.manager.get_fiberio(
                     format=x.source_format, version=x.source_version
                 ),

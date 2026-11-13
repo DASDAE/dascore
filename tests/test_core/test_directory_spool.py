@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -102,6 +103,17 @@ class TestDirectorySpoolBasics:
         spool = Spool._from_directory(path).update().sort("time")
         patch = spool[0]
         assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
+
+    @pytest.mark.skipif(os.sep != "/", reason="backslash is a path separator")
+    @pytest.mark.parametrize("reopen", [False, True])
+    def test_backslash_in_file_name(self, tmp_path, random_patch, reopen):
+        """A backslash in a POSIX file name survives indexing and reopening."""
+        random_patch.io.write(tmp_path / "a\\b.h5", "DASDAE")
+        spool = dc.spool(tmp_path).update()
+        if reopen:
+            spool = dc.spool(tmp_path)
+        assert spool.get_contents()["source_path"][0].endswith("a\\b.h5")
+        assert isinstance(spool[0], dc.Patch)
 
 
 class TestMultiPatchFile:
