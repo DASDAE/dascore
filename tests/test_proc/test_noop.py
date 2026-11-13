@@ -20,9 +20,7 @@ NO_OPS = (
     # The same units spelled differently are still those units.
     ("unit_patch", "convert_units", (), {"distance": "meter"}),
     ("unit_patch", "convert_units", (), {"data_units": "m/s"}),
-    # Not `unit_patch`: `set_units` clears data units it is not given,
-    # which is a change and rightly not short circuited.
-    ("random_patch", "set_units", (), {"distance": "m"}),
+    ("unit_patch", "set_units", (), {"distance": "m"}),
     ("unit_patch", "simplify_units", (), {}),
     ("random_patch_with_lat_lon", "drop_coords", ("not_a_coord",), {}),
     ("random_patch", "drop_private_coords", (), {}),
@@ -53,8 +51,8 @@ class TestTheGuardDoesNotOverFire:
         assert get_quantity(out.get_coord("distance").units) == get_quantity("100 cm")
 
     def test_set_units_still_drops_data_units(self, unit_patch):
-        """`set_units` clears the data units when it is not given any."""
-        assert unit_patch.set_units(distance="m").attrs.data_units is None
+        """`set_units` clears the data units when given None."""
+        assert unit_patch.set_units(None, distance="m").attrs.data_units is None
 
     def test_object_array_is_still_conjugated(self, random_patch):
         """

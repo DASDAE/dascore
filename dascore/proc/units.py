@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from enum import Enum, auto
 from typing import Any
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_serializer
 
 import dascore as dc
 from dascore.core.processor import PatchProcessor
+from dascore.models.base import DascoreBaseModel
 from dascore.units import conversion_factors, get_factor_and_unit, units_match
 
 
@@ -25,6 +27,15 @@ def _replace_data_units(
     return dc.PatchAttrs.from_dict(out)
 
 
+class _Unset(Enum):
+    """Sentinel for data units not given, which None (remove them) cannot express."""
+
+    UNSET = auto()
+
+
+_UNSET = _Unset.UNSET
+
+
 class SetUnits(PatchProcessor):
     """
     Set the units of a patch's data or coordinates.
@@ -35,6 +46,7 @@ class SetUnits(PatchProcessor):
         The input patch.
     data_units
         New units for the patch data. Accepts both unit and quantity strings.
+        None or "" removes the data units; if not given, they are kept.
     **kwargs
         Used to specify new units for any of the patch's coordinates.
 
@@ -58,18 +70,32 @@ class SetUnits(PatchProcessor):
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
 
-    data_units: Any = None
+    data_units: Any = _UNSET
 
     model_config = ConfigDict(extra="allow")
 
+    @property
+    def kwargs(self) -> dict[str, Any]:
+        """Return the fields, data units left out when not given."""
+        return {k: v for k, v in super().kwargs.items() if v is not _UNSET}
+
+    @model_serializer(mode="wrap")
+    def _write_object_type(self, handler, info):
+        """Dump the fields, data units left out when not given."""
+        out = DascoreBaseModel._write_object_type(self, handler, info)
+        if self.data_units is _UNSET:
+            out.pop("data_units", None)
+        return out
+
     def get_metadata(self, meta):
         """Return the coordinates and data units with the units set."""
+        data_units = self.data_units
+        if data_units is _UNSET:
+            data_units = meta.attrs.data_units
         coords = meta.coords.set_units(**(self.model_extra or {}))
-        if coords is meta.coords and units_match(
-            meta.attrs.data_units, self.data_units
-        ):
+        if coords is meta.coords and units_match(meta.attrs.data_units, data_units):
             return meta, {}
-        attrs = _replace_data_units(meta.attrs, self.data_units)
+        attrs = _replace_data_units(meta.attrs, data_units)
         return meta.new(attrs=attrs, coords=coords), {}
 
 

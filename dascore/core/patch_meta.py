@@ -20,6 +20,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import ParameterError
+from dascore.proc.units import _UNSET
 from dascore.utils.attrs import _values_equal
 from dascore.utils.display import (
     NodeRepr,
@@ -474,7 +475,7 @@ class PatchMeta(NodeRepr):
     set_dims = dascore.proc.set_dims
     get_coord = dascore.proc.get_coord
 
-    def set_units(self, data_units: Any = None, **kwargs) -> Self:
+    def set_units(self, data_units: Any = _UNSET, **kwargs) -> Self:
         """Set the units of the data or coordinates without conversion."""
         return dascore.proc.SetUnits(data_units=data_units, **kwargs).run(self)
 
