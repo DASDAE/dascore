@@ -14,7 +14,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.exceptions import InvalidFiberFileError, InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
     parse_units,
@@ -657,3 +657,71 @@ def _get_dims_from_attrs(attrs):
         unbytes = [unbyte(x) for x in iterate(dims)]
         dims = tuple(map_.get(x, x) for x in unbytes)
     return dims
+
+
+# --- The flat layout: one DAS (time, locus) dataset carrying the attrs.
+
+_FLAT_DATASET = "DAS"
+_FLAT_ATTRS = frozenset(
+    {
+        "AmpScaling",
+        "Count",
+        "FibreLengthMultiplier",
+        "GaugeLength",
+        "NumberOfLoci",
+        "OutputDataRate",
+        "PartEndTime",
+        "PartStartTime",
+        "RawDataUnit",
+        "SpatialResolution",
+        "StartDistance",
+        "StopDistance",
+    }
+)
+
+
+class ProdMLFlatPatchAttrs(dc.PatchAttrs):
+    """Patch attrs for the flat layout."""
+
+    gauge_length: OptionalFiniteFloat = None
+    # The factor already applied to the stored samples.
+    amp_scaling: OptionalFiniteFloat = None
+
+
+def _is_flat_prodml(resource) -> bool:
+    """True if the file has a DAS dataset carrying every flat-layout attr."""
+    dataset = resource.get(_FLAT_DATASET)
+    return isinstance(dataset, h5py.Dataset) and _FLAT_ATTRS.issubset(dataset.attrs)
+
+
+def _get_flat_metadata(resource):
+    """
+    Attrs and coords of the flat layout; the header states both grids.
+
+    Samples start at PartStartTime, one per 1/OutputDataRate; loci start at
+    StartDistance, one per SpatialResolution * FibreLengthMultiplier.
+    """
+    dataset = resource[_FLAT_DATASET]
+    attrs = dataset.attrs
+    shape = (int(attrs["Count"]), int(attrs["NumberOfLoci"]))
+    if dataset.shape != shape:
+        msg = f"{dataset.name} shape {dataset.shape} is not (Count, NumberOfLoci)"
+        raise InvalidFiberFileError(msg)
+    time = get_coord(
+        start=_part_time(attrs, "PartStartTime"),
+        step=step_from_rate(_maybe_unpack(attrs["OutputDataRate"])),
+        shape=shape[:1],
+        units="s",
+    )
+    step = float(attrs["SpatialResolution"]) * float(attrs["FibreLengthMultiplier"])
+    start = float(attrs["StartDistance"])
+    distance = get_coord(start=start, step=step, shape=shape[1:], units="m")
+    coords = dc.get_coord_manager(
+        coords={"time": time, "distance": distance}, dims=("time", "distance")
+    )
+    info = {
+        "gauge_length": float(attrs["GaugeLength"]),
+        "amp_scaling": float(attrs["AmpScaling"]),
+        **_get_data_unit_and_type(dataset),
+    }
+    return ProdMLFlatPatchAttrs.model_validate(info), coords
