@@ -1029,7 +1029,11 @@ FREE_CALLS = {
     "HampelFilter": lambda x: x.hampel_filter(threshold=3, time=5, samples=True),
     "WienerFilter": lambda x: x.wiener_filter(time=5, samples=True),
     "Hilbert": lambda x: x.envelope("time"),
+    "Taper": lambda x: x.taper(time=0.1),
 }
+# Declared although a length found against a float coordinate can round a
+# sample either way between windows: one plan for every window is the point.
+ROUNDED = {"Taper"}
 
 
 class _Sized(dc.PatchProcessor):
@@ -1057,6 +1061,8 @@ class TestPositionFree:
     @pytest.mark.parametrize("time", ("datetime", "float"))
     def test_declaration_holds(self, patch, monkeypatch, name, time):
         """Checked in every window all the same, each declared plan is one plan."""
+        if time == "float" and name in ROUNDED:
+            pytest.skip("a length rounded against floats may differ by a sample")
         if time == "float":
             # Steps which no float holds exactly, so rounding has its say.
             floats = np.arange(patch.shape[1]) * 0.004 + 1e6 / 3
@@ -1096,6 +1102,19 @@ class TestPositionFree:
         assert window.detrend("time").shape == patch.shape
         with pytest.raises(ParameterError, match="does not set position_free"):
             Windowed(_Sized(), time=10, samples=True)(patch)
+
+    def test_taper_is_one_taper_in_every_window(self):
+        """Every window gets the first one's ramps, whatever floats would round to."""
+        coords = {
+            "distance": np.arange(2.0),
+            "time": 12345.678 + np.arange(30_000) / 1e4,
+        }
+        patch = dc.Patch(np.ones((2, 30_000)), coords, ("distance", "time"))
+        window = patch.window(time=161, overlap=0, samples=True)
+        out = window.taper(time=0.1).data[0, : 161 * 186].reshape(186, 161)
+        # Ones in, so each row is its window's taper; every row is the first.
+        np.testing.assert_array_equal(out, np.broadcast_to(out[0], out.shape))
+        assert out[0, 0] == 0 and out[0, 80] == 1
 
     def test_undeclared_is_checked_when_few(self, patch):
         """Undeclared, it still runs where every window can be asked."""

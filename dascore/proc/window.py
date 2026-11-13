@@ -695,7 +695,7 @@ class PatchWindow:
             msg = (
                 f"{name} is not a patch operation a window can run. A window "
                 "runs the patch operations written as processors, such as "
-                "detrend, normalize or pass_filter; anything else is a function "
+                "detrend, taper or pass_filter; anything else is a function "
                 "given to apply."
             )
             raise AttributeError(msg)
