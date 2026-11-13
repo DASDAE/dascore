@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.config import get_config
+from dascore.constants import MERGE_EXEMPT_ATTRS
 from dascore.core.attrs import PatchAttrs
 from dascore.core.source import _offsets_text
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
@@ -50,10 +51,10 @@ from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
-# History, dims, and coords are structural, not scalar index columns.
+# Provenance, dims, and coords are not scalar index columns.
 # Index origin_id for patch lookup without loading data, and data_id for
 # provenance queries. Exclude both from merge conflicts (see _SOURCE_COLUMNS).
-_SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
+_SKIPPED_ATTRS = frozenset({*MERGE_EXEMPT_ATTRS, "dims", "coords"})
 
 
 @dataclass(frozen=True)
