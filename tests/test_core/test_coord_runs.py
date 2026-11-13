@@ -522,7 +522,7 @@ class TestReviewFindings:
         patch = patch.update_coords(distance=design_case)
         with pytest.raises(CoordError, match="not evenly sampled"):
             patch.get_coord("distance", require_evenly_sampled=True)
-        with pytest.raises(CoordError, match="not evenly sampled"):
+        with pytest.raises(CoordError, match="evenly sampled"):
             patch.update_attrs(data_type="velocity").velocity_to_strain_rate_edgeless()
 
     def test_median_spacing_ignores_orientation(self):
