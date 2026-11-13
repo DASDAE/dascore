@@ -287,6 +287,7 @@ VENDOR_ATTRS = frozenset(
         "group",
         "index_of_reflection",
         "index_of_refraction",
+        "laser_wavelength",
         "long_name",
         "metadata_recording_time",
         "magnitude",

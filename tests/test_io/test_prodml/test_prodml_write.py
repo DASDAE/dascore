@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.exceptions import InvalidSpoolError, ParameterError, PatchError, UnitError
 from dascore.io.prodml.core import ProdMLV2_0, ProdMLV2_1
 from dascore.units import get_quantity_str
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings, unbyte
 
 
@@ -228,6 +229,14 @@ class TestProdMLWriteRoundTrip:
         )
         assert out.attrs.facility_id == patch.attrs.facility_id
         assert out.attrs.service_company_name == patch.attrs.service_company_name
+
+    def test_optical_attrs_round_trip(self, tmp_path):
+        """The refractive index and laser wavelength survive a write/read."""
+        patch = dc.spool(fetch("opta_sense_quantx_v2.h5"))[0]
+        path = dc.write(patch, tmp_path / "optical.h5", "PRODML")
+        out = dc.read(path, "PRODML")[0]
+        assert out.attrs.refractive_index == pytest.approx(patch.attrs.refractive_index)
+        assert out.attrs.laser_wavelength == pytest.approx(patch.attrs.laser_wavelength)
 
     def test_missing_metadata_uses_defaults(self, prodml_patch, tmp_path):
         """Required metadata should receive deterministic compatibility defaults."""

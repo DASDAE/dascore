@@ -261,11 +261,13 @@ class RadiansToStrain(PatchProcessor):
         normalized per unit length (rad or rad/s); ignored for rad/m and
         rad/(m*s).
     wave_length ($\lambda$)
-        The laser wavelength in m.
+        The laser wavelength in m. Defaults to the patch's `laser_wavelength`
+        attr, else 1550e-9.
     stress_constant ($\zeta$)
         The stress constant.
     refractive_index ($n$)
-        The refractive index of the cable.
+        The refractive index of the cable. Defaults to the patch's
+        `refractive_index` attr, else 1.445.
 
     Examples
     --------
@@ -293,11 +295,11 @@ class RadiansToStrain(PatchProcessor):
     strain/s) and "strain" otherwise.
     """
 
-    __version__ = "1.1"
+    __version__ = "1.2"
     gauge_length: Any = None
-    wave_length: float = 1550.0 * 10 ** (-9)
+    wave_length: float | None = None
     stress_constant: float = 0.79
-    refractive_index: float = 1.445
+    refractive_index: float | None = None
 
     def get_metadata(self, meta):
         """Return strain metadata and the factor for phase units."""
@@ -319,9 +321,16 @@ class RadiansToStrain(PatchProcessor):
             msg = f"radians to strain failed to convert {data_units} to strain."
             raise UnitError(msg)
         normalized = dimensions.get("[length]", 0) == -1
-        const = self.wave_length / (
-            4 * np.pi * self.refractive_index * self.stress_constant
-        )
+        wave_length, index = self.wave_length, self.refractive_index
+        if wave_length is None:
+            wave_length = meta.attrs.get("laser_wavelength")
+        if wave_length is None:
+            wave_length = 1550e-9
+        if index is None:
+            index = meta.attrs.get("refractive_index")
+        if index is None:
+            index = 1.445
+        const = wave_length / (4 * np.pi * index * self.stress_constant)
         new_units = units * get_unit("strain/radians")
         if normalized:
             # For example, OptoDAS files can contain rad/(m*s): phase is already
