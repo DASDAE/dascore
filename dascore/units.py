@@ -383,8 +383,26 @@ def _unit_to_str(unit: Unit) -> str:
     Unit is safe to use as a cache key.
     """
     with _UNIT_LOCK:
+        if _has_rounded_exponent(unit):
+            return _exact_unit_str(unit)
         # A dimensionless unit prints as "", which reads back as no units.
         return str(unit) or "dimensionless"
+
+
+def _has_rounded_exponent(unit: Unit) -> bool:
+    """True if the formatter, which keeps six digits, would round an exponent."""
+    powers = (np.asarray(x, dtype=float).item() for x in unit._units.values())
+    return any(float(f"{x:n}") != x for x in powers)
+
+
+def _exact_unit_str(unit: Unit) -> str:
+    """Write a unit term by term, each exponent as a full Python number."""
+    terms = []
+    for name, power in unit._units.items():
+        power = np.asarray(power, dtype=float).item()
+        exponent = int(power) if power.is_integer() else power
+        terms.append(f"{unit._REGISTRY.Unit(name)} ** {exponent}")
+    return " * ".join(terms)
 
 
 # The subset of quantity_like which names a unit; a numpy time value
@@ -420,6 +438,9 @@ def get_quantity_str(quant_value: unit_like) -> str | None:
     if isinstance(quant_value, Quantity):
         if quant_value.magnitude == 1.0:
             return _unit_to_str(quant_value.units)
+        if _has_rounded_exponent(quant_value.units):
+            units = _unit_to_str(quant_value.units)
+            return f"{float(quant_value.magnitude)!r} {units}"
         return str(quant_value)
     # What remains is a pint Unit: validate it by conversion.
     get_quantity(quant_value)

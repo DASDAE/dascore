@@ -500,7 +500,7 @@ def _apply_binary_ufunc(
         magnitude = float(f"{quantity.magnitude:.12g}")
         if magnitude == 1:
             return get_quantity_str(quantity.units)
-        return str(magnitude * quantity.units)
+        return get_quantity_str(magnitude * quantity.units)
 
     def _apply_op_one_unitful(
         patch, other, operator, attrs, data_units, other_units, reversed=False
@@ -582,7 +582,9 @@ def _apply_binary_ufunc(
         other_q = other_units if other_units is not None else dimensionless
         # µϵ is dimensionless, so the registry would coerce the bare side
         # into it (1.5 becomes 1.5e6 µϵ) instead of asking it to adopt.
-        stand_in = _has_scale(known) and not _needs_equal_units(operator)
+        # A logarithmic unit (dBm) stands in too, so its powers are refused.
+        is_scaled = _has_scale(known) or _is_logarithmic_unit(known)
+        stand_in = is_scaled and not _needs_equal_units(operator)
         if known.dimensionless and _needs_equal_units(operator):
             patch_q = other_q = known
         elif stand_in:

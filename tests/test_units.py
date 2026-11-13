@@ -127,6 +127,21 @@ class TestGetQuantStr:
         out = get_quantity_str(quant)
         assert "10.0" in out
 
+    @pytest.mark.parametrize(
+        "quant",
+        (
+            get_quantity("m") ** np.float64(1 / 3),
+            get_quantity("m") ** np.float32(1 / 3),
+            get_quantity("m") ** np.float32(0.1),
+            get_quantity("100 m") ** (1 / 3),
+            get_quantity("m ** (1/3) / s ** 0.333333"),
+            get_quantity("m ** 1.23456789 * s ** 1.23457e-7 / kg ** 2"),
+        ),
+    )
+    def test_exponents_round_trip(self, quant):
+        """Each exponent reads back exactly from the string."""
+        assert get_quantity(get_quantity_str(quant)) == quant
+
     def test_equal_quantities_keep_distinct_strings(self):
         """
         Quantities that compare equal (e.g. 1 m and 100 cm) must still
