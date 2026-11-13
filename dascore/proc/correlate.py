@@ -140,6 +140,13 @@ class Correlate(PatchProcessor):
         The dimension to correlate along. A 2D patch defaults to the
         dimension not named in ``kwargs``; a patch with more dimensions
         must name it, and every other dimension is correlated separately.
+    normalize
+        If True, divide each correlation by ``sqrt(E_trace * E_source)``,
+        where ``E`` is the whole-trace energy (sum of squared magnitudes)
+        along ``lag_dim``, so ``|cc| <= 1`` and the result is dimensionless.
+        The mean is not removed, and the energies do not change with lag:
+        for traces with their mean removed, this equals the Pearson
+        coefficient only at zero lag. A trace with no energy gives zeros.
     **kwargs
         Source dimension mapped to one or more source values or indices.
 
@@ -162,6 +169,11 @@ class Correlate(PatchProcessor):
     >>> cc_patch = (
     ...     patch.correlate(distance=10 * m)
     ...     .select(lag_time=(-2, 2))
+    ... )
+    >>>
+    >>> # Normalized correlation, keeping -0.5 through 0.5 seconds of lag.
+    >>> cc_patch = patch.correlate(distance=10 * m, normalize=True).select(
+    ...     lag_time=(-0.5, 0.5)
     ... )
     >>>
     >>> # Select a source by sample index after decimation.
@@ -201,6 +213,7 @@ class Correlate(PatchProcessor):
     __version__ = "1.3"
     samples: Any = False
     lag_dim: Any = None
+    normalize: bool = False
 
     model_config = ConfigDict(extra="allow")
     data_type = "correlation"
@@ -250,8 +263,13 @@ class Correlate(PatchProcessor):
             coords = out.coords.update(**{unpadded: (None, out.get_coord(lag_dim))})
             out = out.new(coords=coords)
         if (units := get_quantity(meta.attrs.data_units)) is not None:
-            # a product of two spectra carries their units twice
-            out = out.update_attrs(data_units=units**2)
+            # A product of two spectra carries their units twice. Normalized,
+            # the data units cancel, leaving the transform's for idft to undo.
+            ft_units = get_quantity(meta.get_coord(f"ft_{lag_dim}").units)
+            norm = 1 / ft_units**2 if ft_units is not None else units / units
+            out = out.update_attrs(data_units=norm if self.normalize else units**2)
+        if self.normalize:
+            plan["energy"] = Idft(dim=fft_dim).get_metadata(out)[1]
         # Undo fft if this function did one, shift, and update coord.
         if transform:
             out, idft = Idft(dim=fft_dim).get_metadata(out)
@@ -264,6 +282,12 @@ class Correlate(PatchProcessor):
         if transform:
             data = np.pad(data, plan["pad_width"])
             data = _dft_kernel(data, np, sft, cast=False, **plan["dft"])
+        if (energy_plan := plan.get("energy")) is not None:
+            # Scale each trace to unit energy before the product, so the
+            # result does not depend on amplitude. A trace with no energy
+            # stays zero and one with NaN energy stays NaN (data * 0).
+            norm = np.sqrt(_energy(data, **energy_plan)).astype(data.real.dtype)
+            data = np.divide(data, norm, out=data * 0, where=norm > 0)
         # The sources, along a new last axis so they broadcast with the data.
         selector: list[Any] = [slice(None)] * data.ndim + [None]
         selector[source_axis] = index
@@ -273,3 +297,15 @@ class Correlate(PatchProcessor):
             data = Idft().numpy_kernel(data, **plan["idft"])
             data = _shift_lags(data, **plan["shift"])
         return data
+
+
+def _energy(data, *, axes, real, step, sizes, **_):
+    """Return the time-domain energy of a spectrum along its axis (Parseval)."""
+    axis = axes[0]
+    n = data.shape[axis] if sizes is None else sizes[0]
+    power = np.abs(data).astype(np.float64) ** 2
+    total = power.sum(axis=axis, keepdims=True)
+    if real:  # one-sided bins, but for zero and Nyquist, stand for two
+        edges = [0, n // 2] if n % 2 == 0 else [0]
+        total = 2 * total - np.take(power, edges, axis=axis).sum(axis, keepdims=True)
+    return total / (n * float(step) ** 2)
