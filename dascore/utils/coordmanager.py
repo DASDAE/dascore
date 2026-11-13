@@ -23,6 +23,7 @@ def merge_coord_managers(
     snap_tolerance: float | None = None,
     conflict: CONFLICT = "raise",
     dim_coord=None,
+    warn: bool = True,
 ) -> dc.CoordManager:
     """
     Merge coordinate managers along a specified dimension.
@@ -53,6 +54,8 @@ def merge_coord_managers(
         concatenating the members' values (which materializes them);
         callers which already built the merged dimension coordinate
         (e.g. via `concat_coords`) pass it here to avoid that cost.
+    warn
+        If False, do not warn about the coordinates `conflict` decided.
     """
 
     def _get_dims(managers):
@@ -140,7 +143,7 @@ def merge_coord_managers(
     def _warn_decided():
         """Say which public coordinates the loosened policy decided."""
         parts = [f"{sorted(v)} {k}" for k, v in decided.items() if v]
-        if not parts:
+        if not (warn and parts):
             return
         detail = (
             "the first patch's values are kept"

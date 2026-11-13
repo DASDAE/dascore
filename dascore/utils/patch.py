@@ -650,9 +650,7 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     return merge_kwargs, coord_kwargs
 
 
-def _get_merged_coord(
-    df, merge_dim, coords, conflict="raise", snap_coords=True, tolerance=1.5
-):
+def _get_merged_coord(df, merge_dim, coords, snap_coords=True, tolerance=1.5, **kwargs):
     """
     Get merged coordinates for patches combined along merge_dim.
 
@@ -664,7 +662,7 @@ def _get_merged_coord(
     quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
     members' own step is kept, so a merge across a hole (only where a
     caller bridges holes, as `to_xarray` does) stays segmented rather than
-    being relabeled at a slower rate.
+    being relabeled at a slower rate. `kwargs` go to `merge_coord_managers`.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -673,16 +671,14 @@ def _get_merged_coord(
     except CoordError:
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
         # fall back to raw value concatenation of the dim coord.
-        return merge_coord_managers(coords, dim=merge_dim, conflict=conflict)
+        return merge_coord_managers(coords, dim=merge_dim, **kwargs)
     if snap_coords:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
-    return merge_coord_managers(
-        coords, dim=merge_dim, conflict=conflict, dim_coord=merged
-    )
+    return merge_coord_managers(coords, dim=merge_dim, dim_coord=merged, **kwargs)
 
 
 def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):

@@ -997,6 +997,13 @@ class TestExplicitMetadataSources:
         assert ("channel" in out.coords.coord_map) == (conflict == "keep_first")
         assert _ends(out) == (0, 10)
 
+    def test_keep_first_indexes_first_units(self, channel_conflict_pair):
+        """keep_first indexes the first member's coordinate with its units."""
+        first, second = channel_conflict_pair
+        pair = [first.set_units(channel="m"), second.set_units(channel="km")]
+        merged = dc.spool(pair).chunk(time=None, conflict="keep_first")
+        assert merged.get_contents()["channel_units"].tolist() == ["m"]
+
     def test_missing_live_coordinate_metadata_is_not_assumed_complete(self):
         """A stale live index cannot advertise unverified uneven samples."""
         source = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
