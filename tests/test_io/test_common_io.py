@@ -42,13 +42,13 @@ from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.mseed.core import MSeedV2
-from dascore.io.netcdf import NetCDFCFV18, NetCDFNoCF
+from dascore.io.netcdf import NetCDF3V1, NetCDFCFV18, NetCDFNoCF
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.nokia import NokiaOFDRH5V1, NokiaOFDRV1
 from dascore.io.odh4 import ODH4V1
-from dascore.io.optodas import OptoDASV8
+from dascore.io.optodas import OptoDASV7, OptoDASV8
 from dascore.io.pickle import PickleIO
-from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
+from dascore.io.prodml import ProdMLFlatV1, ProdMLV2_0, ProdMLV2_1
 from dascore.io.puniu import PuniuV1
 from dascore.io.rsf import RSFV1
 from dascore.io.segy import SegyV1_0
@@ -171,12 +171,14 @@ COMMON_IO_READ_TESTS = {
     # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
     # so every contract runs over it, not only a read.
     OptoDASV8(): ("opto_das_1.hdf5", "decimated_optodas.hdf5"),
+    OptoDASV7(): ("opto_das_v7_1.hdf5",),
     SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
     ),
+    ProdMLFlatV1(): ("prodml_flat_1.h5",),
     PuniuV1(): (FixtureFile("puniu_matrix_file"),),
     RSFV1(): ("example_dascore.rsf",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
@@ -194,6 +196,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     XdasV1(): ("xdas_netcdf.nc",),
+    NetCDF3V1(): ("kolsass_dts_netcdf3.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
     **{io: (str(path),) for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items()},
@@ -228,7 +231,9 @@ SKIP_DATA_FILES = {
 # have converted away at the parse boundary.
 # Formats which hand back the attrs stored in the file rather than mapping
 # vendor fields to attrs, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR", "rsf"})
+_PASS_THROUGH_FORMATS = frozenset(
+    {"ARROW", "DASDAE", "NETCDF3", "NETCDF_CF", "ZARR", "rsf"}
+)
 
 VENDOR_ATTRS = frozenset(
     {
@@ -236,6 +241,7 @@ VENDOR_ATTRS = frozenset(
         "acqres",
         "acquisition_id",
         "acquisition_range_m",
+        "amp_scaling",
         "ampli_power",
         "amppower",
         "api",

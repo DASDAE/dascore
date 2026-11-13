@@ -73,3 +73,9 @@ class OptoDASV11(OptoDASV8):
     """Support for OptoDAS V 11."""
 
     version = "11"
+
+
+class OptoDASV7(OptoDASV8):
+    """Support for OptoDAS V 7, which has no dimension table in its header."""
+
+    version = "7"
