@@ -279,7 +279,7 @@ class TestHoles:
 
     def test_holes_raise(self, holed_patch):
         """More than one segment raises, naming the fixes."""
-        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
             holed_patch.differentiate("time")
 
     def test_jitter_computes(self, jittered_patch):
@@ -291,6 +291,11 @@ class TestHoles:
         """Step-less labels are an irregular axis, differentiated by label spacing."""
         out = stepless_seam_patch.differentiate("time")
         assert out.shape == stepless_seam_patch.shape
+
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.differentiate("time")
 
     def test_fine_datetime_spacing(self):
         """Nanosecond spacing of irregular modern times is kept, not rounded."""

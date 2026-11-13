@@ -254,6 +254,10 @@ def _apply_operator(operator, *arrays, **kwargs):
     return func(*arrays, **kwargs)
 
 
+# The unary ufuncs which are powers, and so change the units.
+_UNARY_POWERS = {np.sqrt: 0.5, np.cbrt: 1 / 3, np.square: 2, np.reciprocal: -1}
+
+
 def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     """
     Create a patch from a unary ufunc.
@@ -275,6 +279,13 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     We assume the shape of the array won't change.
     """
     out = _apply_operator(operator, patch.data, *args, **kwargs)
+    patch_attrs = patch.attrs
+    exponent = _UNARY_POWERS.get(operator)
+    if exponent is not None and patch_attrs.data_units is not None:
+        # a power's units, settled as the binary power settles them
+        probe = dc.Patch(data=np.ones(1), coords={"x": [0]}, dims=("x",))
+        probe = probe.update_attrs(data_units=patch_attrs.data_units) ** exponent
+        patch_attrs = patch_attrs.update(data_units=probe.attrs.data_units)
 
     # As for the binary case: a ufunc has no patch function to name it, so
     # `np.abs(patch)` would otherwise record that nothing happened.
@@ -286,7 +297,7 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
             "kwargs": _without_patch_values(kwargs, [patch]),
         },
     )
-    attrs = stamp(patch.attrs, [patch.attrs], operation or None)
+    attrs = stamp(patch_attrs, [patch.attrs], operation or None)
     return patch.new(data=out, attrs=attrs)
 
 
@@ -571,8 +582,18 @@ def _apply_binary_ufunc(
         other_q = other_units if other_units is not None else dimensionless
         # µϵ is dimensionless, so the registry would coerce the bare side
         # into it (1.5 becomes 1.5e6 µϵ) instead of asking it to adopt.
+        stand_in = _has_scale(known) and not _needs_equal_units(operator)
         if known.dimensionless and _needs_equal_units(operator):
             patch_q = other_q = known
+        elif stand_in:
+            # Elsewhere a scale is coerced too (2 µϵ // 1.5 is 0), so metres
+            # stand in for the unit and are mapped back to it after.
+            meter = get_quantity("meter")
+            assert meter is not None
+            if data_units is not None:
+                patch_q = meter
+            else:
+                other_q = meter
 
         # the registry lacks float_power; its units are those of power
         probe_op = np.power if operator is np.float_power else operator
@@ -628,11 +649,17 @@ def _apply_binary_ufunc(
                 raise UnitError(msg)
             return new_data, attrs.update(data_units=get_quantity_str(probe.units))
         try:
-            return new_data, attrs.update(data_units=_label(probe / plain))
+            result = probe / plain
         except TypeError:
             # a logarithmic level cannot be divided by a number, but it has
             # kept its unit through the operation
             return new_data, attrs.update(data_units=get_quantity_str(probe.units))
+        if stand_in and (power := result.dimensionality["[length]"]):
+            if power != 1 and _is_logarithmic_unit(known):
+                msg = f"{operator} with logarithmic units {known} has no defined units."
+                raise UnitError(msg)
+            result = result.magnitude * known.magnitude**power * known.units**power
+        return new_data, attrs.update(data_units=_label(result))
 
     def _apply_op_both_unitful(
         patch, other, operator, attrs, data_units, other_units, reversed=False

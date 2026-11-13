@@ -609,6 +609,18 @@ class TestChunkMerge:
         assert len(out) == 1
         assert out[0].attrs.data_type == ""
 
+    def test_segy_text_header_not_compared(self):
+        """Differing SEG-Y text headers merge; the first is kept."""
+        p1 = dc.get_example_patch().update_attrs(segy_text_header="a", my_attr=1)
+        time = p1.get_coord("time")
+        p2 = dc.get_example_patch(time_min=time.max() + time.step)
+        p2 = p2.update_attrs(segy_text_header="b", my_attr=1)
+        out = dc.spool([p1, p2]).chunk(time=None)
+        assert len(out) == 1
+        assert out[0].attrs.segy_text_header == "a"
+        with pytest.raises(CoordMergeError, match="my_attr"):
+            dc.spool([p1, p2.update_attrs(my_attr=2)]).chunk(time=None)
+
     def test_conflicting_coordinate_follows_conflict(self, channel_conflict_pair):
         """
         A non-dimensional coordinate on another dimension which differs

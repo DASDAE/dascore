@@ -279,7 +279,7 @@ class TestHoles:
     @pytest.mark.parametrize("definite", [True, False])
     def test_holes_raise(self, holed_patch, definite):
         """More than one segment raises, naming the fixes."""
-        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
             holed_patch.integrate("time", definite=definite)
 
     def test_jitter_computes(self, jittered_patch):
@@ -291,6 +291,48 @@ class TestHoles:
         """Step-less labels are an irregular axis, integrated by label spacing."""
         out = stepless_seam_patch.integrate("time", definite=True)
         assert np.allclose(out.data, 79.5)
+
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.integrate("time", definite=True)
+
+
+class TestNaN:
+    """NaN samples are treated as missing, like nansum."""
+
+    @pytest.fixture()
+    def gap_patch(self):
+        """The example patch with a NaN gap in time and an all-NaN trace."""
+        patch = dc.get_example_patch()
+        data = patch.data.copy()
+        data[:, 100:110] = np.nan
+        data[0] = np.nan
+        return patch.update(data=data)
+
+    def test_definite(self, gap_patch):
+        """The definite integral is the sum of the integrals of the finite parts."""
+        data, dt = gap_patch.data, to_float(gap_patch.get_coord("time").step)
+        expected = np.trapezoid(data[:, :100], dx=dt, axis=1) + np.trapezoid(
+            data[:, 110:], dx=dt, axis=1
+        )
+        out = gap_patch.integrate("time", definite=True).data[:, 0]
+        np.testing.assert_allclose(out[1:], expected[1:])
+        assert out[0] == 0
+
+    def test_indefinite(self, gap_patch):
+        """Accumulation carries on past the gap and ends at the definite value."""
+        out = gap_patch.integrate("time").data
+        definite = gap_patch.integrate("time", definite=True).data
+        assert np.isnan(out[:, 100:110]).all()
+        assert np.isfinite(out[1:, 110:]).all()
+        assert np.isnan(out[0]).all()
+        np.testing.assert_allclose(out[1:, -1:], definite[1:])
+
+    def test_single_sample(self):
+        """A NaN sample on a one-sample axis stays NaN."""
+        patch = dc.Patch(data=np.array([np.nan]), coords={"time": [0.0]}, dims=["time"])
+        assert np.isnan(patch.integrate("time").data).all()
 
 
 class TestIntegrateMetadata:

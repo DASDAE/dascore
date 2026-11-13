@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import UnitError
+from dascore.proc.units import SetUnits
 from dascore.units import get_quantity
 from dascore.utils.time import dtype_time_like
 
@@ -75,6 +76,32 @@ class TestSetUnits:
         assert new_dist_none.get_coord("distance").units is None
         new_dist_empty = random_patch.set_units(distance="")
         assert new_dist_empty.get_coord("distance").units is None
+
+    def test_coord_units_keep_data_units(self, random_patch):
+        """Setting only coordinate units leaves the data units alone."""
+        patch = random_patch.set_units("m/s")
+        out = patch.set_units(distance="ft")
+        assert out.attrs.data_units == patch.attrs.data_units
+        assert out.attrs.history[-1] == "set_units(distance='ft')"
+
+    def test_data_units_none_by_name_removes(self, random_patch):
+        """data_units=None given by name removes the data units."""
+        out = random_patch.set_units("m/s").set_units(data_units=None, distance="ft")
+        assert out.attrs.data_units is None
+
+    @pytest.mark.parametrize("given", [{}, {"data_units": None}])
+    @pytest.mark.parametrize("json", [False, True])
+    def test_dump_round_trip(self, random_patch, given, json):
+        """A processor rebuilt from its dump keeps or removes data units alike."""
+        patch = random_patch.set_units("m/s")
+        processor = SetUnits(**given, distance="ft")
+        if json:
+            rebuilt = SetUnits.model_validate_json(processor.model_dump_json())
+        else:
+            rebuilt = SetUnits(**processor.model_dump())
+        expected = processor.run(patch).attrs.data_units
+        assert rebuilt.run(patch).attrs.data_units == expected
+        assert (expected is None) == bool(given)
 
 
 class TestConvertUnits:

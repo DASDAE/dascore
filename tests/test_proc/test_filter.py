@@ -282,10 +282,10 @@ class TestSobelFilter:
 
     def test_holes_raise(self, holed_patch):
         """More than one segment raises, naming the fixes."""
-        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
-        with pytest.raises(CoordError, match="segments"):
+        with pytest.raises(CoordError, match="more than one segment"):
             holed_patch.sobel_filter("distance")
 
     def test_jitter_computes(self, jittered_patch):
@@ -297,6 +297,11 @@ class TestSobelFilter:
         """Step-less labels are an irregular axis, which still filters."""
         out = stepless_seam_patch.sobel_filter("time")
         assert out.shape == stepless_seam_patch.shape
+
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.sobel_filter("time")
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

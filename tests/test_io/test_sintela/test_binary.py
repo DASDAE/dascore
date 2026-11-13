@@ -4,6 +4,7 @@ Tests for sintela binary format.
 
 import shutil
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
 from dascore.io.sintela import SintelaBinaryV3
 from dascore.io.sintela.utils import _get_complete_header, _off_grid
 from dascore.utils.downloader import fetch
+from dascore.warnings import SnapWarning
 
 
 class TestScanSintelaBinary:
@@ -131,13 +133,42 @@ class TestPacketContinuity:
             assert first.equals(whole.select(time=(0, 1000), samples=True))
             assert second.equals(whole.select(time=(1500, None), samples=True))
 
-    def test_time_jump_raises(self, packets, tmp_path):
-        """Packets whose start time jumps raise despite contiguous counts."""
+    def _assert_even(self, path, offset):
+        """One even patch from packet 0's time, warned with the largest offset."""
+        whole = dc.spool(fetch("sintela_binary_v3_test_1.raw"))[0]
+        with pytest.warns(SnapWarning, match=offset):
+            patch = dc.read(path)[0]
+        assert patch.equals(whole)
+        with pytest.warns(SnapWarning, match=offset):
+            (summary,) = SintelaBinaryV3().scan(path)
+        assert summary.coords == patch.coords
+
+    def test_time_step_warns(self, packets, tmp_path):
+        """A clock step with contiguous counts reads on the sample grid."""
         path = tmp_path / "time_jump.raw"
-        tail = [self._shift(x, "time", 60 * 10**9) for x in packets[3:]]
+        tail = [self._shift(x, "time", 5 * 10**9) for x in packets[3:]]
         path.write_bytes(b"".join(packets[:3] + tail))
-        with pytest.raises(InvalidFiberFileError, match=r"packet 4 .* start time"):
-            SintelaBinaryV3().scan(path)
+        self._assert_even(path, r"up to 5 s off")
+
+    def test_clock_drift_warns(self, packets, tmp_path):
+        """Start times wandering inside the run warn when read."""
+        path = tmp_path / "drift.raw"
+        shifts = [0, -300_000_000, -311_000_000] + [0] * (len(packets) - 3)
+        drift = [self._shift(x, "time", y) for x, y in zip(packets, shifts)]
+        path.write_bytes(b"".join(drift))
+        assert len(SintelaBinaryV3().scan(path)) == 1
+        with pytest.warns(SnapWarning, match=r"up to 0\.311 s off"):
+            patch = dc.read(path)[0]
+        assert patch.coords == SintelaBinaryV3().scan(path)[0].coords
+
+    def test_read_array_warns(self, packets, tmp_path):
+        """Reading the array alone warns for a step at the final packets."""
+        path = tmp_path / "end_step.raw"
+        tail = [self._shift(x, "time", 5 * 10**9) for x in packets[-2:]]
+        path.write_bytes(b"".join(packets[:-2] + tail))
+        with pytest.warns(SnapWarning, match=r"up to 5 s off"):
+            out = dc.read_array(path)
+        assert out.shape[0] == len(packets) * 500
 
     def test_unknown_run_key_raises(self, packets, tmp_path):
         """A key naming no run of the file raises."""
@@ -158,23 +189,26 @@ class TestPacketContinuity:
 
     @pytest.mark.parametrize("shift", [-1, 1])
     def test_time_tolerance(self, packets, tmp_path, shift):
-        """A start time within half a packet of the grid reads; beyond raises."""
+        """A start time within half a packet of the grid reads; beyond warns."""
         near = self._shift(packets[2], "time", shift * (self.half_packet_ns - 1))
         far = self._shift(packets[2], "time", shift * (self.half_packet_ns + 1))
         near_path, far_path = tmp_path / "near.raw", tmp_path / "far.raw"
         near_path.write_bytes(b"".join([*packets[:2], near, *packets[3:]]))
         far_path.write_bytes(b"".join([*packets[:2], far, *packets[3:]]))
-        assert dc.read(near_path)[0].shape[0] == len(packets) * 500
-        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* start time"):
-            dc.read(far_path)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert dc.read(near_path)[0].shape[0] == len(packets) * 500
+        with pytest.warns(SnapWarning, match="off the grid"):
+            assert dc.read(far_path)[0].shape[0] == len(packets) * 500
 
     def test_no_drift_over_long_files(self):
-        """A packet duration that is not whole ns does not drift into a raise."""
+        """A packet duration that is not whole ns does not drift off the grid."""
         header = {"num_samples": 1, "sample_rate": 3000.0}
         # 500001 samples at 3 kHz end 166.667 s in, exactly; rounding the
         # packet duration first would put it a whole tolerance away.
         stamps = np.array([[0, 0], [500_001, 166_667_000_000]], dtype="<u8")
-        assert not np.any(_off_grid(stamps, stamps[0], np.array([0, 500_001]), header))
+        bad_count, clock = _off_grid(stamps, stamps[0], np.array([0, 500_001]), header)
+        assert not np.any(bad_count) and np.max(np.abs(clock)) < 1
 
     @pytest.mark.skipif(
         sys.platform in {"win32", "emscripten"}, reason="needs sparse files"

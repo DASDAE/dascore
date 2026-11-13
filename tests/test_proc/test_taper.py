@@ -347,7 +347,7 @@ class TestTaperHoles:
 
     def test_holes_raise(self, holed_patch):
         """More than one segment raises, naming the fixes."""
-        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
             holed_patch.taper(time=0.1)
 
     def test_jitter_computes(self, jittered_patch):
@@ -359,6 +359,11 @@ class TestTaperHoles:
         """Step-less labels are an irregular axis, which tapers by its labels."""
         out = stepless_seam_patch.taper(time=0.1)
         assert out.shape == stepless_seam_patch.shape
+
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.taper(time=0.1)
 
 
 class TestTaperDtype:
@@ -373,6 +378,12 @@ class TestTaperDtype:
         axis = patch.get_axis("time")
         ramp = (out.data != patch.data).any(axis=1 - axis)
         assert ramp.any() and not ramp.all()
+
+    def test_taper_range_keeps_dtype(self, random_patch):
+        """Taper range keeps single precision data in its dtype."""
+        patch = random_patch.new(data=random_patch.data.astype("float32"))
+        out = patch.taper_range(time=(0.1, 0.2, 0.5, 0.6), relative=True)
+        assert out.dtype == np.float32
 
     @pytest.mark.parametrize("dtype", ["int16", "bool"])
     def test_non_float_becomes_float(self, patch_ones, dtype):

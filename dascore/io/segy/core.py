@@ -76,7 +76,9 @@ class SegyV1_0(FiberIO):  # noqa
         Units are not set, since files often misstate their measurement system.
 
         The textual header is kept, one line per row, as the
-        `segy_text_header` attr. Where it says the values are proportional to
+        `segy_text_header` attr; it is per-file provenance, so merges do not
+        compare it (the first file's is kept) and the index does not store
+        it. Where it says the values are proportional to
         strain rate (Silixa), `data_type` is "strain_rate", and a stated scale
         to nm/m/s sets `data_units` (eg "11600 nm/m/s" for "SC= X11600 TO
         NM/M/S"), so `patch.convert_units("nm/m/s")` applies it.

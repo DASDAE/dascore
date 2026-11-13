@@ -931,6 +931,21 @@ class TestMiniSeedUtils:
         patch = dc.read(path)[0]
         assert np.array_equal(patch.data, np.arange(10)[None, :])
 
+    def test_blank_channel(self, tmp_path):
+        """A blank channel code detects, scans and reads."""
+        path = _write_mseed(
+            tmp_path / "blank.mseed",
+            format_version=2,
+            source_ids=["FDSN:BP_D0000__H_S_F"],
+        )
+        with path.open("r+b") as stream:
+            stream.seek(15)
+            stream.write(b"   ")
+        assert dc.get_format(path) == ("MSEED", "2")
+        assert len(dc.scan(path)) == 1
+        patch = dc.read(path)[0]
+        assert np.array_equal(patch.data, np.arange(10)[None, :])
+
     @pytest.mark.parametrize(
         "field,value",
         (
@@ -939,7 +954,6 @@ class TestMiniSeedUtils:
             ("reserved", b"X"),
             ("station", b"     "),
             ("channel", b"H F"),
-            ("channel", b"   "),
             ("channel", b" Z "),
             ("network", b"  "),
             ("year", bytes.fromhex("0700")),

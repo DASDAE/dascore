@@ -77,7 +77,10 @@ class SintelaBinaryV3(FiberIO):
         Scan a file, return summary information on the contents.
 
         A file with dropped or repeated packets gives one patch per run of
-        contiguous packets, keyed by the run's first packet.
+        contiguous packets, keyed by the run's first packet. Time follows the
+        sample counts from the run's first packet start time. A scan warns
+        when a run's end packet clock is more than half a packet off that
+        grid; reading the data checks every packet.
         """
         header, runs = _scan_runs(resource, SintelaPatchAttrs)
         dtype = str(np.dtype(header["dtype"]))

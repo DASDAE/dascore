@@ -176,6 +176,10 @@ STORAGE_PROVENANCE_ATTRS = (
     "file_version",
 )
 
+# Per-patch provenance attrs: merges never compare them and carry the first
+# patch's value, and the index does not store them.
+MERGE_EXEMPT_ATTRS = ("history", "segy_text_header")
+
 # Level of progress bar
 PROGRESS_LEVELS = Literal["standard", "basic", None, False]
 
@@ -237,8 +241,8 @@ Indicates how to handle attributes which hold conflicting values across
 the patches being combined (eg data_type, data_units, custom attrs). A
 missing value (None, NaN, "") is a value like any other: it equals
 another missing one and nothing else, so a patch which never stated an
-attribute conflicts with one which did. History and the ids are never
-compared. If "raise" (default) raise an
+attribute conflicts with one which did. History, the SEG-Y text header
+and the ids are never compared. If "raise" (default) raise an
 [AttributeMergeError](`dascore.exceptions.AttributeMergeError`) for
 conflicting values. If "drop", omit the conflicting attributes from the
 output. If "keep_first", keep the first patch's value of each. The same

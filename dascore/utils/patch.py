@@ -1172,10 +1172,9 @@ def _refuse_segments(patch, dims, operation: str) -> None:
         count = len(contiguous_windows(patch.get_coord(dim)))
         if count > 1:
             msg = (
-                f"Coordinate {dim} has {count} segments, which {operation} "
-                "would compute across as if no gap were between them. Use "
-                "Patch.fill_gaps to fill the gaps, or Patch.split_gaps to "
-                "split at them, first."
+                f"Coordinate {dim} has more than one segment ({count}), which "
+                f"{operation} cannot compute across. Use Patch.fill_gaps to "
+                "join them or Patch.split_gaps to split at them."
             )
             raise CoordError(msg)
 

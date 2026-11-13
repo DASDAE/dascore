@@ -422,7 +422,7 @@ class TestDecimateHoles:
 
     def test_filtered_holes_raise(self, holed_patch):
         """More than one segment raises before filtering, naming the fixes."""
-        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
             holed_patch.decimate(time=2)
 
     def test_filtered_jitter_computes(self, jittered_patch):
@@ -434,6 +434,11 @@ class TestDecimateHoles:
         """Step-less labels are an irregular axis, which still decimates."""
         out = stepless_seam_patch.decimate(time=2)
         assert out.shape == (1, 60)
+
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.decimate(time=2)
 
     def test_raw_striding_runs(self, holed_patch):
         """Striding without a filter still takes every nth sample."""

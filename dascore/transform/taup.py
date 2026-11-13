@@ -81,7 +81,7 @@ class TauP(PatchProcessor):
         coords = meta_cop.coords.drop_associated("distance", "Transforming")
         coords = coords.update(distance=slowness).rename_coord(distance="slowness")
         out = meta.new(coords=coords, attrs=attrs, dtype=np.float64)
-        out, _ = SetUnits(slowness="s/m", time="s").get_metadata(out)
+        out, _ = SetUnits(data_units=None, slowness="s/m", time="s").get_metadata(out)
         # Chooses code version based on whether distance between channels
         # is uniform or not
         uniform = dist.evenly_sampled
