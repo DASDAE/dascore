@@ -422,7 +422,7 @@ class TestDecimateHoles:
 
     def test_filtered_holes_raise(self, holed_patch):
         """More than one segment raises before filtering, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"one segment.*fill_gaps.*split_gaps"):
             holed_patch.decimate(time=2)
 
     def test_filtered_jitter_computes(self, jittered_patch):

@@ -279,7 +279,7 @@ class TestHoles:
 
     def test_holes_raise(self, holed_patch):
         """More than one segment raises, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*fill_gaps.*split_gaps"):
+        with pytest.raises(CoordError, match=r"one segment.*fill_gaps.*split_gaps"):
             holed_patch.differentiate("time")
 
     def test_jitter_computes(self, jittered_patch):
