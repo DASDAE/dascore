@@ -97,7 +97,7 @@ def _get_distance_coord(attr_dict, data_shape):
 
 
 def _get_coords(attrs_dict, shape):
-    """Get coordinates of AP_sensing file."""
+    """Get coordinates of Silixa HDF5 file."""
     # first get time
     time_coord = _get_time_coord(attrs_dict, shape)
     distance_coord = _get_distance_coord(attrs_dict, shape)
