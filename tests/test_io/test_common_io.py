@@ -44,6 +44,7 @@ from dascore.io.h5simple import H5Simple
 from dascore.io.mseed.core import MSeedV2
 from dascore.io.netcdf import NetCDF3V1, NetCDFCFV18, NetCDFNoCF
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
+from dascore.io.nokia import NokiaOFDRH5V1, NokiaOFDRV1
 from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV7, OptoDASV8
 from dascore.io.pickle import PickleIO
@@ -164,6 +165,8 @@ COMMON_IO_READ_TESTS = {
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
+    NokiaOFDRV1(): ("nokia_ofdr_1",),
+    NokiaOFDRH5V1(): ("nokia_ofdr_downsampled_1.h5",),
     ODH4V1(): ("optasense_odh4_1.h5",),
     # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
     # so every contract runs over it, not only a read.
