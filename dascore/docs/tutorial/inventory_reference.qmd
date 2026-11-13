@@ -1,0 +1,201 @@
+---
+title: Inventory Reference
+execute:
+  warning: false
+---
+
+{{< include ../_experimental.qmd >}}
+
+This page lists where each part of an [inventory](inventory.qmd) lives in an authoring directory, how the objects refer to one another, and every field of every model. The field tables are generated from the models in [`dascore.core.inventory`](`dascore.core.inventory`), so they match the installed version.
+
+# How the files fit together
+
+Each file holds one object, and its name states that object's identity:
+
+```text
+inventory.yaml                          Inventory: CRS, creation info (optional)
+resources/<resource_id>.yaml            Interrogator, Cable, Enclosure,
+                                        OpticalMeasurement, ExternalResource
+networks/<network>.yaml                 Network (optional)
+stations/<network>.<code>.yaml          Station, with its channels
+fiber_arrays/<network>.<code>/
+    attrs.yaml                          FiberArray
+    path[.<location_code>][@<start>]/   one OpticalPath epoch
+        attrs.yaml                      OpticalPath
+        optical_components.csv          components, one per row
+        geometry.csv                    geometry control points, one per row
+        coupling.csv                    coupling intervals, one per row
+        labels.csv                      label intervals, one per row
+acquisitions/<network>.<fiber_array>.<location_code>.<code>.yaml
+                                        Acquisition, with its distance_map
+```
+
+Acquisitions are tied to their fiber array and optical path by name, not by nesting: `acquisitions/XT.TUN1.00.DAS.yaml` belongs to fiber array `TUN1` of network `XT`, and interrogates the optical path in `fiber_arrays/XT.TUN1/path.00/`, because both state location code `00`. Its `distance_map` places its channels on that path's optical distance.
+
+Resources are stated once under `resources/` and referred to by `resource_id`, which is the file name without its suffix:
+
+| Field | Refers to |
+|---|---|
+| `Acquisition.interrogator` | `Interrogator` |
+| `FiberSegment.container` | `Cable` |
+| `container` of a `Connector`, `Splice`, `Terminator`, or `Amplifier` | `Enclosure` |
+| `Cable.container` | `Enclosure` or `Cable` |
+| a component's `loss_measurement` and `reflectance_measurement` | `OpticalMeasurement` |
+| `OpticalPath.measurements` | `OpticalMeasurement` |
+| `Cable.specification`, `Enclosure.specification`, `OpticalMeasurement.data` | `ExternalResource` |
+
+An `OpticalMeasurement` is the record of one test (method, wavelength, time, the trace or report file), not a value. A component cites one from `loss_measurement` or `reflectance_measurement` to say where its `loss_db` or `reflectance_db` came from. `OpticalPath.measurements` lists the tests of the path as a whole, such as an end-to-end OTDR trace, which no single component owns. Both are provenance: neither becomes a patch attribute or coordinate.
+
+## Why distances repeat
+
+The four tracks of an optical path are separate tables along the same optical distance, and none refers to another's rows. Where a label, a geometry segment, and a component describe the same stretch of fiber, each table states that stretch's distances. This keeps each track free to cover only what is known and to be split differently: a label can span many components, and geometry needs a control point wherever the fiber bends. The cost is that a change in distance, such as a [repair](../recipes/tunnel_inventory.qmd#a-repair-and-what-it-does-to-the-data), must be applied to every table; generating the tables from one description avoids editing them by hand.
+
+Some repetition is avoidable. A component's `name` and a geometry segment's `name` are coordinates already, so `select(optical_components="spool")` or `select(geometry="spool")` works without a label stating the same interval. A distance map's `optical_distance` values are where the interrogator's axis was calibrated, not track boundaries, so they need not match any table.
+
+# Fields
+
+Every model also has `description` (free text) and `extra_fields` (other metadata, as a mapping). Models with epochs (`Network`, `Station`, `Channel`, `FiberArray`, `Acquisition`, `OpticalPath`) have `time_min` and `time_max`, unbounded by default; an `@<start>` suffix on a file or directory name sets `time_min`, and an optical-path epoch ends where the next one at its location begins. Object files also state `object_type`, the model's name.
+
+Where *In the files* is blank, the field is a key of the same name in the model's file or a column of the same name in its table.
+
+```{python}
+#| echo: false
+#| output: asis
+import numpy as np
+
+from dascore.core import inventory as inv
+
+FILES = {
+    inv.Inventory: "`inventory.yaml`",
+    inv.CoordinateReferenceSystem: "`coordinate_reference_system` in `inventory.yaml`",
+    inv.CreationInfo: "`creation_info` in `inventory.yaml`",
+    inv.Network: "`networks/<code>.yaml`; optional, since any address naming the network creates it",
+    inv.FiberArray: "`fiber_arrays/<network>.<code>/attrs.yaml`",
+    inv.Acquisition: "`acquisitions/<network>.<fiber_array>.<location_code>.<code>.yaml`, or `acquisitions/<network>.<fiber_array>.<location_code>.<code>/attrs.yaml`",
+    inv.DistanceMap: "`distance_map` in the acquisition file, or `distance_map.csv` beside its `attrs.yaml` with one row per control point",
+    inv.OpticalPath: "`fiber_arrays/<network>.<fiber_array>/path[.<location_code>][@<start>]/attrs.yaml`",
+    inv.Geometry: "rows of the path's `geometry.csv`, one per control point",
+    inv.CouplingCondition: "a row of the path's `coupling.csv`",
+    inv.OpticalPathLabel: "a row of the path's `labels.csv`",
+    inv.Station: "`stations/<network>.<code>.yaml`",
+    inv.Channel: "an entry of `channels` in its station's file",
+    inv.Response: "`response` in a channel",
+}
+COMPONENTS = (inv.FiberSegment, inv.Connector, inv.Splice, inv.Terminator, inv.Amplifier)
+POINTS = COMPONENTS[1:]
+RESOURCES = (inv.Interrogator, inv.Cable, inv.Enclosure, inv.OpticalMeasurement, inv.ExternalResource)
+for _model in COMPONENTS:
+    FILES[_model] = f"a row of the path's `optical_components.csv` with `object_type` `{_model.__name__}`"
+for _model in RESOURCES:
+    FILES[_model] = "`resources/<resource_id>.yaml`"
+
+RESOURCE_ID = "a `resource_id`"
+WHERE = {
+    "resource_id": "the file name",
+    "container": RESOURCE_ID,
+    "loss_measurement": RESOURCE_ID,
+    "reflectance_measurement": RESOURCE_ID,
+    "specification": RESOURCE_ID,
+    "data": RESOURCE_ID,
+    (inv.Inventory, "resource_id"): "",
+    (inv.Inventory, "resources"): "the `resources/` directory",
+    (inv.Inventory, "networks"): "the `networks/`, `stations/`, `fiber_arrays/` and `acquisitions/` directories",
+    (inv.Network, "code"): "the file name",
+    (inv.Network, "fiber_arrays"): "`fiber_arrays/<code>.*`",
+    (inv.Network, "stations"): "`stations/<code>.*`",
+    (inv.Station, "code"): "the file name",
+    (inv.FiberArray, "code"): "the directory name, after `<network>.`",
+    (inv.FiberArray, "acquisitions"): "`acquisitions/<network>.<code>.*`",
+    (inv.FiberArray, "optical_paths"): "its `path*` directories",
+    (inv.Acquisition, "code"): "the file name",
+    (inv.Acquisition, "location_code"): "the file name",
+    (inv.Acquisition, "interrogator"): RESOURCE_ID,
+    (inv.Acquisition, "distance_map"): "inline, or `distance_map.csv`",
+    (inv.OpticalPath, "location_code"): "the directory suffix after `path.`",
+    (inv.OpticalPath, "measurements"): "a list of `resource_id`s",
+    (inv.Geometry, "name"): "the `name` column; rows sharing it form one segment",
+    (inv.Geometry, "columns"): "every other column, keyed by its header",
+    (inv.Geometry, "units"): "a header suffix, such as `chainage (m)`",
+}
+for _track in ("optical_components", "geometry", "coupling", "labels"):
+    WHERE[(inv.OpticalPath, _track)] = f"`{_track}.csv` in the path directory, or inline"
+for _model in POINTS:
+    WHERE[(_model, "distance_max")] = "blank, for a point; it takes `distance_min`"
+
+COMMON = {"description", "extra_fields", "time_min", "time_max", "object_type"}
+
+# Where the loader or a model rule requires more than the field's own default says.
+EITHER_AXIS = "at least one of `channel` and `acquisition_distance`"
+REQUIRED = {
+    (inv.Geometry, "name"): "yes, in `geometry.csv`",
+    (inv.DistanceMap, "channel"): EITHER_AXIS,
+    (inv.DistanceMap, "acquisition_distance"): EITHER_AXIS,
+}
+for _model in POINTS:
+    REQUIRED[(_model, "distance_max")] = "no"
+
+
+def show_default(info):
+    """Format a field's default for a table cell."""
+    value = info.get_default(call_default_factory=True)
+    if isinstance(value, inv.InventoryModel):
+        return f"`{type(value).__name__}()`"
+    if isinstance(value, np.datetime64):
+        return "unset"
+    return f"`{dict(value) if hasattr(value, 'items') else value!r}`"
+
+
+def field_table(model):
+    """Print one model's heading, file, and field table as Markdown."""
+    where = FILES[model]
+    print(f"\n### {model.__name__}\n\n{where[0].upper()}{where[1:]}.\n")
+    print("| Field | Required | Default | In the files | Description |")
+    print("|---|---|---|---|---|")
+    for name, info in model.model_fields.items():
+        if name in COMMON:
+            continue
+        required = "yes" if info.is_required() else "no"
+        required = REQUIRED.get((model, name), required)
+        default = "" if info.is_required() else show_default(info)
+        where = WHERE.get((model, name), WHERE.get(name, ""))
+        about = (info.description or "").replace("|", "\\|")
+        print(f"| `{name}` | {required} | {default} | {where} | {about} |")
+```
+
+## Envelope, networks, and acquisitions
+
+```{python}
+#| echo: false
+#| output: asis
+for _model in (inv.Inventory, inv.CoordinateReferenceSystem, inv.CreationInfo, inv.Network, inv.FiberArray, inv.Acquisition, inv.DistanceMap):
+    field_table(_model)
+```
+
+## Optical path
+
+```{python}
+#| echo: false
+#| output: asis
+for _model in (inv.OpticalPath, *COMPONENTS, inv.Geometry, inv.CouplingCondition, inv.OpticalPathLabel):
+    field_table(_model)
+```
+
+## Resources
+
+```{python}
+#| echo: false
+#| output: asis
+for _model in RESOURCES:
+    field_table(_model)
+```
+
+## Stations
+
+Stations describe point sensors beside fiber arrays.
+
+```{python}
+#| echo: false
+#| output: asis
+for _model in (inv.Station, inv.Channel, inv.Response):
+    field_table(_model)
+```
