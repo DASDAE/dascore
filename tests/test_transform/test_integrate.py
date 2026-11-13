@@ -292,6 +292,11 @@ class TestHoles:
         out = stepless_seam_patch.integrate("time", definite=True)
         assert np.allclose(out.data, 79.5)
 
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.integrate("time", definite=True)
+
 
 class TestNaN:
     """NaN samples are treated as missing, like nansum."""

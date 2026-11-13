@@ -292,6 +292,11 @@ class TestHoles:
         out = stepless_seam_patch.differentiate("time")
         assert out.shape == stepless_seam_patch.shape
 
+    def test_two_runs_raise(self, two_run_patch):
+        """Two step-less segments raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+            two_run_patch.differentiate("time")
+
     def test_fine_datetime_spacing(self):
         """Nanosecond spacing of irregular modern times is kept, not rounded."""
         offsets = np.array([0, 100, 400, 900])

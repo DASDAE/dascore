@@ -12,10 +12,16 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
-from dascore.exceptions import ParameterError, UnitError
+from dascore.exceptions import CoordError, ParameterError, UnitError
 from dascore.transform.differentiate import _Derivative, _derivative_metadata
 from dascore.units import convert_units, get_factor_and_unit, get_unit
 from dascore.utils.misc import broadcast_for_index
+
+_UNEVEN_MSG = (
+    "Only velocity_to_strain_rate with step_multiple=2 supports an unevenly "
+    "sampled distance coordinate; use Patch.differentiate('distance', step=...) "
+    "instead."
+)
 
 
 def _check_step_multiple(step_multiple) -> None:
@@ -87,6 +93,10 @@ class VelocityToStrainRate(_Derivative):
     gauge_length is more complex with higher order filters. See
     @yang2022filtering for more info.
 
+    An unevenly sampled distance coordinate is differentiated by its labels
+    and supports only the default `step_multiple=2`; the output then has no
+    `gauge_length`, as there is no single step to multiply.
+
     See the [strain-rate note](`dascore/docs/notes/velocity_to_strain_rate.qmd`)
     for more details on step_multiple and order effects.
 
@@ -111,12 +121,16 @@ class VelocityToStrainRate(_Derivative):
                 "if odd step multiples are required."
             )
             raise ParameterError(msg)
-        step = meta.get_coord("distance", require_evenly_sampled=True).step
         attrs, plan = _derivative_metadata(meta, ("distance",), self.step_multiple // 2)
-        new_attrs = attrs.update(
-            data_type="strain_rate", gauge_length=step * self.step_multiple
-        )
-        return meta.new(attrs=new_attrs), plan
+        attrs = attrs.update(data_type="strain_rate")
+        step = meta.get_coord("distance").step
+        if step is not None:
+            gauge_length = step * self.step_multiple
+            return meta.new(attrs=attrs.update(gauge_length=gauge_length)), plan
+        if self.step_multiple != 2:
+            raise CoordError(_UNEVEN_MSG)
+        # An uneven coordinate has no single step to give a gauge length.
+        return meta.new(attrs=attrs.drop("gauge_length")), plan
 
 
 class VelocityToStrainRateEdgeless(PatchProcessor):
@@ -162,7 +176,9 @@ class VelocityToStrainRateEdgeless(PatchProcessor):
     for a similar function which does not change the shape of the patch.
 
     The resulting gauge length is equal to the step_multiple multiplied by
-    the sampling along the distance dimension.
+    the sampling along the distance dimension. An unevenly sampled distance
+    coordinate raises; use
+    [differentiate](`dascore.transform.differentiate.differentiate`) instead.
 
     See the
     [strain-rate note](`dascore/docs/notes/velocity_to_strain_rate.qmd`)
@@ -178,6 +194,8 @@ class VelocityToStrainRateEdgeless(PatchProcessor):
         """Return the metadata between samples, and the differencing plan."""
         step_multiple = self.step_multiple
         _check_step_multiple(step_multiple)
+        if meta.get_coord("distance").step is None:
+            raise CoordError(_UNEVEN_MSG)
         coord = meta.get_coord("distance", require_evenly_sampled=True)
         distance_step = coord.step
         gauge_length = step_multiple * distance_step
