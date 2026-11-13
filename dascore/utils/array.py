@@ -360,6 +360,11 @@ def _needs_equal_units(operator) -> bool:
     return _refuses(1.5 * dimensionless) and not _refuses(1.5 * meter)
 
 
+def _has_scale(quantity) -> bool:
+    """True for a dimensionless unit which is not exactly 1 (µϵ, %, 0.25)."""
+    return quantity.dimensionless and quantity.to("dimensionless").magnitude != 1
+
+
 def _is_logarithmic_unit(quantity) -> bool:
     """
     Return True for a logarithmic unit (dB), whose base conversion is not linear.
@@ -540,6 +545,22 @@ def _apply_binary_ufunc(
         if is_power and np.ndim(other) > 0 and data_units is not None and not reversed:
             msg = f"{operator} with units {data_units} needs a scalar exponent."
             raise UnitError(msg)
+        # An exponent, or a logaddexp operand, must be dimensionless itself:
+        # the data are bare, so a scale in its units (µϵ, %) would be lost.
+        # with one side unitful, the exponent is the patch exactly when reversed
+        exponent_has_units = is_power and (data_units is not None) == reversed
+        wants_dimensionless = exponent_has_units or operator in (
+            np.logaddexp,
+            np.logaddexp2,
+        )
+        if wants_dimensionless and _has_scale(known):
+            msg = (
+                f"{operator} needs a dimensionless operand without a scale, "
+                f"not {known}; convert it to dimensionless first "
+                "(Patch.convert_units('dimensionless') or "
+                "Quantity.to('dimensionless')), or drop the units."
+            )
+            raise UnitError(msg)
         # The exponent's value decides the units of a power; for every other
         # operation any value does, so a pair whose bare result is not zero
         # is tried first (2 // 1.5 is 1, and reversed 1.5 // 2 is 0).
@@ -553,16 +574,19 @@ def _apply_binary_ufunc(
         if known.dimensionless and _needs_equal_units(operator):
             patch_q = other_q = known
 
+        # the registry lacks float_power; its units are those of power
+        probe_op = np.power if operator is np.float_power else operator
+
         def _probe(value, probe_other):
             pair = (value * patch_q, probe_other * other_q)
             try:
-                return operator(*(pair[::-1] if reversed else pair))
+                return probe_op(*(pair[::-1] if reversed else pair))
             except DimensionalityError:
                 # equal units needed: the side without adopts the other's
                 adopt = data_units if data_units is not None else other_units
                 pair = (value * adopt, probe_other * adopt)
                 try:
-                    return operator(*(pair[::-1] if reversed else pair))
+                    return probe_op(*(pair[::-1] if reversed else pair))
                 except DimensionalityError as er:
                     msg = f"{operator} failed with units {data_units} and {other_units}"
                     raise UnitError(msg) from er
@@ -592,9 +616,17 @@ def _apply_binary_ufunc(
         if not hasattr(probe, "units"):
             # a comparison: no units
             return new_data, attrs.update(data_units=None)
-        # one of the pairs always gives a usable bare result for a ufunc
-        # which returns units at all
-        assert np.isfinite(plain) and plain != 0, f"no usable probe for {operator}"
+        if not (np.isfinite(plain) and plain != 0):
+            # Only a power gets here, its scalar operand zero or not finite:
+            # an unscaled dimensionless result stays so, others are undefined.
+            assert is_power, f"no usable probe for {operator}"
+            if _has_scale(known) or probe.units != dimensionless.units:
+                msg = (
+                    f"{operator} with units {data_units} has no defined units "
+                    f"for the exponent {other}; drop the units first."
+                )
+                raise UnitError(msg)
+            return new_data, attrs.update(data_units=get_quantity_str(probe.units))
         try:
             return new_data, attrs.update(data_units=_label(probe / plain))
         except TypeError:

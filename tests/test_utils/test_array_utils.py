@@ -593,6 +593,79 @@ class TestDimensionlessUnits:
         assert get_quantity(out.attrs.data_units) == get_quantity("rad")
         assert np.allclose(out.data, np.arctan2(random_patch.data, 1.5))
 
+    @pytest.mark.parametrize("unit", ("µϵ", "mrad", "percent", "0.25", "dB"))
+    def test_scaled_dimensionless_operand_raises(self, random_patch, unit):
+        """
+        An exponent or logaddexp operand in a scaled unit is refused.
+
+        The data are bare, so the operator would drop the scale (1 µϵ is
+        1e-6) and return a bare number as the units.
+        """
+        patch = random_patch.set_units(unit)
+        quantity = 3 * get_quantity("µϵ")  # units on the bare patch's side
+        cases = (
+            lambda: 2**patch,
+            lambda: np.power(3, patch),
+            lambda: random_patch**quantity,
+            lambda: np.logaddexp(patch, 1.5),
+            lambda: np.logaddexp(1.5, patch),
+            lambda: np.logaddexp2(patch, 1.5),
+            lambda: np.logaddexp(random_patch, quantity),
+        )
+        for case in cases:
+            with pytest.raises(UnitError, match="convert_units"):
+                case()
+
+    @pytest.mark.parametrize("unit", ("dimensionless", "1", "rad", "ϵ"))
+    def test_unscaled_dimensionless_operand_works(self, random_patch, unit):
+        """An exponent or logaddexp operand without a scale is as it was."""
+        patch = random_patch.set_units(unit)
+        data = random_patch.data
+        dimensionless = get_quantity("dimensionless")
+        out = 2**patch
+        assert np.allclose(out.data, 2**data)
+        assert get_quantity(out.attrs.data_units) == dimensionless
+        out = np.logaddexp(patch, 1.5)
+        assert np.allclose(out.data, np.logaddexp(data, 1.5))
+        assert get_quantity(out.attrs.data_units) == dimensionless
+
+    def test_dimensioned_operand_still_raises(self, random_patch):
+        """An exponent or logaddexp operand in mm fails as before."""
+        patch = random_patch.set_units("mm")
+        for case in (lambda: 2**patch, lambda: np.logaddexp(patch, 1.5)):
+            with pytest.raises(UnitError, match="failed with units"):
+                case()
+
+    @pytest.mark.parametrize("exponent", (np.nan, np.inf, -np.inf))
+    def test_non_finite_exponent(self, random_patch, exponent):
+        """
+        A non-finite exponent gives NaN or inf data.
+
+        Without units or in dimensionless the result is the same; a base with
+        units has no defined units for it.
+        """
+        expected = random_patch.data**exponent
+        for unit in (None, "dimensionless"):
+            out = random_patch.set_units(unit) ** exponent
+            assert np.allclose(out.data, expected, equal_nan=True)
+            assert get_quantity(out.attrs.data_units) == get_quantity(unit)
+        for unit in ("mm", "µϵ", "rad", "0.25", "percent"):
+            with pytest.raises(UnitError, match="no defined units"):
+                random_patch.set_units(unit) ** exponent
+
+    def test_float_power_units(self, random_patch):
+        """float_power settles its units as power does."""
+        out = np.float_power(random_patch.set_units("mm"), 2)
+        assert get_quantity(out.attrs.data_units) == get_quantity("mm**2")
+        with pytest.raises(UnitError, match="failed with units"):
+            np.float_power(1.5, random_patch.set_units("m/s"))
+
+    def test_zero_base_with_dimensionless_exponent(self, random_patch):
+        """A zero base with a dimensionless exponent stays dimensionless."""
+        out = 0 ** random_patch.set_units("dimensionless")
+        assert np.allclose(out.data, 0**random_patch.data)
+        assert get_quantity(out.attrs.data_units) == get_quantity("dimensionless")
+
     def test_scaled_dimensionless_units_keep_their_scale(self, random_patch):
         """A magnitude in the units rides along, as it does for "100 cm"."""
         patch = random_patch.set_units("2 percent")
