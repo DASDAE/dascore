@@ -1097,14 +1097,16 @@ class TestExplicitDerivedViews:
 
     def test_multi_member_irregular_rechunk_checks_actual_samples(self):
         """Rechunking a merged uneven output cannot publish a gap-only row."""
-        patch = _patch([0.0, 1.0, 3.0, 6.0, 8.0, 11.0])
+        patch = _patch([0.0, 1.0, 3.0, 6.0, 8.0, 11.0]).set_units(distance="m")
         source = dc.spool(
             [
                 patch.select(distance=(0, 3)),
                 patch.select(distance=(6, 11)),
             ]
         )
-        joined = source.chunk(distance=np.array([[0.0, 11.0]]), tolerance=10)
+        # labels with no step join only by a distance
+        window = np.array([[0.0, 11.0]])
+        joined = source.chunk(distance=window, tolerance=dc.get_quantity("10 m"))
         with pytest.raises(ChunkError, match="contains no source samples"):
             joined.chunk(distance=np.array([[4.0, 5.0]]))
         assert (

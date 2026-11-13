@@ -113,6 +113,18 @@ class TestCut:
         (patch,) = spool.cut(_ranges(start, (5, 12)))
         assert _span(patch) == _seconds(start, 5, 12)
 
+    def test_wide_seam_splits(self, spool, start):
+        """A window joins as chunk does, so a seam 1.3 steps wide splits it."""
+        first, second = spool[0], spool[1]
+        shift = second.get_coord("time").step * 3 // 10
+        late = second.update_coords(time_min=second.coords.min("time") + shift)
+        pieces = dc.spool([first, late]).cut(_ranges(start, (5, 12)))
+        spans = [_span(x) for x in pieces]
+        assert spans == [
+            _span(first.select(time=(start + 5 * SECOND, None))),
+            _span(late.select(time=(None, start + 12 * SECOND))),
+        ]
+
     def test_tiled(self, spool, start):
         """Patches split along two dims merge along both, in feature order."""
         cut, whole = (x.cut(ann := _boxes(start)) for x in (_tiles(spool, 2), spool))
