@@ -181,6 +181,12 @@ class TestDataConversionValues:
         out = patch.set_units("degC").convert_units("K")
         assert np.allclose(out.data, np.asarray(patch.data) + 273.15)
 
+    @pytest.mark.parametrize(("units", "factor"), [("degF/s", 1.8), ("K/s", 1.0)])
+    def test_offset_rate(self, patch, units, factor):
+        """A Celsius rate is a difference, so it scales without an offset."""
+        out = patch.set_units("degC/s").convert_units(units)
+        assert np.allclose(out.data, np.asarray(patch.data) * factor)
+
     def test_scaled_units(self, patch):
         """Metres to millimetres multiplies by a thousand."""
         out = patch.set_units("m/s").convert_units("mm/s")

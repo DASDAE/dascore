@@ -15,7 +15,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.exceptions import InvalidFiberFileError, InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
     parse_units,
@@ -69,6 +69,13 @@ _ROOT_ATTRS = {
     "SchemaVersion": "schema_version",
 }
 
+# Vendor attrs (OptaSense) under Acquisition/Custom.
+_CUSTOM_ATTRS = {
+    "Fibre Refractive Index": "refractive_index",
+    "Laser Wavelength (nm)": "laser_wavelength",
+    "FibreIndex": "refractive_index",  # on Custom/SystemSettings
+}
+
 # The units patch attrs use for the measures ProdML tags with a uom.
 _MEASURE_UNITS = {"pulse_width": "s", "pulse_rate": "Hz", "gauge_length": "m"}
 
@@ -98,6 +105,8 @@ class ProdMLRawPatchAttrs(dc.PatchAttrs):
 
     pulse_width: OptionalFiniteFloat = None
     gauge_length: OptionalFiniteFloat = None
+    refractive_index: OptionalFiniteFloat = None
+    laser_wavelength: OptionalFiniteFloat = None
     schema_version: UTF8Str = ""
 
 
@@ -150,6 +159,15 @@ def _get_root_attrs(attrs):
     for name, target in _MEASURE_UNITS.items():
         convert_attr_units(out, name, target)
     return out
+
+
+def _get_custom_attrs(acq):
+    """Return the vendor attrs under Acquisition/Custom, wavelength in m."""
+    out = {}
+    for name in ("Custom/SystemSettings", "Custom"):
+        if (group := acq.get(name)) is not None:
+            out.update(maybe_get_items(group.attrs, _CUSTOM_ATTRS, set(_CUSTOM_ATTRS)))
+    return convert_attr_units(out, "laser_wavelength", "m", from_units="nm")
 
 
 def _get_distance_coord(acq):
@@ -447,6 +465,16 @@ def _get_acquisition_attrs(
     return out
 
 
+def _get_custom_write_attrs(attrs):
+    """Return the Acquisition/Custom attrs for the patch's optical attrs."""
+    out = {}
+    if (index := attrs.get("refractive_index")) is not None:
+        out["Fibre Refractive Index"] = float(index)
+    if (wavelength := attrs.get("laser_wavelength")) is not None:
+        out["Laser Wavelength (nm)"] = float(wavelength) * 1e9
+    return out
+
+
 def _get_array_attrs(
     patch, strings, times, output_rate, start_locus, start_time, end_time
 ):
@@ -516,16 +544,21 @@ def _prepare_prodml_write(spool):
         raw_attrs,
         data_attrs,
         time_attrs,
+        _get_custom_write_attrs(patch.attrs),
     )
 
 
 def _write_prodml(spool, resource, options):
     """Write one raw Patch to a standalone ProdML 2.1 HDF5 file."""
     prepared = _prepare_prodml_write(spool)
-    data, times, file_uuid, acq_attrs, raw_attrs, data_attrs, time_attrs = prepared
+    data, times, file_uuid, acq_attrs, raw_attrs, data_attrs, time_attrs, custom = (
+        prepared
+    )
     h5_file = getattr(resource, "_handle", resource)
     with staged_group(h5_file, "/Acquisition") as acquisition:
         acquisition.attrs.update(acq_attrs)
+        if custom:
+            acquisition.create_group("Custom").attrs.update(custom)
         raw = acquisition.create_group("Raw[0]")
         raw.attrs.update(raw_attrs)
         raw_data = create_dataset(raw, "RawData", data, options.get("data"))
@@ -633,13 +666,21 @@ def _yield_prodml_attrs_coords(
     """Scan a prodML file, return metadata and each node's dataset."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
-    base_info = _get_root_attrs(acq.attrs)
+    base_info = _get_root_attrs(acq.attrs) | _get_custom_attrs(acq)
     d_coord = _get_distance_coord(acq)
     # Iterate the raw and processed data and return results in a list.
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
         attr, coords, dtype = func(node_info, d_coord, base_info, snap=snap)
-        yield attr, coords, node_info.name, dtype, _node_dataset(node_info)
+        dataset = _node_dataset(node_info)
+        if dataset.shape != coords.shape:
+            msg = (
+                f"PRODML node {node_info.name} in {fi.filename}: the file's "
+                f"coordinates describe shape {coords.shape} but its data has "
+                f"shape {dataset.shape}."
+            )
+            raise InvalidFiberFileError(msg)
+        yield attr, coords, node_info.name, dtype, dataset
 
 
 def _get_dims_from_attrs(attrs):

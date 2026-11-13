@@ -69,8 +69,7 @@ def _get_attr_text(value) -> str:
         value = value.item()
     if value is None or isinstance(value, bool | int | float):
         return json.dumps(value)
-    text = json.dumps(value, default=str) if isinstance(value, dict) else str(value)
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
 
@@ -188,7 +187,7 @@ class RSFV1(FiberIO):
         - Without data_path, the header ends with a blank line and the
         separator bytes 0x0c 0x0c 0x04 before the binary
         - Each attr that is set, except the ids and coordinate fields such
-        as time_min, is one key=value line (a dict as quoted JSON), prefixed
+        as time_min, is one key=value line, prefixed
         'dascore_' when its name is an RSF key such as n1. An attr Madagascar
         would misread (an odd quote, a control character, a non-identifier
         name) is skipped with a DASCoreWarning.

@@ -1814,9 +1814,7 @@ class TestCodexReviewRegressions:
 
     def test_nested_null_not_equal_to_value(self):
         """A nested null array is not equal to a non-null one."""
-        a = dc.PatchAttrs(foo={"x": np.array([np.nan])})
-        b = dc.PatchAttrs(foo={"x": np.array([1.0])})
-        assert a != b
+        assert not values_equal({"x": np.array([np.nan])}, {"x": np.array([1.0])})
 
     def test_nonfinite_interval_values_raise(self):
         """Nonfinite interval values raise."""
@@ -1977,9 +1975,7 @@ class TestCoverageCompleteness:
 
     def test_equality_array_shape_mismatch(self):
         """Nested arrays of different shapes compare unequal."""
-        a = dc.PatchAttrs(foo={"x": np.array([1.0, 2.0])})
-        b = dc.PatchAttrs(foo={"x": np.array([1.0])})
-        assert a != b
+        assert not values_equal({"x": np.array([1.0, 2.0])}, {"x": np.array([1.0])})
 
     def test_equality_sequence_length_mismatch(self):
         """Nested sequences of different lengths compare unequal."""
@@ -3255,6 +3251,13 @@ class TestFiberSegmentFields:
                 distance_min=0.0, distance_max=10.0, refractive_index=np.nan
             )
 
+    def test_free_text_buffer_type_refused(self):
+        """A spelling outside the vocabulary could never be selected on."""
+        with pytest.raises(ValidationError, match="buffer_type"):
+            inv.FiberSegment(
+                distance_min=0.0, distance_max=10.0, buffer_type="Tight buffer"
+            )
+
 
 class TestDepthLabel:
     """Boreholes and mines measure down, not up."""
@@ -3363,6 +3366,7 @@ class TestGetNames:
         assert "geometry" in names.coords
         assert "optical_components.fiber_type" in names.coords
         assert "zone" in names.coords  # the label group
+        assert "buffer_type" in names.coords  # optical_components.buffer_type
 
     def test_coords_hold_both_axis_spellings(self, names):
         """A CRS axis is selectable as stored and as this CRS reads it."""

@@ -362,9 +362,9 @@ class TestTaperHoles:
 
 
 class TestTaperDtype:
-    """A taper keeps the data's dtype."""
+    """A taper keeps a float dtype and makes other data float64."""
 
-    @pytest.mark.parametrize("dtype", ["int32", "bool", "float32", "complex64"])
+    @pytest.mark.parametrize("dtype", ["float32", "complex64"])
     def test_keeps_dtype(self, random_patch, dtype):
         """Each dtype is kept, and the ramps change some samples but not all."""
         patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
@@ -373,3 +373,11 @@ class TestTaperDtype:
         axis = patch.get_axis("time")
         ramp = (out.data != patch.data).any(axis=1 - axis)
         assert ramp.any() and not ramp.all()
+
+    @pytest.mark.parametrize("dtype", ["int16", "bool"])
+    def test_non_float_becomes_float(self, patch_ones, dtype):
+        """Integer and boolean data taper to float64 with the float ramp."""
+        expected = patch_ones.taper(time=0.1)
+        out = patch_ones.new(data=patch_ones.data.astype(dtype)).taper(time=0.1)
+        assert out.dtype == np.float64
+        assert np.allclose(out.data, expected.data)

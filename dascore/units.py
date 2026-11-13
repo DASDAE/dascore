@@ -19,6 +19,7 @@ import pint
 import pydantic
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 from pint.facets.plain import PlainUnit
+from pint.util import ParserHelper, UnitsContainer
 from platformdirs import user_cache_path
 
 import dascore as dc
@@ -149,7 +150,20 @@ def _str_to_quant(quant_str):
         if isinstance(quant_str, Unit):
             quant_str = str(quant_str)  # ensure unit is converted to quantity
         ureg = get_registry()
-        return ureg.Quantity(quant_str)
+        quant = ureg.Quantity(quant_str)
+        # As in get_unit, an offset temperature in a compound (degC/s) is a
+        # difference; pint's expression parser makes it absolute instead.
+        try:
+            text = quant_str
+            for preprocess in ureg.preprocessors:
+                text = preprocess(text)
+            parsed = ParserHelper.from_string(text)
+            units = ureg.parse_units(str(UnitsContainer(parsed)))
+        except Exception:  # e.g. "inf s" or "1 m + 2 cm", which only Quantity reads
+            return quant
+        if any(x.startswith("delta_degree_") for x in units._units):
+            return ureg.Quantity(parsed.scale, units)
+        return quant
 
 
 # Anything get_quantity can resolve: a unit or quantity, a string naming

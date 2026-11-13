@@ -20,6 +20,7 @@ from markdown_it import MarkdownIt
 
 import dascore as dc
 from dascore.cli import main
+from dascore.exceptions import InvalidInventoryError
 from dascore.utils import doc_cache, doc_corpus
 
 
@@ -637,3 +638,48 @@ class TestKeywordMetadata:
         text = (tmp_path / "output" / record["path"]).read_text(encoding="utf-8")
         front = yaml.safe_load(text.split("---", 2)[1])
         assert front["keywords"] == expected
+
+
+class TestInventory:
+    """The inventory commands start a directory and report its problems."""
+
+    @pytest.fixture
+    def skeleton(self, tmp_path, capsys):
+        """A freshly initialized inventory directory."""
+        path = tmp_path / "inventory"
+        assert main(["inventory", "init", str(path)]) == 0
+        capsys.readouterr()
+        return path
+
+    def test_init_check(self, skeleton, capsys):
+        """A new skeleton loads as written and checks clean."""
+        (network,) = dc.inventory(skeleton).networks
+        assert network.fiber_arrays[0].acquisitions[0].gauge_length == 10.0
+        files = [x for x in skeleton.rglob("*") if x.is_file()]
+        assert not any("NaT" in x.read_text() for x in files)
+        assert main(["inventory", "check", str(skeleton)]) == 0
+        assert capsys.readouterr().out.startswith("OK: 1 networks, 1 fiber arrays")
+
+    def test_init_not_empty(self, tmp_path, capsys):
+        """Init refuses a directory which already holds something."""
+        (tmp_path / "notes.txt").write_text("keep")
+        assert main(["inventory", "init", str(tmp_path)]) == 2
+        assert "is not empty" in capsys.readouterr().err
+        assert [x.name for x in tmp_path.iterdir()] == ["notes.txt"]
+
+    def test_check_broken(self, skeleton, capsys):
+        """Check reports the loader's message for a bad value and fails."""
+        path = skeleton / "acquisitions" / "XX.STA.00.DAS.yaml"
+        text = path.read_text().replace("gauge_length: 10.0", "gauge_length: ten")
+        path.write_text(text)
+        with pytest.raises(InvalidInventoryError) as error:
+            dc.inventory(skeleton)
+        assert main(["inventory", "check", str(skeleton)]) == 1
+        captured = capsys.readouterr()
+        assert not captured.out
+        assert str(error.value) in captured.err
+
+    def test_check_missing(self, tmp_path, capsys):
+        """Check on a missing directory is a usage error."""
+        assert main(["inventory", "check", str(tmp_path / "missing")]) == 2
+        assert "is not a directory" in capsys.readouterr().err

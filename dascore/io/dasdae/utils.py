@@ -11,7 +11,7 @@ import json
 import numpy as np
 
 import dascore as dc
-from dascore.core.attrs import PatchAttrs
+from dascore.core.attrs import PatchAttrs, _ArrayAttrError, _held_value
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
@@ -38,6 +38,7 @@ from dascore.io.dasdae._compat import (
 )
 from dascore.io.utils import resolve_keyed_source, should_snap, stored_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
+from dascore.units import Quantity, Unit, get_quantity, get_quantity_str, get_unit
 from dascore.utils.array import (
     convert_bytes_to_strings,
     convert_strings_to_bytes,
@@ -588,15 +589,19 @@ def _encode_history_attr(value):
 
 
 def _encode_attr_value(key, value):
-    """Encode a patch attr into an HDF5-attr-safe representation."""
+    """
+    Return a patch attr as an HDF5-attr-safe value and its type tag, or None
+    where HDF5 holds it as is; a numpy time is its count tagged with its dtype.
+    """
     if key == "history":
         return _encode_history_attr(value)
     if value is None:
         return "", "none"
-    if isinstance(value, np.datetime64):
-        return to_int(value), "datetime64[ns]"
-    if isinstance(value, np.timedelta64):
-        return to_int(value), "timedelta64[ns]"
+    if isinstance(value, np.datetime64 | np.timedelta64):
+        return int(value.view(np.int64)), value.dtype.name
+    if isinstance(value, Quantity | Unit):
+        tag = "quantity" if isinstance(value, Quantity) else "unit"
+        return get_quantity_str(value), tag
     return value, None
 
 
@@ -607,10 +612,10 @@ def _decode_attr_value(attrs, key, value, legacy: bool = True):
         return _decode_legacy_attr_value(attrs, key, value, legacy=legacy)
     if attr_type == "none":
         return None
-    if attr_type == "datetime64[ns]":
-        return np.asarray([value], dtype="int64").view("datetime64[ns]")[0]
-    if attr_type == "timedelta64[ns]":
-        return np.asarray([value], dtype="int64").view("timedelta64[ns]")[0]
+    if attr_type.startswith(("datetime64", "timedelta64")):
+        return np.asarray([value], dtype="int64").view(attr_type)[0]
+    if attr_type in ("quantity", "unit"):
+        return (get_quantity if attr_type == "quantity" else get_unit)(unbyte(value))
     if attr_type == "history_json":
         return tuple(json.loads(unbyte(value) or "[]"))
     return value
@@ -636,6 +641,15 @@ def _holds_pytables_payload(attrs, key, value) -> bool:
     return get_cset is not None and get_cset() == 0
 
 
+def _attr_can_hold(value) -> bool:
+    """Return True if an attr holds a decoded legacy value; a dict keeps its text."""
+    try:
+        _held_value("", value)
+    except ValueError as error:
+        return isinstance(error, _ArrayAttrError)  # skipped by the validator
+    return True
+
+
 def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
     """
     Decode one attr value from a file written before attr types were stored.
@@ -649,7 +663,7 @@ def _decode_legacy_attr_value(attrs, key, value, legacy: bool = True):
         value = np.asarray([value])[0]
     if legacy and _holds_pytables_payload(attrs, key, value):
         decoded = decode_pytables_attr(bytes(value))
-        if decoded is not NOT_DECODED:
+        if decoded is not NOT_DECODED and _attr_can_hold(decoded):
             return decoded
     if isinstance(value, np.bytes_ | bytes):
         try:

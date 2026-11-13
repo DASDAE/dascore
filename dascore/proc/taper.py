@@ -12,7 +12,7 @@ from pydantic import ConfigDict
 
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
-from dascore.proc.basic import _scale_by
+from dascore.proc.basic import _as_float, _scale_by
 from dascore.units import Quantity
 from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
@@ -98,7 +98,7 @@ class Taper(PatchProcessor):
 
     Returns
     -------
-    The tapered patch.
+    The tapered patch. Integer and boolean data become float64.
 
     Notes
     -----
@@ -156,8 +156,9 @@ class Taper(PatchProcessor):
         return meta, plan
 
     def kernel(self, data, *, axis, start, stop, head, tail):
-        """Return the data with its ends scaled by the ramps, in its own dtype."""
+        """Return the data with its ends scaled by the ramps, as floats."""
         xp = array_namespace(data)
+        data = _as_float(data)
         spans = [(start, stop, None)]
         if head is not None:
             spans.insert(0, (None, start, head))
@@ -167,14 +168,14 @@ class Taper(PatchProcessor):
         for first, last, ramp in spans:
             piece = data[broadcast_for_index(data.ndim, axis, slice(first, last))]
             if ramp is not None:
-                # Scaled in float and cast back, as an in-place multiply was.
+                # The float64 ramps would promote single precision data.
                 piece = xp.astype(_scale_by(piece, ramp), data.dtype)
             pieces.append(piece)
         return xp.concat(pieces, axis=axis)
 
     def numpy_kernel(self, data, *, axis, start, stop, head, tail):
-        """Return a copy of the data with its ends scaled in place."""
-        out = np.array(data)
+        """Return a float copy of the data with its ends scaled in place."""
+        out = np.array(_as_float(data))
         for span, ramp in ((slice(None, start), head), (slice(stop, None), tail)):
             if ramp is not None:
                 inds = broadcast_for_index(out.ndim, axis, span)

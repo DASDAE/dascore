@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import warnings
 from collections.abc import Hashable
@@ -710,7 +711,7 @@ def summaries_to_records(
     for summary in summaries:
         by_source.setdefault(str(summary.source_path), []).append(summary)
     root = base_uri or relative_to
-    root_posix = str(root).replace("\\", "/") if root else None
+    root_posix = str(root).replace(os.sep, "/") if root else None
     root_prefix = root_posix.rstrip("/") if root_posix else None
     out = []
     # Names a directory renamed out from under the file which states them,
@@ -730,7 +731,7 @@ def summaries_to_records(
                 # positional identity within the source, per design doc
                 record = replace(record, source_patch_key=str(num))
             patches.append(record)
-        posix_path = path.replace("\\", "/")
+        posix_path = path.replace(os.sep, "/")
         store_path = posix_path
         path_attrs = None
         if root_prefix is not None and (

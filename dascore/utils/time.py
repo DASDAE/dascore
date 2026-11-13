@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import date, datetime, timedelta
 from fractions import Fraction
 from functools import singledispatch
@@ -26,6 +27,10 @@ _EPOCH_DATETIME64 = np.datetime64(0, "ns")
 # The largest nanosecond count; -2**63 is NaT, so the range is symmetric.
 _MAX_NS = 2**63 - 1
 _MAX_SECONDS = _MAX_NS // 1_000_000_000
+# A UTC offset right after a time of day, with bounded fields.
+_UTC_OFFSET = re.compile(
+    r"[T ]\d\d(?::\d\d(?::\d\d(?:\.\d+)?)?)?([+-])([01]\d|2[0-3])(?::?([0-5]\d))?$"
+)
 _NS_DTYPES = {"M": np.dtype("datetime64[ns]"), "m": np.dtype("timedelta64[ns]")}
 # Nanoseconds per unit numpy can widen to ns; timedelta years and months
 # are numpy's average lengths.
@@ -173,6 +178,13 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
     # Numpy parses these with no unit, which it deprecates.
     if obj.lower() in ("", "nat"):
         return _NAT_DATETIME64
+    # Numpy deprecates parsing a UTC offset, so apply it in whole seconds.
+    if ("+" in obj or obj.rfind("-") > 9) and (match := _UTC_OFFSET.search(obj)):
+        sign, hours, minutes = match.groups()
+        shift = np.timedelta64(int(hours) * 60 + int(minutes or 0), "m")
+        local, dot, fraction = obj[: match.start(1)].partition(".")
+        utc = np.datetime64(local, "s") + (shift if sign == "-" else -shift)
+        obj = f"{utc}{dot}{fraction}"
     return _parse_iso(obj)
 
 
@@ -242,10 +254,15 @@ def _string_array_to_datetime64(arr: pd.arrays.StringArray):
     other -- they share only `BaseStringArray` -- so registering one does
     not dispatch the other.
     """
-    out = pd.to_datetime(arr, errors="coerce", format="mixed")
-    if getattr(out, "tz", None) is not None:  # offsets parse to UTC
-        out = out.tz_convert(None)
-    return _as_ns(out.to_numpy(), "M")
+    return to_datetime64(pd.to_datetime(arr, errors="coerce", format="mixed"))
+
+
+@to_datetime64.register(pd.DatetimeIndex)
+def _datetime_index_to_datetime64(index: pd.DatetimeIndex) -> np.ndarray:
+    """Convert a DatetimeIndex, timezone-aware or not, to UTC datetime64[ns]."""
+    if index.tz is not None:
+        index = index.tz_convert(None)
+    return _as_ns(index.to_numpy(), "M")
 
 
 @to_datetime64.register(np.datetime64)
@@ -319,6 +336,15 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
         return _NAT_TIMEDELTA64
     msg = f"type {type(obj)} is not supported"
     raise NotImplementedError(msg)
+
+
+def numpy_time(value: datetime | date | timedelta) -> np.datetime64 | np.timedelta64:
+    """Return a python or pandas time as a numpy one at its own precision."""
+    for name in ("to_datetime64", "to_timedelta64"):  # pandas, to keep its unit
+        if hasattr(value, name):
+            return getattr(value, name)()
+    is_delta = isinstance(value, timedelta)
+    return np.timedelta64(value) if is_delta else np.datetime64(value)
 
 
 @to_timedelta64.register(float)

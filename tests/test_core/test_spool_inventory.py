@@ -1137,6 +1137,23 @@ class TestInventorySelect:
         assert len(out) == 2
         assert set(out.get_contents()["distance_max"]) == {150.0}
 
+    def test_buffer_type_short_name(self, two_patch_spool, inventory):
+        """The buffer type selects and expands by its short name."""
+        segments = (
+            FiberSegment(distance_min=0.0, distance_max=250.0, buffer_type="bare"),
+            FiberSegment(
+                distance_min=250.0, distance_max=500.0, buffer_type="loose_tube"
+            ),
+        )
+        inv = _replace_path(inventory, optical_components=segments)
+        spool = two_patch_spool.attach_inventory(inv)
+        loose, bare = (spool.select(buffer_type=x) for x in ("loose_tube", "bare"))
+        assert len(loose) == len(bare) == 2
+        # Each keeps only its own channels.
+        loose_df, bare_df = loose.get_contents(), bare.get_contents()
+        assert bare_df["distance_max"].max() < loose_df["distance_min"].min()
+        assert len(spool.expand_by("buffer_type")) == 4
+
     def test_a_channel_level_name_nothing_matches_keeps_nothing(
         self, two_patch_spool, inventory
     ):

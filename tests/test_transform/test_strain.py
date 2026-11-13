@@ -348,6 +348,20 @@ class TestRadianToStrain:
         overridden = normalized.radians_to_strain(gauge_length=100)
         np.testing.assert_array_equal(overridden.data, result.data)
 
+    def test_optical_attrs_used(self, rad_patch):
+        """The patch's refractive index and laser wavelength replace defaults."""
+        patch = rad_patch.update_attrs(refractive_index=1.4682, laser_wavelength=1e-6)
+        out = patch.radians_to_strain()
+        const = 1e-6 / (4 * np.pi * 1.4682 * 10 * 0.79)
+        np.testing.assert_allclose(out.data, patch.data * const)
+
+    def test_explicit_optical_values_win(self, rad_patch):
+        """Passed values win over the patch attrs."""
+        patch = rad_patch.update_attrs(refractive_index=1.4682, laser_wavelength=1e-6)
+        out = patch.radians_to_strain(wave_length=1.3e-6, refractive_index=1.5)
+        const = 1.3e-6 / (4 * np.pi * 1.5 * 10 * 0.79)
+        np.testing.assert_allclose(out.data, patch.data * const)
+
     @pytest.mark.parametrize("units", ["rad/m**2", "rad*m", "rad/s**2"])
     def test_unsupported_phase_units(self, rad_patch, units):
         """Unsupported dimensions must not silently produce non-strain units."""

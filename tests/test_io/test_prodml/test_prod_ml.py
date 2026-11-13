@@ -12,6 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import get_coord
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.core import read
 from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
@@ -184,6 +185,56 @@ class TestStoredTimes:
         assert (time.min(), time.max()) == (stored[0], stored[-1])
 
 
+# RawData cuts and the shapes the refusal names.
+_CUTS = {
+    "time": (np.s_[:-10], r"\(2500, 512\).*\(2490, 512\)"),
+    "distance": (np.s_[:, :-10], r"\(2500, 512\).*\(2500, 502\)"),
+}
+
+
+class TestShortRawData:
+    """A file whose data is smaller than its coordinates is refused."""
+
+    @staticmethod
+    def _cut(tmp_path, cut):
+        """Cut part of RawData, leaving the coordinates alone."""
+        path = tmp_path / "short.h5"
+        shutil.copy(fetch("prodml_2.0.h5"), path)
+        with h5py.File(path, "a") as h5:
+            raw = h5["Acquisition/Raw[0]"]
+            data, attrs = raw["RawData"][...], dict(raw["RawData"].attrs)
+            del raw["RawData"]
+            raw.create_dataset("RawData", data=data[cut]).attrs.update(attrs)
+        return path
+
+    @pytest.fixture(params=list(_CUTS))
+    def short(self, tmp_path, request):
+        """A short file and the message expected for it."""
+        cut, shapes = _CUTS[request.param]
+        return self._cut(tmp_path, cut), rf"Raw\[0\].*short\.h5.*{shapes}"
+
+    def test_read_raises(self, short):
+        """Reading names the node, file and both shapes."""
+        path, match = short
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
+
+    def test_scan_warns_and_skips(self, short):
+        """Scanning skips the file with one warning carrying the reason."""
+        path, match = short
+        with pytest.warns(UserWarning, match=match) as record:
+            assert not dc.scan(path)
+        assert len(record) == 1
+
+    def test_directory_spool_skips(self, tmp_path):
+        """A directory spool indexes nothing from the file."""
+        cut, shapes = _CUTS["time"]
+        path = self._cut(tmp_path, cut)
+        with pytest.warns(UserWarning, match=shapes):
+            spool = dc.spool(path.parent).update()
+        assert not len(spool)
+
+
 class TestReadQuantXV2:
     """Tests for reading the QuantXV2 format."""
 
@@ -195,6 +246,31 @@ class TestReadQuantXV2:
         time = quantx_v2_das_patch.coords.get_array("time")
         dtype = time.dtype
         assert "[ns]" in str(dtype)
+
+    def test_optical_attrs(self, quantx_v2_das_patch):
+        """The refractive index and laser wavelength (in m) come from Custom."""
+        attrs = quantx_v2_das_patch.attrs
+        assert attrs.refractive_index == pytest.approx(1.4682, rel=1e-6)
+        assert attrs.laser_wavelength == pytest.approx(1550e-9)
+
+    def test_optical_attrs_scanned(self, quantx_v2_example_path):
+        """Scanning reports the same optical attrs."""
+        df = dc.scan_to_df(quantx_v2_example_path)
+        assert df["refractive_index"].iloc[0] == pytest.approx(1.4682, rel=1e-6)
+        assert df["laser_wavelength"].iloc[0] == pytest.approx(1550e-9)
+
+    def test_system_settings_index(self):
+        """FibreIndex on Custom/SystemSettings is the refractive index."""
+        attrs = dc.spool(fetch("prodml_2.1.h5"))[0].attrs
+        assert attrs.refractive_index == pytest.approx(1.4682, rel=1e-6)
+        assert attrs.laser_wavelength is None
+
+    def test_boxed_index(self, quantx_v2_example_path, tmp_path):
+        """An index stored as a length-1 array still reads."""
+        path = shutil.copy(quantx_v2_example_path, tmp_path / "boxed.h5")
+        with h5py.File(path, "a") as fi:
+            fi["Acquisition/Custom"].attrs["Fibre Refractive Index"] = np.array([1.47])
+        assert dc.spool(path)[0].attrs.refractive_index == pytest.approx(1.47)
 
 
 class TestVersionDetection:

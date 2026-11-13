@@ -17,6 +17,7 @@ from dascore.units import (
     Hz,
     Quantity,
     assert_dtype_compatible_with_units,
+    conversion_factors,
     convert_units,
     ft,
     get_byte_count,
@@ -206,6 +207,48 @@ class TestGetQuantity:
         """Get quantity should work with temperatures."""
         quant1 = get_quantity("degC")
         assert "°C" in str(quant1)
+
+    @pytest.mark.parametrize(
+        ("units", "expected"),
+        [
+            ("degC/s", "1 delta_degC/s"),
+            ("2 degC/s", "2 delta_degC/s"),
+            ("m/degC", "1 m/delta_degC"),
+            ("degC^2", "1 delta_degC^2"),
+            ("degrees C/s", "1 delta_degC/s"),
+            ("° F / s", "1 delta_degF/s"),
+        ],
+    )
+    def test_compound_temperature_is_delta(self, units, expected):
+        """An offset unit in a compound is a difference, as in get_unit."""
+        assert units_match(units, expected)
+
+    def test_compound_temperature_round_trips(self):
+        """The delta quantity's string reads back as the same quantity."""
+        quant = get_quantity("2 degF/s")
+        assert get_quantity(get_quantity_str(quant)) == quant
+        assert get_quantity(get_quantity_str(quant.units)) == quant / 2
+
+    def test_bare_temperature_is_absolute(self):
+        """A temperature on its own keeps its offset unit."""
+        assert not get_quantity("20 degC")._is_multiplicative
+
+    def test_decibel_rate_unchanged(self):
+        """Decibels in a compound keep the expression parser's reading."""
+        quant = get_quantity("20 dB/m")
+        assert quant.units == 1 / get_unit("m")
+        assert np.isclose(quant.magnitude, 100)
+        mult1, add, mult2 = conversion_factors("dB/m", "dB/km")
+        assert np.isclose(mult1 * mult2, 1000)
+        assert add == 0
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("1 m + 2 cm", 1.02 * m), ("inf s", np.inf * get_unit("s"))],
+    )
+    def test_expressions_only_quantity_reads(self, value, expected):
+        """Expressions the unit parser cannot read still parse."""
+        assert get_quantity(value) == expected
 
     def test_timedelta64(self):
         """Ensure time deltas can be converted to quantity"""
