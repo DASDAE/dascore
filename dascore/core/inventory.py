@@ -103,6 +103,18 @@ CouplingType = Literal[
 ]
 VALID_COUPLING_TYPES = get_args(CouplingType)
 
+# How a fiber sits in its cable; empty when not stated.
+BufferType = Literal[
+    "tight_buffered",
+    "semi_tight",
+    "loose_tube",
+    "ribbon",
+    "bare",
+    "other",
+    "",
+]
+VALID_BUFFER_TYPES = get_args(BufferType)
+
 # Coordinates are stored on the canonical (x, y, z) axes; these labels are
 # resolvable aliases whose meaning the inventory CRS declares.
 CoordinateLabel = Literal[
@@ -560,8 +572,8 @@ class FiberSegment(_OpticalComponentBase):
             "distance; the OTDR group index setting."
         ),
     )
-    buffer_type: str = Field(
-        default="", description="Buffer construction, such as tight_buffered."
+    buffer_type: BufferType = Field(
+        default="", description="Controlled buffer category; empty when not stated."
     )
 
     @property
@@ -1295,6 +1307,12 @@ def _track_identity_fields() -> Mapping[str, str]:
     return MappingProxyType(out)
 
 
+# Track fields a patch coordinate may also be named by alone.
+TRACK_FIELD_SHORT_NAMES = MappingProxyType(
+    {"buffer_type": "optical_components.buffer_type"}
+)
+
+
 # Names a label group may not take: a group becomes a patch coordinate
 # at enrichment, where it would shadow one of these, and a stamped attr
 # at expansion, where it would replace the patch's identity.
@@ -1303,6 +1321,7 @@ RESERVED_GROUP_NAMES = frozenset(
     {"time", "distance", "channel", "acquisition_distance", "acquisition_key"}
     | {"instrument_distance"}
     | {"optical_components", "geometry", "coupling", "labels"}
+    | set(TRACK_FIELD_SHORT_NAMES)
     | set(VALID_COORDINATE_LABELS)
 )
 
@@ -1544,8 +1563,8 @@ class OpticalPath(TimeRangedModel):
         groups = {x.group for x in self.labels if x.group}
         errors = [
             f"Geometry column {name!r} is a reserved name; a column becomes "
-            "a coordinate and cannot shadow a structural coordinate or a "
-            "typed track."
+            "a coordinate and cannot shadow a structural coordinate, a "
+            "typed track, or a track field's short name such as buffer_type."
             for name in sorted(set(spans) & _RESERVED_COLUMN_NAMES)
         ]
         errors += [
@@ -1600,7 +1619,8 @@ class OpticalPath(TimeRangedModel):
             errors.append(
                 f"Label group {group!r} is a reserved name; a group "
                 "becomes a coordinate and cannot shadow a structural "
-                "coordinate, a typed track, or a coordinate label."
+                "coordinate, a typed track, a coordinate label, or a track "
+                "field's short name such as buffer_type."
             )
         for group, items in groups.items():
             kinds = {value_kind(x.value) for x in items}
@@ -2521,6 +2541,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             out[track] = None
             names = (f"{track}.{x}" for x in fields)
             out.update(dict.fromkeys(x for x in names if x not in unusable))
+        out.update({k: None for k, v in TRACK_FIELD_SHORT_NAMES.items() if v in out})
         out.update(columns)
         out.update(groups)
         return tuple(out)

@@ -2624,6 +2624,14 @@ class TestReadableErrors:
         msg = self._message(make_inventory, coupling__csv=text)
         assert "coupling_type is 'glued', but should be" in msg
 
+    def test_bad_buffer_type_states_what_was_given(self, make_inventory):
+        """A free-text buffer type is refused the way a coupling type is."""
+        text = "object_type,distance_min,distance_max,buffer_type\n"
+        text += "FiberSegment,0,1000,tight\n"
+        msg = self._message(make_inventory, optical_components__csv=text)
+        assert "optical_components.csv data row 1:" in msg
+        assert "buffer_type is 'tight', but should be" in msg
+
     def test_row_with_no_type_lists_types(self, make_inventory):
         """A component row with no object_type is told what it may be."""
         text = "distance_min,distance_max,name\n0,1000,fiber 1\n"

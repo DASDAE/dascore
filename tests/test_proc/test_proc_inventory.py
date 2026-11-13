@@ -14,6 +14,7 @@ from dascore.core.inventory import (
     CoordinateReferenceSystem,
     DistanceMap,
     FiberArray,
+    FiberSegment,
     Geometry,
     Inventory,
     Network,
@@ -604,6 +605,30 @@ class TestCoords:
         inv = _replace_path(inventory, coupling=())
         out = patch.enrich(inv, attrs=False)
         assert "coupling" not in set(out.coords.coord_map)
+
+    def test_blanket_adds_buffer_type(self, patch, inventory):
+        """A stated buffer type is copied per segment under its short name."""
+        segments = (
+            FiberSegment(distance_min=0.0, distance_max=250.0, buffer_type="bare"),
+            FiberSegment(
+                distance_min=250.0, distance_max=500.0, buffer_type="loose_tube"
+            ),
+        )
+        inv = _replace_path(inventory, optical_components=segments)
+        out = patch.enrich(inv, attrs=False)
+        values = out.get_array("buffer_type")
+        assert values[0] == "bare" and values[-1] == "loose_tube"
+        named = patch.enrich(
+            inv, attrs=False, coords=("optical_components.buffer_type",)
+        )
+        assert np.all(named.get_array("optical_components.buffer_type") == values)
+        selected = out.select(buffer_type="loose_tube")
+        assert set(np.unique(selected.get_array("buffer_type"))) == {"loose_tube"}
+
+    def test_blanket_without_buffer_type(self, patch, inventory):
+        """A path stating no buffer type projects none."""
+        out = patch.enrich(inventory, attrs=False)
+        assert "buffer_type" not in set(out.coords.coord_map)
 
     def test_coords_false(self, patch, inventory):
         """No coordinates are added when none are wanted."""

@@ -29,6 +29,7 @@ from dascore.constants import (
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     DISTANCE_MAP_AXES,
+    TRACK_FIELD_SHORT_NAMES,
     TRACK_IDENTITY_FIELDS,
     VALID_COORDINATE_LABELS,
     Inventory,
@@ -891,7 +892,8 @@ def get_coord_values(inventory, path, name, distances):
     if name == "distance":
         # The distances are already the optical path's, in meters.
         return get_coord(data=distances, units="m", snap=False)
-    track, _, field = name.partition(".")
+    qualified = TRACK_FIELD_SHORT_NAMES.get(name, name)
+    track, _, field = qualified.partition(".")
     if track in _TRACK_NAMES:
         # A bare track name means the track's identity: which coupling
         # condition, which geometry segment, which component a channel
