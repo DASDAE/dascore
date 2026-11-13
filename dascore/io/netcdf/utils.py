@@ -26,7 +26,7 @@ from dascore.xarray.patch import _cf_attrs, _cf_units
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
 # The attribute holding the step of labels which are not one grid, so they
-# read back with their holes and jitter (in nanoseconds for times).
+# read back as their segments (in nanoseconds for times).
 STEP_ATTR = "dascore_step"
 # The prefix of the attributes describing labels which are one grid, one per
 # field of a DASDAE ``CoordRange`` node (``_dascore_coord_start``, ...), so a
@@ -192,7 +192,7 @@ def get_scan_coord(coord, snap: snap_type = False, where=""):
     units = _cf_units(coord.attrs.get("units"), coord.name)
     step = coord.attrs.get(STEP_ATTR)
     if step is not None and not should_snap(snap, coord.name):
-        # labels written with their step: holes and jitter read back
+        # labels written with their step: their segments read back
         if values.dtype.kind in "mM":
             step = np.timedelta64(int(step), "ns")
         return get_coord(data=values, step=step, units=units)
