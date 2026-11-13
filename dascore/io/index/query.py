@@ -31,6 +31,7 @@ from dascore.io.index.ingest import TypedValue, typed_value
 from dascore.io.index.schema import glob_expr, quote
 from dascore.units import convert_units, get_quantity
 from dascore.utils.misc import glob_to_regex, is_range
+from dascore.utils.misc import stated_units as _normalize_unit
 from dascore.utils.pd import resolve_selector_namespaces
 
 _GLOB_CHARS = frozenset("*?[")
@@ -128,13 +129,6 @@ def _coerce_scalar(value, target_kinds: set[str]):
         except (ValueError, TypeError):
             pass
     return typed
-
-
-def _normalize_unit(value) -> str | None:
-    """Return a nullable unit string from a dataframe value."""
-    if value is None or pd.isnull(value) or value == "":
-        return None
-    return str(value)
 
 
 def _to_target_unit(typed, target_units: str | None, name: str):

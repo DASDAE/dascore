@@ -55,7 +55,7 @@ def explicit_ranges(value) -> ExplicitRanges | None:
         raise ParameterError(msg)
     rows: list[tuple[object, object]] = []
     for index in range(len(candidate)):
-        bounds, opens = [], set()
+        bounds, opens = [], []
         for bound in candidate[index]:
             bound = str(bound) if isinstance(bound, np.str_) else bound
             if bound is None or bound is Ellipsis:
@@ -66,11 +66,14 @@ def explicit_ranges(value) -> ExplicitRanges | None:
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
             inf = isinstance(magnitude, float | np.floating) and np.isinf(magnitude)
-            opens |= {magnitude > 0} if inf else set()
+            opens += [magnitude > 0] if inf else []
             bounds.append(None if inf or pd.isna(magnitude) else bound)  # NaN, NaT
+        if len(opens) == 2 and opens[0] == opens[1]:  # one sign twice: nothing
+            msg = f"Explicit range row {index} has two infinities of one sign."
+            raise ParameterError(msg)
         if opens:  # +inf leaves the row's other bound low, -inf high
-            closed = [x for x in bounds if x is not None] if len(opens) == 1 else []
-            bounds = [*closed, None] if opens == {True} else [None, *closed]
+            closed = [x for x in bounds if x is not None] if len(set(opens)) < 2 else []
+            bounds = [*closed, None] if set(opens) == {True} else [None, *closed]
             bounds = [*bounds, None][:2]
         rows.append((bounds[0], bounds[1]))
     return ExplicitRanges(tuple(rows))

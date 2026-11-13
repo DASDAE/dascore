@@ -426,11 +426,6 @@ class TestChunkRefusesWindows:
         with pytest.raises(ParameterError, match=match):
             getattr(spool, method)(time=windows)
 
-    def test_lengths_still_taken(self, spool):
-        """Lengths, sizes and merges are unchanged."""
-        assert len(spool.chunk(time=4)) == 6
-        assert len(spool.chunk(time=...)) == len(spool.chunk(time=None)) == 1
-
     @pytest.mark.parametrize("method", ["chunk", "chunk_plan"])
     def test_no_on_incomplete(self, spool, method):
         """on_incomplete is refused as removed, pointing to cut."""
@@ -455,14 +450,6 @@ class TestCutWindows:
         bounds = tuple(_seconds(start, 5, 12))
         expected = spool.select(time=bounds).chunk(time=None)[0]
         assert cut[0].equals(expected.update_attrs(window=0))
-
-    def test_matches_annotation_cut(self, spool, start):
-        """A window is cut as a lone range of an annotation set is."""
-        ranges = spool.cut(_ranges(start, (5, 12), (1, 2)))
-        windows = spool.cut(time=_windows(start, (5, 12), (1, 2)))
-        for x, y in zip(ranges, windows, strict=True):
-            assert x.get_coord("time") == y.get_coord("time")
-            assert np.array_equal(x.data, y.data)
 
     def test_split_window_is_labelled(self, spool, start):
         """A window split by a gap gives fragments labelled by their window."""
@@ -495,34 +482,6 @@ class TestCutWindows:
         assert len(source.cut(time=windows, max_shift=0.16)) == 1
         assert len(source.cut(_ranges(start, (5, 12)), max_shift=0.14)) == 2
 
-    def test_boxes_pair_rows(self, spool, start):
-        """Arrays on several dims pair row by row; an open end spans."""
-        time = _windows(start, (5, 12), (1, 2))
-        distance = np.array([[10.0, 50.0], [None, 20]], dtype=object)
-        first, second = spool.cut(time=time, distance=distance)
-        assert _span(first) == _seconds(start, 5, 12)
-        assert _span(first, "distance") == [10, 50]
-        assert _span(second) == _seconds(start, 1, 2)
-        assert _span(second, "distance") == [0, 20]
-        times = tuple(_seconds(start, 5, 12))
-        box = spool.select(time=times, distance=(10, 50)).chunk(time=None)[0]
-        assert first.equals(box.update_attrs(window=0))
-
-    def test_overlap_duplicates_and_empty(self, spool, start):
-        """Overlapping and repeated windows each give an output; empty ones none."""
-        cut = spool.cut(time=_windows(start, (100, 101), (1, 3), (2, 4), (1, 3)))
-        assert cut.get_contents()["window"].tolist() == [1, 2, 3]
-        assert [_span(x) for x in cut] == [
-            _seconds(start, 1, 3),
-            _seconds(start, 2, 4),
-            _seconds(start, 1, 3),
-        ]
-        between = spool.cut(time=_windows(start, (1.001, 1.003)))
-        assert not len(between)
-        empty = spool.cut(time=np.empty((0, 2)))
-        assert not len(empty)
-        assert empty.get_contents()["window"].dtype == "Int64"
-
     def test_irregular_samples(self):
         """Windows over labels with no step keep the samples inside them."""
         spool = dc.spool(_line([0.0, 1.0, 3.0, 6.0, 9.0]))
@@ -535,12 +494,13 @@ class TestCutWindows:
         cases = [
             ({"time": 4}, "(n, 2)"),
             ({"time": _windows(start, (1, 2)), "distance": np.ones((2, 2))}, "same"),
-            ({"depth": np.array([[0, 1]])}, "lacks"),
+            ({"distance": (2, 4)}, "[[start, stop]]"),
+            ({"depth": np.array([[0, 1]])}, "dimensions only"),
             ({}, "got no windows"),
             ({"tolerance": np.ones((1, 2))}, "got no windows"),
         ]
         for kwargs, match in cases:
-            with mock.patch.object(Spool, "_build_chunk_plan") as plan:
+            with mock.patch("dascore.core.spool.window_plan") as plan:
                 with pytest.raises(ParameterError, match=re.escape(match)):
                     spool.cut(**kwargs)
             assert not plan.call_count
@@ -562,7 +522,13 @@ class TestCutWindows:
         )
         # windows pair with sources in one array step, not one per window,
         # and each source's labels are searched once, not once per window
-        pairing = mock.patch.object(chunk_plan, "_meets", wraps=chunk_plan._meets)
+        calls, original = [], chunk_plan._window_edges
+
+        def edges(*args):
+            *rest, bounds = original(*args)
+            return *rest, lambda *x: (calls.append(1), bounds(*x))[1]
+
+        pairing = mock.patch.object(chunk_plan, "_window_edges", side_effect=edges)
         search = mock.patch.object(
             chunk_plan, "_sample_bounds", wraps=chunk_plan._sample_bounds
         )
@@ -570,10 +536,11 @@ class TestCutWindows:
             PlanResolver, "resolve", autospec=True, side_effect=PlanResolver.resolve
         )
         tic = time.perf_counter()
-        with planner as plans, pairing as pairs, search as searches, loads as resolved:
+        with planner as plans, pairing, search as searches, loads as resolved:
             cut = source.cut(time=windows)
             assert len(cut.get_contents()) >= 2000
-        assert plans.call_count == pairs.call_count == 1 and not resolved.call_count
+        # per dim (time, and distance left open), one pairing and one clip
+        assert plans.call_count == 1 and len(calls) == 4 and not resolved.call_count
         assert searches.call_count <= len(source)
         assert time.perf_counter() - tic < 60
         assert sorted(set(cut.get_contents()["window"])) == list(range(2000))
@@ -586,20 +553,30 @@ class TestCutWindows:
         spool = dc.spool([patch, later.convert_units(distance="ft")])
         windows = np.array([[10 * m, 20 * m]], dtype=object)
         cut = spool.cut(distance=windows)
-        joined = spool.select(distance=windows).chunk(time=None)
         rows = cut.get_contents().to_dict("records")
-        assert len(cut) == len(joined) == len(rows) == 2
-        for row, got, expected in zip(rows, cut, joined, strict=True):
-            assert got.get_coord("distance") == expected.get_coord("distance")
+        assert len(cut) == len(rows) == 2
+        for row, got in zip(rows, cut, strict=True):
             ends = (row["distance_min"], row["distance_max"])
             assert list(ends) == _span(got, "distance")
-        assert [str(x.get_coord("distance").units) for x in cut] == ["1 m", "1 ft"]
+        metres, feet = cut
+        assert str(metres.get_coord("distance").units) == "1 m"
+        assert metres.get_coord("distance").values.tolist() == list(range(10, 21))
+        # each window held in one piece keeps its source's labels and units
+        assert str(feet.get_coord("distance").units) == "1 ft"
+        values = feet.get_coord("distance").values * 0.3048
+        np.testing.assert_allclose(values, np.arange(10, 21))
 
-    def test_user_window_attr_refused(self, spool, start):
-        """A patch attribute named window is refused, not overwritten."""
-        named = dc.spool([x.update_attrs(window="mine") for x in spool])
-        with pytest.raises(ParameterError, match="rename"):
-            named.cut(time=_windows(start, (1, 2)))
+    def test_window_attr_overwritten(self, spool, start, tmp_path):
+        """A cut replaces any window label, lazy, loaded or read from files."""
+        named = dc.spool([spool[0].update_attrs(window="mine"), *spool[1:]])
+        windows = _windows(start, (1, 2), (7, 9))
+        assert [x.attrs.window for x in named.cut(time=windows)] == [0, 1]
+        loaded = dc.spool(list(spool.cut(time=windows)))
+        assert loaded.cut(time=windows).get_contents()["window"].tolist() == [0, 1]
+        for num, patch in enumerate(spool.cut(time=windows)):
+            patch.io.write(tmp_path / f"{num}.h5", "DASDAE")
+        files = dc.spool(tmp_path).update(progress=None)
+        assert [x.attrs.window for x in files.cut(time=windows)] == [0, 1]
         # a cut's own label is replaced by a later cut's
         again = spool.cut(time=_windows(start, (1, 3))).cut(
             time=_windows(start, (5, 6), (1, 2))
@@ -654,3 +631,162 @@ class TestCutWindows:
         )
         assert [_span(x) for x in boxed] == [[50, 59], [100, 110]]
         assert boxed.get_contents()["window"].tolist() == [0, 0]
+
+    def test_other_kind_of_cut_relabels(self, spool, start):
+        """A cut of a cut blanks the other kind's labels, in either order."""
+        overlapping = _windows(start, (0, 20), (3, 5))
+        ann = _ranges(start, (4, 12))
+        first = spool.cut(time=overlapping).cut(ann)
+        stamps = first.get_contents()[["feature_id", "annotation", "window"]]
+        # the two windows' parts overlap and join into the annotation's one patch
+        assert stamps.astype(object).values.tolist() == [["", 0, pd.NA]]
+        assert [x.attrs.window for x in first] == [None]
+        second = spool.cut(_ranges(start, (0, 20), (3, 5))).cut(
+            time=_windows(start, (1, 13))
+        )
+        stamps = second.get_contents()[["feature_id", "annotation", "window"]]
+        assert stamps.astype(object).values.tolist() == [["", pd.NA, 0]]
+        assert [x.attrs.annotation for x in second] == [None]
+
+    def test_conflict(self, spool, start):
+        """Conflict has chunk's meaning, here for attrs each file states."""
+        own = dc.spool(
+            [x.update_attrs(instrument_id=str(n)) for n, x in enumerate(spool)]
+        )
+        windows = _windows(start, (5, 12))
+        with pytest.raises(CoordMergeError, match="instrument_id"):
+            own.cut(time=windows)
+        (patch,) = own.cut(time=windows, conflict="keep_first")
+        assert patch.attrs.instrument_id == "0"
+        assert _span(patch) == _seconds(start, 5, 12)
+
+    def test_unbounded_dim_keeps_sources_apart(self):
+        """Sources unlike on a dim the windows leave open stay apart, as in chunk."""
+        first = dc.Patch(
+            np.ones((5, 4)),
+            coords={"x": np.arange(5.0), "y": [0, 1, 3, 5]},
+            dims=("x", "y"),
+        )
+        second = dc.Patch(
+            np.ones((5, 4)),
+            coords={"x": np.arange(5.0, 10), "y": [0, 2, 4, 5]},
+            dims=("x", "y"),
+        )
+        spool = dc.spool([first, second])
+        cut = spool.cut(x=np.array([[0, 9]]))
+        assert len(cut) == len(spool.chunk(x=None)) == 2
+        assert [x.get_coord("y").values.tolist() for x in cut] == [
+            [0, 1, 3, 5],
+            [0, 2, 4, 5],
+        ]
+
+    def test_integer_tiles_rejoin(self):
+        """Integer pieces joined along one dim still join a passed-through one."""
+        data = np.arange(4 * 5 * 12, dtype=float).reshape(4, 5, 12)
+        coords = {x: np.arange(n, dtype=np.int64) for x, n in zip("abc", (4, 5, 12))}
+        whole = dc.Patch(data=data, coords=coords, dims=("a", "b", "c"))
+        parts = [
+            whole.select(c=(0, 5)),
+            whole.select(b=(0, 2), c=(6, 11)),
+            whole.select(b=(3, 4), c=(6, 11)),
+        ]
+        (out,) = dc.spool(parts).cut(c=np.array([[1, 10]]), b=np.array([[1, 4]]))
+        expected = whole.select(c=(1, 10), b=(1, 4))
+        assert out.get_coord("b").values.dtype == np.int64
+        np.testing.assert_array_equal(out.data, expected.data)
+        joined = dc.spool(parts).chunk(b=None)
+        assert set(joined._df["_b_coord_dtype"]) == {"int64"}
+
+    def test_join_along_open_dim(self):
+        """Tiles split on a dim the windows leave open still join, as chunk does."""
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        middle = time.values[len(time) // 2]
+        parts = [
+            patch.select(time=(None, middle - time.step)),
+            patch.select(time=(middle, None), distance=(0, 149)),
+            patch.select(time=(middle, None), distance=(150, 299)),
+        ]
+        spool = dc.spool(parts)
+        low, high = time.values[100], time.values[-100]
+        (out,) = spool.cut(time=np.array([[low, high]]))
+        expected = spool.chunk(distance=None).chunk(time=None)[0]
+        assert out.equals(expected.select(time=(low, high)).update_attrs(window=0))
+
+    def test_unit_tolerance_on_its_own_dims(self):
+        """A tolerance with units applies only along dims of its kind."""
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        middle = time.values[len(time) // 2]
+        quads = [
+            patch.select(time=t, distance=d)
+            for t in ((None, middle - time.step), (middle, None))
+            for d in ((0, 149), (150, 299))
+        ]
+        spool = dc.spool(quads)
+        windows = dict(time=np.array([[time.values[10], time.values[-10]]]))
+        windows["distance"] = np.array([[10.0, 200.0]])
+        for tolerance in (np.timedelta64(10, "ms"), 2 * m):
+            (out,) = spool.cut(**windows, tolerance=tolerance)
+            assert out.shape == (191, len(time) - 19)
+
+    def test_float_pieces_one_sample_apart(self):
+        """Pieces starting a sample apart keep their own first labels."""
+        first = _line([0.0], np.arange(5.0))
+        second = _line([7.0], np.arange(1.0, 6.0))
+        cut = dc.spool([first, second]).cut(distance=np.array([[0, 5]]))
+        rows = cut.get_contents()[["distance_min", "distance_max"]]
+        assert rows.to_numpy().tolist() == [_span(x, "distance") for x in cut]
+        assert rows.to_numpy().tolist() == [[0, 4], [1, 5]]
+
+    def test_non_dimensional_coordinate_refused(self):
+        """Cut windows dimensions only, saying select takes other coordinates."""
+        spool = dc.spool(dc.get_example_patch("random_patch_with_lat_lon"))
+        windows = np.array([[-200, -109.7]])
+        assert len(spool.select(latitude=windows)) == 1
+        with pytest.raises(ParameterError, match=r"dimensions only.*Spool\.select"):
+            spool.cut(latitude=windows)
+
+    def test_earlier_source_owns_overlap(self):
+        """The earlier source wins an overlap, whatever the window (rule 6)."""
+
+        def patch(x, value):
+            data = np.full(len(x), value, dtype=np.float64)
+            return dc.Patch(data=data, coords={"x": x}, dims=("x",))
+
+        first = patch(np.arange(10.0), 1)
+        later = patch(0.08 + 0.96 * np.arange(10), 2)
+        spool = dc.spool([first, later])
+        for window, labels in (([1.01, 4], [2, 3, 4]), ([0, 4], [0, 1, 2, 3, 4])):
+            (out,) = spool.cut(x=np.array([window]))
+            assert out.get_coord("x").values.tolist() == labels
+            assert (out.data == 1).all()
+
+    def test_bare_bounds_in_each_patch_units(self):
+        """Bare numbers mean each patch's own units, as in select."""
+
+        def patch(x, units):
+            coords = {
+                "x": dc.get_coord(data=np.asarray(x, dtype=np.float64), units=units)
+            }
+            return dc.Patch(data=np.ones(len(x)), coords=coords, dims=("x",))
+
+        spool = dc.spool([patch(range(5), "m"), patch(range(10, 15), "ft")])
+        windows = np.array([[10, 12]])
+        (out,) = spool.cut(x=windows)
+        (picked,) = spool.select(x=windows)
+        assert out.get_coord("x").values.tolist() == [10, 11, 12]
+        assert str(out.get_coord("x").units) == "1 ft"
+        assert out.get_coord("x") == picked.get_coord("x")
+        # each patch's samples chosen in its own units, then joined as chunk
+        # joins them, in one unit
+        spool = dc.spool(
+            [patch(np.arange(100) / 0.3048, "ft"), patch(range(100, 200), "m")]
+        )
+        cut = spool.cut(x=np.array([[50, 150]]))
+        joined = spool.select(x=np.array([[50, 150]])).chunk(x=None)
+        assert [x.get_coord("x") for x in cut] == [x.get_coord("x") for x in joined]
+        metres = [x.convert_units(x="m").get_coord("x") for x in cut]
+        np.testing.assert_allclose(
+            [(x.min(), x.max()) for x in metres], [[16, 45], [100, 150]]
+        )

@@ -61,6 +61,7 @@ from dascore.utils.chunk_plan import (
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.misc import is_range
+from dascore.utils.misc import stated_units as _stated_units
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     SOURCE_RANGE_ENDS,
@@ -78,18 +79,6 @@ _READ_KWARGS = ("path", "file_format", "file_version")
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
-
-
-def _stated_units(value) -> str | None:
-    """Return a unit string, or None when the row states none.
-
-    Row values arrive from dataframes, so an absent unit is NaN rather
-    than None — and NaN never equals itself, which would make an unstated
-    unit look like a mismatch.
-    """
-    if value is None or value == "" or pd.isnull(value):
-        return None
-    return str(value)
 
 
 def _source_units_column(name: str) -> str:

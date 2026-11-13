@@ -68,6 +68,8 @@ from dascore.utils.misc import (
     express_range_for_coord,
     get_middle_value,
     is_range,
+    order_range_tuple,
+    stated_units,
 )
 from dascore.utils.pd import (
     adjust_segments,
@@ -75,6 +77,7 @@ from dascore.utils.pd import (
     get_interval_columns,
 )
 from dascore.utils.time import (
+    _MAX_NS,
     is_datetime64,
     is_timedelta64,
     to_datetime64,
@@ -1193,6 +1196,14 @@ def _tolerance_joins(delta, step, tolerance, prec) -> np.ndarray:
         return delta <= width + (0 if tolerance.seam else np.nan_to_num(step)) + prec
 
 
+def _seams(df, name, group, tolerance, max_shift) -> pd.DataFrame:
+    """The rows, integers counted in ticks, joined to their seams' judgements."""
+    df = _integer_ticks(df, name)
+    cells = _cell_labels(df, name, group, dc.get_config().sampling_group_tolerance)
+    df = _adopt_lone_steps(df, name, cells)
+    return _stretch_frame(df, name, cells, tolerance, max_shift)
+
+
 def _stretch_frame(df, name, cells, tolerance, max_shift) -> pd.DataFrame:
     """`_cell_seams` over every cell; ``_stretch`` labels rows that may combine."""
     frames = []
@@ -2234,10 +2245,7 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
     frame_dtype = df[min_name].dtype
-    df = _integer_ticks(df, name)
-    cells = _cell_labels(df, name, params["group"], params["sampling_group_tolerance"])
-    df = _adopt_lone_steps(df, name, cells)
-    seams = _stretch_frame(df, name, cells, tolerance, max_shift)
+    df = seams = _seams(df, name, params["group"], tolerance, max_shift)
     if fill_value is None:  # a fill spreads no labels
         _warn_tolerance_joins(seams, name, tolerance)
     per_partition = _needs_partition_resolution(value, overlap)
@@ -2264,9 +2272,8 @@ def build_chunk_plan(
     ticks = _counts_ticks(start_all.dtype)
     # a grid labels in the dtype every source stores its labels in
     stored = {str(x) for x in sorted_df.get(f"_{name}_coord_dtype", [""])}
-    label_dtype = start_all.dtype
-    if len(stored) == 1 and min(stored).startswith(("int", "uint", "float")):
-        label_dtype = np.dtype(min(stored))
+    stated = len(stored) == 1 and min(stored).startswith(("int", "uint", "float"))
+    label_dtype = np.dtype(min(stored)) if stated else start_all.dtype
     mod_after = (
         sorted_df["_modified"].fillna(False).to_numpy(dtype=bool)
         if "_modified" in sorted_df.columns
@@ -2629,6 +2636,7 @@ def build_chunk_plan(
         min_name: np.concatenate(out_starts),
         max_name: np.concatenate(out_stops),
         f"{name}_step": part_steps[repeats],
+        **({f"_{name}_coord_dtype": min(stored)} if stated else {}),  # as loaded
     }
     for col, values in carried.items():
         data[col] = values.take(repeats).reset_index(drop=True)
@@ -3063,15 +3071,6 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
         return np.zeros(len(df), dtype=bool)
     dims = df["dims"].astype(str).str.split(",")
     return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
-
-
-def refuse_riders(windows: Mapping, rows: pd.DataFrame) -> None:
-    """With several windows, refuse a coordinate some patch holds as no dim."""
-    for name in list(windows) if len(windows) > 1 else ():
-        held = rows[f"{name}_min"].notna() if f"{name}_min" in rows else False
-        if (held & ~_structural(rows, name)).any():
-            msg = f"{name!r} is non-dimensional on some patches; window it alone."
-            raise ParameterError(msg)
 
 
 def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
@@ -3584,13 +3583,14 @@ def _absolute_bounds(bounds, start, unit, stop):
                 raise ParameterError(msg) from exc
         else:
             out.append(bound)
-    return tuple(out) if out[0] <= out[1] else (out[1], out[0])
+    return order_range_tuple(tuple(out))
 
 
+_TICKS = np.array([-_MAX_NS, _MAX_NS], np.int64)
 _OPEN = {  # the ends of an open window, by value family
     "number": (-np.inf, np.inf),
-    "datetime": tuple(np.array([1 - 2**63, 2**63 - 1], np.int64).astype("M8[ns]")),
-    "timedelta": tuple(np.array([1 - 2**63, 2**63 - 1], np.int64).astype("m8[ns]")),
+    "datetime": tuple(_TICKS.astype("M8[ns]")),
+    "timedelta": tuple(_TICKS.astype("m8[ns]")),
 }
 
 
@@ -3609,12 +3609,14 @@ def _window_edges(df: pd.DataFrame, dim: str, ranges: ExplicitRanges):
         _coerce(df.get(x, blank).where(has, edge[0]), family).to_numpy()
         for x in (low, high)
     )
-    units = [x if isinstance(x, str) else "" for x in df.get(f"_{dim}_units", blank)]
-    codes, names = pd.factorize(pd.Series(units, dtype=object))
+    units = [stated_units(x) or "" for x in df.get(f"_{dim}_units", blank)]
+    # rows lacking the dim (NaN here) are never read in any unit
+    codes, names = pd.factorize(pd.Series(units, dtype=object).where(has))
     rows = [
         [_absolute_bounds(x, edge[0], u, edge[1]) for x in ranges.rows] for u in names
     ]
-    ends = np.array(rows).reshape(len(names), len(ranges.rows), 2)
+    ends = np.array(rows or [[edge] * len(ranges.rows)])
+    ends = ends.reshape(len(rows or [0]), len(ranges.rows), 2)
     spans = np.array([x == (None, None) for x in ranges.rows], dtype=bool)
     return has, mins, maxs, spans, lambda r, i: ends[codes[i], r].T
 
@@ -3622,6 +3624,8 @@ def _window_edges(df: pd.DataFrame, dim: str, ranges: ExplicitRanges):
 def _sample_bounds(coord, lows, highs, unit):
     """The first and last of `coord`'s labels inside each [low, high], and if any."""
     values = np.sort(np.asarray(coord.values).ravel())
+    if not len(values):  # a residual selection left none
+        return lows, highs, np.zeros(len(lows), dtype=bool)
     native = getattr(coord, "units", None)
     if unit and native is not None and str(native) != unit:
         values = np.asarray(convert_units(values, to_units=unit, from_units=native))
@@ -3638,31 +3642,60 @@ def _sample_bounds(coord, lows, highs, unit):
     return values[np.where(held, first, 0)], values[np.where(held, last, 0)], held
 
 
-def _meets(edges, req, pos) -> np.ndarray:
-    """Whether each window ``req`` meets row ``pos`` on every windowed dim."""
-    keep = np.ones(len(req), dtype=bool)
-    for has, mins, maxs, spans, bounds in edges:
-        low, high = bounds(req, pos)
-        meets = (low <= maxs[pos]) & (high >= mins[pos])
-        keep &= np.where(has[pos], meets, spans[req])
-    return keep
+def _owned(df, same, name, req, pos, join):
+    """Pairs' parts no earlier row in their window holds (rule 6; ``same``: 1 unit)."""
+    lo, hi = (df[f"{name}_{x}"].to_numpy()[pos] for x in ("min", "max"))
+    keep, sets, unit = np.ones(len(pos), dtype=bool), {}, f"_{name}_units"
+    for window, rows in pd.Series(pos).groupby(req).agg(tuple).items():
+        if len(rows) > 1:  # windows reaching the same rows share their judgement
+            sets.setdefault(rows, []).append(window)
+    # rows overlap only where alike on every other dim, as in chunk's cells
+    alike = [f"{x}_{y}" for x in join["others"] for y in ("min", "max")]
+    group, shift = [*_resolve_group_attrs(None, df.columns), *alike], join["max_shift"]
+    for rows, windows in sets.items():
+        sub = same.iloc[list(rows)].sort_values(f"{name}_min")
+        if not (sub[f"{name}_min"] <= sub[f"{name}_max"].cummax().shift()).any():
+            continue  # no row overlaps another
+        seams = _seams(sub, name, group, None, resolve_max_shift(shift))
+        part, codes, starts, *_ = _partition_frames(seams, seams["_stretch"], name)
+        _carried_columns(part, codes, starts, name, join["conflict"], starts >= 0)
+        seams, at = seams.loc[list(rows)], np.isin(req, windows)
+        own = df[unit].iloc[list(rows)] if unit in df else []
+        for num, (a, b) in enumerate(zip(own, seams.get(unit, []))):
+            if stated_units(a) != stated_units(b):  # back in the row's own unit
+                for x in ("_lo", "_hi"):
+                    got = convert_units(seams[x].iloc[num], a, b)
+                    seams.iloc[num, seams.columns.get_loc(x)] = got
+        index = pd.Index(rows).get_indexer(pos[at])
+        lo[at], hi[at] = (seams[x].to_numpy()[index] for x in ("_lo", "_hi"))
+        keep[at] &= seams["_keep"].to_numpy(dtype=bool)[index]
+    return lo, hi, keep
 
 
-def window_plan(df, windows: Mapping, catalog, sources=None) -> ChunkPlan:
+def window_plan(df, windows: Mapping, catalog, sources=None, join=None) -> ChunkPlan:
     """
     Plan each window's piece of each row it reaches, clipped to its samples.
 
     ``windows`` maps dims to `ExplicitRanges` of one row count, row ``i`` of
-    each making window ``i`` (``_request_row`` on the outputs, which come in
-    window order, then in their sources' order); bounds are inclusive, and a
-    window open at both ends spans its dim, keeping rows lacking it. The
-    rows' coordinates in `catalog`, found by their ``sources`` (else the rows
-    themselves), name the samples kept. Windows and rows pair in array
+    each making window ``i`` (``_request_row`` on the outputs, in window then
+    source order); bounds are inclusive, and a window open at both ends spans
+    its dim, keeping rows lacking it. The rows' coordinates in `catalog`,
+    found by ``sources`` (else the rows), name the samples kept. With
+    ``join`` (cut's `max_shift`, `conflict` and other dims), what a window's
+    earlier rows hold is theirs (`_owned`). Windows and rows pair in array
     operations, never a window at a time; the first dim is the plan's.
     """
     df = _drop_patch_local_empty(_ensure_patch_row(df)).reset_index(drop=True)
-    refuse_riders(windows, df)
+    for x in list(windows) if len(windows) > 1 else ():  # beside another window
+        if (
+            df.get(f"{x}_min", pd.Series(dtype=float)).notna() & ~_structural(df, x)
+        ).any():
+            msg = f"{x!r} is non-dimensional on some patches; window it alone."
+            raise ParameterError(msg)
     sources = df if sources is None else sources
+    # a row's source, to tell which dims cutting at holes narrowed
+    own = sources.drop_duplicates("_patch_row").set_index("_patch_row")
+    own = own.reindex(df["_patch_row"]).reset_index(drop=True)
     edges = {dim: _window_edges(df, dim, x) for dim, x in windows.items()}
     name, count = next(iter(windows)), len(next(iter(windows.values())).rows)
     block = max(1, 4_000_000 // max(len(df), 1))  # pairs held at once
@@ -3670,7 +3703,12 @@ def window_plan(df, windows: Mapping, catalog, sources=None) -> ChunkPlan:
     for begin in range(0, count, block):
         req = np.repeat(np.arange(begin, min(begin + block, count)), len(df))
         pos = np.tile(np.arange(len(df)), len(req) // max(len(df), 1))
-        keep = _meets(edges.values(), req, pos)
+        keep = np.ones(len(req), dtype=bool)
+        for has, mins, maxs, spans, bounds in edges.values():
+            low, high = bounds(req, pos)  # windows meet rows on every dim
+            keep &= np.where(
+                has[pos], (low <= maxs[pos]) & (high >= mins[pos]), spans[req]
+            )
         found.append((req[keep], pos[keep]))
     req, pos = (np.concatenate(x) for x in zip(*found))
     # a window's pieces in their sources' order, so an overlap's earlier
@@ -3681,11 +3719,16 @@ def window_plan(df, windows: Mapping, catalog, sources=None) -> ChunkPlan:
     first = np.where(down, -ends[len(df) :], ends[: len(df)])
     order = np.lexsort((df["_patch_row"].to_numpy()[pos], first[pos], req))
     req, pos = req[order], pos[order]
-    keep, clipped = np.ones(len(req), dtype=bool), {}
+    keep, clipped, narrowed = np.ones(len(req), dtype=bool), {}, {name}
+    if join is not None:  # what the window's earlier sources hold is theirs
+        owned_lo, owned_hi, owned = _owned(df, same, name, req, pos, join)
+        keep &= owned
     modified = df.get("_modified", pd.Series(False, index=df.index))
     modified = modified.fillna(False).to_numpy(dtype=bool)[pos]
     for dim, (has, mins, maxs, spans, bounds) in edges.items():
         lo, hi = mins[pos], maxs[pos]
+        if dim == name and join is not None:
+            lo, hi = owned_lo.astype(lo.dtype), owned_hi.astype(hi.dtype)
         trim = np.flatnonzero(has[pos] & ~spans[req])
         low, high = bounds(req[trim], pos[trim])
         low, high = np.maximum(low, lo[trim]), np.minimum(high, hi[trim])
@@ -3699,19 +3742,17 @@ def window_plan(df, windows: Mapping, catalog, sources=None) -> ChunkPlan:
                 msg = f"No {dim!r} labels in {row.get('source_path')!r}: "
                 raise MissingPatchError(msg + "coordinate metadata is unavailable.")
             if row is not None:
-                unit = units.iloc[pos[trim][at[0]]]
-                unit = unit if isinstance(unit, str) and unit else None
+                unit = stated_units(units.iloc[pos[trim][at[0]]])
                 out = _sample_bounds(coord, low[at], high[at], unit)
                 lo[trim[at]], hi[trim[at]], held = out
                 keep[trim[at]] &= held
-        if dim == name and lo.dtype.kind == "f":  # a sample two units round apart
-            slack = np.abs(df[f"{name}_step"].to_numpy(float))[pos] * _GRID_SNAP_RTOL
-            for x, how in ((lo, "min"), (hi, "max")):
-                e = pd.Series(np.where(keep, x, np.nan)).groupby(req).transform(how)
-                x[:] = np.where(np.abs(x - e) <= slack, e, x)
-        modified |= (lo != mins[pos]) | (hi != maxs[pos])
+        changed = (lo != mins[pos]) | (hi != maxs[pos])
+        modified |= changed
+        holes = own.get(f"{dim}_min", df[f"{dim}_min"]) != df[f"{dim}_min"]
+        if ((changed | holes.to_numpy()[pos]) & keep & has[pos]).any():
+            narrowed.add(dim)  # a trim; a dim left whole keeps its identity
         clipped[dim] = tuple(pd.Series(x).where(has[pos]).to_numpy() for x in (lo, hi))
-    picked = {dim: (x[keep], y[keep]) for dim, (x, y) in clipped.items()}
+    picked = {x: (y[keep], z[keep]) for x, (y, z) in clipped.items() if x in narrowed}
     plan = _pieces_plan(df, pos[keep], picked, modified[keep])
     # a piece states its own slice of an exact grid, found over the range of
     # the source a trimmed row was cut from

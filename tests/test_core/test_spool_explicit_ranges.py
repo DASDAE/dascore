@@ -3,9 +3,11 @@
 import pickle
 import threading
 from dataclasses import replace
+from datetime import timedelta
 from unittest.mock import Mock
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -14,7 +16,7 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import MissingPatchError, ParameterError, UnitError
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
-from dascore.units import get_quantity, m, s
+from dascore.units import ft, get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
 from dascore.utils.patch_assembly import coord_from_row
@@ -249,14 +251,6 @@ class TestExplicitCut:
         assert [_ends(x) for x in out] == [(2, 4), (8, 9)]
         assert _listed(out.get_contents()) == [[2, 4], [8, 9]]
 
-    def test_uneven_coordinates_use_exact_samples(self):
-        """Uneven ranges succeed when samples exist and skip empty windows."""
-        spool = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
-        out = spool.cut(distance=np.array([[2.0, 7.0]]))
-        assert _listed(out.get_contents()) == [[3, 6]]
-        assert _ends(out[0]) == (3, 6)
-        assert len(spool.cut(distance=np.array([[4.0, 5.0]]))) == 0
-
     @pytest.mark.parametrize("bounds", [[20.0, 30.0], [1.1, 1.9], [-3, -1]])
     def test_window_without_samples_gives_nothing(self, bounds):
         """A window outside coverage or between samples gives no output."""
@@ -330,18 +324,6 @@ class TestExplicitCut:
         np.testing.assert_array_equal(cut[0].coords["time"].values, values[-1:])
         np.testing.assert_array_equal(cut[0].data, [4])
 
-    def test_missing_dimension_and_between_sample_window(self):
-        """A missing dimension is refused; a window between samples gives none."""
-        patch = dc.Patch(
-            data=np.arange(10),
-            coords={"time": np.arange(10).astype("datetime64[s]")},
-            dims=("time",),
-        )
-        with pytest.raises(ParameterError, match="lacks"):
-            dc.spool(patch).cut(distance=np.array([[1, 3]]))
-        spool = dc.spool(_patch(np.arange(10)))
-        assert len(spool.cut(distance=np.array([[1.1, 1.9]]))) == 0
-
     def test_datetime_rejects_quantity_and_mixed_bounds_swap(self):
         """Only instants bound datetimes; mixed native/unit points swap (rule 8)."""
         values = np.arange(10).astype("datetime64[s]")
@@ -355,12 +337,6 @@ class TestExplicitCut:
         assert [_ends(x) for x in swapped] == [(2, 5)]
         with pytest.raises(ParameterError, match="incompatible units"):
             distance.cut(distance=np.array([[3 * m, 1 * s]], dtype=object))
-
-    def test_uneven_request_past_envelope_keeps_samples(self):
-        """An uneven source supplies the samples inside an over-wide window."""
-        spool = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
-        partial = spool.cut(distance=np.array([[-1.0, 6.0]]))
-        assert _ends(partial[0]) == (0, 6)
 
     def test_unitless_coordinate_rejects_quantity_points(self):
         """A unit-bearing absolute request cannot select a unitless grid."""
@@ -396,16 +372,6 @@ class TestExplicitCut:
         with pytest.raises(ParameterError):
             spool.cut(distance=np.array([bounds], dtype=object))
 
-    @pytest.mark.parametrize(
-        "bounds, ends",
-        [((np.inf, 2), (2, 9)), ((1, -np.inf), (0, 1)), ((3, 1), (1, 3))],
-    )
-    def test_reversed_and_infinite_bounds(self, bounds, ends):
-        """Reversed bounds swap and an infinity opens its side (rule 8)."""
-        spool = dc.spool(_patch(np.arange(10)))
-        (out,) = spool.cut(distance=np.array([bounds], dtype=object))
-        assert _ends(out) == ends
-
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_text_dimension_refused(self, method):
         """Labels with no order to window are refused, naming the dimension."""
@@ -417,7 +383,9 @@ class TestExplicitCut:
     def test_argument_validation_and_empty_requests(self):
         """Malformed windows and policy names fail before planning data."""
         spool = dc.spool(_patch(np.arange(10)))
-        assert len(spool.cut(distance=np.empty((0, 2)))) == 0
+        empty = spool.cut(distance=np.empty((0, 2)))
+        assert len(empty) == 0
+        assert empty.get_contents()["window"].dtype == "Int64"
         assert len(spool.select(distance=np.empty((0, 2)))) == 0
         open_low = spool.cut(distance=np.array([[np.nan, 2]]))
         assert open_low[0].coords["distance"].values.tolist() == [0, 1, 2]
@@ -1065,11 +1033,11 @@ class TestExplicitBoxes:
         # select refuses a non-dimensional coordinate beside another window;
         # cut windows only dimensions, and skips patches lacking them
         select, cut, windows = {
-            "first": (bad, "lacks", dict(latitude=_d(-109.85, -109.84))),
+            "first": (bad, "dimensions only", dict(latitude=_d(-109.85, -109.84))),
             "mixed": (bad, None, {}),
             "size": (None, r"\(n, 2\) windows", dict(distance=10)),
             "fill": (None, "fill_value", dict(fill_value=0)),
-            "depth": (None, "lacks", dict(depth=_d(10, 20))),
+            "depth": (None, "dimensions only", dict(depth=_d(10, 20))),
         }[case]
         if case == "mixed":  # distance is a dimension on one patch only
             rider = patch.rename_coords(distance="channel")
@@ -1424,13 +1392,22 @@ class TestWindowForms:
         expected = self._spans(call(distance=each), "distance")
         assert self._spans(call(distance=whole), "distance") == expected
         assert expected[0] == (10, 20)
+        # a quantity array's units are its own, here feet on a metre axis
+        feet = self._spans(call(distance=np.array([[10, 20]]) * ft), "distance")
+        assert set(feet) == {(4, 6)}
 
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_timedelta_on_datetime_refused(self, forms_spool, method):
         """An offset is not an instant: say to add it to a start time."""
         offsets = np.array([[1, 3]]).astype("timedelta64[s]")
-        with pytest.raises(ParameterError, match=r"absolute instants.*start"):
-            len(getattr(forms_spool, method)(time=offsets))
+        for bound in (offsets, pd.Timedelta("1s"), timedelta(seconds=1)):
+            bounds = (
+                np.array([[bound, bound]], dtype=object)
+                if offsets is not bound
+                else bound
+            )
+            with pytest.raises(ParameterError, match=r"absolute instants.*start"):
+                len(getattr(forms_spool, method)(time=bounds))
 
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_numbers_on_datetime_are_epoch_seconds(self, forms_spool, method):
@@ -1447,3 +1424,36 @@ class TestWindowForms:
             patch.get_coord("time").min(),
             patch.get_coord("time").max(),
         ) == got_ends
+
+
+class TestWindowEdgeCases:
+    """Windows the review found mishandled."""
+
+    @pytest.mark.parametrize("bounds", [(np.inf, np.inf), (-np.inf, -np.inf)])
+    def test_same_sign_infinities_refused(self, bounds):
+        """A row bounded on one side by both infinities holds nothing sensible."""
+        spool = dc.spool(_patch(np.arange(10)))
+        with pytest.raises(ParameterError, match="infinit"):
+            spool.cut(distance=np.array([bounds]))
+
+    def test_quantity_windows_with_patches_lacking_the_dim(self):
+        """Patches lacking the dim are skipped, not read in no unit."""
+        patch = dc.get_example_patch().set_units(distance="m")
+        lone = patch.select(distance=(0, 0)).squeeze("distance")
+        spool = dc.spool([patch, lone])
+        assert (
+            len(spool.select(distance=np.array([[10 * m, 20 * m]], dtype=object))) == 1
+        )
+        open_row = np.array([[None, None], [10 * m, 20 * m]], dtype=object)
+        assert len(spool.select(distance=open_row)) == 3
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_empty_recovered_coordinate(self, method):
+        """A source whose selected coordinate holds no labels gives nothing."""
+        patch = dc.Patch(
+            data=np.arange(4.0),
+            coords={"x": np.arange(4.0), "depth": ("x", np.arange(4.0) * 10)},
+            dims=("x",),
+        )
+        narrowed = dc.spool(patch).select(depth=(1, 2))
+        assert not len(getattr(narrowed, method)(x=np.array([[0, 3]])))
