@@ -549,7 +549,7 @@ class Windowed(PatchProcessor):
             out, made = self._blend(to_numpy(data), inner=inner, tiles=tiles, **where)
             if not quiet:
                 _warn_if_integers(made, out.dtype)
-            return asarray_like(out, data)
+            return _chunked_like(asarray_like(out, data), data)
         xp = array_namespace(data)
         plan = get_tile_plan(length, size, stride)
         tiles = tiles or tuple((0, count) for count in plan.grid)
@@ -621,9 +621,7 @@ class Windowed(PatchProcessor):
         assert total is not None and dtype is not None  # an axis has a window
         if not quiet:
             _warn_if_integers(dtype, _as_numpy_dtype(total.dtype))
-        out = xp.moveaxis(total[(..., *inside)], tail, axes)
-        # Back in the chunks a dask array came in, not one for each window.
-        return out.rechunk(data.chunks) if hasattr(out, "rechunk") else out
+        return _chunked_like(xp.moveaxis(total[(..., *inside)], tail, axes), data)
 
     def _blend(self, data, *, axes, size, stride, length, inner, tiles):
         """Return the blended windows, and the dtype the operation made."""
@@ -684,6 +682,12 @@ def _weighted(xp, array, weights: np.ndarray):
     if wide != like.dtype:
         array = xp.astype(array, _dtype_on(array, wide))
     return array * asarray_like(weights.astype(wide, copy=False), array)
+
+
+def _chunked_like(out, data):
+    """Return a result in the chunks a dask array came in; any other as it is."""
+    # Not one chunk for each window, nor one for the whole of it.
+    return out.rechunk(data.chunks) if hasattr(out, "rechunk") else out
 
 
 def _dtype_on(array, dtype: np.dtype):
