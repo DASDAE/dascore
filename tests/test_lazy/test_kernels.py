@@ -14,9 +14,10 @@ import dascore as dc
 from dascore.core.processor import PatchProcessor, _subclasses
 from dascore.exceptions import LazyOperationError
 from dascore.lazy.array import LazyArray
-from dascore.lazy.contract import Pointwise, Unchanged
+from dascore.lazy.contract import Pointwise
+from dascore.lazy.execute import compute
 
-from .conftest import lazy_patch, stored_patch
+from .conftest import grid, lazy_patch, stored_patch
 
 # The dtypes whose result dtype a pointwise operation could get wrong: the
 # integers and bool which angle promotes, and the complex ones whose part
@@ -44,6 +45,8 @@ def _values(shape, dtype):
     """Distinct values of a dtype, negative ones and both parts included."""
     values = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
     values = (values - values.mean()) / values.size * 200
+    # Not a ramp, which a smoothing filter would hand back as it was.
+    values = values + 20 * np.sin(np.arange(values.size) * 0.7).reshape(shape)
     if dtype == "bool":
         return values > 0
     if np.dtype(dtype).kind == "u":
@@ -69,13 +72,18 @@ def assert_same(lazy, eager):
     assert loaded.coords == eager.coords
     assert loaded.attrs == eager.attrs
     assert loaded.attrs.data_id == eager.attrs.data_id
-    dtype = np.dtype(eager.dtype)
+    _assert_close(loaded.data, eager.data)
+
+
+def _assert_close(found, expected):
+    """The arrays agree, to the rounding of their dtype."""
+    dtype = np.dtype(expected.dtype)
     if dtype.kind in "fc":
         # Scaled to the dtype: a chunked run may round differently.
         rtol = 8 * np.finfo(dtype).eps
-        np.testing.assert_allclose(loaded.data, eager.data, rtol=rtol, atol=0)
+        np.testing.assert_allclose(found, expected, rtol=rtol, atol=0)
     else:
-        np.testing.assert_array_equal(loaded.data, eager.data)
+        np.testing.assert_array_equal(found, expected)
 
 
 class TestEachOperation:
@@ -164,38 +172,62 @@ CONTRACTED = sorted(
 )
 
 
+# How each of them is called. An operation declared later needs an entry.
+CALLS = {
+    "Abs": lambda x: x.abs(),
+    "Real": lambda x: x.real(),
+    "Imag": lambda x: x.imag(),
+    "Angle": lambda x: x.angle(),
+    "Conj": lambda x: x.conj(),
+    "_Query": lambda x: x.select(time=(5, 300), distance=(2, 90), samples=True),
+    "PassFilter": lambda x: x.pass_filter(time=(10, 100)),
+    "MedianFilter": lambda x: x.median_filter(time=5, distance=3, samples=True),
+    "SavgolFilter": lambda x: x.savgol_filter(
+        polyorder=2, time=7, distance=5, samples=True, mode="mirror"
+    ),
+    "GaussianFilter": lambda x: x.gaussian_filter(time=1.5, distance=1, samples=True),
+}
+
+# Cuts of the two axes: uneven ones, and pieces shorter than any halo.
+GRIDS = (((7, 150), (500,)), ((1, 2, 3), (1, 2, 1000)), ((), (3, 4, 5, 1999)))
+
+
 class TestContractsHold:
     """
-    What each declared contract promises, checked on its numpy kernel.
+    What each declared contract promises: any chunks give the eager result.
 
     Driven by the registry, so an operation declared later is checked too.
     """
 
-    def test_the_declared_are_found(self):
-        """The registry walk finds the five declared here."""
-        names = {x.__name__ for x in CONTRACTED}
-        assert {"Abs", "Real", "Imag", "Angle", "Conj"} <= names
+    def test_the_declared_are_called(self):
+        """Every operation which states a contract has a call here."""
+        assert {x.__name__ for x in CONTRACTED} == set(CALLS)
 
     @pytest.mark.parametrize("dtype", DTYPES)
     @pytest.mark.parametrize("cls", CONTRACTED, ids=lambda x: x.__name__)
-    def test_contract_holds(self, cls, dtype):
-        """Unchanged hands the input back; Pointwise works on any halves."""
-        data = _values((6, 4), dtype)
-        coords = {"a": np.arange(6), "b": np.arange(4)}
-        patch = dc.Patch(data=data, coords=coords, dims=("a", "b"))
-        processor = cls()
-        out, plan = processor.get_metadata(patch.drop_data())
-        contract = processor.chunk_contract(np.dtype(dtype), plan)
-        kernel = cls.kernel_for("numpy")
-        result = kernel(processor, data, **plan)
-        if isinstance(contract, Unchanged):
-            assert result is data
+    def test_contract_holds(self, stored, cls, dtype):
+        """Computed in boxes of any grid, the result is the eager one."""
+        call = CALLS[cls.__name__]
+        lazy_in = lazy_patch(stored[dtype])
+        eager_in = lazy_in.load()
+        try:
+            lazy = call(lazy_in)
+        except LazyOperationError:
+            # Only the filters refuse a dtype, and never these two.
+            assert cls.__name__.endswith("Filter")
+            assert dtype not in ("float32", "float64")
             return
-        assert isinstance(contract, Pointwise)
-        assert result.shape == data.shape
-        assert np.dtype(result.dtype) == out.dtype
-        for axis, cut in ((0, 3), (1, 1)):
-            first, second = np.split(data, [cut], axis=axis)
-            halves = [kernel(processor, x, **plan) for x in (first, second)]
-            joined = np.concatenate(halves, axis=axis)
-            np.testing.assert_array_equal(joined, result)
+        eager = call(eager_in)
+        if lazy is lazy_in:
+            assert eager is eager_in  # Unchanged: a no-op eagerly too
+            return
+        assert lazy.dtype == eager.dtype and lazy.shape == eager.shape
+        assert lazy.attrs.data_id == eager.attrs.data_id
+        for edges in GRIDS:
+            out = np.empty(lazy.shape, lazy.dtype)
+            # A selection is shorter, so only the cuts inside it apply.
+            inside = [[x for x in e if x < n] for e, n in zip(edges, lazy.shape)]
+            for low, high in grid(lazy.shape, inside):
+                box = tuple(slice(int(a), int(b)) for a, b in zip(low, high))
+                out[box] = compute(lazy.data, box)
+            _assert_close(out, eager.data)

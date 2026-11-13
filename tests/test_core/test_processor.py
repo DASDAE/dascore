@@ -1952,7 +1952,7 @@ class TestLazyRefusal:
             lambda x: SeamScale()(x),
             lambda x: x.normalize("time"),
             lambda x: x.detrend("time"),
-            lambda x: x.pass_filter(time=(None, 0.2)),
+            lambda x: x.sobel_filter("time"),
         ),
         ids=("seam", "array_api_kernel", "numpy_kernel", "filter"),
     )
@@ -1967,20 +1967,23 @@ class TestLazyRefusal:
         with pytest.raises(LazyOperationError, match=r"^normalize cannot run"):
             lazy_patch.normalize("time")
 
-    def test_unknown_contract_refused(self, lazy_patch, recipe_loads):
-        """A contract the lazy backend cannot keep yet is refused too."""
+    def test_any_contract_is_chained(self, lazy_patch, recipe_loads):
+        """A contract of the operation's own kind is chained like any other."""
 
-        class Haloed(SeamScale):
-            """States a contract no executor keeps."""
+        class Shifted(ChunkContract):
+            """A contract written outside DASCore."""
+
+        class Own(SeamScale):
+            """States a contract of its own."""
 
             name = None
 
             def chunk_contract(self, dtype, plan):
-                """Some other contract."""
-                return ChunkContract()
+                """A contract nothing in DASCore defines."""
+                return Shifted()
 
-        with pytest.raises(LazyOperationError, match="Haloed cannot run"):
-            Haloed()(lazy_patch)
+        out = Own()(lazy_patch)
+        assert isinstance(out.data.chain.last.contract, Shifted)
         assert not recipe_loads
 
     def test_reconcile_refused_before_it_runs(self, lazy_patch, recipe_loads):
