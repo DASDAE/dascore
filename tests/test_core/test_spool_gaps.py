@@ -833,6 +833,20 @@ class TestConcatenateOrder:
             out = _concatenate_group(patches, "time", patches[0].attrs, "test")
         assert np.array_equal(out.data[0], out.get_coord("time").values)
 
+    def test_patch_inside_a_gap(self):
+        """A patch lying in another's gap leaves the labels with their samples."""
+        grids = [get_coord(start=x, step=1.0, shape=(2,)) for x in (0.0, 10.0, 5.0)]
+        times = [concat_coords(*grids[:2]), grids[2]]  # [0, 1, 10, 11], [5, 6]
+        patches = [
+            dc.Patch(
+                data=x.values[None], coords={"distance": [0], "time": x}, dims=DIMS
+            )
+            for x in times
+        ]
+        with pytest.warns(DASCoreWarning, match="out of order"):
+            (out,) = dc.spool(patches).concatenate(time=None)
+        assert np.array_equal(out.data[0], out.get_coord("time").values)
+
 
 class TestSpoolSnapCoords:
     """Spool.snap_coords snaps each patch alone, as it loads."""

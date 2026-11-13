@@ -1673,7 +1673,8 @@ def _concatenate_group(
             ]
         try:  # members chaining in order join exactly, each its own segment
             joined_dim = dc.core.coords.concat_coords(*members)
-            lows = [x.min() for x in members if not x.degenerate]
+            # segments, not members: one may sit in another's gap
+            lows = [s.min() for x in members if not x.degenerate for s in x.segments]  # ty: ignore[unresolved-attribute]
             if lows != sorted(lows, reverse=joined_dim.reverse_sorted):
                 raise CoordError("concat_coords put the members in its own order")
         except (CoordError, TypeError):  # others join by value, as released
