@@ -396,6 +396,17 @@ class TestSegyTextHeader:
         assert attrs.data_units is None
         assert "C3 Manufacturer: Silixa" in attrs.segy_text_header.split("\n")
 
+    def test_consecutive_files_merge(self, tmp_path):
+        """Consecutive files whose text headers differ chunk into one patch."""
+        date = (2019, 114, 22, 24, 24)
+        for name, stamp in (("a", "24.000000"), ("b", "24.020000")):
+            text = {13: f"UTC Time stamp: 2019/04/24 22:24:{stamp} (UTC)"}
+            _write_segy_file(tmp_path / f"{name}.sgy", date=date, text=text)
+        out = dc.spool(tmp_path).update().chunk(time=None)
+        assert len(out) == 1
+        assert out[0].shape == (40, 3)
+        assert "24.000000" in out[0].attrs.segy_text_header
+
     def test_blank_header(self, tmp_path):
         """A blank textual header gives no attrs."""
         path, _ = _write_segy_file(tmp_path / "blank.sgy")

@@ -90,6 +90,12 @@ class TestMergeAttrs:
         assert combine_patch_attrs([pa1, pa2]).history == ("pass_filter",)
         assert combine_patch_attrs([pa2, pa1]).history == ()
 
+    def test_segy_text_header_never_compared(self):
+        """Differing SEG-Y text headers are not a conflict; the first carries."""
+        pa1 = PatchAttrs(segy_text_header="a")
+        pa2 = PatchAttrs(segy_text_header="b")
+        assert combine_patch_attrs([pa1, pa2]).segy_text_header == "a"
+
     def test_drop_conflicts(self, random_patch):
         """Ensure unequal non-coordinate attrs can be dropped."""
         attrs = PatchAttrs.from_dict(random_patch.attrs)

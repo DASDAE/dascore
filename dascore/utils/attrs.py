@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import CONFLICT, attr_conflict_description
+from dascore.constants import CONFLICT, MERGE_EXEMPT_ATTRS, attr_conflict_description
 from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import (
@@ -142,15 +142,12 @@ def combine_patch_attrs(
     elif ids_enabled() and members:
         operation = try_operation_id("Merge", dict(merge_params or {}))
         ids.update(result_ids(members, operation))
-    # History is never compared (processing differing between members is
-    # what a merge is for); the first member's is carried, like the ids.
-    history = (
-        {"history": mod_dict_list[0]["history"]}
-        if "history" in mod_dict_list[0]
-        else {}
-    )
+    # Provenance (history, per-file headers) is never compared; the first
+    # member's is carried, like the ids.
+    exempt = {i: v for i, v in mod_dict_list[0].items() if i in MERGE_EXEMPT_ATTRS}
     mod_dict_list = [
-        {i: v for i, v in x.items() if i != "history"} for x in mod_dict_list
+        {i: v for i, v in x.items() if i not in MERGE_EXEMPT_ATTRS}
+        for x in mod_dict_list
     ]
     mod_dict_list = _handle_other_attrs(mod_dict_list)
     first = model_list[0]
@@ -158,7 +155,7 @@ def combine_patch_attrs(
         _to_patch_attrs(first).__class__ if not isinstance(first, dict) else dict
     )
     cls = first_class if first_class is not dict else dc.PatchAttrs
-    out = {**mod_dict_list[0], **history, **ids}
+    out = {**mod_dict_list[0], **exempt, **ids}
     # A field the subclass requires can be dropped as a conflict, and the
     # subclass cannot then hold the result; the base class carries the rest
     # of its fields as extras, including the defaults the dump left out
