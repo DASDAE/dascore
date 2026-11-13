@@ -12,6 +12,7 @@ import pytest
 from scipy.signal import detrend
 
 import dascore as dc
+from dascore.core import processor as processor_module
 from dascore.core.processor import PatchProcessor, captured_operation
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -1144,16 +1145,17 @@ class TestOtherBackends:
     }
 
     @staticmethod
-    def _refuse_numpy(monkeypatch, there):
+    def _refuse_numpy(monkeypatch):
         """Fail the test if anything turns the data into a NumPy array."""
 
         def refuse(*args, **kwargs):
             """Raise: nothing should be converted."""
             raise AssertionError("the data were converted to NumPy")
 
+        # Both ways DASCore has of doing it: the window's own, and the one
+        # an operation with no implementation for the library goes through.
         monkeypatch.setattr(window_module, "to_numpy", refuse)
-        if not hasattr(there.data, "compute"):
-            monkeypatch.setattr(type(there.data), "__array__", refuse, raising=False)
+        monkeypatch.setattr(processor_module, "to_numpy", refuse)
 
     @pytest.mark.parametrize("name", CASES)
     def test_stays_on_the_library(self, patch, library, name, monkeypatch):
@@ -1162,7 +1164,7 @@ class TestOtherBackends:
         there = _on(patch, library)
         computed = []
         with monkeypatch.context() as patched, warnings.catch_warnings():
-            self._refuse_numpy(patched, there)
+            self._refuse_numpy(patched)
             # A conversion through NumPy would warn, and so fail here.
             warnings.simplefilter("error", NumpyFallbackWarning)
             if library == "dask":
