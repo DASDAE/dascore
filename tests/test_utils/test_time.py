@@ -228,6 +228,61 @@ class TestToDateTime64:
             time = to_datetime64(array_no_nan)
             assert np.issubdtype(time.dtype, "M8")
 
+    @pytest.mark.parametrize(
+        "time_str, expected",
+        [
+            ("2019-10-10T15:58:50.340+01:00", "2019-10-10T14:58:50.340"),
+            ("2019-10-10T15:58:50.123456789+01:00", "2019-10-10T14:58:50.123456789"),
+            ("2019-10-10T23:30:00-0530", "2019-10-11T05:00:00"),
+            ("2019-10-10T15:58:50Z", "2019-10-10T15:58:50"),
+            ("2019-10-10T15:58:50+00:00", "2019-10-10T15:58:50"),
+            ("2019-10-10T15+01:00", "2019-10-10T14:00"),
+        ],
+    )
+    def test_string_with_utc_offset(self, time_str, expected):
+        """A UTC offset is applied without a warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = to_datetime64(time_str)
+        assert out == np.datetime64(expected, "ns")
+
+    @pytest.mark.parametrize(
+        "time_str",
+        [
+            "+01:00",
+            "nat+01:00",
+            "2019-10-10-05",
+            "2019-10-10+0100",
+            "2019-10-10T15:58:50+01:60",
+            "2019-10-10T15:58:50+24:00",
+            "2019-10-10T15:58:50+25:00",
+            "2019-10-10T15:58:50+01:99",
+            "2019-10-10T15:58:50+01:",
+            "2019-10-10T15:58:50 +0100",
+            "2019-10-10T15:58:50Z+01:00",
+        ],
+    )
+    @pytest.mark.filterwarnings("ignore:no explicit representation of timezones")
+    def test_malformed_utc_offset_raises(self, time_str):
+        """An offset without a time before it, or out of bounds, is rejected."""
+        with pytest.raises(ValueError):
+            to_datetime64(time_str)
+
+    def test_expanded_year_is_not_an_offset(self):
+        """A signed expanded year is not read as an offset."""
+        out = to_datetime64("+002019-10-10")
+        assert out == np.datetime64("2019-10-10", "ns")
+
+    def test_timezone_aware_datetime_index(self):
+        """A timezone-aware DatetimeIndex converts to UTC."""
+        idx = pd.date_range(
+            "2018-03-28 02:00", periods=2, freq="5s", tz="Europe/Amsterdam"
+        )
+        out = to_datetime64(idx)
+        expected = np.array(["2018-03-28T00:00:00", "2018-03-28T00:00:05"])
+        assert out.dtype == np.dtype("datetime64[ns]")
+        assert np.all(out == expected.astype("datetime64[ns]"))
+
     def test_timedelta_array(self):
         """Ensure timedelta arrays can be converted to datetime64."""
         td = to_timedelta64(random_state.random(100))
@@ -470,7 +525,6 @@ class TestToTimeDelta64:
         assert to_timedelta64(np.array(value)) == expected
 
 
-@pytest.mark.filterwarnings("ignore:no explicit representation of timezones")
 class TestNanosecondRange:
     """Times a nanosecond count cannot hold raise rather than wrap (#890)."""
 
