@@ -1391,6 +1391,8 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                 steps = df.loc[idx, step_name].to_numpy(dtype=float)
                 stepped = convert_units(mins + steps, to_units=target, from_units=unit)
                 df.loc[idx, step_name] = stepped - new_min
+            if f"_{name}_coord_dtype" in df.columns:  # converted labels are floats
+                df.loc[idx, f"_{name}_coord_dtype"] = "float64"
         df.loc[rows, unit_col] = target
     return df
 
@@ -4222,36 +4224,57 @@ def _window_edges(df: pd.DataFrame, dim: str, ranges: ExplicitRanges):
 
 def _sample_bounds(coord, lows, highs, unit):
     """The first and last of `coord`'s labels inside each [low, high], and if any."""
-    values = np.sort(np.asarray(coord.values).ravel())
-    if not len(values):  # a residual selection left none
+    if not len(coord):  # a residual selection left none
         return lows, highs, np.zeros(len(lows), dtype=bool)
-    native = getattr(coord, "units", None)
-    if unit and native is not None and str(native) != unit:
-        values = np.asarray(convert_units(values, to_units=unit, from_units=native))
-    if values.dtype.kind in "Mm":  # the frame's unit
-        values = values.astype(lows.dtype)
-    step = getattr(coord, "step", None)
-    if values.dtype.kind == "f" and step is not None and not pd.isnull(step) and step:
-        # labels known to rounding, in the units they are compared in
-        margin = (values[-1] - values[0]) / max(len(values) - 1, 1) * _GRID_SNAP_RTOL
+    native = stated_units(getattr(coord, "units", None))
+    if back := unit and native and native != unit:  # bounds in the labels' units
+        lows, highs = (
+            np.asarray(convert_units(x, native, unit)) for x in (lows, highs)
+        )
+    step, runs = getattr(coord, "step", None), getattr(coord, "runs", ())
+    if lows.dtype.kind == "f" and step is not None and not pd.isnull(step) and step:
+        margin = abs(step) * _GRID_SNAP_RTOL  # labels known to rounding
         lows, highs = lows - margin, highs + margin
-    first = np.searchsorted(values, lows, side="left")
-    last = np.searchsorted(values, highs, side="right") - 1
-    held = last >= first
-    return values[np.where(held, first, 0)], values[np.where(held, last, 0)], held
+    if (
+        len(runs) == 1
+        and isinstance(runs[0], Grid)
+        and coord.sorted
+        and len(coord) > 1e4
+    ):
+        # a long grid's samples by index arithmetic, never expanding its labels
+        label = lambda x: runs[0].labels(x, coord.dtype)  # noqa
+        nexts = (
+            coord.get_next_index(x, allow_out_of_bounds=True) for x in (lows, highs)
+        )
+        first, last = (np.clip(x, 0, len(coord) - 1) for x in nexts)
+        last = np.where(label(last) > highs, last - 1, last)
+        held = (last >= first) & (label(first) >= lows)
+        ends = [label(np.where(held, x, 0)) for x in (first, last)]
+    else:
+        values = np.sort(np.asarray(coord.values).ravel())
+        first = np.searchsorted(values, lows, side="left")
+        last = np.searchsorted(values, highs, side="right") - 1
+        held = last >= first
+        ends = [values[np.where(held, x, 0)] for x in (first, last)]
+    if back:  # each row's labels in its own unit
+        ends = [np.asarray(convert_units(x, unit, native)) for x in ends]
+    if ends[0].dtype.kind in "Mm":  # the frame's unit
+        ends = [x.astype(lows.dtype) for x in ends]
+    return ends[0], ends[1], held
 
 
-def _owned(df, same, name, req, pos, join):
+def _owned(df, same, name, req, pos, join, spans):
     """Pairs' parts no earlier row in their window holds (rule 6; ``same``: 1 unit)."""
     lo, hi = (df[f"{name}_{x}"].to_numpy()[pos] for x in ("min", "max"))
     keep, sets, unit = np.ones(len(pos), dtype=bool), {}, f"_{name}_units"
     for window, rows in pd.Series(pos).groupby(req).agg(tuple).items():
         if len(rows) > 1:  # windows reaching the same rows share their judgement
-            sets.setdefault(rows, []).append(window)
+            sets.setdefault((rows, spans[window]), []).append(window)
     # rows overlap only where alike on every other dim, as in chunk's cells
     alike = [f"{x}_{y}" for x in join["others"] for y in ("min", "max")]
-    group, shift = [*_resolve_group_attrs(None, df.columns), *alike], join["max_shift"]
-    for rows, windows in sets.items():
+    group = [*_resolve_group_attrs(None, df.columns), *alike]
+    for (rows, spanned), windows in sets.items():  # max_shift if bounding `name`
+        shift = None if spanned else join["max_shift"]
         sub = same.iloc[list(rows)].sort_values(f"{name}_min")
         if not (sub[f"{name}_min"] <= sub[f"{name}_max"].cummax().shift()).any():
             continue  # no row overlaps another
@@ -4310,17 +4333,18 @@ def window_plan(df, windows: Mapping, catalog, sources=None, join=None) -> Chunk
             )
         found.append((req[keep], pos[keep]))
     req, pos = (np.concatenate(x) for x in zip(*found))
-    # a window's pieces in their sources' order, so an overlap's earlier
-    # source comes first and wins it when the window joins (rule 6)
-    same = _normalize_numeric_units(df, name)  # one unit per dimensionality
-    ends = _order_key(pd.concat([same[f"{name}_min"], same[f"{name}_max"]]))
-    down = _directions(df[f"{name}_step"]) < 0
-    first = np.where(down, -ends[len(df) :], ends[: len(df)])
-    order = np.lexsort((df["_patch_row"].to_numpy()[pos], first[pos], req))
-    req, pos = req[order], pos[order]
     keep, clipped, narrowed = np.ones(len(req), dtype=bool), {}, {name}
-    if join is not None:  # what the window's earlier sources hold is theirs
-        owned_lo, owned_hi, owned = _owned(df, same, name, req, pos, join)
+    if join is not None:  # a window's pieces in their sources' order, so an
+        # overlap's earlier source comes first, and keeps what it holds (rule 6)
+        same = _normalize_numeric_units(df, name)  # one unit per dimensionality
+        ends = _order_key(pd.concat([same[f"{name}_min"], same[f"{name}_max"]]))
+        down = _directions(df[f"{name}_step"]) < 0
+        first = np.where(down, -ends[len(df) :], ends[: len(df)])
+        order = np.lexsort((df["_patch_row"].to_numpy()[pos], first[pos], req))
+        req, pos = req[order], pos[order]
+        owned_lo, owned_hi, owned = _owned(
+            df, same, name, req, pos, join, edges[name][3]
+        )
         keep &= owned
     modified = df.get("_modified", pd.Series(False, index=df.index))
     modified = modified.fillna(False).to_numpy(dtype=bool)[pos]

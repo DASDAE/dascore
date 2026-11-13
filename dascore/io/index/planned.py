@@ -1285,18 +1285,17 @@ _CARRIED_RUN_FIELDS = (
 
 
 def _aux_info_for_unfed(aux_info: Mapping, outputs, members) -> dict:
-    """Describe fill-only outputs from their nearest fed sibling."""
-    out = dict(aux_info)
-    known = np.array(sorted(aux_info))
-    fed = set(members["output_id"])
-    for row in outputs.to_dict("records"):
-        output_id = int(row["output_id"])
+    """
+    Describe fill-only outputs as their nearest fed sibling, as they load
+    (`PlanResolver._sibling_coords`): its info, if it has any.
+    """
+    out, fed = dict(aux_info), np.unique(members["output_id"].to_numpy(np.int64))
+    for output_id in outputs["output_id"].to_numpy(np.int64):
         # a fed output is described by its members, even with nothing left
-        if output_id in out or output_id in fed:
-            continue
-        if len(known):
-            out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
-    return out
+        if len(fed) and output_id not in fed:
+            nearest = int(fed[np.argmin(np.abs(fed - output_id))])
+            out[int(output_id)] = aux_info.get(nearest, {})
+    return {x: y for x, y in out.items() if y}
 
 
 def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:

@@ -239,8 +239,11 @@ def _planned_manager(plan, row, files=None, projection=None):
     # Patch utilities import spool/chunk planning; defer until plans are read.
     from dascore.utils import patch_assembly as pa  # noqa: PLC0415
 
-    if not recovered:  # an output only of fill has no source to state them
-        return None
+    if not recovered:  # only fill: its nearest fed sibling's, on this one's grid
+        ids = plan.member_rows["output_id"].to_numpy(np.int64)
+        near = str(ids[np.argmin(np.abs(ids - int(key)))])
+        sibling = {**row, "source_patch_key": near}
+        return _planned_manager(plan, sibling, files, requested_projection)
     if len(recovered) == 1:
         coords = recovered[0]
     else:

@@ -826,3 +826,53 @@ class TestCutWindows:
             (patch,) = cut
         assert reads.call_count == 2 and not patches.call_count  # one per file
         assert _span(patch) == _seconds(start, 5, 12)
+
+    def test_overrides_follow_each_window(self):
+        """Tolerance applies along a dim only for windows which bound it."""
+
+        def make(x):
+            coords = {
+                "x": np.asarray(x, dtype=np.int64),
+                "y": np.array([0, 1], dtype=np.int64),
+            }
+            return dc.Patch(data=np.ones((len(x), 2)), coords=coords, dims=("x", "y"))
+
+        spool = dc.spool([make(range(5)), make(range(7, 12))])
+        alone = spool.cut(x=np.array([[None, None]]), y=np.array([[0, 1]]), tolerance=4)
+        assert len(alone) == 2
+        both = spool.cut(
+            x=np.array([[0, 4], [None, None]], dtype=object),
+            y=np.array([[None, None], [0, 1]], dtype=object),
+            tolerance=4,
+        )
+        assert both.get_contents()["window"].tolist() == [0, 1, 1]
+
+    def test_ownership_shift_follows_each_window(self):
+        """max_shift snaps overlap seams only for windows which bound the dim."""
+
+        def make(x):
+            coords = {"x": np.asarray(x, dtype=float), "y": np.array([0, 1])}
+            return dc.Patch(data=np.ones((len(x), 2)), coords=coords, dims=("x", "y"))
+
+        spool = dc.spool([make(np.arange(10.0)), make(np.arange(10.0) + 5.3)])
+        open_x = dict(y=np.array([[0, 1]]), max_shift=0.4)
+        alone = spool.cut(x=np.array([[None, None]], dtype=object), **open_x)
+        both = spool.cut(
+            x=np.array([[0, 14.5], [None, None]], dtype=object),
+            y=np.array([[None, None], [0, 1]], dtype=object),
+            max_shift=0.4,
+        )
+        mins = [x.coords.min("x") for x in both if x.attrs.window == 1]
+        assert mins == [x.coords.min("x") for x in alone] == [0.0, 9.3]
+
+    def test_joins_repeat_until_none_merges(self):
+        """Three-dimensional tiles join along whichever dims still can."""
+        data = np.arange(64, dtype=float).reshape(4, 4, 4)
+        coords = {x: np.arange(4, dtype=np.int64) for x in "abc"}
+        whole = dc.Patch(data=data, coords=coords, dims=("a", "b", "c"))
+        tiles = (((0, 1), (0, 3)), ((2, 3), (0, 1)), ((2, 3), (2, 3)))
+        parts = [
+            whole.select(a=a, b=b, c=c) for a in ((0, 1), (2, 3)) for b, c in tiles
+        ]
+        (out,) = dc.spool(parts).cut(a=np.array([[0, 3]]))
+        assert out.equals(whole.update_attrs(window=0))

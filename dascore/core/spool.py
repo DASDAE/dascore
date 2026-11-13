@@ -227,19 +227,22 @@ def _stamp_key(*stamps) -> tuple:
     )
 
 
-def _joined(frame, many, dim, merge) -> ChunkPlan:
-    """Join the rows `many` marks along `dim`, as chunk joins; pass the rest whole."""
-    try:
-        plan = build_chunk_plan(frame[many], **merge)
-    except UnitError:  # a tolerance with units joins dims of its kind
-        plan = build_chunk_plan(frame[many], **(merge | {"tolerance": None}))
-    lone = frame[~many]
-    ends = zip(lone[f"{dim}_min"], lone[f"{dim}_max"])
-    kept = build_subdivision_plan(lone, [[x] for x in ends], dim)
-    for x in (kept.outputs, kept.members):
-        x["output_id"] += len(plan.outputs)
-    stack = lambda x: pd.concat([getattr(plan, x), getattr(kept, x)])  # noqa
-    return replace(plan, outputs=stack("outputs"), members=stack("members"))
+def _joined(frame, parts, dim) -> ChunkPlan:
+    """Join each part's rows along `dim` as chunk joins, each by its own merge."""
+    plans, done = [], np.zeros(len(frame), dtype=bool)
+    for rows, merge in parts:
+        try:
+            plans.append(build_chunk_plan(frame[rows], **merge))
+        except UnitError:  # a tolerance with units joins dims of its kind
+            plans.append(build_chunk_plan(frame[rows], **(merge | {"tolerance": None})))
+        done |= rows
+    ends = zip(frame[f"{dim}_min"][~done], frame[f"{dim}_max"][~done])
+    plans.append(build_subdivision_plan(frame[~done], [[x] for x in ends], dim))
+    for num, plan in enumerate(plans[1:]):  # numbered after those before
+        for x in (plan.outputs, plan.members):
+            x["output_id"] += sum(len(y.outputs) for y in plans[: num + 1])
+    stack = lambda x: pd.concat([getattr(y, x) for y in plans])  # noqa
+    return replace(plans[0], outputs=stack("outputs"), members=stack("members"))
 
 
 def _composed(plan, pieces) -> ChunkPlan:
@@ -830,8 +833,8 @@ class Spool(NodeRepr, NamespaceOwner):
             or an ``(n, 2)`` array of absolute ranges, in the forms
             [Spool Chunking](`dascore/docs/notes/spool_chunking.qmd`)
             lists; row ``i`` of each array forms one box. Rows select
-            independently in input order, each row's pieces in their
-            sources' order, so overlaps and duplicates return separate pieces;
+            independently in input order, each row's pieces in the spool's
+            order, so overlaps and duplicates return separate pieces;
             [`Spool.cut`](`dascore.Spool.cut`) joins each row's pieces.
             Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
@@ -2744,10 +2747,11 @@ class Spool(NodeRepr, NamespaceOwner):
         annotations
             The set to cut by; without it, keywords give the windows.
         tolerance
-            As for `chunk`, along each dimension the windows bound; one with
-            units, along those of its kind only.
+            As for `chunk`, along each dimension a window bounds, for that
+            window; one with units, along those of its kind only.
         max_shift
-            As for `chunk`, along each dimension the windows bound.
+            As for `chunk`, along each dimension a window bounds, for that
+            window.
         conflict
             As for `chunk`, for the sources each window joins.
         **kwargs
@@ -2794,6 +2798,7 @@ class Spool(NodeRepr, NamespaceOwner):
         columns = np.array(stamps, dtype=object).reshape(-1, len(dtypes)).T
         sets = self._df["dims"].map(lambda x: ",".join(sorted(x.split(","))))
         cuts = []  # one plan per set of patch dims, then one merge per dim
+        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
         for have, rows in self._df["_patch_row"].groupby(sets, sort=False):
             have = str(have).split(",")
             asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
@@ -2813,8 +2818,7 @@ class Spool(NodeRepr, NamespaceOwner):
             }
             source_rows, working = part._plan_frames(main, *others)
             joins = {"tolerance": tolerance, "max_shift": max_shift}
-            owning = joins if counts[main] else dict.fromkeys(joins)
-            owning = owning | {"conflict": conflict, "others": others}
+            owning = joins | {"conflict": conflict, "others": others}
             working = working.drop(columns=list(kinds), errors="ignore")  # replaced
             plan = window_plan(working, arrays, part._catalog, source_rows, owning)
             if plan.outputs.empty:
@@ -2834,7 +2838,7 @@ class Spool(NodeRepr, NamespaceOwner):
             frame = pieces.outputs.rename(columns={"output_id": "_patch_row"})
             frame = frame.drop(columns=stale, errors="ignore").assign(_modified=False)
             out, passes = None, [main, *others]
-            for dim in passes:
+            for num, dim in enumerate(passes):
                 if out is not None:
                     source_rows, frame = out._plan_frames(dim)
                 # only pieces of one window alike on every other dim can join
@@ -2847,13 +2851,24 @@ class Spool(NodeRepr, NamespaceOwner):
                         )
                     continue
                 steps = [f"{x}_step" for x in have if x != dim]
-                merge: dict[str, Any] = {dim: None, **(joins if counts[dim] else {})}
-                merge |= dict(
-                    group=[*kinds_seen, *labels, *alike, *steps], conflict=conflict
+                group = [*kinds_seen, *labels, *alike, *steps]
+                merge: dict[str, Any] = dict(
+                    group=group, conflict=conflict, **{dim: None}
                 )
-                joined = _joined(frame, many.to_numpy(), dim, merge)
-                if main not in (dim, passes[-1]) and len(joined.outputs) < len(frame):
-                    passes.append(main)  # what others made alike may join along main
+                # the overrides apply for the windows which bound the dim
+                keys = frame[list(dtypes)].astype(object).itertuples(index=False)
+                own = np.array(
+                    [dim in windows[rank[_stamp_key(*x)]] for x in keys], bool
+                )
+                parts = [
+                    (many.to_numpy() & x, merge | y)
+                    for x, y in ((own, joins), (~own, {}))
+                ]
+                joined = _joined(frame, [x for x in parts if x[0].any()], dim)
+                if len(joined.outputs) < len(frame):  # others it made alike may join
+                    passes += [
+                        x for x in have if x != dim and x not in passes[num + 1 :]
+                    ]
                 joined = joined if out is not None else _composed(joined, pieces)
                 out = (part if out is None else out)._chunked(
                     source_rows, joined, dtypes=labels, lossy=True
@@ -2866,7 +2881,6 @@ class Spool(NodeRepr, NamespaceOwner):
             )
         out = sum(cuts[1:], cuts[0])
         # back into window order, each window's pieces in coordinate order
-        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
         keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
         ranked = sorted(sorted(present), key=lambda x: -self._df[f"{x}_min"].nunique())
         mins = [f"{x}_min" for x in ranked if f"{x}_min" in out._df]

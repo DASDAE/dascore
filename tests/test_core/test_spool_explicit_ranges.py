@@ -1354,12 +1354,13 @@ class TestWindowsOverFilledChunks:
         assert patch.data[:, 0].tolist() == [1, 1, -1, -1, 1, 1]
 
     def test_rider_selection_over_only_fill(self):
-        """A rider can't place a window on an output holding only fill."""
+        """A rider places a window on an output holding only fill, as its sibling."""
         source, _ = _gapped_2d(0, 10, depth=True)
         filled = source.chunk(distance=2, tolerance=6, fill_value=-1)
         narrowed = filled.select(depth=(0, 100))
-        with pytest.raises(MissingPatchError, match="metadata is unavailable"):
-            narrowed.cut(distance=np.array([[5.5, 7]]))
+        (fill,) = narrowed.cut(distance=np.array([[5.5, 7]]))
+        assert fill.coords["distance"].values.tolist() == [6, 7]
+        assert (fill.data == -1).all()
         # an output a source feeds still places it
         (patch,) = narrowed.cut(distance=np.array([[2, 3]]))
         assert patch.coords["distance"].values.tolist() == [2, 3]
@@ -1492,3 +1493,92 @@ class TestWindowEdgeCases:
         )
         narrowed = dc.spool(patch).select(depth=(1, 2))
         assert not len(getattr(narrowed, method)(x=np.array([[0, 3]])))
+
+
+class TestReviewThreads:
+    """Windows the PR's review threads found mishandled."""
+
+    def test_select_keeps_spool_order(self):
+        """Select returns each window's pieces in the spool's order (as on dev)."""
+        later = _patch(np.arange(10.0, 20.0))
+        spool = dc.spool([later, _patch(np.arange(10.0))])
+        order = spool.get_contents()["distance_min"].tolist()
+        pieces = spool.select(distance=np.array([[0, 19]]))
+        assert pieces.get_contents()["distance_min"].tolist() == order
+        assert [_ends(x)[0] for x in spool.cut(distance=np.array([[0, 19]]))] == [0]
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    def test_grid_windows_never_expand_labels(self, method, monkeypatch):
+        """A grid's window samples come from index arithmetic, not its labels."""
+        coord = get_coord(start=0.0, step=0.5, shape=(20_000,))
+        patch = dc.Patch(
+            data=np.arange(20_000.0), coords={"distance": coord}, dims=("distance",)
+        )
+        spool = dc.spool([patch, patch.update_coords(distance_min=9000.0)])
+        windows = np.array([[10.2, 20.0], [8995.0, 9005.0], [30000.0, 40000.0]])
+        expected = getattr(spool, method)(distance=windows).get_contents()
+        values = type(coord).values
+
+        def forbidden(self):
+            if self.evenly_sampled and len(self) > 10_000:
+                raise AssertionError("a grid's labels were expanded")
+            return values.fget(self)
+
+        monkeypatch.setattr(type(coord), "values", property(forbidden))
+        got = getattr(spool, method)(distance=windows).get_contents()
+        assert _listed(got) == _listed(expected)
+        assert _listed(got)[0] == [10.5, 20.0]
+
+    def test_fill_only_output_takes_a_sibling_coordinate(self):
+        """A window on another dim over an output holding only fill finds it."""
+        time = np.arange(5).astype("datetime64[s]")
+
+        def make(start):
+            coords = {"distance": np.arange(3, dtype=np.int64), "time": time + start}
+            return dc.Patch(
+                data=np.ones((3, 5)), coords=coords, dims=("distance", "time")
+            )
+
+        filled = dc.spool([make(0), make(15)]).chunk(time=5, tolerance=20, fill_value=0)
+        assert len(filled) == 4
+        pieces = filled.select(distance=np.array([[0, 1]]))
+        assert [x.shape for x in pieces] == [(2, 5)] * 4
+        assert np.all(pieces[1].data == 0) and np.all(pieces[0].data == 1)
+        (joined,) = filled.cut(distance=np.array([[0, 1]]))
+        assert joined.shape == (2, 20) and np.all(joined.data[:, 5:15] == 0)
+
+    def test_fill_only_metadata_from_nearest_fed(self):
+        """A fill-only output states what its nearest fed sibling holds."""
+        times = lambda a, b: np.arange(a, b).astype("datetime64[s]")  # noqa
+
+        def make(start, stop, tag, gain=False):
+            coords = {"time": times(start, stop)}
+            if gain:
+                coords["gain"] = ("time", np.arange(stop - start, dtype=np.float64))
+            data = np.ones(stop - start)
+            return dc.Patch(
+                data=data, coords=coords, dims=("time",), attrs={"tag": tag}
+            )
+
+        parts = [make(0, 10, "a", True), make(100, 105, "b"), make(115, 120, "b")]
+        filled = dc.spool(parts).chunk(
+            time=5, tolerance=20, fill_value=0, keep_partial=True
+        )
+        stated = filled._catalog.to_df()["gain_min"].notna().tolist()
+        assert stated == [("gain" in x.coords.coord_map) for x in filled]
+        assert [x.attrs.tag for x in filled.select(gain=(0, 100))] == ["a", "a"]
+
+    def test_mixed_unit_integers_keep_float_envelopes(self):
+        """Integer labels normalised to fractions are stated as they load."""
+
+        def make(values, units):
+            coord = get_coord(data=np.asarray(values, dtype=np.int64), units=units)
+            return dc.Patch(data=np.ones(len(values)), coords={"x": coord}, dims=("x",))
+
+        spool = dc.spool(
+            [make(range(5), "m"), make(range(5, 10), "m"), make(range(40, 45), "ft")]
+        )
+        joined = spool.chunk(x=None)
+        rows = joined.get_contents()[["x_min", "x_max"]].to_numpy().tolist()
+        loaded = [[x.get_coord("x").min(), x.get_coord("x").max()] for x in joined]
+        np.testing.assert_allclose(rows, loaded)

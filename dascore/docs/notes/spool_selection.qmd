@@ -112,7 +112,7 @@ for bounds in [(5, -1), (5, ...)]:
 
 Pass an `(n, 2)` array to select several absolute ranges along a coordinate. Several coordinates can take arrays with the same number of rows; row `i` of each forms one box. [Spool Chunking](spool_chunking.qmd#explicit-output-windows) lists the forms a window takes.
 
-- Rows come in input order, and each row's pieces in their sources' coordinate order.
+- Each row is applied to each matching patch, in input order.
 - Overlapping, repeated, and touching ranges stay separate pieces, so two rows across a file boundary can return more than two patches.
 - Endpoints are inclusive. An empty `(0, 2)` array selects nothing.
 - Ordinary selectors on other attributes or coordinates can be combined with it.
