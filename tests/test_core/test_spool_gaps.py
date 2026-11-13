@@ -851,6 +851,7 @@ class TestSpoolSnapCoords:
             make([0.0, 1.1, 1.9, 5.05, 6.4]),
             make(np.arange(10.0), start=20.0),
             make([6.4, 5.05, 1.9, 1.1, 0.0], start=40.0),
+            make(np.arange(9.0, -1.0, -1.0), start=60.0),  # a descending grid
         ]
         spool = dc.spool(patches)
         with suppress_warnings(UserWarning):
@@ -861,6 +862,11 @@ class TestSpoolSnapCoords:
         labels = lambda x: [y.get_coord("time").values.tolist() for y in x]  # noqa
         assert labels(lazy) == labels(eager)
         assert labels(lazy.chunk(time=None)) == labels(eager.chunk(time=None))
+        chunk = dict(time=3, keep_partial=True)
+        assert labels(lazy.chunk(**chunk)) == labels(eager.chunk(**chunk))
+        # windows between the labels as recorded and as snapped
+        windows = np.array([[1.2, 1.5], [3.0, 4.5], [61.5, 64.2]])
+        assert labels(lazy.cut(time=windows)) == labels(eager.cut(time=windows))
         assert len(lazy.get_gaps()) == len(eager.get_gaps())
 
     def test_unknown_dimension_raises(self, wacky):

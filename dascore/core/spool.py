@@ -2830,8 +2830,11 @@ class Spool(NodeRepr, NamespaceOwner):
             if f"{dim}_step" not in rows:
                 msg = f"Coordinate {dim!r} is not a dimension of this spool."
                 raise CoordError(msg)
-            # only labels change unless a step or a reversal is asked for
-            moves = rows[f"{dim}_step"].isna() | reverse | (step is not None)
+            # only labels change, and a descending grid, which a snap sorts,
+            # unless a step or a reversal is asked for
+            steps = rows[f"{dim}_step"]
+            moves = steps.isna() | (to_float(steps.to_numpy()) < 0) | reverse
+            moves |= step is not None
             for index in np.flatnonzero(dims.map(lambda x, d=dim: d in x) & moves):
                 row = rows.iloc[index].to_dict()
                 manager = _source_manager(resolver, row, files, projection=dim)

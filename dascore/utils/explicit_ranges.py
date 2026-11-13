@@ -12,7 +12,7 @@ import pandas as pd
 from dascore.config import config_context
 from dascore.exceptions import ParameterError
 from dascore.units import Quantity, convert_units
-from dascore.utils.misc import express_range_for_coord
+from dascore.utils.misc import express_range_for_coord, suppress_warnings
 
 
 @dataclass(frozen=True)
@@ -259,6 +259,10 @@ def _planned_manager(plan, row, files=None, projection=None):
             **kwargs,
         )
     coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
+    if (snap := plan.merge_kwargs.get("snap")) is not None:  # as the patch loads
+        names = [x for x in snap[0] or coords.dims if x in coords.dims]
+        with suppress_warnings(UserWarning):  # warned as it loads
+            coords = coords.snap(*names, **snap[1])[0]
     if plan.merge_kwargs.get("fill_value") is None or plan.dim not in coords.dims:
         return _project_manager(coords, requested_projection)
     # A filled output takes its grid from the output, not its anchor.
