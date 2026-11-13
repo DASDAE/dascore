@@ -68,9 +68,9 @@ Everything about a windowed operation is decided from metadata when it is called
 - **Plan.** The plan is worked out from a tile's metadata, not the patch's. `taper` in a window therefore tapers each tile.
 - **Inputs.** A tile sees itself and the inputs given to the operation, and nothing else. An input shaped like the data, such as the mask of `where`, is tiled alongside the data. Any other input is handed to every tile whole. An operation which needs a channel the tile does not hold must be given it: `patch.window(distance=100).correlate(source)`.
 - **Blending.** The result is blended as it is. Blended phase angles are wrong and DASCore cannot know that an array holds angles, so the choice is the user's. Blending integer or boolean output warns.
-- **Kernel.** `window` is a declaration, and each operation's kernel decides how to honour it. `window(time=5, samples=True).median()` may call a compiled median filter directly. An operation with no windowed kernel of its own runs on the generic tile engine, which is today's `dascore.utils.tiles` and its numba drivers.
+- **Kernel.** `window` is a declaration, and an operation needs no kernel written for it. The tile engine, which is today's `dascore.utils.tiles` and its numba drivers, cuts the data, works the plan out for a tile, runs the operation's ordinary kernel on each, and blends. Where an operation in some window is an operation DASCore already has, the window runs that one instead: `window(time=5, samples=True).median()` is `median_filter`, and a reduction with a step is what `rolling` computes.
 
-A windowed operation records its window in history and in its `data_id`.
+A windowed operation records its window in history, as `window(time=10.0, overlap=2.0).detrend(dim='time')`, and in its `data_id`.
 
 ## `Patch.impulse_window`
 
@@ -166,7 +166,5 @@ These land before the public API is frozen for 1.0.
 
 ## Still to settle
 
-- The name and signature of the hook by which an operation honours a window.
 - The name of the fallback setting.
-- How a windowed step is spelled in history.
 - Contracts for the operations a usual chain needs and which state none yet: `detrend`, `decimate`, `taper`, arithmetic with a scalar, the reductions and `sobel_filter`.
