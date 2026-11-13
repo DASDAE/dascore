@@ -70,6 +70,12 @@ Authoring rules:
 
 An `@time` suffix, such as `path@2025-01-01/`, begins a new epoch. [`dc.inventory`](`dascore.core.inventory_loader.inventory`) validates identities, object types, references, track coverage, and epoch ranges when it reads the directory.
 
+## Starting from the command line
+
+`python -m dascore inventory init <directory>` writes a minimal directory: one network, fiber array, acquisition, optical path, interrogator, and cable, with every value a placeholder to replace. It refuses a directory that already holds files.
+
+`python -m dascore inventory check <directory>` loads a directory with the same loader and prints a one-line summary when it is valid; otherwise it prints the loader's message, which names the file and field at fault, and exits with status 1.
+
 Position is ordinary geometry whose column names match the coordinate reference system, or the canonical aliases `x`, `y`, and `z`. Positional axes must be stated together and use the CRS units; a geometry segment may omit all of them and record another quantity such as chainage instead. Fiber gathered at one place, such as a spool, is a segment of two rows with the same position at the spool's start and end distances. Segments that place the axes may not overlap in optical distance.
 
 # Track semantics
