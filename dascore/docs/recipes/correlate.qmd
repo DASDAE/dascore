@@ -39,3 +39,13 @@ corr.squeeze().viz.waterfall();
 corr = patch.correlate(distance=3, samples=True, normalize=True)
 corr.squeeze().viz.waterfall();
 ```
+
+## Template matching
+
+`other` correlates each trace with the matching trace of a second patch along `lag_dim`. A patch with only `lag_dim`, such as a short template, is matched against every trace. Here a 0.2 s window around the arrival at channel 4 is the template. Each channel peaks at the lag where the template's waveform lines up with the trace: the offset of the template's start from the start of the trace, in seconds. Channel 4 peaks at 0.45 s, where the template was cut; add the arrival's offset inside the template (0.1 s) to get the arrival time. A positive lag means the waveform comes later in the trace than in the template, and the lags may run a few samples past the full range, as zeros from padding. With `normalize=True` the energies are those of the whole traces, so a match peaks at one only because these traces hold nothing but the wavelet.
+
+```{python}
+template = patch.isel(distance=3).select(time=(0.45, 0.65), relative=True)
+corr = patch.correlate(other=template, lag_dim="time", normalize=True)
+corr.viz.waterfall();
+```

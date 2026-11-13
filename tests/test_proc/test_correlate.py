@@ -527,3 +527,145 @@ class TestCorrelateNormalize:
         )
         assert np.all(np.isnan(out.data[..., 0]))
         assert not np.any(np.isnan(out.data[1, :, 1]))
+
+
+class TestCorrelateOther:
+    """Correlating each trace with the matching trace of another patch."""
+
+    step = 0.01
+
+    def _patch(self, data, time_start=0.0, **coords):
+        """Return a patch whose last dimension is time."""
+        time = time_start + np.arange(data.shape[-1]) * self.step
+        coords = {**coords, "time": time}
+        return dc.Patch(data=data, coords=coords, dims=list(coords))
+
+    def _expected(self, out, x, y):
+        """Return out's trace beside numpy's full correlation of x with y."""
+        lags = np.round(to_float(out.get_array("lag_time")) / self.step)
+        full = (lags >= -(len(y) - 1)) & (lags <= len(x) - 1)
+        assert np.allclose(out.data[~full], 0)
+        return out.data[full], np.correlate(x, y, "full")
+
+    def test_matches_source(self):
+        """A source trace as other gives the single-patch result."""
+        patch = dc.get_example_patch("random_das", shape=(4, 51))
+        expected = patch.correlate(distance=2, samples=True).squeeze()
+        other = patch.select(distance=2, samples=True).squeeze()
+        out = patch.correlate(other=other, lag_dim="time")
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, expected.data)
+
+    def test_aligned_patches(self):
+        """Each shared channel is correlated with its counterpart."""
+        rng = np.random.default_rng(0)
+        a = self._patch(rng.random((3, 40)), distance=[0.0, 1.0, 2.0])
+        b = self._patch(rng.random((3, 40)), time_start=5, distance=[1.0, 2.0, 3.0])
+        out = a.correlate(other=b, lag_dim="time")
+        assert np.all(out.get_array("distance") == [1.0, 2.0])
+        for i in range(2):
+            trace = out.isel(distance=i)
+            assert np.allclose(*self._expected(trace, a.data[i + 1], b.data[i]))
+
+    def test_broadcast_dim(self):
+        """A dimension only one patch has is broadcast."""
+        rng = np.random.default_rng(1)
+        a = self._patch(rng.random((2, 2, 30)), source=[0, 1], distance=[0.0, 1.0])
+        b = self._patch(rng.random((2, 30)), distance=[0.0, 1.0])
+        out = a.correlate(other=b, lag_dim="time")
+        assert out.get_coord("source").shape == (2,)
+        trace = out.isel(source=1, distance=0)
+        assert np.allclose(*self._expected(trace, a.data[1, 0], b.data[0]))
+
+    @pytest.mark.parametrize("offset", [0, 37, 80])
+    def test_template_shift(self, offset):
+        """A short template peaks at the lag where it sits in the record."""
+        template = np.sin(np.arange(20.0))
+        data = np.zeros(100)
+        data[offset : offset + 20] = template
+        record = self._patch(data)
+        other = self._patch(template, time_start=3)
+        out = record.correlate(other=other)
+        lags = to_float(out.get_array("lag_time"))
+        assert np.isclose(lags[np.argmax(out.data)], offset * self.step)
+        assert np.allclose(*self._expected(out, data, template))
+        # Swapping the patches flips the sign.
+        swapped = other.correlate(other=record)
+        lags = to_float(swapped.get_array("lag_time"))
+        assert np.isclose(lags[np.argmax(swapped.data)], -offset * self.step)
+
+    @pytest.mark.parametrize("scale", [1e-6, 3.0, 1e6])
+    def test_normalized_template_peaks_at_one(self, scale):
+        """An embedded template, at any scale, peaks at one."""
+        template = np.sin(np.arange(20.0))
+        data = np.zeros(100)
+        data[30:50] = template * scale
+        out = self._patch(data).correlate(other=self._patch(template), normalize=True)
+        assert np.isclose(np.abs(out.data).max(), 1)
+
+    def test_units(self):
+        """Data units are the product of both patches', or none."""
+        rng = np.random.default_rng(2)
+        a = self._patch(rng.random(20)).set_units("m/s")
+        b = self._patch(rng.random(10)).set_units("m")
+        units = a.correlate(other=b).attrs.data_units
+        assert get_quantity(units) == get_quantity("m**2/s")
+        normalized = a.correlate(other=b, normalize=True).attrs.data_units
+        assert get_quantity(normalized) == get_quantity("1")
+        assert (
+            a.correlate(other=b.update_attrs(data_units=None)).attrs.data_units is None
+        )
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            ({"other": np.ones(10)}, "must be a Patch"),
+            ({"distance": 0}, "cannot be combined"),
+            ({"samples": True}, "cannot be combined"),
+            ({}, "lag_dim must name"),
+            ({"lag_dim": "distance"}, "lag_dim must name"),
+        ],
+    )
+    def test_refused(self, kwargs, match):
+        """Arguments other cannot be used with are refused."""
+        patch = self._patch(np.ones((2, 10)), distance=[0.0, 1.0])
+        kwargs = {"other": patch.sel(distance=0.0)} | kwargs
+        with pytest.raises(ParameterError, match=match):
+            patch.correlate(**kwargs)
+
+    def test_mismatched_step(self):
+        """Patches with different steps along lag_dim are refused."""
+        patch = self._patch(np.ones(10))
+        other = dc.Patch(
+            data=np.ones(5), coords={"time": np.arange(5) * 0.02}, dims=["time"]
+        )
+        with pytest.raises(ParameterError, match=r"step is 0\.01 but other's is 0\.02"):
+            patch.correlate(other=other)
+
+    def test_transformed_refused(self):
+        """A patch already transformed along lag_dim is refused."""
+        patch = self._patch(np.ones(10))
+        with pytest.raises(ParameterError, match="untransformed"):
+            patch.dft("time").correlate(other=patch, lag_dim="ft_time")
+
+    def test_step_in_other_units(self):
+        """A step stated in other units of time is compared as one."""
+        rng = np.random.default_rng(3)
+        patch = self._patch(rng.random(20)).set_units(time="s")
+        other = self._patch(rng.random(10)).set_units(time="s")
+        time_ms = other.get_array("time") * 1000
+        other_ms = other.update_coords(time=time_ms).set_units(time="ms")
+        expected = patch.correlate(other=other)
+        assert patch.correlate(other=other_ms).equals(expected)
+
+    def test_step_units_differ(self):
+        """Equal magnitudes in different units are different steps."""
+        patch = self._patch(np.ones(10)).set_units(time="s")
+        with pytest.raises(ParameterError, match=r"0\.01 s but other's is 0\.01 ms"):
+            patch.correlate(other=patch.set_units(time="ms"))
+
+    def test_step_units_incompatible(self):
+        """Lag coordinates whose units do not convert are refused."""
+        patch = self._patch(np.ones(10)).set_units(time="s")
+        with pytest.raises(UnitError, match="do not convert"):
+            patch.correlate(other=patch.set_units(time="m"))

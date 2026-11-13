@@ -625,11 +625,12 @@ class Patch(NamespaceOwner, PatchMeta):
         *,
         lag_dim: str | None = None,
         normalize: bool = False,
+        other: Patch | None = None,
         **kwargs,
     ) -> Self:
         """Correlate source row/columns in a patch with all other row/columns."""
         return dascore.proc.Correlate(
-            samples=samples, lag_dim=lag_dim, normalize=normalize, **kwargs
+            samples=samples, lag_dim=lag_dim, normalize=normalize, other=other, **kwargs
         ).run(self)
 
     def correlate_shift(self, dim: str, undo_weighting: bool = True) -> Self:
