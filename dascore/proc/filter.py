@@ -22,7 +22,7 @@ from scipy.ndimage import sobel as nd_sobel
 
 import dascore as dc
 from dascore.constants import samples_arg_description
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, position_free_off_frequencies
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
 from dascore.lazy.contract import Halo, WholeAxis
 from dascore.proc.basic import Real
@@ -778,12 +778,8 @@ class SlopeFilter(PatchProcessor):
         out = convert_units(array, new_units, units)
         return out
 
-    def position_free(self, dims) -> bool:
-        """Whether the plan ignores where the coordinates of `dims` start."""
-        # From a patch in time and distance the plan is made of steps and
-        # lengths. One already transformed is weighted by its frequencies
-        # themselves, which a window along a frequency does not all hold.
-        return not any(x.startswith("ft_") for x in dims)
+    # Away from a frequency dimension; see the function.
+    position_free = position_free_off_frequencies
 
     def get_metadata(self, meta):
         """Return the filtered metadata, the transforms and the slope mask."""

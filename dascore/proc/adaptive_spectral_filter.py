@@ -319,6 +319,9 @@ class AdaptiveSpectralFilter(PatchProcessor):
         )
         return window
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the metadata as it is, and the axes, window and overlap."""
         window = self.geometry(meta)

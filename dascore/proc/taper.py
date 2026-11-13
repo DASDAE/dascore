@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 from pydantic import ConfigDict
 
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, position_free_if_relative
 from dascore.exceptions import ParameterError
 from dascore.proc.basic import _as_float, _scale_by
 from dascore.units import Quantity
@@ -338,13 +338,8 @@ class TaperRange(_Envelope):
 
     model_config = ConfigDict(extra="allow")
 
-    def position_free(self, dims) -> bool:
-        """Whether the plan ignores where the coordinates of `dims` start."""
-        # Values measured from the start of a coordinate, or counted in
-        # samples, are the same wherever it starts; absolute ones name a
-        # place, which matters only along a dimension they are given for.
-        relative = self.relative or getattr(self, "samples", False)
-        return bool(relative or not set(dims) & set(self.model_extra or {}))
+    # Where its values are measured from decides; see the function.
+    position_free = position_free_if_relative
 
     def get_metadata(self, meta):
         """Return the envelope, shaped to broadcast along its axis."""

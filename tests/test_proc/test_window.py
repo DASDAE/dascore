@@ -903,6 +903,8 @@ FREE_CALLS = {
     "VelocityToStrainRate": lambda x: x.velocity_to_strain_rate(),
     "RadiansToStrain": lambda x: x.radians_to_strain(gauge_length=10),
     "Where": lambda x: x.where(np.True_),
+    "Flip": lambda x: x.flip("time", flip_coords=False),
+    "AdaptiveSpectralFilter": lambda x: x.adaptive_spectral_filter(time=0.05),
     # These three say so only for values measured from a coordinate's start.
     "LineMute": lambda x: x.line_mute(time=(0.1, 0.2)),
     "TaperRange": lambda x: x.taper_range(time=(0.01, 0.02, 0.1, 0.2), relative=True),
@@ -1046,7 +1048,7 @@ class TestPositionFree:
         """Values from a coordinate's start are every window's; absolute are not."""
         window = patch.window(time=100, samples=True)
         assert window.line_mute(time=(0.1, 0.2)).shape == patch.shape
-        with pytest.raises(ParameterError, match="relative=True"):
+        with pytest.raises(ParameterError, match="has a `relative` argument"):
             window.line_mute(time=(0.1, 0.2), relative=False)
         # A place along a dimension which is not windowed is every window's.
         far = patch.get_coord("distance").values[[10, 20]]
@@ -1188,13 +1190,6 @@ class TestOtherBackends:
         assert _values(out).dtype == expected.dtype == np.dtype(dtype)
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
 
-    def test_dask_is_not_computed(self, patch, library):
-        """On dask the result is still a graph: no window was computed."""
-        if library != "dask":
-            pytest.skip("only dask defers")
-        out = _on(patch, library).window(time=100, samples=True).abs()
-        assert hasattr(out.data, "compute") and not isinstance(out.data, np.ndarray)
-
     def test_integers(self, patch, library):
         """Integers are blended to floats without the library mixing kinds."""
         ints = patch.new(data=(patch.data * 100).astype(np.int16))
@@ -1205,20 +1200,32 @@ class TestOtherBackends:
         assert out.backend == library and _values(out).dtype == expected.dtype
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
 
-    def test_operation_without_the_library_converts_once(
-        self, patch, library, monkeypatch
-    ):
-        """An operation with no implementation is converted for whole, and says so."""
+    def test_operation_without_the_library(self, patch, library, monkeypatch):
+        """
+        An operation with no implementation for the library still runs.
+
+        On dask each chunk is blended with NumPy when it is computed, so
+        nothing is converted or said. On another library the array is
+        converted once, for the whole of it, and the warning names the
+        operation.
+        """
         calls = []
         original = window_module.to_numpy
         monkeypatch.setattr(
             window_module, "to_numpy", lambda x: calls.append(1) or original(x)
         )
         expected = patch.window(time=100, samples=True).detrend("time")
-        with pytest.warns(NumpyFallbackWarning, match="detrend has no"):
-            out = _on(patch, library).window(time=100, samples=True).detrend("time")
-        # Once, not once for each of the 39 windows.
-        assert out.backend == library and len(calls) == 1
+        there = _on(patch, library)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = there.window(time=100, samples=True).detrend("time")
+        said = [str(x.message) for x in caught if x.category is NumpyFallbackWarning]
+        if library == "dask":
+            assert not calls and not said
+        else:
+            # Once, not once for each of the 39 windows.
+            assert len(calls) == 1 and len(said) == 1 and "detrend has no" in said[0]
+        assert out.backend == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
 
     def test_dask_keeps_its_chunks(self, patch, library):
@@ -1228,10 +1235,12 @@ class TestOtherBackends:
         there = _on(patch, library)
         out = there.window(time=100, distance=30, samples=True).abs()
         assert out.data.chunks == there.data.chunks
-        # And where the operation has to go through NumPy.
-        with pytest.warns(NumpyFallbackWarning):
-            out = there.window(time=100, samples=True).detrend("time")
+        # And along a dimension the operation needs whole, which is
+        # computed in one piece and cut back.
+        out = there.window(time=100, samples=True).detrend("distance")
         assert out.data.chunks == there.data.chunks
+        expected = patch.window(time=100, samples=True).detrend("distance")
+        np.testing.assert_array_equal(_values(out), expected.data)
 
     def test_integers_through_numpy_warn_too(self, patch, library):
         """Integers blended for an operation with no implementation still warn."""

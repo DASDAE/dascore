@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
+from dascore.core.processor import position_free_if_relative
 from dascore.exceptions import ParameterError
 from dascore.models import sensible_model_equals, sensible_model_hash
 from dascore.proc.taper import _Envelope
@@ -501,13 +502,8 @@ class LineMute(_Envelope):
     model_config = ConfigDict(extra="allow")
     _positional_fields = ()
 
-    def position_free(self, dims) -> bool:
-        """Whether the plan ignores where the coordinates of `dims` start."""
-        # Values measured from the start of a coordinate, or counted in
-        # samples, are the same wherever it starts; absolute ones name a
-        # place, which matters only along a dimension they are given for.
-        relative = self.relative or getattr(self, "samples", False)
-        return bool(relative or not set(dims) & set(self.model_extra or {}))
+    # Where its values are measured from decides; see the function.
+    position_free = position_free_if_relative
 
     def get_metadata(self, meta):
         """Return the envelope of the region the lines bound."""

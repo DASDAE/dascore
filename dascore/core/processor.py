@@ -613,6 +613,32 @@ _UNCHECKED: list[type[PatchProcessor]] = []
 _HOSTS: list[type] = []
 
 
+def position_free_if_relative(self, dims) -> bool:
+    """
+    Say an operation given coordinate values ignores where `dims` start.
+
+    A `position_free` for a class which takes values along dimensions as
+    keywords, and a `relative` field. Values measured from the start of a
+    coordinate, or counted in samples, are the same wherever it starts;
+    absolute ones name a place, which matters only along a dimension they
+    are given for.
+    """
+    relative = self.relative or getattr(self, "samples", False)
+    return bool(relative or not set(dims) & set(self.model_extra or {}))
+
+
+def position_free_off_frequencies(self, dims) -> bool:
+    """
+    Say an operation which works on a spectrum ignores where `dims` start.
+
+    A `position_free` for a class which transforms a patch in time and
+    distance itself, when its plan is made of steps and lengths. Given a
+    patch already transformed it weights by the frequencies themselves,
+    which a window along a frequency dimension does not all hold.
+    """
+    return not any(x.startswith("ft_") for x in dims)
+
+
 def captured_operation(method, patch, /, *args, **kwargs) -> PatchProcessor:
     """
     Return the operation a patch method would run, without running it.

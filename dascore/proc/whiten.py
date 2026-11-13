@@ -9,7 +9,7 @@ import scipy.fft as sft
 from pydantic import ConfigDict
 from scipy.ndimage import uniform_filter1d
 
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, position_free_off_frequencies
 from dascore.exceptions import ParameterError
 from dascore.proc.basic import Angle
 from dascore.proc.taper import TaperRange, _scale_by
@@ -143,12 +143,8 @@ class Whiten(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
-    def position_free(self, dims) -> bool:
-        """Whether the plan ignores where the coordinates of `dims` start."""
-        # From a patch in time and distance the plan is made of steps and
-        # lengths. One already transformed is weighted by its frequencies
-        # themselves, which a window along a frequency does not all hold.
-        return not any(x.startswith("ft_") for x in dims)
+    # Away from a frequency dimension; see the function.
+    position_free = position_free_off_frequencies
 
     def get_metadata(self, meta):
         """Return the whitened metadata, and the transforms, smoothing and taper."""

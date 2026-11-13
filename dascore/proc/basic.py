@@ -23,7 +23,11 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import get_coord
-from dascore.core.processor import PatchProcessor, register_kernel
+from dascore.core.processor import (
+    PatchProcessor,
+    position_free_if_relative,
+    register_kernel,
+)
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.lazy.contract import Pointwise, Unchanged
@@ -902,13 +906,8 @@ class PowCoord(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
-    def position_free(self, dims) -> bool:
-        """Whether the plan ignores where the coordinates of `dims` start."""
-        # Values measured from the start of a coordinate, or counted in
-        # samples, are the same wherever it starts; absolute ones name a
-        # place, which matters only along a dimension they are given for.
-        relative = self.relative or getattr(self, "samples", False)
-        return bool(relative or not set(dims) & set(self.model_extra or {}))
+    # Where its values are measured from decides; see the function.
+    position_free = position_free_if_relative
 
     def get_metadata(self, meta):
         """Return metadata with the gained units, and each dimension's curve."""
@@ -1577,6 +1576,9 @@ class Flip(PatchProcessor):
 
     dims: tuple[Any, ...] = ()
     flip_coords: bool = True
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the flipped metadata and the axes to mirror."""
