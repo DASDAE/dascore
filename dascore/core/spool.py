@@ -2768,7 +2768,9 @@ class Spool(NodeRepr, NamespaceOwner):
             tolerance = GapTolerance(count=float(size + 1), nearest=True)
         else:
             tolerance = GapTolerance(excess=size, nearest=True)  # past one step
-        # a later segment moves onto the grid by under half a step
+        # a later segment moves onto the grid by under half a step; None
+        # fills as Patch.fill_gaps reads it, a null of the data's dtype
+        fill_value = np.nan if fill_value is None else fill_value
         merge = dict(tolerance=tolerance, conflict=conflict, fill_value=fill_value)
         merge["max_shift"] = np.nextafter(0.5, 0)
         return self._new_from_catalog(_PendingFill(self, dim, merge))

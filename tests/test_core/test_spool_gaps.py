@@ -26,6 +26,7 @@ from dascore.exceptions import (
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import _concatenate_group
 from dascore.warnings import DASCoreWarning
+from tests.conftest import segment_layout
 
 ONE_SECOND = np.timedelta64(1, "s")
 ONE_NS = np.timedelta64(1, "ns")
@@ -667,31 +668,32 @@ class TestSpoolFillGaps:
             assert patch.attrs.station == station
             assert patch.shape[1] == (2 if station == "A" else 3)
 
+    @pytest.mark.parametrize("fill_value", [np.nan, None])
     @pytest.mark.parametrize("offset", [0.0, 0.3, -0.3, 0.45])
     @pytest.mark.parametrize("missing", [0, 1, 2, 3])
     @pytest.mark.parametrize(
         "size", [None, {"x": 1}, {"x": 2}, {"x": 2.4}, {"x": 2, "samples": True}]
     )
-    def test_matches_patch_fill(self, offset, missing, size):
+    def test_matches_patch_fill(self, offset, missing, size, fill_value):
         """A spool fills each seam exactly where the joined patch fills it."""
         first = get_coord(start=0.0, step=1.0, shape=(10,))
         second = get_coord(start=10.0 + missing + offset, step=1.0, shape=(6,))
 
-        def make(coord):
-            data = np.ones(len(coord))
+        def make(coord, start=0.0):
+            data = np.arange(len(coord)) + start
             return dc.Patch(data=data, coords={"x": coord}, dims=("x",))
 
         kwargs = {"x": None} if size is None else size
-        spool = dc.spool([make(first), make(second)])
+        spool = dc.spool([make(first), make(second, 10.0)])
         joined = make(concat_coords(first, second))
         with suppress_warnings(UserWarning):
-            want = joined.fill_gaps(**kwargs)
-            got = spool.fill_gaps(**kwargs)
-        got_coords = [x.get_coord("x") for x in got]
-        assert len(got_coords) == len(want.get_coord("x").segments)
-        if len(got_coords) == 1:
-            assert got_coords[0] == want.get_coord("x")
-            assert len(got.get_contents()) == 1
+            want = joined.fill_gaps(**kwargs, fill_value=fill_value).split_gaps()
+            got = spool.fill_gaps(**kwargs, fill_value=fill_value)
+        assert len(got) == len(want) == len(got.get_contents())
+        for out, expected in zip(got, want, strict=True):
+            np.testing.assert_array_equal(out.data, expected.data)  # NaN where
+            coord, other = out.get_coord("x"), expected.get_coord("x")
+            assert coord == other and segment_layout(coord) == segment_layout(other)
 
     @pytest.mark.parametrize("labels", [[20.0, 21.2, 29.9, 31.0], [20, 21.2, 22.9, 24]])
     def test_labels_beside_an_unfilled_gap_load(self, labels):

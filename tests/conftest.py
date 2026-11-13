@@ -57,6 +57,14 @@ needs_chunk_iter = pytest.mark.skipif(
 )
 
 
+def segment_layout(coord) -> list[tuple]:
+    """
+    Each segment of a coordinate as (kind, step, length), which `==` ignores
+    since it compares labels only.
+    """
+    return [(type(x.runs[0]).__name__, x.step, len(x)) for x in coord.segments]
+
+
 def _importable(name: str) -> bool:
     """Return True if a module can be imported, without importing it."""
     return importlib.util.find_spec(name) is not None
