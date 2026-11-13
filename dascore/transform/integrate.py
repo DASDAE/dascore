@@ -178,7 +178,7 @@ class Integrate(PatchProcessor):
         # than one, so only that slice is checked before scanning the input.
         last = broadcast_for_index(out.ndim, axes, -1, fill=slice(None))
         single = any(data.shape[ax] == 1 for ax in axes)
-        maybe_nan = single or np.isnan(out[last]).any()
-        if out.size and maybe_nan and np.isnan(data).any():
+        maybe_nan = out.size and (single or np.isnan(out[last]).any())
+        if maybe_nan and np.isnan(data).any():
             out = func(data, spacing, axes, skip_nan=True)
         return out
