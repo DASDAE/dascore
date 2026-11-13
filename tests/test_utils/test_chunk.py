@@ -20,6 +20,7 @@ from dascore.utils.chunk_plan import (
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
+    patch_local_adjusted_envelopes,
     subdivision_pieces,
 )
 from dascore.utils.time import to_timedelta64
@@ -896,7 +897,7 @@ class TestCarryGrids:
 
 
 class TestHeldCoord:
-    """The samples a relation row holds, rebuilt from its origin."""
+    """The samples a relation row holds, rebuilt from what it states."""
 
     @pytest.fixture()
     def origin(self):
@@ -905,18 +906,53 @@ class TestHeldCoord:
         row = {"x_min": coord.min(), "x_max": coord.max(), "x_step": coord.step}
         return {**row, "_x_grid": (*coord.runs[0].canonical()[1:], 2000)}, coord
 
-    def test_selects_origin_to_bounds(self, origin):
-        """The origin's coordinate is selected to the row's bounds."""
+    def test_whole_row(self, origin):
+        """A row whose grid ends on its bounds states its coordinate."""
         row, coord = origin
-        low, high = STARTTIME + np.timedelta64(100, "ms"), coord.max()
-        out = _held_coord(row, low, high, "x")
-        assert out == coord.select((low, high))[0]
+        assert _held_coord(row, "x") == coord
 
-    def test_trimmed_origin(self, origin):
-        """An origin whose grid no longer ends on its bounds cannot answer."""
-        row, coord = origin
+    def test_trimmed_row(self, origin):
+        """A row whose grid no longer ends on its bounds states none."""
+        row, _ = origin
         row = {**row, "x_min": STARTTIME + np.timedelta64(100, "ms")}
-        assert _held_coord(row, row["x_min"], coord.max(), "x") is None
+        assert _held_coord(row, "x") is None
+
+
+class TestSharedDimensionEnvelopes:
+    """Replaying selections onto rows whose coordinates share a dimension."""
+
+    @pytest.fixture()
+    def frame(self):
+        """One row with sensor riding distance, two to a distance step."""
+        return pd.DataFrame(
+            {
+                "distance_min": [0.0],
+                "distance_max": [299.0],
+                "distance_step": [1.0],
+                "_distance_dims": ["distance"],
+                "sensor_min": [1000.0],
+                "sensor_max": [1598.0],
+                "sensor_step": [2.0],
+                "_sensor_dims": ["distance"],
+            }
+        )
+
+    def test_range_narrower_than_rounding(self, frame):
+        """A range holding no sample, closer than rounding, keeps the rider whole."""
+        residuals = (({"sensor": (1020.95, 1021.05)}, False, False),)
+        out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
+        assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
+
+    def test_coordinate_on_two_dimensions(self, frame):
+        """A coordinate on two dimensions trims neither of them."""
+        frame = frame.assign(
+            xy_min=[0.0], xy_max=[10.0], xy_step=[1.0], _xy_dims=["distance,time"]
+        )
+        residuals = (({"xy": (2, 5)}, True, False),)
+        out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
+        assert (out["xy_min"].iloc[0], out["xy_max"].iloc[0]) == (2, 4)
+        assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
+        assert (out["sensor_min"].iloc[0], out["sensor_max"].iloc[0]) == (1000, 1598)
 
 
 class TestBuildGapFrame:

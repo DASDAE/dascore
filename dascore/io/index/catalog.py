@@ -732,7 +732,8 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
     if not names:
         return {}
     # A coordinate riding a dimension is trimmed by a selection on that
-    # dimension, and the reverse; the envelopes state neither, so a view
+    # dimension, and the reverse; the envelopes follow that only as a
+    # range holding what loads, not the samples themselves, so a view
     # naming one leaves every coordinate in it to the patch.
     named = {name for coords, _, _ in residuals for name in coords}
     if "dims" in df and any(

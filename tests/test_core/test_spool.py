@@ -839,16 +839,25 @@ class TestSelect:
 
 
 def _assert_contents_match_patches(spool, names):
-    """Each row advertises the extent of each named coordinate it loads."""
+    """
+    Each row advertises the extent of each named coordinate it loads.
+
+    Times and integers are advertised exactly. A float range holds the
+    one loaded and passes it by no more than a hundred-thousandth of a
+    step, the room left for the rounding of a label the file stores.
+    """
     contents = spool.get_contents()
     assert len(contents) == len(spool)
     for (_, row), patch in zip(contents.iterrows(), spool, strict=True):
         for name in names:
             coord = patch.get_coord(name)
-            assert (row[f"{name}_min"], row[f"{name}_max"]) == (
-                coord.min(),
-                coord.max(),
-            )
+            low, high = row[f"{name}_min"], row[f"{name}_max"]
+            if np.asarray(coord.min()).dtype.kind != "f":
+                assert (low, high) == (coord.min(), coord.max())
+                continue
+            slack = 1e-5 * abs(coord.step)
+            assert 0 <= coord.min() - low <= slack
+            assert 0 <= high - coord.max() <= slack
 
 
 class TestSelectSharedDimension:
@@ -1015,8 +1024,8 @@ class TestSelectSharedDimensionManyPatches:
 
     start = np.datetime64("2020-01-01")
 
-    @pytest.fixture(scope="class")
-    def staggered_spool(self):
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def staggered_spool(self, request, tmp_path_factory):
         """Patches on a 1024 Hz grid, 20 s apart, one of them shorter."""
         base = dc.get_example_patch()
         shape = (base.shape[base.get_axis("time")],)
@@ -1033,7 +1042,12 @@ class TestSelectSharedDimensionManyPatches:
             )
             patches.append(patch)
         patches[2] = patches[2].select(time=(0, 600), samples=True)
-        return dc.spool(patches)
+        if request.param == "memory":
+            return dc.spool(patches)
+        path = tmp_path_factory.mktemp("staggered")
+        for num, patch in enumerate(patches):
+            dc.write(patch, path / f"patch_{num}.h5", "DASDAE")
+        return dc.spool(path).update()
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -1061,6 +1075,139 @@ class TestSelectSharedDimensionManyPatches:
         _assert_contents_match_patches(out, ["utc"])
         again = out.select(utc=(5, 100), samples=True)
         _assert_contents_match_patches(again, ["time", "utc"])
+
+
+def _assert_contents_hold_patches(spool, names):
+    """Each row advertises a range of each named coordinate holding what loads."""
+    contents = spool.get_contents()
+    assert len(contents) == len(spool)
+    for (_, row), patch in zip(contents.iterrows(), spool, strict=True):
+        for name in names:
+            coord = patch.get_coord(name)
+            assert row[f"{name}_min"] <= coord.min()
+            assert row[f"{name}_max"] >= coord.max()
+
+
+class TestSelectSharedDimensionHoldsWhatLoads:
+    """No coordinate on a selected dimension is advertised short of what loads."""
+
+    def _spool(self, **coords):
+        """The example patch with the given arrays along distance."""
+        patch = dc.get_example_patch()
+        size = patch.shape[patch.get_axis("distance")]
+        arrays = {name: make(np.arange(size)) for name, make in coords.items()}
+        distance = arrays.pop("distance", None)
+        if distance is not None:
+            patch = patch.update_coords(distance=distance)
+        riders = {name: ("distance", array) for name, array in arrays.items()}
+        return dc.spool([patch.update_coords(**riders)])
+
+    def test_float32_labels(self):
+        """Labels stored as float32 are not the ones a start and step rebuild."""
+        spool = self._spool(
+            distance=lambda x: (0.3 + 1.1 * x).astype(np.float32),
+            sensor=lambda x: (100.3 - 0.7 * x).astype(np.float32),
+        )
+        patch = spool[0]
+        distance, sensor = patch.get_array("distance"), patch.get_array("sensor")
+        names = ["distance", "sensor"]
+        _assert_contents_hold_patches(spool.select(sensor=(50.0, 80.0)), names)
+        for num in range(0, len(distance) - 10, 29):
+            out = spool.select(distance=(distance[num], distance[num + 10]))
+            _assert_contents_hold_patches(out, names)
+            out = spool.select(sensor=(sensor[num + 10], sensor[num]))
+            _assert_contents_hold_patches(out, names)
+
+    def test_chained_on_rounded_labels(self):
+        """A second selection counts from the samples the first really left."""
+        spool = self._spool(
+            distance=lambda x: np.linspace(0, 0.7 * (len(x) - 1), len(x)),
+            sensor=lambda x: np.linspace(0, 3.3 * (len(x) - 1), len(x)),
+        )
+        patch = spool[0]
+        distance, sensor = patch.get_array("distance"), patch.get_array("sensor")
+        first = spool.select(distance=(distance[62], distance[243]))
+        names = ["distance", "sensor"]
+        _assert_contents_hold_patches(first, names)
+        for name in names:
+            out = first.select(**{name: (2, -2)}, samples=True)
+            _assert_contents_hold_patches(out, names)
+        # the end sample itself is still found by its stored label
+        end = first.select(sensor=(None, sensor[62]))
+        assert len(end.get_contents()) == len(end) == 1
+
+    def test_samples_after_an_unfollowed_selection(self):
+        """Samples counted after a selection no row can follow keep a superset."""
+        arc = np.array([0, 1, 3, 6, 10, 15, 21, 28, 36, 45], dtype=np.float64)
+        patch = dc.get_example_patch().select(distance=(0, 10), samples=True)
+        patch = patch.update_coords(distance=np.arange(10.0))
+        patch = patch.update_coords(
+            sensor=("distance", 1000 + 2 * np.arange(10.0)), arc=("distance", arc)
+        )
+        out = dc.spool([patch]).select(arc=(6, 28))
+        out = out.select(distance=(1, 3), samples=True)
+        _assert_contents_hold_patches(out, ["distance", "sensor", "arc"])
+        assert np.array_equal(out[0].get_array("sensor"), [1008, 1010])
+        assert len(out.select(sensor=(1007, 1011)).get_contents()) == 1
+
+    @pytest.mark.parametrize("first", [{"relative": True}, {}])
+    def test_samples_after_values(self, first):
+        """Samples counted after a value or relative selection hold what loads."""
+        spool = self._spool(sensor=lambda x: 1000.0 + 2 * x)
+        out = spool.select(distance=(10.5, 40.2), **first)
+        for name in ("distance", "sensor"):
+            again = out.select(**{name: (3, -4)}, samples=True)
+            _assert_contents_hold_patches(again, ["distance", "sensor"])
+
+    def test_two_coordinates_in_one_call(self):
+        """Two coordinates named together are both cut, in either order."""
+        spool = self._spool(sensor=lambda x: 1000.0 + 2 * x)
+        bounds = {"sensor": (1021, 1099), "distance": (15.5, 30.2)}
+        names = ["distance", "sensor"]
+        one = spool.select(**bounds)
+        other = spool.select(**dict(reversed(bounds.items())))
+        _assert_contents_hold_patches(one, names)
+        columns = [f"{x}_{end}" for x in names for end in ("min", "max")]
+        assert one.get_contents()[columns].equals(other.get_contents()[columns])
+        # neither is advertised past the range it was itself selected to
+        row = one.get_contents().iloc[0]
+        for name, (low, high) in bounds.items():
+            assert low <= row[f"{name}_min"] <= row[f"{name}_max"] <= high
+        # samples one of the two excluded are not advertised
+        assert len(one.select(distance=(40, 45)).get_contents()) == 0
+
+    @pytest.mark.parametrize("second", [(15, -15), (30, None)])
+    def test_relative_after_a_bound_in_doubt(self, second):
+        """A relative cut counts from whichever sample the bound left first."""
+        spool = self._spool(distance=lambda x: x * 1.0, sensor=lambda x: 1000.0 + 2 * x)
+        # 9.95 sits within a tenth of a step of sample 10, which may or may not
+        # be kept as far as the envelopes can tell
+        out = spool.select(distance=(9.95, 40)).select(distance=second, relative=True)
+        _assert_contents_hold_patches(out, ["distance", "sensor"])
+
+    def test_patch_without_the_rider(self):
+        """A patch lacking the rider leaves its neighbours' rows their own."""
+        base = dc.get_example_patch()
+        sensor = 1000.0 + 2 * np.arange(base.shape[base.get_axis("distance")])
+        duration = base.get_coord("time").max() - base.get_coord("time").min()
+        patches = []
+        for num in range(3):
+            shifted = base.update_coords(
+                time_min=base.get_coord("time").min() + 2 * num * duration
+            )
+            if num != 1:
+                shifted = shifted.update_coords(sensor=("distance", sensor))
+            patches.append(shifted)
+        out = dc.spool(patches).select(distance=(10, 20))
+        contents = out.get_contents()
+        assert len(contents) == 3
+        for (_, row), patch in zip(contents.iterrows(), out, strict=True):
+            if "sensor" not in patch.coords.coord_map:
+                assert pd.isna(row["sensor_min"])
+                continue
+            coord = patch.get_coord("sensor")
+            assert row["sensor_min"] <= coord.min() <= coord.max() <= row["sensor_max"]
+            assert row["sensor_max"] - row["sensor_min"] < 25
 
 
 class TestUnselect:
