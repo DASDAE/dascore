@@ -2295,7 +2295,11 @@ class Spool(NodeRepr, NamespaceOwner):
             msg = "chunk takes no fill_value: fill gaps first with Spool.fill_gaps"
             raise ParameterError(msg + ", eg spool.fill_gaps(time=10).chunk(time=60).")
         dim = next(iter(dim_kwargs), None)
-        if isinstance(fill := self._catalog, _PendingFill) and fill.dim == dim:
+        fill = self._catalog
+        # straight onto the files, unless a seam test of the caller's own
+        # joins the fill's outputs, as over the outputs themselves
+        own = params["tolerance"] is not None or params["max_shift"] is not None
+        if isinstance(fill, _PendingFill) and fill.dim == dim and not own:
             return fill.frames[0], fill.windows(params, dim_kwargs)
         source_rows, working = self._plan_frames(dim)
         plan = build_chunk_plan(working, **params, **dim_kwargs)

@@ -530,6 +530,21 @@ class TestSpoolFillGaps:
         expected = dc.spool([gappy_spool.fill_gaps("time")[0]]).chunk(time=4)
         assert [x.shape for x in chunked] == [x.shape for x in expected]
 
+    @pytest.mark.parametrize(
+        "kwargs", [{"tolerance": 3}, {"tolerance": 3, "max_shift": 0.01}]
+    )
+    def test_chunk_keeps_its_own_seam_test(self, kwargs):
+        """A chunk's tolerance and max_shift join the fill's outputs, as filled."""
+        spool = random_spool(time_gap=np.timedelta64(6, "ms"), length=3)
+        filled = spool.fill_gaps(time=0.001)
+        with suppress_warnings(UserWarning):
+            got = filled.chunk(time=None, **kwargs)
+            want = dc.spool(list(filled)).chunk(time=None, **kwargs)
+        assert len(got) == len(want) == 1
+        for out, expected in zip(got, want, strict=True):
+            assert out.get_coord("time") == expected.get_coord("time")
+            np.testing.assert_array_equal(out.data, expected.data)
+
     def test_window_reads_only_the_members_it_reaches(self, gappy_spool):
         """Loading a window reads the files it reaches, not the whole stretch."""
         filled = gappy_spool.fill_gaps("time")
