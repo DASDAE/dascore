@@ -19,6 +19,7 @@ from dascore.io.index.planned import (
     _aux_coord_info,
     _coord_record_from_row,
     _ns,
+    _record_once,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -417,6 +418,26 @@ class TestWindowedRiders:
         advertised, loaded = _bounds(out.get_contents(), out, "sensor")
         assert advertised == [(1000.0, 1598.0)]
         assert loaded == [(1036.0, 1098.0)]
+
+
+class TestRecordOnce:
+    """Outputs stating one coordinate share the record built for it."""
+
+    def test_same_cells_share_a_record(self):
+        """A second row with the same cells reuses the first's record."""
+        cache = {}
+        row = {"distance_min": 10.0, "distance_max": 20.0, "distance_step": 1.0}
+        first = _record_once(cache, row, "distance")
+        assert _record_once(cache, dict(row), "distance") is first
+        assert first == _coord_record_from_row(row, "distance")
+
+    def test_negative_zero_is_its_own_cell(self):
+        """-0.0 equals 0.0 but is keyed apart, as its bits differ."""
+        cache = {}
+        row = {"distance_min": 0.0, "distance_max": 20.0, "distance_step": 1.0}
+        _record_once(cache, row, "distance")
+        _record_once(cache, {**row, "distance_min": -0.0}, "distance")
+        assert len(cache) == 2
 
 
 class TestAuxInfoEdges:

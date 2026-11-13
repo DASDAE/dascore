@@ -543,6 +543,28 @@ def _with_windowed_dims(outputs: pd.DataFrame, aux_info, plan_dim: str):
     return outputs
 
 
+def _cell_key(value):
+    """A cell as a cache key: a float by its bits, so -0.0 is not 0.0."""
+    return value.hex() if isinstance(value, float) else (type(value), value)
+
+
+def _record_once(cache: dict, row: Mapping, name: str, **kwargs):
+    """
+    `_coord_record_from_row`, built once per distinct coordinate.
+
+    Outputs cut to the same window state the same coordinate, and
+    rebuilding a range's identity is the costly part. Records are frozen,
+    so outputs can share one. The key is every cell the record reads.
+    """
+    cells = [row.get(f"{name}_{x}") for x in ("min", "max", "step")]
+    cells += [row.get(f"_{name}_{x}") for x in ("units", "coord_dtype", "def_key")]
+    cells += [row.get(f"_{name}_grid")]
+    key = (name, *sorted(kwargs.items()), *map(_cell_key, cells))
+    if key not in cache:
+        cache[key] = _coord_record_from_row(row, name, **kwargs)
+    return cache[key]
+
+
 def _output_records(
     outputs: pd.DataFrame,
     token: str,
@@ -571,6 +593,7 @@ def _output_records(
     }
     base_names |= {"time", "distance"}  # fixed patches-table envelopes
     envelope_cache: dict[tuple, set[str]] = {}
+    coord_cache: dict[tuple, CoordRecord | None] = {}
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
         dims = str(row.get("dims") or "")
@@ -578,7 +601,7 @@ def _output_records(
         aux = aux_info.get(output_id, {})
         coords = []
         for name in dim_names:
-            record = _coord_record_from_row(row, name, planned=name == plan_dim)
+            record = _record_once(coord_cache, row, name, planned=name == plan_dim)
             if record is not None:
                 coords.append(record)
         # auxiliary (non-dimension) coordinates remain on the assembled
@@ -586,8 +609,8 @@ def _output_records(
         for name, info in aux.items():
             if name in dim_names:
                 continue
-            record = _coord_record_from_row(
-                info, name, dims=info["dims"], name_is_held=True
+            record = _record_once(
+                coord_cache, info, name, dims=info["dims"], name_is_held=True
             )
             if record is not None:
                 coords.append(record)
