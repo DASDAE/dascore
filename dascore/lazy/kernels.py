@@ -10,9 +10,9 @@ some other kernel, so it does not count -- then:
   handed the lazy array: refuses, before anything is read;
 - [`Unchanged`](`dascore.lazy.contract.Unchanged`): hands the data back, so
   the operation is the same no-op it is on data in memory;
-- [`Pointwise`](`dascore.lazy.contract.Pointwise`): appends the operation
-  to the chain, pending until the operation settles it with the shape,
-  dtype and `data_id` of what it made.
+- any other contract: appends the operation to the chain, pending until
+  the operation settles it with the shape, dtype and `data_id` of what it
+  made.
 
 [`PatchProcessor.kernel_for`](`dascore.core.processor.PatchProcessor.kernel_for`)
 answers with it for the lazy backend.
@@ -51,7 +51,7 @@ from typing import Any
 from dascore.core.processor import PatchProcessor, _computes
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
-from dascore.lazy.contract import Pointwise, Unchanged
+from dascore.lazy.contract import ChunkContract, Unchanged
 from dascore.utils.array_api import lazy_refusal
 
 
@@ -77,9 +77,9 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     contract = _contract(processor, data.dtype, plan)
     if isinstance(contract, Unchanged):
         return data
-    if isinstance(contract, Pointwise):
+    if isinstance(contract, ChunkContract):
         return data._appended(Node(processor, plan, contract))
-    # No contract, or one nothing here runs yet: refused, and nothing read.
+    # No contract: refused, and nothing read.
     raise lazy_refusal(processor.name or type(processor).__name__)
 
 
