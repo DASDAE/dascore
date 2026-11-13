@@ -1268,12 +1268,20 @@ class Patch(NamespaceOwner, PatchMeta):
         phase_velocities: Sequence[float],
         approx_resolution: float | None = None,
         approx_freq: tuple[float, float] | None = None,
+        time_dim: str | None = None,
+        distance_dim: str = "distance",
+        source_distance: float | Quantity | None = None,
+        normalize: Literal["phase"] | None = "phase",
     ) -> Self:
         """Compute dispersion images using the phase-shift method."""
         return transform.DispersionPhaseShift(
             phase_velocities=phase_velocities,
             approx_resolution=approx_resolution,
             approx_freq=approx_freq,
+            time_dim=time_dim,
+            distance_dim=distance_dim,
+            source_distance=source_distance,
+            normalize=normalize,
         ).run(self)
 
     def tau_p(self, velocities: NDArray[np.floating]) -> Self:
