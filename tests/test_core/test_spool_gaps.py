@@ -934,6 +934,21 @@ class TestConcatenatedRuns:
         assert got == [x.get_coord("x").values.tolist() for x in rebuilt]
         assert len(got) == 3
 
+    def test_chunk_counts_each_segment_from_its_first_label(self):
+        """A segment off the grid of the one before is windowed on its own."""
+        step = 4 * ONE_MS
+        segments = [
+            get_coord(start=T0, step=step, shape=(5,)),
+            get_coord(start=T0 + 10 * step + ONE_MS, step=step, shape=(5,)),
+        ]
+        # a dimension not named time, whose index states no step as None
+        coords = {"x": concat_coords(*segments)}
+        patch = dc.Patch(data=np.arange(10.0), coords=coords, dims=("x",))
+        merged = dc.spool([patch]).concatenate(x=None)
+        got = merged.chunk(x=2 * step, keep_partial=True)
+        want = dc.spool([patch]).chunk(x=2 * step, keep_partial=True)
+        assert [x.get_coord("x") for x in got] == [x.get_coord("x") for x in want]
+
     def test_concatenating_chunks_keeps_each_sample_once(self):
         """Members a plan trimmed load trimmed, so no sample repeats."""
         spool = dc.get_example_spool("random_das")

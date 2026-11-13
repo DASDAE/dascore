@@ -3824,8 +3824,8 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
         mask = families == family
         lo, hi = _coerce(starts[mask], family), _coerce(stops[mask], family)
         step = steps[mask]
-        if family == "number":
-            step = pd.to_numeric(step)
+        # a member of segments states no step, None in a column of objects
+        step = pd.to_numeric(step) if family == "number" else pd.to_timedelta(step)
         ascending = _directions(step) >= 0
         forward = (lo == hi.shift(1) + step).to_numpy()
         backward = (hi == lo.shift(1) + step).to_numpy()
