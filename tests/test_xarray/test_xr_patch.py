@@ -180,7 +180,7 @@ class TestCFUnits:
             patch = xarray_to_patch(array)
         assert patch.get_coord("distance").units is None
 
-    @pytest.mark.parametrize("units", ["degrees_Celsius", "()", "1/0", "m/0"])
+    @pytest.mark.parametrize("units", ["not_a_unit", "()", "1/0", "m/0"])
     def test_unknown_data_units_kept(self, xr, random_patch, units):
         """Data units that cannot be parsed warn and stay a plain attr."""
         array = patch_to_xarray(random_patch).assign_attrs(units=units)
@@ -189,6 +189,12 @@ class TestCFUnits:
         assert patch.attrs.data_units is None
         assert patch.attrs.model_dump()["units"] == units
         assert record[0].filename == __file__
+
+    def test_cf_celsius_data_units(self, xr, random_patch):
+        """The CF spelling degrees_Celsius reads as degrees Celsius."""
+        array = patch_to_xarray(random_patch).assign_attrs(units="degrees_Celsius")
+        patch = xarray_to_patch(array)
+        assert patch.attrs.data_units == dc.get_quantity("degC")
 
     def test_edited_units_win(self, xr, units_patch):
         """An edited ``units`` overrides the ``data_units`` it disagrees with."""

@@ -19,6 +19,8 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.patch_meta import PatchMeta, _as_dtype
 from dascore.core.processor import check_patch_listings
 from dascore.core.source import ArraySource
+from dascore.lazy.array import LazyArray
+from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
 from dascore.proc.tile_apply import TileApply
@@ -49,6 +51,11 @@ from dascore.utils.identity import (
     operation_context,
 )
 from dascore.utils.namespace import NamespaceOwner
+
+
+def _is_lazy(data) -> bool:
+    """Whether an array's values are read only when asked for."""
+    return isinstance(data, LazyArray) or backend_name(data) == "dask"
 
 
 def _handed_array_attrs(attrs):
@@ -109,6 +116,21 @@ class Patch(NamespaceOwner, PatchMeta):
     Coords and a dtype describe data without holding any, which is a
     [`PatchMeta`](`dascore.PatchMeta`); see
     [`drop_data`](`dascore.Patch.drop_data`).
+
+    NumPy ufuncs and most NumPy functions take patches and return patches,
+    with coordinates following the data:
+
+    - Reductions such as `np.mean(patch, axis=1)` keep the reduced dimension
+      at length one, with or without `keepdims`.
+    - `np.transpose`, `np.swapaxes`, `np.squeeze` and the `np.flip` family
+      call the matching patch methods.
+    - `np.diff` labels each difference with the midpoint of its two samples,
+      drops coordinates that depend on that dimension, and refuses
+      `prepend` and `append`.
+    - `np.gradient` returns one patch per axis.
+    - `np.sort`, `np.argsort`, `np.partition` and `numpy.fft` functions raise
+      a `ParameterError`; apply them to `patch.data`, or use
+      [`dft`](`dascore.Patch.dft`).
     """
 
     data: ArrayLike
@@ -158,6 +180,10 @@ class Patch(NamespaceOwner, PatchMeta):
                 "coords and a dtype alone describe data, which is a PatchMeta."
             )
             raise ValueError(msg)
+        # A recipe is data nothing has been done to yet. Held bare it would
+        # read as numpy, and every operation would load it unasked.
+        if isinstance(data, Recipe):
+            data = LazyArray(data)
         data = array(data)
         coords = get_coord_manager(coords, dims=dims, shape=data.shape)
         data = array(coords.validate_data(data))
@@ -346,6 +372,38 @@ class Patch(NamespaceOwner, PatchMeta):
         # drops the data and fills them again keeps a subclass.
         out._patch_type = type(self)
         return out
+
+    def load(self) -> Self:
+        """
+        Return the patch with its data read into memory, keeping its id.
+
+        A patch whose data are already in memory is handed back as it is.
+        Otherwise its array is read, and every operation pending on it is
+        run, and the result holds that array under the same attrs and
+        `data_id`: the array read is the one the patch described.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.lazy.recipe import Recipe
+        >>>
+        >>> recipe = Recipe.from_source(ArraySource.full((3, 2), 1.0))
+        >>> lazy = dc.Patch(data=recipe, coords={"x": range(3), "y": range(2)},
+        ...                 dims=("x", "y"))
+        >>> loaded = lazy.load()
+        >>> assert loaded.attrs.data_id == lazy.attrs.data_id
+        >>> assert loaded.backend == "numpy" and loaded.load() is loaded
+        """
+        data = self._data
+        if not _is_lazy(data):
+            return self
+        # Inside an operation, so the attrs are taken to describe the array.
+        with operation_context():
+            # A lazy array loads itself, so an error from one of its steps
+            # is the one raised.
+            lazy = isinstance(data, LazyArray)
+            return self.update(data=data.load() if lazy else to_numpy(data))
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

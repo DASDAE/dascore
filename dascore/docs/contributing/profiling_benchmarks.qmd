@@ -17,7 +17,7 @@ Add a benchmark for substantial new behavior and investigate reported regression
 Profile a specific benchmark with `pytest-profiling`, then inspect the generated `.prof` file with [SnakeViz](https://jiffyclub.github.io/snakeviz/):
 
 ```bash
-pip install snakeviz
+uv pip install snakeviz
 pytest benchmarks/test_patch_benchmarks.py::TestProcessingBenchmarks::test_pass_filter --profile
 snakeviz prof/test_pass_filter_performance.prof
 ```

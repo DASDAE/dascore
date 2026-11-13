@@ -47,7 +47,7 @@ from dascore.utils.chunk_plan import (
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.gaps import GapTolerance
-from dascore.utils.misc import get_middle_value, suppress_warnings
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import _get_merged_coord
 from dascore.utils.patch_assembly import (
     PatchAssembler,
@@ -55,6 +55,7 @@ from dascore.utils.patch_assembly import (
     _match_merge_units,
 )
 from dascore.utils.time import to_int, to_timedelta64
+from dascore.warnings import DASCoreWarning
 from tests.conftest import join_patches
 
 
@@ -174,10 +175,8 @@ class TestChunk:
         duration = contents["time_max"] - contents["time_min"]
         dt = contents["time_step"]
         full = ((duration + dt) / dc.to_timedelta64(1)) >= 10
-        # only the window drawing on overlapping sources off each other's
-        # grid is a sample short of its length
-        assert (~full).sum() == 1
-        assert (((duration + 2 * dt)[~full] / dc.to_timedelta64(1)) >= 10).all()
+        # windows are cut from each stretch's one grid, so every one is full
+        assert full.all()
 
     def test_small_segments_with_partial(self, diverse_spool):
         """Test issue #262 with partials."""
@@ -442,8 +441,9 @@ class TestChunkMerge:
         assert pa1 == pa2
 
     def test_merge_monotonic_no_overlap(self, adjacent_spool_monotonic):
-        """Ensure monotonic coords can merge."""
-        sp = adjacent_spool_monotonic.chunk(time=...)
+        """Monotonic coords with no step merge across a seam only by distance."""
+        assert len(adjacent_spool_monotonic.chunk(time=...)) == 2
+        sp = adjacent_spool_monotonic.chunk(time=..., tolerance=dc.to_timedelta64(0.3))
         assert len(sp) == 1
         pa = sp[0]
         assert isinstance(pa, dc.Patch)
@@ -522,11 +522,11 @@ class TestChunkMerge:
         assert not np.any(pd.isnull(pa.coords.get_array("distance")))
 
     def test_merge_patches_close_dt(self, memory_spool_small_dt_differences):
-        """Slightly different dt values should still merge."""
+        """Slightly different dt values merge onto the roundest which fits."""
         old_spool = memory_spool_small_dt_differences
         new_spool = old_spool.chunk(time=None)
         old_contents = old_spool.get_contents()
-        time_step_expected = get_middle_value(old_contents["time_step"])
+        time_step_expected = old_contents["time_step"].min()  # exactly 4 ms
         assert len(new_spool) == 1
         # need to iterate to make sure patch can be loaded.
         for patch in new_spool:
@@ -546,8 +546,11 @@ class TestChunkMerge:
         patches = patches_2 + patches_1
         random.shuffle(patches)  # mix the patches, ensure order isnt required.
         new_spool = dc.spool(patches).chunk(time=None)
-        assert len(new_spool) == 2
+        # the coarse patches overlap off one another's grid, so each one's
+        # samples past the one before start a stretch of their own
         time_steps = new_spool.get_contents()["time_step"]
+        assert len(new_spool) == 1 + len(patches_2)
+        assert (time_steps == time_steps.min()).sum() == 1
         for patch, time_step in zip(new_spool, time_steps):
             diff = np.abs(patch.coords["time"].step - time_step)
             assert diff / time_step < 0.01
@@ -566,11 +569,16 @@ class TestChunkMerge:
         )
 
     def test_perturbed_dt(self, spool_dt_perturbed):
-        """Ensure patches still merge if dt is slightly off."""
+        """Patches starting together with slightly different dts keep each sample once.
+
+        The first holds its samples; each later one's samples past the
+        furthest so far are too soon to join it, so they start stretches.
+        """
         out = spool_dt_perturbed.chunk(time=...)
-        assert len(out) == 1
-        for patch in out:
-            assert isinstance(patch, dc.Patch)
+        first = min(spool_dt_perturbed, key=lambda x: x.get_coord("time").step)
+        assert out[0].get_coord("time") == first.get_coord("time")
+        labels = np.concatenate([x.get_array("time") for x in out])
+        assert np.all(np.diff(labels) > np.timedelta64(0))
 
     def test_merge_select(self, adjacent_spool_no_overlap):
         """Ensure spools can be merged *then* selected."""
@@ -603,6 +611,50 @@ class TestChunkMerge:
         out = dc.spool([p1, p2]).chunk(time=None, conflict="drop")
         assert len(out) == 1
         assert out[0].attrs.data_type == ""
+
+    def test_conflicting_coordinate_follows_conflict(self, channel_conflict_pair):
+        """
+        A non-dimensional coordinate on another dimension which differs
+        between members follows `conflict`: raise, keep the first patch's,
+        or drop it, the loosened policies warning by name at the caller.
+        """
+        first, _ = channel_conflict_pair
+        spool = dc.spool(list(channel_conflict_pair))
+        with pytest.raises(CoordMergeError, match="channel"):
+            spool.chunk(time=None)
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] kept") as record:
+            kept = spool.chunk(time=None, conflict="keep_first")[0]
+        assert record[0].filename == __file__
+        assert np.array_equal(kept.get_array("channel"), first.get_array("channel"))
+        assert kept.shape[1] == 2 * first.shape[1]
+        with pytest.warns(DASCoreWarning, match=r"\['channel'\] dropped"):
+            dropped = spool.chunk(time=None, conflict="drop")[0]
+        assert "channel" not in dropped.coords.coord_map
+
+    def test_drop_required_subclass_attr(self):
+        """
+        Dropping a conflicting attr a PatchAttrs subclass requires returns a
+        merged patch rather than a validation error.
+        """
+
+        class _Attrs(dc.PatchAttrs):
+            start_channel: int
+
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        first = patch.update(attrs=_Attrs(**dict(patch.attrs), start_channel=0))
+        second = first.update_coords(time_min=time.max() + time.step)
+        second = second.update(
+            attrs=_Attrs(**{**dict(second.attrs), "start_channel": 1000})
+        )
+        spool = dc.spool([first, second])
+        kept = spool.chunk(time=None, conflict="keep_first")[0]
+        assert kept.attrs.start_channel == 0
+        out = spool.chunk(time=None, conflict="drop")
+        assert len(out) == 1
+        merged = out[0]
+        assert merged.shape[1] == 2 * patch.shape[1]
+        assert "start_channel" not in dict(merged.attrs)
 
     def test_surviving_member_takes_the_rows_attrs(self):
         """Whichever duplicate survives overlap removal, patch and row agree."""
@@ -809,10 +861,14 @@ class TestChunkMerge:
             out = dc.spool((base, patch_w_gap)).chunk(time=None)
         assert len(out) == 2
 
-        # Case 3: A tolerance alone keeps the hole; with a fill value they merge.
+        # Case 3: a tolerance spans the hole, refitting it (which warns) or
+        # filling it (which spreads no labels, so does not).
         spool = dc.spool((base, patch_w_gap))
-        assert len(spool.chunk(time=None, tolerance=10)) == 2
-        assert len(spool.chunk(time=None, tolerance=10, fill_value=np.nan)) == 1
+        with pytest.warns(UserWarning, match="gap"):
+            assert len(spool.chunk(time=None, tolerance=10)) == 1
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error")
+            assert len(spool.chunk(time=None, tolerance=10, fill_value=np.nan)) == 1
 
 
 def _bare_assembler():
@@ -967,11 +1023,18 @@ class TestDescendingChunk:
         np.testing.assert_allclose(patch.data[0], labels + tags)
 
     def test_length_windows_hold_each_sample_once(self, overlapping):
-        """A length window over the overlaps holds each of its samples once."""
-        patch = overlapping.chunk(time=5)[0]
+        """A length window over the overlaps holds each of its samples once.
+
+        Windows start at the stretch's first label, its top.
+        """
+        (patch,) = overlapping.chunk(time=5)
         labels = patch.get_coord("time").values
-        np.testing.assert_array_equal(labels, np.arange(4.0, -1, -1))
-        np.testing.assert_allclose(patch.data[0], labels + ([0.2] * 3 + [0.3] * 2))
+        np.testing.assert_array_equal(labels, np.arange(8.0, 3, -1))
+        np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 4 + [0.2]))
+        last = overlapping.chunk(time=5, keep_partial=True)[1]
+        labels = last.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(3.0, -1, -1))
+        np.testing.assert_allclose(last.data[0], labels + ([0.2] * 2 + [0.3] * 2))
 
     def test_overlaps_and_holes_fill(self):
         """A fill value bridges a hole beside trimmed descending overlaps."""
@@ -1003,10 +1066,15 @@ class TestDescendingChunk:
         np.testing.assert_allclose(patch.data[0], labels + 0.1)
 
     def test_stepless_members_keep_data_with_labels(self):
-        """Descending members with no step merge with data following labels."""
-        first = self._member([6.0, 5.5, 4.0, 3.0], 0.1)
-        second = self._member([2.5, 1.0, 0.0], 0.2)
-        patch = dc.spool([second, first]).chunk(time=None)[0]
+        """Descending members with no step merge with data following labels.
+
+        Pieces with no step join only under a distance tolerance.
+        """
+        first = self._member([6.0, 5.5, 4.0, 3.0], 0.1).set_units(time="s")
+        second = self._member([2.5, 1.0, 0.0], 0.2).set_units(time="s")
+        spool = dc.spool([second, first])
+        assert len(spool.chunk(time=None)) == 2
+        patch = spool.chunk(time=None, tolerance=get_quantity("1 s"))[0]
         labels = patch.get_coord("time").values
         np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5, 1.0, 0.0])
         np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 4 + [0.2] * 3))
@@ -1014,11 +1082,14 @@ class TestDescendingChunk:
     def test_stepless_single_sample_member_follows_labels(self):
         """A one-sample member states no direction; the others' order holds."""
         members = [
-            self._member(v, t) for v, t in (([6.0, 5.5, 4.0, 3.0], 0.1), ([2.5], 0.2))
+            self._member(v, t).set_units(time="s")
+            for v, t in (([6.0, 5.5, 4.0, 3.0], 0.1), ([2.5], 0.2))
         ]
         # an associated coordinate must follow the labels too
         members = [x.update_coords(aux=("time", x.data[0])) for x in members]
-        patch = dc.spool(members).chunk(time=None, conflict="drop")[0]
+        tolerance = get_quantity("1 s")  # pieces with no step join by distance
+        spool = dc.spool(members)
+        patch = spool.chunk(time=None, conflict="drop", tolerance=tolerance)[0]
         labels = patch.get_coord("time").values
         np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5])
         expected = labels + ([0.1] * 4 + [0.2])
@@ -1552,8 +1623,9 @@ class TestQuantityTolerance:
             ]
         )
         assert pd.isnull(spool.get_contents()["time_step"]).all()
-        # the sample count has no step to scale, so it merges blindly
-        assert len(spool.chunk(time=None)) == 1
+        # pieces with no step join only under a distance, so they split
+        assert len(spool.chunk(time=None)) == 2
+        assert len(spool.chunk(time=None, tolerance=100)) == 2
         assert len(spool.chunk(time=None, tolerance=get_quantity("0.5 s"))) == 2
         # and the merging side of the same branch, which needs no step
         with suppress_warnings(UserWarning):
@@ -1638,8 +1710,8 @@ class TestQuantityTolerance:
         # count is no bound on the snap, not a bound of NaT
         assert merged[0].get_coord("time").evenly_sampled
 
-    def test_looser_tolerance_keeps_default_breaks(self):
-        """Without fill_value a looser tolerance never closes a default break."""
+    def test_tolerance_widens_the_seam_test(self):
+        """A tolerance joins seams up to its width, beside those max_shift joins."""
         t0 = np.datetime64("2020-01-01T00:00:00", "ns")
         rng = np.random.default_rng(42)
 
@@ -1653,17 +1725,19 @@ class TestQuantityTolerance:
             return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
         # Steps within the sampling group tolerance, so all three patches
-        # share a cell; the holes are chosen so the default (1.5 steps) and
-        # an excess of 0.51 s over the step split at *different* boundaries.
+        # share a cell; both seams are wider than max_shift allows.
         first = _patch(t0, 1.0)
         second = _patch(first.get_coord("time").max() + to_timedelta64(1.505), 1.0)
         third = _patch(second.get_coord("time").max() + to_timedelta64(1.555), 1.04)
         spool = dc.spool([first, second, third])
-        default = spool.chunk(time=None)
-        absolute = spool.chunk(time=None, tolerance=get_quantity("0.51 s"))
-        assert len(default) == 2
-        # each tolerance breaks at its own boundary, and both breaks stand
-        assert len(absolute) == 3
+        assert len(spool.chunk(time=None)) == 3
+        # a width under one step joins nothing max_shift does not
+        assert len(spool.chunk(time=None, tolerance=get_quantity("0.51 s"))) == 3
+        # each width joins the seams up to it
+        assert len(spool.chunk(time=None, tolerance=get_quantity("1.53 s"))) == 2
+        with pytest.warns(UserWarning, match="gap"):
+            joined = spool.chunk(time=None, tolerance=get_quantity("1.6 s"))
+        assert len(joined) == 1
 
     def test_merge_uses_the_normalized_tolerance(self, random_spool):
         """The merge gets the tolerance the plan resolved, not the raw one.
@@ -1678,17 +1752,18 @@ class TestQuantityTolerance:
         # a dimensionless quantity is the sample count it spells out
         assert handed == GapTolerance.samples(2.0)
 
-    def test_snapping_never_relabels_across_a_hole(self, random_patch):
-        """However wide the tolerance, a hole is missing data, not a slower rate."""
+    def test_tolerance_refits_across_a_hole(self, random_patch):
+        """A tolerance spanning a hole spreads the labels evenly across it."""
         step = random_patch.get_coord("time").step
         spool = self._gapped(random_patch, 40)
-        snapped = spool.chunk(time=None, tolerance=41 * step)
-        exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)
-        # the hole stays a boundary, and every label keeps its source's value
-        assert len(snapped) == len(exact) == 2
-        for patches in zip(snapped, exact, spool, strict=True):
-            one, two, source = (x.get_coord("time") for x in patches)
-            assert one == two == source
+        assert len(spool.chunk(time=None)) == 2
+        with pytest.warns(UserWarning, match="gap"):
+            (joined,) = spool.chunk(time=None, tolerance=41 * step)
+        coord = joined.get_coord("time")
+        assert coord.evenly_sampled
+        assert len(coord) == sum(len(x.get_coord("time")) for x in spool)
+        assert coord.min() == min(x.get_coord("time").min() for x in spool)
+        assert coord.max() == max(x.get_coord("time").max() for x in spool)
 
     def test_snapping_still_absorbs_sub_sample_jitter(self, random_patch):
         """Labels a fraction of a step off the grid do collapse to a range."""
@@ -1699,22 +1774,21 @@ class TestQuantityTolerance:
             time_min=coord.max() + coord.step + offset
         ).update_attrs(history="")
         spool = dc.spool((base, after))
-        snapped = spool.chunk(time=None)[0].get_coord("time")
-        # without snapping the exact labels are kept, jitter and all
-        (exact,) = spool.chunk(time=None, snap_coords=False)
+        # a third of a step is over the default max_shift
+        assert len(spool.chunk(time=None)) == 2
+        snapped = spool.chunk(time=None, max_shift=0.4)[0].get_coord("time")
         assert snapped.evenly_sampled
-        assert exact.get_coord("time").runs_count == 2
-        values = exact.get_coord("time").values
-        # no sample moved far enough to land on another grid position,
-        # and none moved past the tolerance the merge was given either
+        assert snapped.step == coord.step
+        values = np.concatenate([x.get_array("time") for x in spool])
+        # no sample moved far enough to land on another grid position
         deviation = abs(snapped.values - values).max()
         assert deviation < coord.step
-        assert deviation <= 1.5 * coord.step
 
     def test_plan_records_normalized_tolerance(self, random_spool):
         """The plan records the tolerance it actually used."""
         plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2 s"))
-        assert plan.params["tolerance"] == GapTolerance.absolute(get_quantity("2 s"))
+        width = GapTolerance(excess=get_quantity("2 s"), seam=True)
+        assert plan.params["tolerance"] == width
         plan = random_spool.chunk_plan(time=None, tolerance=get_quantity("2"))
         assert plan.params["tolerance"] == GapTolerance.samples(2.0)
 
@@ -2052,7 +2126,9 @@ class TestChunkEdgeBetweenPatches:
         p2 = dc.get_example_patch(time_min=time.max() + 1.4 * time.step)
         span = (time.max() - time.min()) + 0.7 * time.step
         length = span / np.timedelta64(1, "s") / 2
-        out = dc.spool([p1, p2]).chunk(time=length)
+        # a seam of 1.4 steps joins only under a tolerance, which refits it
+        assert len(dc.spool([p1, p2]).chunk(time=None)) == 2
+        out = dc.spool([p1, p2]).chunk(time=length, tolerance=1.5)
         assert len(out) == 4
         coords = [patch.get_coord("time") for patch in out]
         # windows of a fractional number of samples hold whole ones
@@ -2120,11 +2196,21 @@ def _half_open_windows(whole, length, overlap):
     """
     The labels and data of ``whole`` inside each window [ref, ref + length).
 
-    After the first, a window is kept only when it holds a sample past the
-    end of the one before. A float label a rounding error short of an edge
-    is on it.
+    Windows run from the first label in the coordinate's order, its top
+    when descending. After the first, a window is kept only when it holds
+    a sample past the end of the one before. A float label a rounding
+    error short of an edge is on it.
     """
     x = whole.get_coord("x").values
+    if len(x) > 1 and x[0] > x[-1]:  # measured downward from the top
+        if x.dtype.kind != "M":
+            flipped = whole.update_coords(x=-x)
+            return [(-a, b) for a, b in _half_open_windows(flipped, length, overlap)]
+        ticks = x.astype("datetime64[ns]").view(np.int64)
+        flipped = whole.update_coords(x=-ticks)
+        length, overlap = (to_int(to_timedelta64(v or 0)) for v in (length, overlap))
+        windows = _half_open_windows(flipped, length, overlap or None)
+        return [((-a).view("datetime64[ns]"), b) for a, b in windows]
     as_time = x.dtype.kind == "M"
     length = to_timedelta64(length) if as_time else length
     stride = length - (to_timedelta64(overlap or 0) if as_time else overlap or 0)
@@ -3514,7 +3600,7 @@ class TestRecipeMerge:
         start = np.datetime64("2020-01-01") + STEP * (8 + gap)
         second = self._patch(start, 8, seed=2)
         spool = self._write(tmp_path, [first, second])
-        assert len(spool.chunk(time=None, tolerance=10)) == 2
+        assert len(spool.chunk(time=None)) == 2
         merged = spool.chunk(time=None, tolerance=10, fill_value=fill)
         assert len(merged) == 1
         out = merged[0]
@@ -3591,9 +3677,15 @@ class TestChunkFillValue:
         source = np.concatenate([first.data, second.data], axis=1)
         assert np.array_equal(merged.data[:, kept], source)
 
-    def test_merge_without_fill_value_keeps_the_hole(self, gapped_spool):
-        """Without one the hole stays a boundary, however wide the tolerance."""
-        assert len(gapped_spool.chunk(time=None, tolerance=10)) == 2
+    def test_merge_without_fill_value_refits_the_hole(self, gapped_spool):
+        """Without one the tolerance closes the hole by spreading the labels."""
+        assert len(gapped_spool.chunk(time=None)) == 2
+        with pytest.warns(UserWarning, match="gap"):
+            (merged,) = gapped_spool.chunk(time=None, tolerance=10)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled
+        assert len(coord) == sum(len(x.get_coord("time")) for x in gapped_spool)
+        assert not np.isnan(merged.data).any()
 
     def test_fill_value_does_not_widen_the_tolerance(self, gapped_spool):
         """A hole the tolerance does not span is still a boundary."""
@@ -3627,8 +3719,8 @@ class TestChunkFillValue:
         assert after.shape == before.shape
         assert np.array_equal(after.data, before.data, equal_nan=True)
 
-    def test_hole_is_kept_when_steps_differ_slightly(self, random_patch):
-        """Steps too close to tell apart are still not licence to close a hole."""
+    def test_hole_is_spread_when_steps_differ_slightly(self, random_patch):
+        """Steps too close to tell apart join; a tolerance spreads over the hole."""
         coord = random_patch.get_coord("time")
         first = random_patch.select(time=(0, 100), samples=True)
         second = random_patch.select(time=(110, ...), samples=True)
@@ -3637,11 +3729,16 @@ class TestChunkFillValue:
             coords=second.coords.update(time_step=coord.step + to_timedelta64(1e-9))
         )
         spool = dc.spool([first, nudged])
-        pieces = spool.chunk(time=None, tolerance=20)
-        # the pathology was one range whose step was stretched over the hole
+        pieces = spool.chunk(time=None)
         assert [x.get_coord("time").step for x in pieces] == [
             x.get_coord("time").step for x in spool
         ]
+        # as released, a tolerance spanning the hole stretches the step over it
+        with pytest.warns(UserWarning, match="gap"):
+            (joined,) = spool.chunk(time=None, tolerance=20)
+        time = joined.get_coord("time")
+        assert time.evenly_sampled and time.step > coord.step
+        assert len(time) == sum(len(x.get_coord("time")) for x in spool)
 
     @staticmethod
     def _two_members(step, second_offset_ns, count=3):
@@ -3703,8 +3800,9 @@ class TestChunkFillValue:
     def test_absolute_tolerance_fills(self, gapped_spool, random_patch):
         """A tolerance stated in the coordinate's own units bounds the fill."""
         step = random_patch.get_coord("time").step
+        # the tolerance is the seam's width: the hole and the step after it
         wide = gapped_spool.chunk(
-            time=None, tolerance=self.hole * step, fill_value=np.nan
+            time=None, tolerance=(self.hole + 1) * step, fill_value=np.nan
         )[0]
         assert len(self._fill_positions(wide)) == self.hole
         # a hole wider than the tolerance is left as a boundary
@@ -3771,12 +3869,23 @@ class TestChunkFillWindows:
             assert coord.min() == row.time_min
             assert coord.max() == row.time_max
 
-    def test_windows_are_dropped_without_a_fill_value(self, spool_and_tolerance):
-        """The plan only publishes an output no source feeds when it can fill it."""
+    def test_every_window_has_a_source_without_a_fill_value(self, spool_and_tolerance):
+        """
+        Without a fill value no window is published that no source feeds:
+        the hole splits the stretch, or tolerance spreads labels over it.
+        """
         spool, tolerance = spool_and_tolerance
-        with suppress_warnings(UserWarning):
+        plan = spool.chunk_plan(time=1)
+        assert len(plan.outputs) == 4
+        assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
+        # a tolerance alone spreads the two over the hole, 1001 samples over
+        # 7.996 s, so every window has a source to draw from
+        with pytest.warns(UserWarning, match="was used to force merging"):
+            plan = spool.chunk_plan(time=1, tolerance=tolerance)
             plain = spool.chunk(time=1, tolerance=tolerance)
-        assert len(plain) == 4
+        assert len(plan.outputs) == len(plain) == 8
+        assert set(plan.members["output_id"]) == set(plan.outputs["output_id"])
+        assert {x.get_coord("time").step for x in plain} == {np.timedelta64(7996, "us")}
 
     def test_streaming_merge_fills(self, random_patch, tmp_path_factory):
         """The index-backed merge streams into a buffer; it fills too."""
@@ -4584,7 +4693,7 @@ class TestStoredDatetimeUnit:
         length = to_timedelta64(8)
         fast = list(spool.chunk(time=length))
         monkeypatch.setattr(
-            planned.PlanResolver, "_sources_unchanged", lambda self, rows: False
+            planned.PlanResolver, "_sources_unchanged", lambda self, rows, **_: False
         )
         stale = list(spool.chunk(time=length))
         for one, other in zip(fast, stale, strict=True):
@@ -4700,10 +4809,9 @@ class TestTrimmedRecipeMerge:
         memory = list(dc.spool(patches).chunk(**kwargs))[1]
         assert np.array_equal(out.data, memory.data)
         assert out.coords == memory.coords
-        # the second window is [1.1, 2.2); on their sources' float32 grids the
-        # samples labelled 1.1 and 2.2 sit just below each edge, so 11 falls
-        # to the first window and 22 stays
-        assert out.data.tolist() == list(range(12, 23))
+        # the second window is [1.1, 2.2): eleven steps of the stretch's
+        # grid from its first label, so it holds positions 11 through 21
+        assert out.data.tolist() == list(range(11, 22))
 
     def test_an_integer_coordinate_trims_on_its_own_grid(self, tmp_path, route):
         """A chunk edge between integer samples keeps only what it names."""
@@ -4960,7 +5068,7 @@ class TestTrimmedRecipeMerge:
         _rewrite_dasdae(path, flat)
         # the stat check would catch this first; the fallback is what is tested
         monkeypatch.setattr(
-            planned.PlanResolver, "_sources_unchanged", lambda self, rows: True
+            planned.PlanResolver, "_sources_unchanged", lambda self, rows, **_: True
         )
         with pytest.raises(ValueError, match="axes"):
             spool.chunk(time=None)[0]
@@ -5322,27 +5430,34 @@ class TestChunkMergeRegressions:
         return dc.Patch(data=seconds, coords={"time": coord}, dims=("time",))
 
     @staticmethod
-    def _merged_seconds(patches, spool):
-        """The merged labels in seconds, and every member's own, sorted."""
-        (merged,) = spool.chunk(time=None)
-        seconds = (merged.get_array("time") - ORIGIN) / np.timedelta64(1, "s")
+    def _chunked_seconds(patches, spool):
+        """Each output's labels in seconds, and every member's own, sorted."""
+        chunked = list(spool.chunk(time=None))
+        seconds = [
+            (x.get_array("time") - ORIGIN) / np.timedelta64(1, "s") for x in chunked
+        ]
         expected = np.sort(np.concatenate([x.data for x in patches]))
-        return merged, seconds, expected
+        return chunked, seconds, expected
 
     @pytest.mark.parametrize("shot_step", [321, None])
     def test_crowded_samples_keep_their_labels(self, merge_spool, shot_step):
-        """Test shots inside one step of a stream join it at their own times."""
-        # A DTS stream sampled every 321 s, three one-shot test files, then
-        # the stream again; no seam is a whole step, so none can be snapped.
-        # A shot may state the stream's step, or none at all.
+        """Test shots inside one step of a stream keep their own times.
+
+        No seam is within max_shift of a step, so each shot, and the stream
+        after them, starts a stretch of its own, and no label moves. A shot
+        may state the stream's step, or none at all.
+        """
         patches = [
             self._seconds_patch(-9 * 321, 10, 321),
             *(self._seconds_patch(x, 1, shot_step) for x in (197, 225, 260)),
             self._seconds_patch(348, 10, 321),
         ]
-        merged, seconds, expected = self._merged_seconds(patches, merge_spool(patches))
-        np.testing.assert_array_equal(seconds, expected)
-        np.testing.assert_array_equal(merged.data, expected)
+        spool = merge_spool(patches)
+        chunked, seconds, expected = self._chunked_seconds(patches, spool)
+        assert len(chunked) == 5
+        np.testing.assert_array_equal(np.concatenate(seconds), expected)
+        data = np.concatenate([x.data for x in chunked])
+        np.testing.assert_array_equal(data, expected)
 
     def test_lone_sample_does_not_bridge_a_gap(self, merge_spool):
         """A step-less sample far from a stream is measured by its step."""
@@ -5413,13 +5528,15 @@ class TestChunkMergeRegressions:
         assert adopted == {pd.Timedelta(1.02, unit="s")}
 
     def test_off_grid_samples_stay_in_order(self, merge_spool):
-        """Snapping lone samples moves no label past its tolerance or order."""
+        """Lone samples off a stream's grid start stretches; no label moves."""
         patches = [
             self._seconds_patch(0, 10),
             *(self._seconds_patch(x, 1) for x in (93, 95)),
             self._seconds_patch(100, 10),
         ]
-        merged, seconds, expected = self._merged_seconds(patches, merge_spool(patches))
-        assert np.all(np.diff(seconds) > 0)
-        assert np.max(np.abs(seconds - expected)) <= 15
-        np.testing.assert_array_equal(merged.data, expected)
+        spool = merge_spool(patches)
+        chunked, seconds, expected = self._chunked_seconds(patches, spool)
+        assert len(chunked) == 4
+        np.testing.assert_array_equal(np.concatenate(seconds), expected)
+        data = np.concatenate([x.data for x in chunked])
+        np.testing.assert_array_equal(data, expected)

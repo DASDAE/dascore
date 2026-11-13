@@ -6,7 +6,7 @@ import functools
 import inspect
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
 import pandas as pd
@@ -40,6 +40,7 @@ from dascore.utils.array_api import (
     backend_name,
     is_foreign,
     is_numpy,
+    refuse_lazy,
     to_numpy,
     warn_numpy_fallback,
 )
@@ -50,7 +51,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -403,6 +404,12 @@ def _to_numpy_arg(obj):
     return obj
 
 
+def _operand_arrays(args, kwargs=None):
+    """Yield every operand, a patch as its data."""
+    for value in (*args, *(kwargs or {}).values()):
+        yield value.data if isinstance(value, dc.Patch) else value
+
+
 def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
     """
     Apply a function numpy can perform but the patch's backend cannot.
@@ -426,7 +433,14 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
         Keyword arguments for func; patches and arrays are converted.
     stacklevel
         The stack level, as understood by warnings.warn, of the caller.
+
+    Raises
+    ------
+    LazyOperationError
+        If any operand is lazy: converting it would read it, which the lazy
+        backend never does behind the caller's back.
     """
+    refuse_lazy(name, (data, *_operand_arrays(args, kwargs)))
     warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
     # Crossing the backend boundary is part of the operation being applied,
     # not data replacement: the same values are the same data, and what
@@ -638,31 +652,36 @@ def _get_merge_dim(df) -> str | None:
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
+    tolerance = merge_kwargs.pop("tolerance", None)
     coord_kwargs = {
-        "snap_coords": merge_kwargs.pop("snap_coords", True),
-        "tolerance": merge_kwargs.pop("tolerance", 1.5),
+        "tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance,
+        # attrs and conflicting non-dimensional coords share one policy
+        "conflict": merge_kwargs.get("conflict") or "raise",
     }
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
+    merge_kwargs.pop("max_shift", None)  # the plan's, which names the merge
     return merge_kwargs, coord_kwargs
 
 
 def _get_merged_coord(
-    df, merge_dim, coords, drop_conflicting=False, snap_coords=True, tolerance=1.5
+    df, merge_dim, coords, tolerance=DEFAULT_TOLERANCE, fuse=True, **kwargs
 ):
     """
     Get merged coordinates for patches combined along merge_dim.
 
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
-    a plain range; recorded seams otherwise), then — when `snap_coords` —
-    simplified with bounded error: no value moves more than the tolerance
-    allows, `tolerance` steps for a count or the excess itself for a
-    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
-    members' own step is kept, so a merge across a hole (only where a
-    caller bridges holes, as `to_xarray` does) stays segmented rather than
-    being relabeled at a slower rate.
+    a plain range; recorded seams otherwise), then, if ``fuse`` (a chunk
+    plan keeping a stretch's labels says not), simplified with bounded
+    error: no value moves
+    more than the tolerance allows, `tolerance` steps for a count or the
+    excess itself for a quantity or timedelta (see
+    `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
+    A chunk output whose stretch has a grid then takes its labels from
+    that grid (see `dascore.utils.patch_assembly.on_stretch_grid`).
+    `kwargs` go to `merge_coord_managers`.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -671,21 +690,17 @@ def _get_merged_coord(
     except CoordError:
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
         # fall back to raw value concatenation of the dim coord.
-        return merge_coord_managers(
-            coords, dim=merge_dim, drop_conflicting=drop_conflicting
-        )
-    if snap_coords:
+        return merge_coord_managers(coords, dim=merge_dim, **kwargs)
+    if fuse:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
-    return merge_coord_managers(
-        coords, dim=merge_dim, drop_conflicting=drop_conflicting, dim_coord=merged
-    )
+    return merge_coord_managers(coords, dim=merge_dim, dim_coord=merged, **kwargs)
 
 
-def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
+def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     """
     Force a merge of the patches along a dimension.
 
@@ -712,12 +727,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    # Determine if conflicting non-dimensional coords should be dropped.
-    conf = attr_kwargs.get("conflict", None)
-    drop_conf_coords = True if conf in {"drop", "keep_first"} else False
-    new_coord = _get_merged_coord(
-        df, merge_dim, coords, drop_conf_coords, **coord_kwargs
-    )
+    new_coord = _get_merged_coord(df, merge_dim, coords, fuse=fuse, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.
@@ -867,7 +877,7 @@ def get_patch_names(
     # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
     fields = list(attrs) + [field for pair in coord_fields for field in pair]
-    sub = df.reindex(columns=fields).pipe(_format_time_columns).fillna("").astype(str)
+    sub = df.reindex(columns=fields).pipe(_format_time_columns).astype(str).fillna("")
     out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
     return out
 
@@ -1065,13 +1075,33 @@ def _get_data_units_from_dims(patch, dims, operator):
     return data_units
 
 
+@overload
+def _get_dx_or_spacing_and_axes(
+    patch,
+    dim,
+    require_sorted: bool = ...,
+    *,
+    require_evenly_spaced: Literal[True],
+) -> tuple[tuple[float, ...], tuple[int, ...]]: ...
+
+
+@overload
+def _get_dx_or_spacing_and_axes(
+    patch,
+    dim,
+    require_sorted: bool = ...,
+    require_evenly_spaced: bool = ...,
+) -> tuple[tuple[float | np.ndarray, ...], tuple[int, ...]]: ...
+
+
 def _get_dx_or_spacing_and_axes(
     patch,
     dim,
     require_sorted=True,
-) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    require_evenly_spaced=False,
+) -> tuple[tuple[float | np.ndarray, ...], tuple[int, ...]]:
     """
-    Return the spacing of evenly sampled dims and their axes.
+    Return dx (spacing) or values for a list of dims and corresponding axes.
 
     Parameters
     ----------
@@ -1081,18 +1111,30 @@ def _get_dx_or_spacing_and_axes(
         The dimension name or sequence of such
     require_sorted
         If True, raise an error if all requested dimensions are not sorted.
-
-    Raises a CoordError for a dimension which is not evenly sampled.
+    require_evenly_spaced
+        If True, raise an error if all requested dimensions are not evenly sampled.
+        Every returned value is then a scalar spacing rather than an array of
+        values, which the overloads above make visible to callers.
     """
     dims = iterate(dim if dim is not None else patch.dims)
     out = []
     axes = []
     for dim_ in dims:
         coord = patch.get_coord(
-            dim_, require_sorted=require_sorted, require_evenly_sampled=True
+            dim_,
+            require_sorted=require_sorted,
+            require_evenly_sampled=require_evenly_spaced,
         )
-        # need to convert the step to float so datetimes work
-        out.append(to_float(coord.step))
+        if coord.evenly_sampled:
+            val = coord.step
+        else:
+            val = coord.values
+            # Offsets from the first label keep a fine datetime spacing,
+            # which float seconds since 1970 would round away.
+            if val.dtype.kind == "M" and val.size:
+                val = val - val[0]
+        # need to convert val to float so datetimes work
+        out.append(to_float(val))
         axes.append(patch.get_axis(dim_))
 
     return tuple(out), tuple(axes)
@@ -1116,16 +1158,17 @@ def _uneven_message(name: str, coord, caller: str) -> str:
     )
 
 
-def _require_evenly_sampled(patch, dims, operation: str) -> None:
+def _refuse_holes_and_jitter(patch, dims, operation: str) -> None:
     """
-    Require evenly sampled dims for an operation 0.1.24 ran on any labels.
+    Refuse dims with missing samples or labels off their step's grid.
 
-    Raises a CoordError naming the operation, as
-    ``patch.get_coord(dim, require_evenly_sampled=True)`` does its caller.
+    A coordinate with no step is an irregular axis, which an operation
+    computes on by its labels, as DASCore 0.1.x did; one with a step it does
+    not keep (holes or jitter) raises a CoordError naming the operation.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)
-        if not coord.evenly_sampled:
+        if coord.gapped or coord.jittered:
             raise CoordError(_uneven_message(dim, coord, operation))
 
 
@@ -1845,6 +1888,10 @@ def stack_patches(
     """
     # check the dims/coords of first patch (considered to be standard for rest)
     init_patch = patches[0]
+    # Adding arrays reads them, and zeros_like reads one for its shape. Each
+    # patch is checked as the loop meets it: a spool reads its files anew
+    # on every pass, so a pass made only to check would read them twice.
+    refuse_lazy("stack", (init_patch.data,))
     stack_arr = np.zeros_like(init_patch.data)
 
     # ensure dim_vary is in dims
@@ -1854,6 +1901,7 @@ def stack_patches(
 
     kept = []
     for p in patches:
+        refuse_lazy("stack", (p.data,))
         # check kind, then dimensions and coords of patch against init_patch.
         # Kind is compared strictly: a collection is being combined, so a
         # missing value is a value.

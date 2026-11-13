@@ -1,8 +1,223 @@
 ---
 title: Annotations
-keywords: [annotations, picks, events, csv]
 execute:
   warning: false
 engine: jupyter
 ---
-{{< include ../../.agents/skills/make-annotations/SKILL.md >}}
+
+::: {.callout-warning title="Experimental"}
+Annotations are an experimental part of DASCore: the API and file formats may change in any minor release without a deprecation period. See what [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features) means.
+:::
+
+An [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`) records where things are in your data: phase picks, a window around an event, a vehicle's track, the outline of a noisy region. Annotations are written in coordinates (e.g., time and distance) rather than sample indices, so they stay valid when the data are decimated, trimmed, or re-chunked. They describe data but never hold it.
+
+This tutorial annotates light-rail trains in a recording from Salt Lake City: it picks train passages, groups the picks into trains, measures their speeds, traces one train along the fiber, and then plots, queries, cuts, and saves the result.
+
+# The data
+
+The example holds about 50 minutes of low-frequency DAS recorded under a street in Salt Lake City, decimated to 4 Hz, along 745 m of fiber. Light-rail trains show up every few minutes as strong bursts of strain rate:
+
+```{python}
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy.signal import find_peaks
+
+import dascore as dc
+
+patch = dc.get_example_patch("UoU_lf_urban.hdf5")
+_ax = patch.viz.waterfall(scale=0.1)
+```
+
+# Picking train passages
+
+Picks usually come from a picker or a spreadsheet as one table. Here a simple picker finds the moments when the strain rate anywhere on the fiber peaks, and notes where on the fiber that happened:
+
+```{python}
+amplitude = np.abs(patch.data)
+strongest = amplitude.max(axis=1)
+peaks, _ = find_peaks(strongest, height=1e-5, distance=4 * 60)
+
+picks = pd.DataFrame(
+    {
+        "time": patch.get_array("time")[peaks],
+        "distance": patch.get_array("distance")[amplitude[peaks].argmax(axis=1)],
+        "peak": strongest[peaks],
+    }
+)
+picks.head()
+```
+
+[`AnnotationSet.from_patch`](`dascore.core.annotations.AnnotationSet.from_patch`) turns the table into a set. It takes the dimensions from the patch and records which data the picks were made on. Columns other than the dimensions, such as `peak`, are yours and are kept as written.
+
+```{python}
+pick_set = dc.AnnotationSet.from_patch(patch, picks)
+pick_set
+```
+
+# Grouping picks into trains
+
+Each train is picked twice: first near the west end of the fiber (around 7,150 m), then about a minute later near the east end (around 7,630 m). Rows that belong together share a `feature_id`, so pairing those picks turns them into trains. A few weaker signals near the east end have no partner; they stay as single picks.
+
+```{python}
+is_west = picks["distance"] < 7400
+is_second = (
+    ~is_west
+    & is_west.shift(fill_value=False)
+    & (picks["time"].diff() < pd.Timedelta("90s"))
+)
+is_first = is_second.shift(-1, fill_value=False)
+train_number = is_first.cumsum().astype(str)
+grouped = picks.assign(feature_id=("train_" + train_number).where(is_first | is_second))
+
+trains = dc.AnnotationSet.from_patch(patch, grouped)
+trains.features
+```
+
+You never write the features table yourself: naming a new `feature_id` creates the group.
+
+## How a set is organized
+
+A set holds three tables:
+
+- **annotations**: one row per located thing. For each dimension a row states a single value (`time`), a half-open range (`time_min`, `time_max`), or nothing, in which case it spans that whole dimension.
+- **features**: what rows compose. A feature is a `group` (unordered, like the trains above), a `path` (vertices in order), or a `polygon` (rings of vertices). A row without a `feature_id` is a feature on its own.
+- **bases**: named curves, such as a straight line, that a path can be drawn from instead of listing its vertices.
+
+So a row can be an instant across the whole fiber, a pick at one place, or a stretch of fiber at all times:
+
+| time | distance | distance_min | distance_max | feature_id | reads as |
+|---|---|---|---|---|---|
+| 03:10:00 | | | | | an instant across the fiber |
+| 03:10:00 | 7630 | | | train_5 | a pick, part of `train_5` |
+| | | 7350 | 7420 | | a stretch of fiber at all times |
+
+# Train speeds
+
+[`bounds`](`dascore.core.annotations.AnnotationSet.bounds`) gives each feature's extent. A train's extent is how far and how long it traveled between its two picks, which gives its speed:
+
+```{python}
+extent = trains.bounds().dropna(subset=["feature_id"])
+seconds = (extent["time_max"] - extent["time_min"]).dt.total_seconds()
+extent.assign(speed=(extent["distance_max"] - extent["distance_min"]) / seconds)
+```
+
+The trains move at about 7 to 8 m/s, roughly 25 to 30 km/h.
+
+# Tracing a train
+
+[`add_path`](`dascore.core.annotations.AnnotationSet.add_path`) adds a path through its vertices. To trace `train_8`, take the time its signal peaks on each channel it reaches. An array keyword gives one value per vertex, and a scalar keyword, such as `vehicle`, describes the whole path. Builder methods like this return a new set.
+
+```{python}
+train_8 = extent.set_index("feature_id").loc["train_8"]
+passage = patch.select(
+    time=(train_8.time_min - pd.Timedelta("20s"), train_8.time_max + pd.Timedelta("20s"))
+)
+passage_amplitude = np.abs(passage.data)
+reached = passage_amplitude.max(axis=0) > 5e-6
+track_time = passage.get_array("time")[passage_amplitude.argmax(axis=0)][reached][::6]
+track_distance = passage.get_array("distance")[reached][::6]
+
+traced = trains.add_path(
+    "train_8_track", time=track_time, distance=track_distance, vehicle="light rail"
+)
+```
+
+# Marking a quiet window
+
+[`add_polygon`](`dascore.core.annotations.AnnotationSet.add_polygon`) outlines a region. Give the outer ring first and any holes after it; each ring closes on its own. A box with no trains in it, across the whole fiber, marks a window to estimate noise from:
+
+```{python}
+quiet_start = pd.Timestamp("2023-05-24T03:02:30")
+quiet_end = pd.Timestamp("2023-05-24T03:04:30")
+fiber_start, fiber_end = patch.get_array("distance")[[0, -1]]
+quiet = {
+    "time": [quiet_start, quiet_end, quiet_end, quiet_start],
+    "distance": [fiber_start, fiber_start, fiber_end, fiber_end],
+}
+ann = traced.add_polygon("quiet", rings=[quiet], note="noise window")
+ann
+```
+
+# Seeing your annotations
+
+[`AnnotationSet.viz.plot`](`dascore.viz.annotations.plot`) draws a set over a waterfall. Picks are markers, paths are lines, polygons are filled shapes, and a row spanning a dimension is a line or band across it:
+
+```{python}
+_ax = patch.viz.waterfall(scale=0.1)
+_ax = ann.viz.plot(ax=_ax)
+```
+
+Zooming in on the traced train shows the path following its leading edge. [`overlapping`](`dascore.core.annotations.AnnotationSet.overlapping`), given a patch, keeps only the features within it:
+
+```{python}
+_ax = passage.viz.waterfall(scale=0.1)
+_ax = ann.overlapping(passage).viz.plot(ax=_ax)
+```
+
+Pass `color` to color by a column, and `palette` to fix the colors of chosen values.
+
+# Finding annotations
+
+[`select`](`dascore.core.annotations.AnnotationSet.select`) filters by column values. A value matches exactly, a list matches any of its values, and a tuple is an inclusive range:
+
+```{python}
+strong = ann.select(peak=(5e-5, None))
+strong.annotations[["time", "distance", "peak", "feature_id"]]
+```
+
+`overlapping` also takes ranges, and keeps or drops each feature whole:
+
+```{python}
+first_ten_minutes = ann.overlapping(
+    time=(patch.get_coord("time").min(), pd.Timestamp("2023-05-24T02:56"))
+)
+[x.id for x in first_ten_minutes]
+```
+
+# Cutting data around trains
+
+[`Spool.cut`](`dascore.core.spool.Spool.cut`) returns one patch per feature, cut to its bounds and merged across the files it crosses. A pad of `(before, after)` widens the cut, here by 20 seconds on each side:
+
+```{python}
+spool = dc.spool([patch])
+train_ids = list(trains.features["id"])
+cut = spool.cut(trains.select(feature_id=train_ids), time=("-20s", "20s"))
+cut.get_contents()[["feature_id", "time_min", "time_max"]]
+```
+
+Each cut patch states its `feature_id`, so you can join the results back to the set.
+
+# Editing
+
+[`update`](`dascore.core.annotations.AnnotationSet.update`) changes a feature's or annotation's columns, [`remove`](`dascore.core.annotations.AnnotationSet.remove`) drops one, and [`merge`](`dascore.core.annotations.AnnotationSet.merge`) combines sets in the same dimensions, such as hand and automatic picks:
+
+```{python}
+edited = ann.update(feature="train_8", note="traced").remove(feature="quiet")
+```
+
+# Saving and sharing
+
+A set of picks alone saves as a single table. CSV is easy to share but does not record the dimensions or which data the picks were made on, so state the dimensions again when reading. `io.to_parquet` keeps both (it needs pyarrow).
+
+```{python}
+folder = Path(tempfile.mkdtemp())
+csv_path = folder / "picks.csv"
+pick_set.io.to_csv(csv_path)
+from_csv = dc.annotations(csv_path, dims=patch.dims)
+```
+
+A set with features or bases saves as a directory, and [`dc.annotations`](`dascore.annotations`) reads it back:
+
+```{python}
+directory = edited.io.save(folder / "trains")
+assert dc.annotations(directory) == edited
+```
+
+To read a CSV written by another tool, name its columns as above (`time`, or `time_min` and `time_max`, for each dimension) and read it with `dc.annotations(path, dims=("time", "distance"))`. Reading it with plain pandas instead turns identifiers such as `001` into numbers and `NA` into missing values.
+
+# Ranges and edges
+
+Three interval rules meet in annotations: a row's `_min`/`_max` range is half-open, a `select` tuple includes both ends, and `overlapping` given a patch includes the patch's last sample.

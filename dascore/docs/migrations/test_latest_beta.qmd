@@ -1,5 +1,0 @@
----
-title: Test the latest DASCore pre-release
-keywords: [beta, pre-release, testing, migration, bug report]
----
-{{< include ../../.agents/skills/test-beta/SKILL.md >}}

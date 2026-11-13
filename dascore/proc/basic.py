@@ -26,6 +26,7 @@ from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor, register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
+from dascore.lazy.contract import Pointwise, Unchanged
 from dascore.models import ArrayLike
 from dascore.models.base import values_equal
 from dascore.units import _quantities_equal, get_quantity
@@ -95,6 +96,16 @@ def _known_real(data) -> bool:
     return False
 
 
+def _pointwise_unless_real(dtype):
+    """
+    The contract of an operation which hands real data back as they are.
+
+    Read from the dtype, as `_known_real` reads it, so the lazy no-op is
+    the eager one: the patch itself, with its own id.
+    """
+    return Unchanged() if np.dtype(dtype).kind in _REAL_KINDS else Pointwise()
+
+
 def _as_float(data):
     """
     Promote data which cannot hold a fraction to floats.
@@ -106,6 +117,21 @@ def _as_float(data):
     if xp.isdtype(data.dtype, ("real floating", "complex floating")):
         return data
     return xp.astype(data, xp.float64)
+
+
+def _with_dtype(meta, dtype):
+    """
+    Return `meta` stating `dtype`, and an empty plan.
+
+    The metadata itself when it already states that dtype, so an operation
+    whose kernel hands the data back is still seen to change nothing.
+    """
+    return (meta if dtype == meta.dtype else meta.new(dtype=dtype)), {}
+
+
+def _real_dtype_metadata(meta):
+    """Return `meta` stating the real counterpart of its dtype; see `_with_dtype`."""
+    return _with_dtype(meta, _result_dtype(meta.dtype, real=True))
 
 
 def _data_id_given(patch, attrs) -> bool:
@@ -490,6 +516,14 @@ class Abs(PatchProcessor):
     >>> out = patch.abs()
     """
 
+    def get_metadata(self, meta):
+        """Complex data have a real magnitude; every other dtype keeps its own."""
+        return _real_dtype_metadata(meta)
+
+    def chunk_contract(self, dtype, plan):
+        """Each sample's magnitude needs only that sample."""
+        return Pointwise()
+
     def kernel(self, data):
         """Return the magnitude of every sample."""
         return array_namespace(data).abs(data)
@@ -509,6 +543,10 @@ class Conj(PatchProcessor):
     >>> conj = dft.conj()
     """
 
+    def chunk_contract(self, dtype, plan):
+        """Pointwise, and nothing to do for real data."""
+        return _pointwise_unless_real(dtype)
+
     def kernel(self, data):
         """Return the conjugate; real data come back as the same array, a no-op."""
         if _known_real(data):
@@ -527,6 +565,14 @@ class Real(PatchProcessor):
     >>> out = pa.real()
     """
 
+    def get_metadata(self, meta):
+        """Complex data have a real part of the real dtype; real data are kept."""
+        return _real_dtype_metadata(meta)
+
+    def chunk_contract(self, dtype, plan):
+        """Pointwise, and nothing to do for real data."""
+        return _pointwise_unless_real(dtype)
+
     def kernel(self, data):
         """Return the real part, or the data which is already only that."""
         if _known_real(data):
@@ -544,6 +590,14 @@ class Imag(PatchProcessor):
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
+
+    def get_metadata(self, meta):
+        """The imaginary part is real; real data give zeros of their own dtype."""
+        return _real_dtype_metadata(meta)
+
+    def chunk_contract(self, dtype, plan):
+        """Each sample's imaginary part needs only that sample."""
+        return Pointwise()
 
     def kernel(self, data):
         """
@@ -570,6 +624,20 @@ class Angle(PatchProcessor):
     """
 
     data_type = ""
+
+    def get_metadata(self, meta):
+        """
+        The angle is real, and floating point for integer and bool data.
+
+        Numpy's own promotion, worked out on an empty array of the dtype:
+        it is not one rule, since bool goes to float64 and int8 to float16.
+        """
+        empty = np.empty(0, _as_numpy_dtype(meta.dtype))
+        return _with_dtype(meta, _result_dtype(np.angle(empty).dtype, like=meta.dtype))
+
+    def chunk_contract(self, dtype, plan):
+        """Each sample's angle needs only that sample."""
+        return Pointwise()
 
     def numpy_kernel(self, data):
         """Return the phase angle of every sample."""

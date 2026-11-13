@@ -1,4 +1,8 @@
-# Runtime Configuration
+---
+title: Configuration
+execute:
+  warning: false
+---
 
 Runtime settings live in `dascore.config` and affect subsequent operations.
 
@@ -8,7 +12,7 @@ import dascore as dc
 print(dc.get_config().display_float_precision)
 ```
 
-# Scope
+## Scope
 
 | Function | Scope | Restoration |
 |---|---|---|
@@ -28,7 +32,7 @@ Concurrent contexts do not overwrite one another. `Spool.map` captures the activ
 
 `set_config` is intended for application startup. Prefer `config_context` in libraries, tests, notebooks, and any operation that should restore the caller's settings.
 
-# Common settings
+## Common settings
 
 - `patch_history="disabled"` preserves existing history but stops appending entries.
 - `patch_kind_attrs` selects metadata fields that determine whether patches are compatible; see [Patch compatibility](../notes/patch_compatibility.qmd).
@@ -72,7 +76,7 @@ with dc.config_context(display_html_open_lines=0):
 folded_html
 ```
 
-# Unpickling settings
+## Unpickling settings
 
 Unpickling a file can run arbitrary code, so both settings that allow it default to `False`. Turn one on only for files you trust, and prefer `config_context` so it ends with the block.
 

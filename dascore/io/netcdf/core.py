@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 from pathlib import Path
 
 import numpy as np
@@ -14,15 +15,17 @@ from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
-from dascore.utils.misc import optional_import
+from dascore.utils.io import BinaryReader
+from dascore.utils.misc import optional_import, suppress_warnings
+from dascore.xarray.patch import _cf_units
 
 from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
-    get_shared_payload_names,
     get_xarray_data_var_name,
     is_netcdf4_file,
     parse_cf_version,
+    payload_datasets,
     read_dataset_array,
     spool_to_cf_dataset,
 )
@@ -72,6 +75,14 @@ def _open_xarray_dataset(resource: H5Reader):
     return xr.open_dataset(h5_file, engine="h5netcdf")
 
 
+def _open_classic_dataset(resource: BinaryReader):
+    """Open a netCDF-3 file as an xarray dataset; the file is read whole."""
+    # A copy, because some xarray versions close the handle they are given.
+    resource.seek(0)
+    buffer = io.BytesIO(resource.read())
+    return optional_import("xarray").open_dataset(buffer, engine="scipy")
+
+
 def _int_for_bool(attrs: dict) -> dict:
     """Return attrs with booleans as the integer flags netCDF can store.
 
@@ -95,45 +106,44 @@ def _int_for_bool(attrs: dict) -> dict:
     return {i: convert(v) for i, v in attrs.items()}
 
 
-def _payload_datasets(dataset) -> dict:
-    """Map each payload's name to a dataset holding it as the only payload."""
+def _take_file_units(dataset):
+    """
+    Copy the root ``units`` onto a payload with neither ``units`` nor
+    ``data_units``, in place, when they read as CF units (``m s-1``).
+    """
+    name = get_xarray_data_var_name(dataset)
+    attrs, units = dataset[name].attrs, dataset.attrs.get("units")
+    if {"units", "data_units"} & set(attrs) or not isinstance(units, str):
+        return
+    with suppress_warnings(UserWarning):  # text which is not units stays out
+        if _cf_units(units, name) is not None:
+            attrs["units"] = units
+
+
+def _states_cf(obj) -> bool:
+    """Return True when the attrs of ``obj`` state CF 1.6 or later."""
     try:
-        return {get_xarray_data_var_name(dataset): dataset}
-    except ValueError:
-        names = get_shared_payload_names(dataset)
-    # Siblings differ only by name, so it tags them unless their own tags
-    # already tell them apart; otherwise chunking would merge them.
-    tags = {x: dataset[x].attrs.get("tag") or x for x in names}
-    if len(set(tags.values())) < len(tags):
-        tags = {x: x for x in names}
-    out = {}
-    for name in names:
-        sub = dataset[[name]]
-        if len(names) > 1:
-            sub[name] = sub[name].assign_attrs(tag=tags[name])
-        out[name] = sub
-    return out
+        return parse_cf_version(get_cf_version(obj) or "") >= (1, 6)
+    except (TypeError, ValueError):
+        return False
 
 
 def _takes_cf(resource: H5Reader) -> bool:
     """Return True for a non-XDAS netCDF-4 file stating CF 1.6 or later."""
     if not is_netcdf4_file(resource) or is_xdas_file(resource):
         return False
-    cf_version = get_cf_version(resource)
-    if not cf_version:
-        return False
-    try:
-        return parse_cf_version(cf_version) >= (1, 6)
-    except (TypeError, ValueError):
-        return False
+    return _states_cf(resource)
 
 
 class _NetCDFReader:
-    """Read NetCDF-4 through xarray, one patch per payload variable."""
+    """Read netCDF through xarray, one patch per payload variable."""
 
-    def read_array(
-        self, resource: H5Reader, windows: windows_type = (), key: str = ""
-    ) -> np.ndarray:
+    # Whether a payload with no units takes the file's root ``units`` when
+    # they parse and the file does not state CF.
+    _file_units = False
+    _open = staticmethod(_open_xarray_dataset)
+
+    def _read_array(self, resource, windows: windows_type, key: str) -> np.ndarray:
         """
         Slice the keyed payload variable through xarray.
 
@@ -141,14 +151,34 @@ class _NetCDFReader:
         so CF decoding (scaling, offsets, fill values) applies exactly as
         it does in `read`.
         """
-        with _open_xarray_dataset(resource) as dataset:
+        with self._open(resource) as dataset:
             where = str(getattr(resource, "filename", "the resource"))
-            payloads = _payload_datasets(dataset)
+            payloads = payload_datasets(dataset)
             if len(payloads) > 1:
                 dataset = resolve_keyed_source(payloads, key, where)
             else:
                 (dataset,) = payloads.values()
             return read_dataset_array(dataset, windows, key, where)
+
+    def _get_metadata(self, resource, snap: snap_type) -> list[dc.PatchMeta]:
+        """Describe each payload of the file without loading its array."""
+        out = []
+        with self._open(resource) as dataset:
+            for payload in payload_datasets(dataset).values():
+                if self._file_units and not _states_cf(dataset):
+                    _take_file_units(payload)
+                out.extend(dataset_to_patch_meta(payload, snap))
+        return out
+
+
+class _HDF5NetCDFReader(_NetCDFReader):
+    """Read netCDF-4 (HDF5) files."""
+
+    def read_array(
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
+    ) -> np.ndarray:
+        """Slice the keyed payload variable through xarray."""
+        return self._read_array(resource, windows, key)
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = ()
@@ -159,15 +189,10 @@ class _NetCDFReader:
         existing ``h5py`` handle, so only metadata bytes are fetched and the
         file is not downloaded.
         """
-        with _open_xarray_dataset(resource) as dataset:
-            return [
-                meta
-                for payload in _payload_datasets(dataset).values()
-                for meta in dataset_to_patch_meta(payload, snap)
-            ]
+        return self._get_metadata(resource, snap)
 
 
-class NetCDFCFV18(_NetCDFReader, FiberIO):
+class NetCDFCFV18(_HDF5NetCDFReader, FiberIO):
     """NetCDF-4 IO using xarray for read/write and CF markers for detection."""
 
     name = "NETCDF_CF"
@@ -198,20 +223,23 @@ class NetCDFCFV18(_NetCDFReader, FiberIO):
         dataset.to_netcdf(resource, encoding=encoding)
 
 
-class NetCDFNoCF(_NetCDFReader, FiberIO):
+class NetCDFNoCF(_HDF5NetCDFReader, FiberIO):
     """
     NetCDF-4 files version 1.8 does not take, read as NETCDF_CF version 0.
 
     These state no CF version, or one older than 1.6. Version 0 is a
     fallback, tried after every other format, and claims only a file
     written through netCDF (``_NCProperties``) with a dimensioned root
-    variable. It reads like version 1.8 and infers nothing more; it does
-    not write.
+    variable. It reads like version 1.8, except that a payload with no
+    units takes the file's root ``units`` when they parse; it does not
+    write.
     """
 
     name = "NETCDF_CF"
     version = "0"
     fallback = True
+    # Files outside CF may state their payloads' units once, on the file.
+    _file_units = True
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return "0" for a netCDF-4 file that version 1.8 does not take."""
@@ -219,3 +247,34 @@ class NetCDFNoCF(_NetCDFReader, FiberIO):
             return None
         has_variable = any("DIMENSION_LIST" in resource[x].attrs for x in resource)
         return self.version if has_variable else None
+
+
+class NetCDF3V1(_NetCDFReader, FiberIO):
+    """
+    netCDF-3 classic and 64-bit offset files, read like NETCDF_CF.
+
+    A file stating CF 1.6 or later reads as NETCDF_CF version 1.8 does;
+    others as version 0, taking the file's units. Arrays are read whole.
+    """
+
+    name = "NETCDF3"
+    version = "1"
+    preferred_extensions = ("nc",)
+    _file_units = True
+    _open = staticmethod(_open_classic_dataset)
+
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return "1" for a file starting with the netCDF-3 magic bytes."""
+        return self.version if resource.read(4) in (b"CDF\x01", b"CDF\x02") else None
+
+    def read_array(
+        self, resource: BinaryReader, windows: windows_type = (), key: str = ""
+    ) -> np.ndarray:
+        """Slice the keyed payload variable."""
+        return self._read_array(resource, windows, key)
+
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: snap_type = ()
+    ) -> list[dc.PatchMeta]:
+        """Describe each payload variable without slicing it."""
+        return self._get_metadata(resource, snap)

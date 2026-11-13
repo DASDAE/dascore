@@ -5,8 +5,6 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from dascore.utils.doc_skills import get_skills
-
 _qmd_builder = pytest.importorskip("_qmd_builder")
 
 
@@ -79,28 +77,19 @@ class TestApiTocTree:
 
 
 class TestSkillsNavigation:
-    """The human navigation uses the same membership as the installed CLI."""
+    """The skills sidebar holds the guides; agents.qmd's table lists the skills."""
 
-    def test_catalog(self):
-        """Rendering the website template lists every catalogued recipe once."""
-        catalog = yaml.safe_load(
-            (_qmd_builder.API_PATH.parent / "skills.yml").read_text()
-        )
+    def test_sidebar(self):
+        """The rendered sidebar links the two guides and no individual skill."""
         text = _qmd_builder.get_template("_quarto.yml").render(
-            dascore_version_str="DASCore test",
-            api_toc_tree=[],
-            repo_branch="dev",
-            skills=catalog,
+            dascore_version_str="DASCore test", api_toc_tree=[], repo_branch="dev"
         )
-        config = yaml.safe_load(text)
         sidebar = next(
-            x for x in config["website"]["sidebar"] if x.get("id") == "skills"
+            x
+            for x in yaml.safe_load(text)["website"]["sidebar"]
+            if x.get("id") == "skills"
         )
-        links = {
-            x["text"]: x["href"]
-            for x in sidebar["contents"]
-            if x["text"] != "Agent onboarding"
-        }
-        assert links == {
-            name: info["target"] + ".qmd" for name, info in get_skills().items()
-        }
+        assert [x["text"] for x in sidebar["contents"]] == [
+            "Agent onboarding",
+            "Local documentation",
+        ]

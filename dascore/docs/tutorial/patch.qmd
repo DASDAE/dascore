@@ -74,24 +74,13 @@ distance_max = patch.coords.max("distance")
 time_step = patch.coords.step("time")
 ```
 
-A coordinate may be associated with one or more dimensions, such as latitude along `distance`, or be independent of the data. See the advanced [coordinates tutorial](coords.qmd) for direct `BaseCoord` and `CoordManager` use.
+A coordinate may be associated with one or more dimensions, such as latitude along `distance`, or be independent of the data. See the [coordinates tutorial](coords.qmd) for working with coordinates directly.
 
 Dimension coordinates usually share a dimension's name, but that is not required. Auxiliary coordinates such as latitude commonly depend on `distance`; a quality grid may depend on both `distance` and `time`; deployment metadata can be independent of every dimension.
 
 String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting, but not units or numeric ranges. See [String coordinates](coords.qmd#string-coordinates) for examples and literal-label caveats.
 
-## Metadata without data
-
-[`PatchMeta`](`dascore.PatchMeta`) is everything a patch is apart from its data: coordinates, attrs and dtype. Scanning a file returns these, so a patch's shape and extents can be read without loading samples.
-
-```{python}
-meta = patch.drop_data()
-print(meta.shape, meta.dtype)
-
-patch_again = meta.to_patch(patch.data)
-```
-
-`drop_data` and `to_patch` are inverses. Operations which only describe data, such as `rename_coords`, run on a `PatchMeta`; those which compute samples need a `Patch`.
+To read a patch's shape and extents without its data, see [Metadata without data](large_archives.qmd#metadata-without-data).
 
 ## Attributes and summaries
 
@@ -127,67 +116,7 @@ Existing history remains intact while recording is disabled. This is useful for 
 
 ### Patch identity
 
-Two attributes track identity:
-
-| Attribute | Meaning | Changes when |
-|---|---|---|
-| `origin_id` | Which stored data this came from | Data from more than one origin is combined |
-| `data_id` | Which array this is | An operation changes the patch |
-
-A patch nothing has been done to carries its origin's ID as its `data_id`. An operation's result takes an ID derived from the `data_id` of every patch it was given, in order, and from the operation's name, version, and parameters, so one ID commits to the whole route which led to it:
-
-```{python}
-assert patch.attrs.data_id == patch.attrs.origin_id
-
-filtered = patch.pass_filter(time=(1, 10))
-assert filtered.attrs.origin_id == patch.attrs.origin_id
-assert filtered.attrs.data_id != patch.attrs.data_id
-```
-
-The route matters. Repeating the same operations produces the same `data_id`, while changing their order does not:
-
-```{python}
-first = patch.pass_filter(time=(1, 10)).decimate(time=2)
-same = patch.pass_filter(time=(1, 10)).decimate(time=2)
-other = patch.decimate(time=2).pass_filter(time=(1, 10))
-
-assert first.attrs.data_id == same.attrs.data_id
-assert first.attrs.data_id != other.attrs.data_id
-```
-
-A parameter left at its default is the same call as one which passes that default, so adding a defaulted parameter to an operation changes no ID; changing what a default *does* requires raising the operation's version. An ID is never knowingly false: when a parameter cannot be described faithfully (a closure, an object of an unknown type), or an input carries no ID, the result receives a random `data_id` instead of a derived one.
-
-Trimming a stored patch is not a route. While a patch is still exactly what its source loads, narrowing it to a window of that array names the window rather than the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)` and `spool.select(time=window)` all name one array, and selecting twice lands where selecting once does. Once anything else has been done to the patch, or the selection is one the stored array cannot be sliced to, the result derives like any other operation's. Reading under a decode option other than the format's default, such as a `snap` which names other dimensions, is itself an operation on the stored thing, so it names a different array than the default read of the same file.
-
-When a file does not contain an `origin_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
-
-In-memory patches receive process-local IDs. The low-level methods — `new`, `update`, `update_attrs`, `set_dims` and `to_patch` — are how patch functions assemble their results, so inside an operation they add nothing: the operation names its own result. Called on their own they say what they did. Handing a patch an array nothing else names gives the result a random `data_id`, since no route describes it, while `origin_id` still says where the data came from:
-
-```{python}
-doubled = patch.new(data=patch.data * 2)
-assert doubled.attrs.origin_id == patch.attrs.origin_id
-assert doubled.attrs.data_id != patch.attrs.data_id
-```
-
-Replacing metadata instead is a describable change, so the result's ID is derived from the call and can be arrived at twice:
-
-```{python}
-tagged = patch.update_attrs(tag="cleaned")
-assert tagged.attrs.data_id == patch.update_attrs(tag="cleaned").attrs.data_id
-assert tagged.attrs.data_id != patch.attrs.data_id
-```
-
-A call which changes nothing returns the patch's own IDs, and stating `origin_id` or `data_id` in the call keeps what was stated — which is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
-
-Those IDs are derived without reading anything. [`pin_id`](`dascore.Patch.pin_id`) reads the array instead and states a `data_id` hashed from the patch's content, so patches which arrived by different routes share one ID and everything derived afterwards builds on data checked here:
-
-```{python}
-pinned = patch.pin_id()
-assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
-assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
-```
-
-Pinning is a checkpoint rather than something every operation does. See [Weak and strong `data_id`](../notes/identity.qmd#weak-and-strong-data_id) for what it hashes.
+Every patch carries an `origin_id`, naming the stored data it came from, and a `data_id`, naming the array itself, which changes with each operation. See [Keys, IDs and Rows](../notes/identity.qmd) for how they are derived and [Finding a patch by ID](large_archives.qmd#finding-a-patch-by-id) for lookup.
 
 ## Display and shortcuts
 
@@ -210,7 +139,7 @@ print(patch.get_patch_name())
 
 ## Select
 
-[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound. For xarray-compatible label or positional indexing, use [`Patch.sel`](`dascore.Patch.sel`) or [`Patch.isel`](`dascore.Patch.isel`), respectively; see [Xarray-style indexing](#xarray-style-indexing).
+[`Patch.select`](`dascore.Patch.select`) keeps coordinate values inside a range without reordering them. Use `...` or `None` for an open bound. For xarray-compatible label or positional indexing, use [`Patch.sel`](`dascore.Patch.sel`) or [`Patch.isel`](`dascore.Patch.isel`), respectively; see [Xarray-style indexing](xarray.qmd#xarray-style-indexing).
 
 ```{python}
 time = patch.get_coord("time")
@@ -266,39 +195,6 @@ window = patch.select(
 ```
 
 `select` and `order` accept slices as range shorthand; sample slices still require `samples=True`. Processing functions such as `pass_filter` and `taper` require tuples.
-
-## Xarray-style indexing
-
-[`Patch.sel`](`dascore.Patch.sel`) selects coordinate labels, and [`Patch.isel`](`dascore.Patch.isel`) selects sample positions. These methods were added for compatibility with xarray's `DataArray.sel` and `DataArray.isel`, respectively. Both accept a dictionary or keyword indexers and return a Patch. The supported subset is described below and tested directly against xarray.
-
-```{python}
-label_window = patch.sel(distance=slice(10, 20))
-sample_window = patch.isel(time=slice(0, 100, 2))
-repeated_channels = patch.isel(distance=[20, 10, 20])
-nearest_channel = patch.sel(distance=10.2, method="nearest", tolerance=0.5)
-```
-
-Label slices include both endpoints; positional slices exclude the stop and support negative indices and strides. Array indexers preserve the requested order and repetitions. Arrays on different dimensions select every combination: three distance indices and two time indices produce three channels with two samples each. Missing scalar or array labels and out-of-bounds scalar or array positions raise; positional slices clip to the available samples.
-
-A scalar indexer removes its dimension and retains the selected coordinate as a scalar. Use `drop=True` to remove coordinates made scalar by the selection, or a one-element list to retain a length-one dimension:
-
-```{python}
-channel = patch.isel(distance=3)
-assert "distance" not in channel.dims
-assert channel.get_array("distance").shape == ()
-channel_without_label = patch.isel(distance=3, drop=True)
-assert "distance" not in channel_without_label.coords
-one_channel_patch = patch.isel(distance=[3])
-assert one_channel_patch.shape[0] == 1
-point = patch.isel(distance=3, time=0)
-assert point.shape == ()
-```
-
-Associated coordinates follow the same indexing: a latitude coordinate along distance becomes scalar after selecting one channel, while a coordinate spanning distance and time retains its time axis. Selecting every dimension with scalar indexers produces a scalar Patch. Existing scalar coordinates are retained even with `drop=True`.
-
-`sel` supports exact matches and `method="nearest"`, with an optional tolerance. Quantities convert to the coordinate's units, including unit-bearing tolerances. Datetime strings use pandas' partial-date rules, and datetime tolerances are durations. Slices follow coordinate order, so a descending coordinate requires descending bounds. `isel` accepts 1D boolean masks and supports `missing_dims="raise"`, `"warn"`, or `"ignore"`.
-
-The supported subset covers dimension names and scalar, slice, and unlabelled 1D array indexers. Labelled xarray indexers, multidimensional indexer arrays, MultiIndexes, auxiliary-coordinate lookup, and forward/backward filling are not supported. Dimensions without coordinate labels use positional indexing. Use [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation, relative selections, and filtering that preserves dimensions and source order.
 
 ## Unselect and order
 
@@ -446,7 +342,7 @@ assert np.allclose(divided.data, patch.data / 10)
 assert np.allclose(combined.data, patch.data * 2)
 ```
 
-Operations between patches first reject conflicting values in the configured `patch_kind_attrs`, then align shared coordinate values. Broadcast-compatible shapes are supported:
+Patches of broadcast-compatible shapes combine after alignment:
 
 ```{python}
 one_channel = patch.select(distance=0, samples=True).squeeze()
@@ -464,9 +360,7 @@ displacement = velocity * (2 * s)
 print(displacement.attrs.data_units)
 ```
 
-Array operands must broadcast against patch data. Coordinate-aware alignment occurs only for another Patch; a bare NumPy array contributes no coordinate or metadata information.
-
-A bare array therefore follows NumPy's rules: it lines up with the *last* axes, whatever the dimensions are called. Weighting a `(distance, time)` patch by a per-channel array `w` with `patch * w` scales along time instead, and raises nothing when the two lengths happen to match. To weight along a named dimension, wrap the array in a patch on that dimension:
+A bare NumPy array carries no coordinates, so it follows NumPy's rules: it lines up with the *last* axes, whatever the dimensions are called. Weighting a `(distance, time)` patch by a per-channel array with `patch * w` therefore scales along time. To weight along a named dimension, wrap the array in a patch on that dimension:
 
 ```{python}
 distance = patch.get_array("distance")
@@ -476,34 +370,17 @@ weighted = patch * w_patch
 assert np.allclose(weighted.data, patch.data * w[:, None])
 ```
 
-Comparisons such as `patch > 0` give a boolean patch, which `~`, `&`, `|` and `^` invert and combine, and which [`Patch.where`](`dascore.Patch.where`) accepts as a condition. `abs(patch)` is `np.abs(patch)`. `==` is different: `patch == other` is [`Patch.equals`](`dascore.Patch.equals`), a single bool, so use `np.equal(patch, other)` for an elementwise mask.
+Comparisons such as `patch > 0` give a boolean patch, which `~`, `&` and `|` combine and [`Patch.where`](`dascore.Patch.where`) accepts as a condition. `patch == other` is [`Patch.equals`](`dascore.Patch.equals`), a single bool; use `np.equal(patch, other)` for an elementwise mask.
 
 ```{python}
 mask = (patch > 0) & ~(patch > 1)
-assert mask.data.dtype == bool
-assert np.array_equal(abs(patch).data, np.abs(patch.data))
 ```
 
-NumPy ufuncs operate directly on patches, and DASCore patch ufuncs support named-dimension reduction and accumulation.
+NumPy ufuncs and most NumPy functions accept patches and return patches. Patch ufuncs also reduce and accumulate along named dimensions:
 
 ```{python}
 absolute = np.abs(patch)
-cumulative = patch.add.accumulate("time")
 summed = patch.add.reduce("distance")
 ```
 
-`Patch.apply_ufunc` also accepts a NumPy ufunc explicitly. DASCore maps named dimensions to NumPy axes and preserves compatible coordinates:
-
-```{python}
-same_absolute = patch.apply_ufunc(np.abs)
-multiplied = patch.apply_ufunc(np.multiply, 10)
-```
-
-Named reduction removes the reduced dimension and coordinates which depend on it. Accumulation retains the original shape and dimension coordinates.
-
-Other NumPy functions also accept patches. Unlike named reduction, `np.mean(patch, axis=1)` and similar reductions keep the reduced dimension at length one, with or without `keepdims=True`. `np.transpose`, `np.swapaxes`, `np.squeeze`, and the `np.flip` family call the matching patch methods, so the coordinates follow the data. `np.diff` labels each difference with the midpoint of the two samples it compares, drops coordinates which depend on the differenced dimension, and refuses `prepend` and `append`. `np.gradient` returns one patch per axis. Functions which sort values (`np.sort`, `np.argsort`, `np.partition`) and the `numpy.fft` functions raise a `ParameterError`, since no coordinates fit their output; apply them to `patch.data`, or use [`Patch.dft`](`dascore.Patch.dft`) for Fourier transforms.
-
-```{python}
-transposed = np.transpose(patch)
-differences = np.diff(patch, axis=1)
-```
+Some NumPy functions behave differently on a patch, and some raise; see the [`Patch`](`dascore.Patch`) notes. Use `patch.data` for plain NumPy behavior.

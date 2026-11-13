@@ -11,6 +11,7 @@ import warnings
 from enum import Enum
 from functools import partial
 from pathlib import PureWindowsPath
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,7 @@ from dascore.utils.array import hash_array
 from dascore.utils.identity import (
     H,
     PatchMarker,
+    callable_name,
     derive,
     encode,
     extract_patches,
@@ -423,6 +425,29 @@ class TestCallables:
 
         assert digest(make(1)) == digest(make(1))
         assert digest(make(1)) != digest(make(2))
+
+    @pytest.mark.parametrize("module", ["__main__", "__mp_main__"])
+    def test_a_script_function_by_source(self, monkeypatch, module):
+        """A path into a script finds it, but two scripts share that path."""
+        script = ModuleType(module)
+        monkeypatch.setitem(sys.modules, module, script)
+
+        def first(x):
+            return x * 2
+
+        def second(x):
+            return x * 3
+
+        names = []
+        for func in (first, second):
+            # Renamed to share one name and one signature.
+            func.__module__ = module
+            func.__qualname__ = "clean"
+            script.clean = func
+            names.append(callable_name(func))
+        # A spawned worker's `__mp_main__` names it as its parent does.
+        assert names[0].startswith("__main__:clean@")
+        assert names[0] != names[1]
 
     def test_partial(self):
         """A partial is what it wraps and what it wraps it with."""
@@ -1202,11 +1227,27 @@ class TestCombinations:
         backwards = derive([x.attrs.data_id for x in members[::-1]], merge_operation())
         assert merged.attrs.data_id != backwards
 
-    def test_merge_options_are_part_of_it(self, members):
-        """`snap_coords` changes the merged coordinate, so it changes the id."""
+    def test_ignored_merge_options_are_not_part_of_it(self, members):
+        """`snap_coords` no longer changes the merge, so it keeps the id."""
         snapped = dc.spool(members).chunk(time=None)[0]
-        exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
-        assert snapped.attrs.data_id != exact.attrs.data_id
+        with pytest.warns(DeprecationWarning, match="snap_coords"):
+            exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
+        assert snapped.attrs.data_id == exact.attrs.data_id
+
+    @pytest.mark.parametrize("kwargs", [{"max_shift": 0.4}, {"tolerance": 1.5}])
+    def test_joining_options_are_part_of_it(self, members, kwargs):
+        """`max_shift` and `tolerance` can change the labels, so the id too."""
+        step = members[0].get_coord("time").step
+        late = [  # each seam 1.15 steps: no stated step fits under 0.2
+            x.update_coords(time_min=x.coords.min("time") + num * (step * 15) // 100)
+            for num, x in enumerate(members)
+        ]
+        default = dc.spool(late).chunk(time=None)[0]
+        other = dc.spool(late).chunk(time=None, **kwargs)[0]
+        assert default.attrs.data_id != other.attrs.data_id
+        if "max_shift" in kwargs:  # a wider slack keeps the stated step
+            assert other.get_coord("time").step == step
+            assert default.get_coord("time") != other.get_coord("time")
 
     def test_unencodable_merge_options(self, members):
         """The merge still happens; its id is nobody else's."""

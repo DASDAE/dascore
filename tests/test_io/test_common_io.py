@@ -42,15 +42,18 @@ from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.mseed.core import MSeedV2
-from dascore.io.netcdf import NetCDFCFV18, NetCDFNoCF
+from dascore.io.netcdf import NetCDF3V1, NetCDFCFV18, NetCDFNoCF
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
+from dascore.io.nokia import NokiaOFDRH5V1, NokiaOFDRV1
 from dascore.io.odh4 import ODH4V1
-from dascore.io.optodas import OptoDASV8
+from dascore.io.optodas import OptoDASV7, OptoDASV8
 from dascore.io.pickle import PickleIO
-from dascore.io.prodml import ProdMLV2_0, ProdMLV2_1
+from dascore.io.prodml import ProdMLFlatV1, ProdMLV2_0, ProdMLV2_1
+from dascore.io.puniu import PuniuV1
+from dascore.io.rsf import RSFV1
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
-from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2
+from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2, SilixaH5V3
 from dascore.io.sintela import SintelaBinaryV3, SintelaProtobufV1
 from dascore.io.sr4731 import SR4731V200
 from dascore.io.tdms import TDMSFormatterV4713
@@ -69,11 +72,14 @@ from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
 from dascore.warnings import SnapWarning
 from tests.test_io._common_io_test_utils import (
+    FixtureFile,
     get_flat_io_test,
+    get_matrix_path,
     skip_missing,
     skip_timeout,
 )
 from tests.test_io.test_asdf.test_asdf import write_asdf
+from tests.test_io.test_puniu.test_puniu import write_puniu
 from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 
 # No shipped file is DASDAE version 2 yet: the current writer makes one
@@ -126,11 +132,20 @@ def _write_dasdae_v2():
 
 # --- Fixtures
 
+
+@pytest.fixture(scope="session")
+def puniu_matrix_file(tmp_path_factory):
+    """A synthetic PUNIU file; no registry file exists for the format."""
+    return write_puniu(tmp_path_factory.mktemp("puniu") / "puniu.h5")
+
+
 # These fixtures are for attaching FiberIO objects to a suite of common
 # read, scan, and get_format tests that all FiberIO instances which implement
 # more than just a write method should pass.
 # The format is {FiberIO class: [path_or_fetch_name]} where fetch_name
 # is the name passed to dascore.utils.downloader.fetch to load the file.
+# A FixtureFile entry instead names a session fixture returning the path,
+# for a format with no registry file.
 # See the docs on adding a new IO format, in the contributing section,
 # for more details.
 COMMON_IO_READ_TESTS = {
@@ -150,21 +165,28 @@ COMMON_IO_READ_TESTS = {
     H5Simple(): ("h5_simple_2.h5", "h5_simple_1.h5"),
     NeubrexDASV1(): ("neubrex_das_1.h5",),
     NeubrexRFSV1(): ("neubrex_dss_forge.h5", "neubrex_dts_forge.h5"),
+    NokiaOFDRV1(): ("nokia_ofdr_1",),
+    NokiaOFDRH5V1(): ("nokia_ofdr_downsampled_1.h5",),
     ODH4V1(): ("optasense_odh4_1.h5",),
     # decimated_optodas.hdf5 is the #419 regression file; it is in the matrix
     # so every contract runs over it, not only a read.
     OptoDASV8(): ("opto_das_1.hdf5", "decimated_optodas.hdf5"),
+    OptoDASV7(): ("opto_das_v7_1.hdf5",),
     SR4731V200(): ("ofl100_1.sor", "ofl100_2.sor", "ofl100_3.sor"),
     ProdMLV2_0(): ("prodml_2.0.h5", "opta_sense_quantx_v2.h5"),
     ProdMLV2_1(): (
         "prodml_2.1.h5",
         "iDAS005_hdf5_example.626.h5",
     ),
+    ProdMLFlatV1(): ("prodml_flat_1.h5",),
+    PuniuV1(): (FixtureFile("puniu_matrix_file"),),
+    RSFV1(): ("example_dascore.rsf",),
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     SegyV1_0(): ("conoco_segy_1.sgy",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
     SilixaH5V1(): ("silixa_h5_1.hdf5",),
     SilixaH5V2(): ("silixa_h5_ingv_1.h5",),
+    SilixaH5V3(): ("silixa_h5_idas2_1.h5",),
     SintelaBinaryV3(): ("sintela_binary_v3_test_1.raw",),
     SintelaProtobufV1(): ("sintela_protobuf_1.pb",),
     Terra15FormatterV4(): (
@@ -174,6 +196,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     XdasV1(): ("xdas_netcdf.nc",),
+    NetCDF3V1(): ("kolsass_dts_netcdf3.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
     **{io: (str(path),) for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items()},
@@ -188,6 +211,7 @@ COMMON_IO_WRITE_TESTS = (
     PickleIO(),
     DASDAEV1(),
     DASDAEV2(),
+    RSFV1(),
     *_ZARR_IOS,
 )
 
@@ -205,9 +229,11 @@ SKIP_DATA_FILES = {
 # of the inventory's facts under a vendor spelling, in which case it belongs
 # under the canonical name, and whether it states units the reader should
 # have converted away at the parse boundary.
-# Formats which hand back the attrs stored in the file rather than building
-# them from a header, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR"})
+# Formats which hand back the attrs stored in the file rather than mapping
+# vendor fields to attrs, so the file, not the reader, chooses the names.
+_PASS_THROUGH_FORMATS = frozenset(
+    {"ARROW", "DASDAE", "NETCDF3", "NETCDF_CF", "ZARR", "rsf"}
+)
 
 VENDOR_ATTRS = frozenset(
     {
@@ -215,6 +241,7 @@ VENDOR_ATTRS = frozenset(
         "acqres",
         "acquisition_id",
         "acquisition_range_m",
+        "amp_scaling",
         "ampli_power",
         "amppower",
         "api",
@@ -283,6 +310,7 @@ VENDOR_ATTRS = frozenset(
         "sample_spacing_usec",
         "sampling_resolution",
         "schema_version",
+        "segy_text_header",
         "service_company_name",
         "signal_size",
         "start_channel",
@@ -434,9 +462,8 @@ def io_path_tuple(request):
     A fixture which returns io instance, path_to_file.
     This is used for common testing.
     """
-    io, fetch_name = request.param
-    with skip_timeout():
-        return io, fetch(fetch_name)
+    io, entry = request.param
+    return io, get_matrix_path(entry, request)
 
 
 @pytest.fixture(scope="session", params=get_registry_df()["name"])
@@ -558,14 +585,13 @@ class TestGetFormat:
         """Ensure a dummy h5 file the format (it isn't any fiber format)."""
         assert io_instance.get_format(generic_hdf5) is False
 
-    def test_all_other_files_arent_format(self, io_instance):
+    def test_all_other_files_arent_format(self, io_instance, request):
         """All other data files should not show up as this format."""
         for other_io, data_files in COMMON_IO_READ_TESTS.items():
             if isinstance(other_io, type(io_instance)):
                 continue
-            for key in iterate(data_files):
-                with skip_timeout():
-                    path = fetch(key)
+            for entry in iterate(data_files):
+                path = get_matrix_path(entry, request)
                 out = io_instance.get_format(path)
                 if out and isinstance(io_instance, NetCDFNoCF):
                     # It claims netCDF-written files with no CF version, such
@@ -934,7 +960,7 @@ class TestScan:
                 assert inspect.unwrap(getattr(type(reader), name)) is getattr(
                     FiberIO, name
                 )
-            if reader.name in {"WAV", "rsf"}:
+            if reader.name == "WAV":
                 continue  # Write-only formats cannot describe or load a resource.
             for name in ("get_version", "get_metadata", "read_array"):
                 assert inspect.unwrap(getattr(type(reader), name)) is not getattr(
@@ -1205,8 +1231,10 @@ class TestWrite:
 
     def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
         """If the writer can read, ensure round-tripping patch is equal."""
-        if fiber_io_writer.name in {"WAV", "rsf"}:
+        if fiber_io_writer.name == "WAV":
             pytest.skip("FiberIO doesn't implement read")
+        if fiber_io_writer.name == "rsf":
+            pytest.skip("RSF stores float32 samples; the random patch is float64")
         new = fiber_io_writer.read(written_fiber_path)[0]
         assert new == random_patch
 

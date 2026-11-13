@@ -223,7 +223,7 @@ class TestIncludes:
         chunks = extract_qmd_file(page).chunks
         assert chunks and all(x.path is not None for x in chunks)
         module = render_test_module(page, chunks)
-        assert "### dascore/.agents/skills/make-inventory/SKILL.md:" in module
+        assert "### dascore/.agents/skills/dascore-make-inventory/SKILL.md:" in module
 
 
 class TestOutputPaths:

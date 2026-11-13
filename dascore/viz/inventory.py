@@ -79,7 +79,8 @@ def _sample_distances(path, low: float, high: float, count: int) -> np.ndarray:
     placed. Every gap contributes a sample, so every gap is seen.
     """
     spans = sorted(
-        (float(min(x.distance)), float(max(x.distance))) for x in path.geometry
+        (float(min(x.optical_distance)), float(max(x.optical_distance)))
+        for x in path.geometry
     )
     covered: list[list[float]] = []
     for start, end in spans:
@@ -209,7 +210,7 @@ def _track_frame(path, acquisitions) -> pd.DataFrame:
         dist_map = acquisition.distance_map
         if dist_map is None:
             continue
-        distances = dist_map.distance
+        distances = dist_map.optical_distance
         rows.append(
             {
                 "lane": f"acquisition ({acquisition.code})",

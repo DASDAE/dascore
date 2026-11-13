@@ -429,16 +429,25 @@ class TestChunkPlanToMerge:
             plan = build_chunk_plan(df, time=None, tolerance=10, group=("station",))
         assert len(plan.outputs) == 2
 
-    def test_hole_merges_only_with_a_fill_value(self, contiguous_df):
-        """A tolerance spans a real gap only when the plan may fill it (#662)."""
+    def test_tolerance_spans_a_hole(self, contiguous_df):
+        """A tolerance spans a real gap, refitting it, or filling with a fill value."""
         df = contiguous_df.iloc[:2].copy()
         step = df["time_step"].iloc[0]
         df.loc[0, "time_max"] = df.loc[0, "time_min"] + 10 * step
         df.loc[1, "time_min"] = df.loc[0, "time_max"] + 5 * step
         df.loc[1, "time_max"] = df.loc[1, "time_min"] + 10 * step
-        assert len(build_chunk_plan(df, time=None, tolerance=10).outputs) == 2
-        plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
+        assert len(build_chunk_plan(df, time=None).outputs) == 2
+        with pytest.warns(UserWarning, match="gap"):
+            refit = build_chunk_plan(df, time=None, tolerance=10).outputs
+        # the gap is closed by spreading the labels evenly over 22 samples
+        assert len(refit) == 1
+        span = (df["time_max"].max() - df["time_min"].min()).value
+        assert refit["time_step"].iloc[0].value == round(span / 21)
+        with warnings.catch_warnings():  # a fill spreads no labels, so no warning
+            warnings.simplefilter("error")
+            plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
         assert len(plan.outputs) == 1
+        assert plan.outputs["time_step"].iloc[0] == step
 
 
 class TestPlanMembers:
@@ -1023,17 +1032,27 @@ class TestBuildGapFrame:
         assert build_gap_frame(nested_then_later_df, "time").empty
 
     def test_sub_tolerance_gap_ignored(self, contiguous_df):
-        """A hole under the tolerance is not a gap."""
+        """A seam under the tolerance is not a gap, and nothing makes one."""
         df = contiguous_df.copy()
         df["time_max"] -= df["time_step"]
         assert build_gap_frame(df, "time").empty
-        # ... but tightening the tolerance finds it
-        assert len(build_gap_frame(df, "time", tolerance=0.5)) == len(df) - 1
+        # a tolerance only widens the seam test, so a tight one finds nothing
+        assert build_gap_frame(df, "time", tolerance=0.5).empty
+        # a seam 1.3 steps wide is a gap unless the tolerance spans it
+        wide = df.assign(time_min=df["time_min"] + 0.3 * df["time_step"])
+        wide.loc[0, "time_min"] = df.loc[0, "time_min"]
+        assert len(build_gap_frame(wide, "time")) == len(df) - 1
+        assert build_gap_frame(wide, "time", tolerance=1.5).empty
 
-    def test_unknown_step_reports_no_gap(self, gapy_df):
-        """With no step the tolerance has no sample to scale, so no gaps."""
+    def test_unknown_step_reports_every_seam(self, gapy_df):
+        """With no step only a distance joins, so every seam is a gap."""
         df = gapy_df.assign(time_step=np.timedelta64("NaT", "ns"))
-        assert build_gap_frame(df, "time").empty
+        out = build_gap_frame(df, "time")
+        assert len(out) == len(df) - 1
+        assert out["missing"].isna().all()
+        wide = gapy_df["time_step"].iloc[0] * 16
+        assert build_gap_frame(df, "time", tolerance=wide).empty
+        assert len(build_chunk_plan(df, time=None).outputs) == len(df)
 
     def test_groups_never_bridge(self, gapy_df):
         """A gap is never reported between two unrelated groups."""

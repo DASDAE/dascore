@@ -133,7 +133,8 @@ def coverage(
     spool,
     dim: str = "time",
     *,
-    tolerance: float | Quantity | np.timedelta64 = 1.5,
+    tolerance: float | Quantity | np.timedelta64 | None = None,
+    max_shift: float | None = None,
     group: str | Sequence[str] | None = None,
     color=None,
     ax: plt.Axes | None = None,
@@ -157,10 +158,12 @@ def coverage(
     dim
         The dimension to measure along.
     tolerance
-        How many samples patches may be spaced and still count as
-        contiguous, or a quantity or timedelta stating that limit in the
-        coordinate's own units (eg `1 * s`). Same meaning as chunk's
-        `tolerance`.
+        Seams up to this many steps wide also join, or up to this width
+        when a quantity or timedelta (eg `1 * s`); off by default. Same
+        meaning as chunk's `tolerance`.
+    max_shift
+        The seam test's slack, in steps; None means
+        `dascore.config.max_shift`. Same meaning as chunk's `max_shift`.
     group
         Attributes which separate patches into unrelated groups; a gap
         is never reported between two groups. Defaults to the config
@@ -202,8 +205,10 @@ def coverage(
     """
     # get_coverage refuses a dimension the spool does not state, and
     # names the ones it does, so its message is better than any here.
-    report = spool.get_coverage(dim, tolerance=tolerance, group=group)
-    gaps = spool.get_gaps(dim, tolerance=tolerance, group=group)
+    report = spool.get_coverage(
+        dim, tolerance=tolerance, max_shift=max_shift, group=group
+    )
+    gaps = spool.get_gaps(dim, tolerance=tolerance, max_shift=max_shift, group=group)
     frame = _tile(report, gaps, dim)
     lanes = list(dict.fromkeys(frame["lane"]))
     ax = _new_ax(ax, 1.2 + 0.45 * len(lanes))
@@ -348,7 +353,8 @@ def calendar(
     spool,
     *,
     method: str = "percent",
-    tolerance: float | Quantity | np.timedelta64 = 1.5,
+    tolerance: float | Quantity | np.timedelta64 | None = None,
+    max_shift: float | None = None,
     group: str | Sequence[str] | None = None,
     ax: plt.Axes | None = None,
     show: bool = False,
@@ -373,10 +379,12 @@ def calendar(
         - "gap": how much of the day does not, in seconds, log scaled.
         - "count": how many patches overlap the day.
     tolerance
-        How many samples patches may be spaced and still count as
-        contiguous, or a quantity or timedelta stating that limit in the
-        coordinate's own units (eg `1 * s`). Same meaning as chunk's
-        `tolerance`.
+        Seams up to this many steps wide also join, or up to this width
+        when a quantity or timedelta (eg `1 * s`); off by default. Same
+        meaning as chunk's `tolerance`.
+    max_shift
+        The seam test's slack, in steps; None means
+        `dascore.config.max_shift`. Same meaning as chunk's `max_shift`.
     group
         Attributes which separate patches into unrelated groups. Defaults
         to the config option `patch_kind_attrs`. It decides which
@@ -428,8 +436,10 @@ def calendar(
         )
         raise ParameterError(msg)
     dim = "time"
-    report = spool.get_coverage(dim, tolerance=tolerance, group=group)
-    gaps = spool.get_gaps(dim, tolerance=tolerance, group=group)
+    report = spool.get_coverage(
+        dim, tolerance=tolerance, max_shift=max_shift, group=group
+    )
+    gaps = spool.get_gaps(dim, tolerance=tolerance, max_shift=max_shift, group=group)
     if len(report) and not pd.api.types.is_datetime64_any_dtype(report[f"{dim}_min"]):
         msg = (
             "A calendar puts data on dates, and this spool states time "
