@@ -2583,13 +2583,33 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         mine, theirs = self._label_fields(), other._label_fields()
         if sensible_model_equals(mine, theirs):
             return True
-        labels = self.values, other.values
-        grids = self._grid is not None and other._grid is not None
-        if grids or self._partial or other._partial:
+        if self.shape != other.shape or self._partial or other._partial:
+            return False
+        if self._grid is not None and other._grid is not None:
             return False  # one grid each says all of its labels
         for fields in (mine, theirs):  # the labels say all a step or runs do
             fields.pop("runs"), fields.pop("step")
-        return sensible_model_equals(mine, theirs) and values_equal(*labels)
+        return sensible_model_equals(mine, theirs) and self._same_labels(other)
+
+    def _same_labels(self, other: NumericCoord) -> bool:
+        """
+        Whether a coordinate as long holds equal labels: run by run where
+        both split alike (equal runs hold equal labels), and elsewhere a
+        block at a time, so no grid is spelled out whole.
+        """
+        size, starts = int(self.shape[0]), self._run_offsets()
+        spans = [(0, size)]
+        if np.array_equal(starts, other._run_offsets()):
+            stops = [*starts.tolist()[1:], size]
+            pairs = zip(starts.tolist(), stops, self.runs, other.runs, strict=True)
+            spans = [(a, b) for a, b, x, y in pairs if x != y]
+        for start, stop in spans:
+            for low in range(start, stop, _EQ_BLOCK):
+                high = min(low + _EQ_BLOCK, stop)
+                mine, theirs = self[low:high].values, other[low:high].values
+                if not (np.array_equal(mine, theirs) or values_equal(mine, theirs)):
+                    return False
+        return True
 
     # Defined together, as the base class defines them: a class which states
     # __eq__ and not __hash__ is unhashable by a rule of python's, which
@@ -4210,9 +4230,13 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     # each group: its anchor grid, its filled length, and its pieces' blocks
     groups: list[list] = []
     moved = 0.0
-    for source, piece in _fill_pieces(coord):
+    for source, piece in _fill_pieces(coord, limit, samples):
         stop = source + len(piece)
-        if groups:
+        if groups and isinstance(groups[-1][0], Labels) and limit is None:
+            # without a step, only filling every gap reaches past labels
+            msg = "Filling gaps after labels with no step needs a grid; snap first."
+            raise CoordError(msg)
+        if groups and not isinstance(groups[-1][0], Labels):
             anchor, length, blocks = groups[-1]
             position, shift = _fill_position(coord, anchor, piece)
             missing = position - length
@@ -4231,9 +4255,6 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
                 blocks.append((source, stop, position))
                 groups[-1][1] = position + len(piece)
                 continue
-        if isinstance(piece, Labels):  # no grid to fill onto
-            msg = "Filling gaps after labels with no step needs a grid; snap first."
-            raise CoordError(msg)
         groups.append([piece, len(piece), [(source, stop, 0)]])
     if all(len(blocks) == 1 for *_, blocks in groups):
         return None
@@ -4250,14 +4271,25 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     return coord._with_runs(runs), tuple(out), moved
 
 
-def _fill_pieces(coord: NumericCoord) -> list[tuple[int, Any]]:
-    """Each piece of consecutive positions (a labels segment is one), with offset."""
+def _fill_pieces(coord: NumericCoord, limit, samples) -> list[tuple[int, Any]]:
+    """
+    Each piece of consecutive positions (a labels segment is one), with
+    offset. Jittered labels are one piece, refused if a hole in them fills.
+    """
     if coord.jittered:
-        msg = (
-            "Filling gaps needs labels on their step's grid; these sit off it. "
-            "Use snap_coords to put them on a grid first."
-        )
-        raise CoordError(msg)
+        (run,) = coord.runs
+        values = coord._run_labels(run)
+        holes = _on_grid(_diffs(values), coord.step, jitter=True) - 1
+        holes = holes[holes > 0]
+        anchor = _range_run(dict(start=values[0], step=coord.step, shape=(1,)))[0]
+        most = _fill_limit(coord, anchor, limit, samples)
+        if len(holes) and (most is None or holes.min() <= most):
+            msg = (
+                "Filling gaps needs labels on their step's grid; these sit off "
+                "it. Use snap_coords to put them on a grid first."
+            )
+            raise CoordError(msg)
+        return [(0, run)]
     pieces: list[tuple[int, Any]] = []
     for run, offset in zip(coord.runs, coord._run_offsets()):
         if isinstance(run, Grid) or _is_null(coord.step):
@@ -4853,6 +4885,10 @@ def _range_coord(spec: dict, units, dtype=None) -> BaseCoord:
     """The evenly sampled coordinate a set of range inputs describes."""
     grid, inferred = _range_run(spec)
     return NumericCoord(runs=(grid,), units=units, dtype=dtype or inferred)
+
+
+# Labels equality spells out at a time: a few megabytes of float64.
+_EQ_BLOCK = 2**18
 
 
 def _same_step(step, other) -> bool:

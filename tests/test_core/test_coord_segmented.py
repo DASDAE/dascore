@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import tracemalloc
 import warnings
 from fractions import Fraction
 
@@ -848,6 +849,42 @@ class TestEdgeCases:
             float_gap_coord, get_coord(start=30.0, stop=40.0, step=1.0)
         )
         assert float_gap_coord != three
+
+    def test_eq_split_differently(self):
+        """Segments split at other places, or stated otherwise, are equal by labels."""
+        grid = lambda start, size: get_coord(start=start, step=1.0, shape=(size,))  # noqa
+        labels = NumericCoord.from_labels
+        first = concat_coords(grid(0.0, 5), labels(np.array([7.0, 8, 9, 10])))
+        second = concat_coords(labels(np.arange(5.0)), grid(7.0, 4))
+        assert first == second and first.runs != second.runs
+        assert first != concat_coords(grid(0.0, 5), grid(7.0, 5))
+        # a stated step says nothing the labels do not; a dtype does
+        values = np.array([0.0, 1.0, 3.0])
+        assert labels(values, step=1.0) == labels(values, step=0.5)
+        assert labels(values) != labels(values.astype(np.int64))
+
+    def test_eq_spells_out_no_grid(self):
+        """Comparing long grids and their segments holds no labels in memory."""
+        size = 50_000_000
+        grid = get_coord(start=0.0, step=1.0, shape=(size,))
+        keep = np.ones(size, dtype=bool)
+        keep[size // 2] = False
+        pairs = [
+            (grid, get_coord(start=0.0, step=1.0, shape=(size,))),
+            (grid, get_coord(start=0.5, step=1.0, shape=(size,))),
+            (grid, get_coord(start=0.0, step=1.0, shape=(size - 1,))),
+            (grid[keep], concat_coords(grid[: size // 2], grid[size // 2 + 1 :])),
+            (grid[keep], grid[keep].update_limits(min=1.0)),
+        ]
+        del keep
+        tracemalloc.start()
+        try:
+            found = [x == y for x, y in pairs]
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert found == [True, False, False, True, False]
+        assert peak < 50_000_000
 
     def test_zero_dim_index_returns_scalar(self, float_gap_coord):
         """A 0-d array index returns a scalar value."""

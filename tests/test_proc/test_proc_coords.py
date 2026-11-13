@@ -2246,10 +2246,24 @@ class TestFillGaps:
             patch.fill_gaps("time")
 
     def test_no_step_raises(self):
-        """An array coordinate without a declared step has no grid to fill."""
-        patch = _gapped_patch(get_coord(data=np.array([0.0, 1.0, 5.0])), dim="x")
+        """A gap after labels without a step has no grid to fill onto."""
+        labels = get_coord(data=np.array([0.0, 1.0, 5.0]))
+        coord = concat_coords(labels, get_coord(start=9.0, step=1.0, shape=(3,)))
         with pytest.raises(CoordError, match="no step"):
-            patch.fill_gaps("x")
+            _gapped_patch(coord, dim="x").fill_gaps("x")
+
+    def test_labels_beside_unfilled_gaps(self):
+        """Labels are left as they are where no gap beside them fills."""
+        grids = [get_coord(start=x, step=1.0, shape=(5,)) for x in (0.0, 7.0)]
+        labels = get_coord(data=np.array([1000, 1001.3, 1005]))
+        patch = _gapped_patch(concat_coords(*grids, labels), dim="x")
+        out = patch.fill_gaps(x=5)
+        assert out.get_coord("x") == get_coord(data=np.r_[0:12, 1000, 1001.3, 1005])
+        alone = _gapped_patch(labels, dim="x")
+        assert alone.fill_gaps("x") == alone
+        jittered = get_coord(data=np.array([0.0, 1.1, 1.9, 5.05, 6.0]), step=1.0)
+        patch = _gapped_patch(jittered, dim="x")
+        assert patch.fill_gaps(x=1, samples=True) == patch
 
     def test_jittered_raises(self):
         """Labels off their step's grid are snapped, not filled."""

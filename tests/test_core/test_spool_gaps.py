@@ -640,6 +640,24 @@ class TestSpoolFillGaps:
             assert got_coords[0] == want.get_coord("x")
             assert len(got.get_contents()) == 1
 
+    @pytest.mark.parametrize("labels", [[20.0, 21.2, 29.9, 31.0], [20, 21.2, 22.9, 24]])
+    def test_labels_beside_an_unfilled_gap_load(self, labels):
+        """A patch of labels no fill reaches loads, alone or in windows."""
+
+        def make(coord):
+            coords = {"time": coord, "distance": np.arange(2.0)}
+            return dc.Patch(
+                data=np.ones((len(coord), 2)), coords=coords, dims=tuple(coords)
+            )
+
+        labels = get_coord(data=np.array(labels))
+        grid = get_coord(start=0.0, step=1.0, shape=(10,))
+        spool = dc.spool([make(grid), make(labels)])
+        assert [x.shape for x in spool.fill_gaps(time=2)] == [(10, 2), (4, 2)]
+        assert [x.shape for x in dc.spool([make(labels)]).fill_gaps("time")] == [(4, 2)]
+        windows = spool.fill_gaps(time=2).chunk(time=5, keep_partial=True)
+        assert sum(x.shape[0] for x in windows) == 14
+
     def test_negative_sample_count_raises(self, gappy_spool):
         """A count of missing samples is never negative."""
         with pytest.raises(ParameterError, match="non-negative"):
