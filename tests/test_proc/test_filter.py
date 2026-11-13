@@ -34,6 +34,12 @@ class TestPassFilterChecks:
         with pytest.raises(ValueError):
             random_patch.pass_filter(corners=corners, time=(1, 10))
 
+    def test_corners_which_are_no_key(self, random_patch):
+        """An order given as an array is still the order."""
+        out = random_patch.pass_filter(corners=np.array(4), time=(1, 10))
+        expected = random_patch.pass_filter(corners=4, time=(1, 10))
+        assert np.allclose(out.data, expected.data)
+
     def test_design_is_not_shared(self, random_patch):
         """Each call gets its own filter, whatever a caller does to one."""
         first = PassFilter(time=(1, 10)).get_metadata(random_patch)[1]["sos"]

@@ -85,7 +85,10 @@ def _reach(mode, widths: dict[int, int], dtype):
 
 def _get_sos(sr, filt_min, filt_max, corners):
     """Get second order sections from sampling rate and filter bounds."""
-    found = _designed(sr, filt_min, filt_max, corners)
+    try:
+        found = _designed(sr, filt_min, filt_max, corners)
+    except TypeError:  # an argument which is no key, such as an array
+        return _design(sr, filt_min, filt_max, corners)
     # A copy, so nothing a caller does to it reaches the next one.
     return found.copy()
 

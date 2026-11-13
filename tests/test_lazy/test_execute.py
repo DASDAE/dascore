@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tracemalloc
 import warnings
 from typing import ClassVar
 
@@ -10,12 +11,13 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.core.source import ArraySource
 from dascore.exceptions import LazyOperationError, ParameterError, PatchError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.contract import Pointwise, Window
 from dascore.lazy.execute import chunk_boxes, compute, read_schedule
-from dascore.lazy.recipe import concat
+from dascore.lazy.recipe import Recipe, concat
 from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
 
@@ -345,6 +347,34 @@ class TestWindowed:
         out = lazy.window(time=64, samples=True).set_units("m/s")
         assert out.data is lazy.data
         assert out.attrs.data_units == dc.get_quantity("m/s")
+
+    def test_declaring_reads_and_holds_little(self):
+        """The dtype is found from a short window, however long the others are."""
+        shape = (8, 20_000_000)
+        coords = {"distance": np.arange(8.0), "time": np.arange(shape[1])}
+        recipe = Recipe.from_source(ArraySource.full(shape, 1, dtype=np.int16))
+        long = dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
+        tracemalloc.start()
+        try:
+            out = long.window(distance=4, samples=True).detrend("distance")
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # One window whole would be 4 by 20 million samples.
+        assert out.dtype == np.float64 and peak < 20e6
+
+    def test_dtype_of_what_cannot_run_short(self, tmp_path_factory):
+        """An operation which needs more of a dimension than is tried gets it."""
+        data = np.random.default_rng(3).integers(-9, 9, (300, 2000), np.int16)
+        ints = lazy_patch(stored_patch(tmp_path_factory.mktemp("short"), data))
+        # A fit to 201 samples of time, where the dtype is first tried on 64.
+        call = {"polyorder": 2, "time": 201, "samples": True}
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            out = ints.window(distance=32, samples=True).savgol_filter(**call)
+            eager = ints.load().window(distance=32, samples=True)
+            expected = eager.savgol_filter(**call)
+        assert out.dtype == expected.dtype
 
     def test_reduction_still_refused(self, lazy, recipe_loads):
         """A reduction in a window states no contract yet."""

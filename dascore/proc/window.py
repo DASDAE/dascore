@@ -260,6 +260,9 @@ def _same(one, other) -> bool:
     )
 
 
+# The most samples of a dimension which is not windowed that a lazy patch's
+# dtype is found from.
+_PROBE = 64
 # The most windows whose plans are worked out to check an operation which
 # does not say it is `position_free`. Each costs tens of microseconds and
 # the operation's own planning, which for a taper makes about a third of a
@@ -341,7 +344,8 @@ class Windowed(PatchProcessor):
         spans = zip(window.dims, starts, window.size, strict=True)
         index = {dim: slice(at, at + size) for dim, at, size in spans}
         coords, _ = meta.coords.isel(**index)
-        return meta.new(coords=coords)
+        # In the dtype the operation is handed, which is what it plans for.
+        return meta.new(coords=coords, dtype=self._given_dtype(meta.dtype))
 
     def _planned(self, tile):
         """Return what the operation makes of one window's metadata, and its plan."""
@@ -413,25 +417,73 @@ class Windowed(PatchProcessor):
                     merged.update(found)
                 frozen = type(coords.coord_map)(merged)
                 other = tile.new(coords=coords.model_copy(update={"coord_map": frozen}))
-            if not _same(plan, self._planned(other)[1]):
+            made, planned = self._planned(other)
+            self._check_made(other, made)
+            if not _same(plan, planned):
                 self._refuse("what it does depends on where the window sits.")
 
-    def _lazy_dtype(self, meta, made, plan) -> np.dtype:
+    def _lazy_dtype(self, window, tile, plan) -> np.dtype:
         """Return the dtype of the blended windows, by running one of zeros."""
         # A lazy patch states its dtype before anything is read, and an
         # operation's metadata need not say what its kernel returns: a
-        # detrend of integers is float. The one window which starts where
-        # the array does is run, as if it were all there is.
+        # detrend of integers is float. A dtype does not depend on how long
+        # the other dimensions are, so the window is cut short along those;
+        # an operation which cannot plan or run that short is given it whole.
+        long = {
+            dim: slice(0, _PROBE)
+            for dim, n in zip(tile.dims, tile.shape)
+            if dim not in window.dims and n > _PROBE
+        }
+        if long:
+            try:
+                short = tile.new(coords=tile.coords.isel(**long)[0])
+                return self._probed(short, {**plan, "inner": self._planned(short)[1]})
+            except Exception:
+                # Whatever it could not do that short, it is asked whole.
+                pass
+        return self._probed(tile, plan)
+
+    def _probed(self, tile, plan) -> np.dtype:
+        """Return the dtype one window of zeros is blended to."""
+        # The one window which starts where the array does, as if it were
+        # all there is.
         size, stride = plan["size"], plan["stride"]
         only = tuple(-(-z // step) for z, step in zip(size, stride, strict=True))
         where = {x: plan[x] for x in ("axes", "size", "stride", "inner")}
-        probe = np.zeros(made.shape, meta.dtype)
+        probe = np.zeros(tile.shape, tile.dtype)
         with np.errstate(all="ignore"), suppress_warnings():
             out, before = self._blend(
                 probe, length=size, tiles=tuple((x - 1, x) for x in only), **where
             )
         _warn_if_integers(before, out.dtype)
         return out.dtype
+
+    def _given_dtype(self, dtype):
+        """
+        Return the dtype the operation's kernel is handed for data of `dtype`.
+
+        A fill the data cannot hold widens them, and an analysis window
+        makes floats of them, before the operation sees a window.
+        """
+        if self.fill in (None, 0) and self.analysis is None:
+            return dtype
+        dtype = np.dtype(dtype)
+        if self.fill is not None and self.fill != 0:
+            dtype = fill_dtype(dtype, self.fill)
+        if self.analysis is not None:
+            dtype = np.result_type(dtype, _taper_like(np.empty(0), np.empty(0, dtype)))
+        return dtype
+
+    def _check_made(self, tile, made):
+        """Refuse an operation which does not hand a window back as it was."""
+        if made.shape != tile.shape:
+            self._refuse(
+                f"it turns a window of shape {tile.shape} into one of "
+                f"{made.shape}, and only windows which keep their shape are "
+                "blended."
+            )
+        if made is not tile and not _coords_kept(made, tile):
+            self._refuse("it changes the window's dimensions or coordinates.")
 
     def get_metadata(self, meta):
         """Return the blended metadata, the tiling, and one window's plan."""
@@ -470,14 +522,7 @@ class Windowed(PatchProcessor):
         )
         check_patch_attrs(tile, operation.required_attrs)
         made, inner = self._planned(tile)
-        if made.shape != tile.shape:
-            self._refuse(
-                f"it turns a window of shape {tile.shape} into one of "
-                f"{made.shape}, and only windows which keep their shape are "
-                "blended."
-            )
-        if made is not tile and not _coords_kept(made, tile):
-            self._refuse("it changes the window's dimensions or coordinates.")
+        self._check_made(tile, made)
         if not type(operation)._is_position_free():
             self._check_everywhere(meta, window, tile, inner)
         lazy = meta.backend == LAZY_BACKEND
@@ -497,7 +542,7 @@ class Windowed(PatchProcessor):
         if not lazy:
             # In memory the array which comes back says what it is.
             return out, {**plan, "quiet": False}
-        dtype = self._lazy_dtype(meta, made, plan)
+        dtype = self._lazy_dtype(window, tile, plan)
         return out.new(dtype=dtype), {**plan, "quiet": True}
 
     def chunk_contract(self, dtype, plan):
@@ -510,7 +555,7 @@ class Windowed(PatchProcessor):
             return Unchanged()
         axes, others = plan["axes"], plan["others"]
         spans = dict(zip(axes, zip(plan["size"], plan["stride"], plan["length"])))
-        inner = _contract(self.operation, dtype, plan["inner"])
+        inner = _contract(self.operation, self._given_dtype(dtype), plan["inner"])
         if isinstance(inner, Pointwise | Unchanged):
             return Tiles(spans)
         if isinstance(inner, Halo):
@@ -599,6 +644,7 @@ def _coords_kept(made, tile) -> bool:
         and made.coords == tile.coords
         and set(before) == set(after)
         and all(before[x].units == after[x].units for x in before)
+        and all(before[x] == after[x] for x in before if x.startswith("_"))
     )
 
 

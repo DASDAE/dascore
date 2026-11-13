@@ -775,6 +775,61 @@ class TestOperations:
         assert _same(one, other) is same
 
 
+class _Typed(dc.PatchProcessor):
+    """An operation which plans for a dtype, and is handed that dtype."""
+
+    name = None
+    position_free = True
+
+    def get_metadata(self, meta):
+        """Return whether the data are complex."""
+        return meta, {"complex": np.dtype(meta.dtype).kind == "c"}
+
+    def kernel(self, data, *, complex):
+        """Return the data, which are what the plan was told."""
+        assert (data.dtype.kind == "c") is complex
+        return data
+
+
+class _Drifts(dc.PatchProcessor):
+    """An operation which renames a coordinate in every window but the first."""
+
+    name = None
+
+    def get_metadata(self, meta):
+        """Return the metadata, with a hidden coordinate changed off the start."""
+        if float(meta.get_coord("time").min()) == 0:
+            return meta, {}
+        hidden = meta.get_coord("_hidden").values + 1
+        return meta.new(coords=meta.coords.update(_hidden=("time", hidden))), {}
+
+    def kernel(self, data):
+        """Return the data."""
+        return data
+
+
+class TestWhatTheOperationIsHanded:
+    """The operation plans for the window it will be given."""
+
+    @pytest.mark.parametrize("window", ({"fill": 1 + 2j}, {"analysis": "hann"}))
+    def test_plans_for_the_dtype_it_is_handed(self, patch, window):
+        """A fill or an analysis window changes the dtype before the plan."""
+        ints = patch.new(data=np.ones(patch.shape, np.int16))
+        out = Windowed(_Typed(), time=100, overlap=20, samples=True, **window)(ints)
+        assert out.dtype.kind == ("c" if "fill" in window else "f")
+
+    def test_every_window_is_handed_back_as_it_was(self):
+        """A change to a window's coordinates is found in whichever window."""
+        coords = {
+            "distance": np.arange(4.0),
+            "time": np.arange(300.0),
+            "_hidden": ("time", np.zeros(300)),
+        }
+        patch = dc.Patch(np.ones((4, 300)), coords, ("distance", "time"))
+        with pytest.raises(ParameterError, match="dimensions or coordinates"):
+            Windowed(_Drifts(), time=50, samples=True)(patch)
+
+
 class TestOperationsRefused:
     """What cannot run in a window is refused when it is called."""
 
