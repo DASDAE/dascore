@@ -406,6 +406,63 @@ class TestSelect:
         assert out == float_gap_coord
 
 
+def _pairs_patch(stretches, timed=False):
+    """A patch whose mask keeps `stretches` stretches of two samples."""
+    size = 4 * stretches
+    t0 = np.datetime64("2020-01-01", "ns")
+    start, step = (t0, np.timedelta64(1, "ms")) if timed else (0.0, 0.25)
+    time = get_coord(start=start, step=step, shape=(size,))
+    patch = dc.Patch(data=np.arange(float(size)), coords={"time": time}, dims=("time",))
+    return patch, np.arange(size) % 4 < 2
+
+
+class TestSegmentLimit:
+    """Past `max_index_runs` segments, removing samples leaves one list."""
+
+    @pytest.mark.parametrize("timed", [False, True])
+    @pytest.mark.parametrize("stretches", [256, 257])
+    def test_limit(self, stretches, timed):
+        """256 stretches stay segments; 257 are one list with no step."""
+        patch, mask = _pairs_patch(stretches, timed)
+        out = patch.select(time=mask)
+        coord = out.get_coord("time")
+        assert coord.runs_count == (256 if stretches == 256 else 1)
+        if stretches > 256:
+            assert isinstance(coord.runs[0], Labels) and coord.step is None
+        np.testing.assert_array_equal(coord.values, patch.get_coord("time")[mask])
+        np.testing.assert_array_equal(out.data, patch.data[mask])
+
+    def test_list_equals_segments(self):
+        """The list and the same labels as segments compare equal."""
+        patch, mask = _pairs_patch(300)
+        listed = patch.get_coord("time")[mask]
+        with dc.config_context(max_index_runs=1_000):
+            segmented = patch.get_coord("time")[mask]
+        assert (listed.runs_count, segmented.runs_count) == (1, 300)
+        assert listed == segmented and segmented == listed
+
+    def test_index_array_and_dropna(self):
+        """Positions and dropna remove samples through the same limit."""
+        patch, mask = _pairs_patch(300)
+        taken = patch.get_coord("time")[np.flatnonzero(mask)]
+        dropped = patch.update(data=np.where(mask, patch.data, np.nan)).dropna("time")
+        for coord in (taken, dropped.get_coord("time")):
+            assert coord.runs_count == 1 and coord.step is None
+            np.testing.assert_array_equal(coord.values, patch.get_coord("time")[mask])
+        np.testing.assert_array_equal(dropped.data, patch.data[mask])
+
+    def test_no_object_per_stretch(self, monkeypatch):
+        """A heavy mask builds no grid per stretch it leaves."""
+        patch, mask = _pairs_patch(10_000)
+        made = []
+        original = Grid.__post_init__
+        monkeypatch.setattr(
+            Grid, "__post_init__", lambda self: made.append(1) or original(self)
+        )
+        patch.select(time=mask)
+        assert len(made) < 10
+
+
 class TestGetItem:
     """Tests for indexing behavior."""
 

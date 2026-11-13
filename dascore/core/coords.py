@@ -2999,10 +2999,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         The samples at an array of positions, evaluating only those.
 
         Strictly monotonic positions leave each stretch of consecutive
-        positions its own segment on the original step; only positions one
-        stride apart, as a strided slice is, give a coarser step. Others (a
-        reorder or a repeat) are read as labels.
-        None where ``item`` is not an array of positions within the coord.
+        positions its own segment on the original step, or past
+        `max_index_runs` segments one list with no step; only positions one
+        stride apart give a coarser step. Others (a reorder or a repeat) are
+        read as labels. None where ``item`` is no array of positions in it.
         """
         indices = np.asarray(item)
         if indices.dtype == np.bool_ and indices.shape == self.shape:
@@ -3030,8 +3030,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             # step (an irregular axis, as dev kept it) holds no segments
             values = self._get_index_values(indices)
             return get_coord(data=values, units=self.units, snap=False)
-        # each stretch of consecutive positions is its own segment
-        edges = np.flatnonzero(diffs != stride) + 1
+        # a segment per stretch within a run, or one list past the limit
+        which = np.searchsorted(self._run_offsets(), indices, side="right")
+        edges = np.flatnonzero((diffs != stride) | (np.diff(which) != 0)) + 1
+        if len(edges) >= dc.get_config().max_index_runs:
+            return self._with_runs((self._get_index_values(indices),), step=None)
         runs = []
         for first, stop in zip(np.r_[0, edges], np.r_[edges, len(indices)]):
             span = range(int(indices[first]), int(indices[stop - 1]) + stride, stride)

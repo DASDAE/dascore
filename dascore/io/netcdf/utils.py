@@ -199,13 +199,6 @@ def get_scan_coord(coord, snap: snap_type = False, where=""):
     return stored_coord(values, snap, name=coord.name, where=where, units=units)
 
 
-def _stated_step(name, coord):
-    """The step a coordinate's labels need written beside them, or None."""
-    why = "NetCDF and Zarr, which store labels with one step"
-    step = written_step(name, coord, why)
-    return to_int(step) if isinstance(step, np.timedelta64) else step
-
-
 def _get_patch_key(data_var_name):
     """Normalize the selected xarray payload name to a patch id."""
     return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
@@ -263,8 +256,10 @@ def spool_to_cf_dataset(spool):
         raise NotImplementedError(msg)
     patch = patches[0]
     dataset = patch_to_xarray(patch).rename("data").to_dataset()
+    why = "NetCDF and Zarr, which store labels with one step"
     for name, coord in patch.coords.coord_map.items():
-        if (step := _stated_step(name, coord)) is not None:
-            dataset[name].attrs[STEP_ATTR] = step
+        if (step := written_step(name, coord, why)) is not None:
+            timed = isinstance(step, np.timedelta64)
+            dataset[name].attrs[STEP_ATTR] = to_int(step) if timed else step
     dataset.attrs["Conventions"] = "CF-1.8"
     return dataset

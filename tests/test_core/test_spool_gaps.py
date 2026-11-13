@@ -744,8 +744,7 @@ class TestSpoolFillGaps:
         )
         with pytest.raises(CoordError, match="Resample or snap"):
             joined.fill_gaps("x")
-        remedy = "size smaller than that gap, select first .* or resample"
-        with pytest.raises(CoordError, match=remedy):
+        with pytest.raises(CoordError, match="smaller size, select first, or resamp"):
             len(dc.spool(patches).fill_gaps("x"))  # it plans as it is asked
 
     @pytest.mark.parametrize("kwargs", [{}, {"time": 1, "distance": 1}])

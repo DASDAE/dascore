@@ -6,6 +6,7 @@ import math
 import re
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
@@ -98,15 +99,12 @@ def written_step(name: str, coord, why: str):
     layout = _layout(coord)
     if _layout(get_coord(data=coord.values, units=coord.units, snap=False)) == layout:
         return None
-    steps = {x.step for x in coord.segments}
-    try:  # a long fractional grid drifts off its whole-tick step
-        step = steps.pop() if len(steps) == 1 else None
+    step, *others = {x.step for x in coord.segments}
+    with suppress(CoordError):  # a long fractional grid drifts off its step
         back = get_coord(data=coord.values, step=step, units=coord.units)
-    except CoordError:
-        back = None
-    if step is None or back is None or _layout(back) != layout:
-        raise CoordError(_uneven_message(name, coord, why))
-    return step
+        if not others and _layout(back) == layout:
+            return step
+    raise CoordError(_uneven_message(name, coord, why))
 
 
 def get_attr_names(attr_cls) -> set[str]:

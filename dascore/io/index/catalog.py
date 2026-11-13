@@ -726,11 +726,9 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
     the reader did has to be recovered from the coordinate the row
     describes, and the envelope columns are about to be replayed onto,
     so the untrimmed values are kept aside here while they are still
-    true. A relative selection keeps them too: its samples still sit on
-    the source's grid, which planning counts from.
+    true. Relative selections keep them too, as planning's sample grid.
     """
-    relative = {x for coords, _, rel in residuals if rel for x in coords}
-    names = _hintable_names(residuals) | relative
+    names = _hintable_names(residuals) | {x for c, _, r in residuals if r for x in c}
     if not names:
         return {}
     # A coordinate riding a dimension is trimmed by a selection on that

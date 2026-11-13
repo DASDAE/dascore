@@ -215,3 +215,53 @@ class TestDASDAESegments:
         back = dc.read(tmp_path / "out.h5")[0].get_coord("time")
         assert [len(x) for x in back.segments] == [2, 1, 2]
         assert [x.step for x in back.segments] == [np.timedelta64(1, "ms")] * 3
+
+
+# each label-list format's file name and the module it writes with
+LIST_FORMATS = {
+    "DASDAE": ("out.h5", "h5py"),
+    "NETCDF_CF": ("out.nc", "h5netcdf"),
+    "ZARR": ("out.zarr", "zarr"),
+}
+
+
+class TestManySegments:
+    """Heavily masked and long concatenated coordinates write, or refuse."""
+
+    @staticmethod
+    def _patch(stretches, keep=2, period=4):
+        """A patch masked to `stretches` stretches of `keep` samples."""
+        size = period * stretches
+        start = np.datetime64("2020-01-01", "ns")
+        time = dc.get_coord(start=start, step=np.timedelta64(1, "ms"), shape=(size,))
+        patch = dc.Patch(data=np.zeros(size), coords={"time": time}, dims=("time",))
+        return patch.select(time=np.arange(size) % period < keep)
+
+    @pytest.mark.parametrize("name", list(LIST_FORMATS))
+    def test_masked_round_trip(self, name, tmp_path):
+        """Past the segment limit a mask leaves one list, which every one writes."""
+        file_name, module = LIST_FORMATS[name]
+        pytest.importorskip(module)
+        patch = self._patch(300)
+        patch.io.write(tmp_path / file_name, name)
+        back = dc.read(tmp_path / file_name)[0].get_coord("time")
+        assert back.runs_count == 1 and back.step is None
+        assert back == patch.get_coord("time")
+
+    @pytest.mark.parametrize("name", list(LIST_FORMATS))
+    def test_concatenated_segments_round_trip(self, name, tmp_path):
+        """1,500 segments on one step read back as the same segments."""
+        file_name, module = LIST_FORMATS[name]
+        pytest.importorskip(module)
+        with dc.config_context(max_index_runs=2_000):
+            patch = self._patch(1_500, keep=10, period=13)
+        patch.io.write(tmp_path / file_name, name)
+        back = dc.read(tmp_path / file_name)[0].get_coord("time")
+        assert back.runs_count == 1_500 and back == patch.get_coord("time")
+
+    def test_dasdae_refuses_more_segments_than_it_records(self, tmp_path):
+        """An HDF5 attribute holds only so many lengths; the refusal says why."""
+        with dc.config_context(max_index_runs=20_000):
+            patch = self._patch(10_000)
+        with pytest.raises(CoordError, match=r"DASDAE.*10000 segments.*split_gaps"):
+            patch.io.write(tmp_path / "out.h5", "DASDAE")

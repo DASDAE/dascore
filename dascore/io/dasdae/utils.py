@@ -261,8 +261,11 @@ def _save_coord(coord, name, group, compact: bool, options=None):
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
         if compact and getattr(coord, "runs_count", 1) > 1:
-            # irregular runs are read back as the runs they are, unsnapped
-            node.attrs[_EXACT] = [len(x) for x in coord.runs]
+            try:  # runs read back as they are; HDF5 holds ~8,000 lengths
+                node.attrs[_EXACT] = [len(x) for x in coord.runs]
+            except OSError:
+                why = "DASDAE, which records up to about 8,000 segments"
+                raise CoordError(_uneven_message(name[7:], coord, why)) from None
     if compact:
         node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
@@ -451,9 +454,9 @@ def _read_stored_coord(node, name, attrs2):
                     spec = dict(start=values[0], step=node_step, shape=values.shape)
                     written = get_coord(**spec)
                     off = np.abs(written.values - values).max()
-                    floats = values.dtype.kind == "f"
-                    if off <= (_float_allowance(values, node_step) if floats else 0):
-                        grid = written._grid
+                    if values.dtype.kind == "f":  # within float precision
+                        off = off > _float_allowance(values, node_step)
+                    grid = grid if off else written._grid
                 runs.append(values if grid is None else grid)
             return NumericCoord(runs=tuple(runs), units=units, dtype=array.dtype)
         if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate
