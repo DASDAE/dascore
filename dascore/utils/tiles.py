@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import product
 
 import numpy as np
@@ -158,7 +158,9 @@ class TilePlan:
         own = np.asarray(array).dtype
         # Zero is a value of any dtype; another fill may need a wider one.
         dtype = dtype or (own if fill == 0 else fill_dtype(own, fill))
-        buffer = np.full(self.extended, fill, dtype=dtype)
+        # Zeros come from the allocator; any other value has to be written.
+        whole = np.zeros if fill == 0 else partial(np.full, fill_value=fill)
+        buffer = whole(self.extended, dtype=dtype)
         buffer[self._inner()] = array
         return buffer
 

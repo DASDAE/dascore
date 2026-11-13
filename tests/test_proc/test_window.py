@@ -214,9 +214,11 @@ class TestReduce:
     @pytest.mark.parametrize("name", REDUCERS)
     @pytest.mark.parametrize("align", ("center", "right", "left"))
     @pytest.mark.parametrize("step", (1, 3, 4))
-    def test_fast_engine_agrees(self, patch, name, align, step):
+    @pytest.mark.parametrize("size", (400, 401))
+    def test_fast_engine_agrees(self, patch, name, align, step, size):
         """A long window, which another engine answers, gives NumPy's values."""
-        window = patch.window(time=400, step=step, samples=True, align=align)
+        # An odd window centres where pandas does, so its answer is used whole.
+        window = patch.window(time=size, step=step, samples=True, align=align)
         named = getattr(window, name)()
         by_function = window.reduce(getattr(np, name))
         np.testing.assert_allclose(

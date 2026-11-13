@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict
 
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
@@ -79,7 +79,8 @@ class WindowReduce(PatchProcessor):
 
     function: Any
     function_args: tuple = ()
-    function_kwargs: dict = Field(default_factory=dict)
+    # None for none: a default pydantic need not build on every call.
+    function_kwargs: dict | None = None
     overlap: Any = None
     step: Any = None
     samples: bool = False
@@ -94,7 +95,7 @@ class WindowReduce(PatchProcessor):
         given = self._inputs()[0]
         function = given.pop("function")
         args = given.pop("function_args", None)
-        kwargs = given.pop("function_kwargs", {})
+        kwargs = given.pop("function_kwargs", None) or {}
         window = _call_str("window", given)
         if isinstance(function, str) and not (args or kwargs):
             return f"{window}.{function}()"
@@ -135,7 +136,10 @@ class WindowReduce(PatchProcessor):
         kept, total = slice(None, None, step), len(range(0, length, step))
         if self.ends == "drop":
             kept, total = slice(first * step, (first + valid) * step, step), valid
-        coords, _ = meta.coords.isel(**{dim: kept})
+        coords = meta.coords
+        # A window at every sample, the usual one, keeps every label.
+        if kept != slice(None, None, 1):
+            coords, _ = coords.isel(**{dim: kept})
         dtype = np.result_type(meta.dtype, np.float64)
         # Each output sample summarizes a window, not the input's cell.
         out = meta.new(coords=coords._update_grid(dim), dtype=dtype)
@@ -149,28 +153,45 @@ class WindowReduce(PatchProcessor):
             "total": total,
         }
 
+    def _bare(self) -> bool:
+        """Return True for a named reduction given nothing more."""
+        # Only then pandas: it is not handed what NumPy would be.
+        named = isinstance(self.function, str)
+        return named and not (self.function_args or self.function_kwargs)
+
+    def _pandas(self, data, *, axis, size, step, center):
+        """Return pandas' reduction, a value wherever a window ends or centres."""
+        # pandas' std defaults to ddof=1, NumPy's to 0
+        kwargs = {"ddof": 0} if self.function == "std" else {}
+        where = {"window": size, "step": step, "axis": axis, "center": center}
+        return _rolling_pandas(data, self.function, args=(), kwargs=kwargs, **where)
+
+    def _whole(self, data, *, axis, size, step, before, total):
+        """
+        Return pandas' answer where it is every window's already, else None.
+
+        It marks the incomplete windows itself, so nothing is placed in a
+        second array the size of the patch: so for a window labelled at its
+        last sample, or at the middle one pandas calls the centre.
+        """
+        center = step == 1 and before == (size - 1) // 2
+        if not (self._bare() and (center or before == size - 1)):
+            return None
+        if not _pandas_agrees(data, size, step, center=center):
+            return None
+        out = self._pandas(data, axis=axis, size=size, step=step, center=center)
+        return out if out.shape[axis] == total else None
+
     def _complete(self, data, *, axis, size, step, before, first, valid):
         """Return the reduction of each complete window, in a float dtype."""
         named = isinstance(self.function, str)
         function = _REDUCERS[self.function] if named else self.function
-        # Only the bare reduction: pandas is not handed what NumPy would be.
-        bare = named and not (self.function_args or self.function_kwargs)
+        bare = self._bare()
         # pandas labels a window by its last sample, so its answers are these
         # when the two labels are a whole number of steps apart.
         shift, apart = divmod(size - 1 - before, step)
         if bare and not apart and _pandas_agrees(data, size, step, center=False):
-            # pandas' std defaults to ddof=1, NumPy's to 0
-            kwargs = {"ddof": 0} if self.function == "std" else {}
-            rolled = _rolling_pandas(
-                data,
-                self.function,
-                window=size,
-                step=step,
-                axis=axis,
-                center=False,
-                args=(),
-                kwargs=kwargs,
-            )
+            rolled = self._pandas(data, axis=axis, size=size, step=step, center=False)
             pick = [slice(None)] * data.ndim
             pick[axis] = slice(first + shift, first + shift + valid)
             return rolled[tuple(pick)]
@@ -179,7 +200,8 @@ class WindowReduce(PatchProcessor):
         pick = [slice(None)] * (data.ndim + 1)
         pick[axis] = slice(start, start + (valid - 1) * step + 1, step)
         windows = view[tuple(pick)]
-        raw = function(windows, *self.function_args, axis=-1, **self.function_kwargs)
+        kwargs = self.function_kwargs or {}
+        raw = function(windows, *self.function_args, axis=-1, **kwargs)
         # Float64, or complex for complex data, so a window can hold NaN.
         return np.asarray(raw, dtype=np.result_type(data.dtype, np.float64))
 
@@ -195,6 +217,9 @@ class WindowReduce(PatchProcessor):
             data = data.astype(fill_dtype(data.dtype, self.fill), copy=False)
             data = np.pad(data, width, constant_values=self.fill)
             return self._complete(data, before=0, first=0, valid=total, **where)
+        whole = self._whole(data, before=before, total=total, **where)
+        if whole is not None:
+            return whole
         reduced = self._complete(data, before=before, first=first, valid=valid, **where)
         if total == valid:
             return reduced
@@ -385,7 +410,7 @@ class PatchWindow:
         return WindowReduce(
             function=function,
             function_args=args,
-            function_kwargs=kwargs,
+            function_kwargs=kwargs or None,
             overlap=self.overlap,
             step=self.step,
             samples=self.samples,
