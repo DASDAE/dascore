@@ -294,9 +294,10 @@ def spool_to_xarray(
     spool: SpoolType,
     dim: str = "time",
     group: str | typing.Sequence[str] | None = None,
-    tolerance=1.5,
+    tolerance=None,
     conflict: CONFLICT = "raise",
     block_size: str | int | None = None,
+    max_shift: float | None = None,
 ):
     """
     Convert a spool to a lazy, dask-backed xarray DataTree.
@@ -320,10 +321,13 @@ def spool_to_xarray(
         Attributes which partition patches into unrelated groups, exactly
         as `chunk` uses them. Defaults to the config's ``patch_kind_attrs``.
     tolerance
-        The continuity tolerance deciding when a gap splits segments, as
-        in `chunk` (not the sampling-step grouping tolerance).
+        Seams up to this many steps wide (or a quantity or timedelta of
+        that width) also join, as in `chunk`; off by default.
     conflict
         How attribute conflicts within a segment resolve, as in `chunk`.
+    max_shift
+        The seam test's slack, as in `chunk`; None means
+        `dascore.config.max_shift`.
     block_size
         The most a single dask block may hold, as a byte count or a
         string dask parses ("256MiB", "1GB"). This bounds a *bulk* read:
@@ -358,12 +362,11 @@ def spool_to_xarray(
     not hold, and state ``data_id`` or ``origin_id`` only where the index
     knows the merged patch's without loading it.
 
-    The merged dimension's coordinate, when it is a range or segmented,
-    is served lazily by `dascore.xarray.index.CoordIndex`: its labels are
-    computed on demand from the merged coordinate rather than stored, so an
-    arbitrarily long merged time coordinate costs nothing to build, even
-    when sub-tolerance gaps or slightly different sampling steps leave it
-    segmented rather than one range. Label selection on it answers
+    The merged dimension's coordinate, when it is a range, is served
+    lazily by `dascore.xarray.index.CoordIndex`: its labels are computed
+    on demand from the merged coordinate rather than stored, so an
+    arbitrarily long merged time coordinate costs nothing to build. Label
+    selection on it answers
     as `Patch.sel` does, and reading ``.values`` or asking for the
     pandas index materializes labels on demand. Other dimensions keep
     materialized labels, which per-channel arrays (gains, offsets) align
@@ -480,9 +483,9 @@ def spool_to_xarray(
     plan = build_chunk_plan(
         working,
         tolerance=tolerance,
+        max_shift=max_shift,
         conflict=conflict,
         group=group,
-        _bridge_holes=True,
         **chunk_kwargs,
     )
     outputs = plan.outputs
@@ -494,11 +497,8 @@ def spool_to_xarray(
         source_rows=source_rows,
         plan=plan,
         parent=spool._catalog,
-        merge_kwargs={
-            "conflict": conflict,
-            "snap_coords": True,
-            "tolerance": plan.params["tolerance"],
-        },
+        merge_kwargs={"conflict": conflict}
+        | {x: plan.params[x] for x in ("tolerance", "max_shift")},
         mode="chunk",
         origin_path=spool.spool_path,
     )

@@ -12,7 +12,6 @@ from dascore.utils.gaps import (
     GapTolerance,
     RunRecord,
     contiguous_runs,
-    gap_boundaries,
     get_gap_edges,
     is_monotonic_and_finite,
 )
@@ -182,27 +181,6 @@ class TestGapTolerance:
             GapTolerance(count=1.0, excess=1.0)
         with pytest.raises(ParameterError):
             GapTolerance()
-
-
-class TestGapBoundaries:
-    """The reach sweep over runs."""
-
-    def test_reach_shields_nested_runs(self):
-        """A run behind the furthest stop seen never opens a gap."""
-        starts = np.array([0.0, 20.0, 5.0, 40.0])
-        stops = np.array([30.0, 25.0, 8.0, 45.0])
-        steps = np.ones(4)
-        order, reach, has_gap = gap_boundaries(
-            starts, stops, steps, GapTolerance.samples(1.5)
-        )
-        assert order.tolist() == [0, 2, 1, 3]
-        assert reach.tolist() == [30.0, 30.0, 30.0, 30.0]
-        assert has_gap.tolist() == [False, False, False, True]
-
-    def test_first_row_never_a_gap(self):
-        """Nothing lies behind the first run."""
-        _, _, has_gap = gap_boundaries([10.0], [12.0], [1.0], GapTolerance.samples(1.5))
-        assert has_gap.tolist() == [False]
 
 
 class TestContiguousRuns:
