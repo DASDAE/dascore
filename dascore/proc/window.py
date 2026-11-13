@@ -24,7 +24,7 @@ from dascore.core.processor import PatchProcessor, captured_operation
 from dascore.exceptions import ParameterError, PatchError
 from dascore.lazy.contract import Halo, Pointwise, Tiles, Unchanged, WholeAxis
 from dascore.proc.rolling import _pandas_agrees, _rolling_pandas
-from dascore.proc.tile_apply import TileApply, _blended_window, _windows
+from dascore.proc.tile_apply import TileApply, _blended_window, _windowed, _windows
 from dascore.utils.array_api import LAZY_BACKEND
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
@@ -240,20 +240,29 @@ class WindowReduce(PatchProcessor):
 
 
 def _same(one, other) -> bool:
-    """Whether two plans hold the same values, arrays included."""
+    """
+    Whether two plans hold the same values, arrays included.
+
+    Exactly, and of the same types, where `values_equal` compares within a
+    tolerance: a plan which differs at all between two windows is not the
+    one plan every window is run with.
+    """
     if isinstance(one, dict) and isinstance(other, dict):
         return one.keys() == other.keys() and all(_same(one[x], other[x]) for x in one)
     if isinstance(one, list | tuple) and isinstance(other, list | tuple):
         return len(one) == len(other) and all(map(_same, one, other))
     if isinstance(one, np.ndarray) or isinstance(other, np.ndarray):
-        return np.array_equal(one, other, equal_nan=np.asarray(one).dtype.kind in "fc")
+        return np.array_equal(
+            one, other, equal_nan=np.asarray(one).dtype.kind in "fcmM"
+        )
     return type(one) is type(other) and (
         one == other or (one != one and other != other)
     )
 
 
-# The most windows along one dimension whose plans are compared.
-_POSITIONS = 64
+# The most windows whose plans are worked out to check an operation which
+# does not say it is `position_free`; about a tenth of a second's work.
+_MAX_CHECKED = 2000
 
 
 class Windowed(PatchProcessor):
@@ -284,10 +293,15 @@ class Windowed(PatchProcessor):
     Notes
     -----
     - Everything is decided from the metadata of one window before any
-      data are read: the operation must give back a window of the same
-      shape and coordinates, and must work the same way wherever the
-      window sits. The plans of up to 64 windows along each dimension,
-      evenly spread, are compared to check the last.
+      data are read. The operation must give back a window of the same
+      shape, dimensions and coordinates, take no other patch or array
+      shaped like the patch, not settle its result from the data it
+      computed, and work the same way wherever the window sits; the
+      window must fit inside its dimension.
+    - An operation says the last itself, by setting `position_free` on its
+      class; DASCore's detrend, filters, normalizations and the like do.
+      One which does not has its plan worked out for every whole window to
+      check, and is refused where there are more than 2000 windows.
     - An operation which only changes metadata leaves the data as they are.
     - On a lazy patch an output chunk needs only the windows which overlap
       it, so a windowed dimension can be cut even where the operation
@@ -327,6 +341,15 @@ class Windowed(PatchProcessor):
         coords, _ = meta.coords.isel(**index)
         return meta.new(coords=coords)
 
+    def _planned(self, tile):
+        """Return what the operation makes of one window's metadata, and its plan."""
+        try:
+            return self.operation.get_metadata(tile)
+        except Exception as error:
+            name = self.operation.name or type(self.operation).__name__
+            error.add_note(f"Raised by {name} for one window of Patch.window.")
+            raise
+
     def _refuse(self, why: str):
         """Raise for an operation which cannot run in a window."""
         operation = self.operation
@@ -337,21 +360,59 @@ class Windowed(PatchProcessor):
         )
         raise ParameterError(msg)
 
-    def _check_everywhere(self, meta, window, plan):
-        """Refuse an operation whose plan is not the one plan of every window."""
-        length = tuple(meta.shape[x] for x in window.axes)
-        for place, (n, size, step) in enumerate(
-            zip(length, window.size, window.stride, strict=True)
-        ):
-            # Every whole window along this dimension, or a spread of them.
-            starts = range(step, n - size + 1, step)
-            picked = np.linspace(0, len(starts) - 1, min(len(starts), _POSITIONS))
-            for at in sorted({starts[int(x)] for x in picked}):
-                where = [0] * len(length)
-                where[place] = at
-                other = self.operation.get_metadata(self._tile(meta, window, where))
-                if not _same(plan, other[1]):
-                    self._refuse("what it does depends on where the window sits.")
+    def _check_everywhere(self, meta, window, tile, plan):
+        """
+        Refuse an operation whose plan is not the one plan of every window.
+
+        Only for an operation which does not say it is `position_free`.
+        Every whole window is asked, up to a limit, and along each dimension
+        the one which ends where the array does: the last windows reach past
+        the end, and no metadata describes those. A window's metadata
+        differs from the first's only in the coordinates along the windowed
+        dimensions, so those are cut once for each start and put together
+        for each window.
+        """
+        coords, dim_map = tile.coords, tile.coords.dim_map
+        counts = [
+            (meta.shape[axis] - size) // step + 1
+            for axis, size, step in zip(window.axes, window.size, window.stride)
+        ]
+        if math.prod(counts) > _MAX_CHECKED:
+            self._refuse(
+                f"its class does not set position_free, which says its plan is "
+                f"the same wherever a window sits, and {math.prod(counts)} "
+                f"windows are more than the {_MAX_CHECKED} whose plans are "
+                "worked out to check."
+            )
+        windowed = set(window.dims)
+        # A coordinate along two windowed dimensions is cut by both at once.
+        joint = any(len(windowed & set(x)) > 1 for x in dim_map.values())
+        choices = []
+        for dim, size, step in zip(window.dims, window.size, window.stride):
+            n = len(meta.get_coord(dim))
+            names = [x for x, dims in dim_map.items() if dim in dims]
+            cut: list[tuple[int, dict]] = []
+            for at in sorted({*range(0, n - size + 1, step), n - size}):
+                found: dict = {}
+                if not joint:
+                    along, _ = meta.coords.isel(**{dim: slice(at, at + size)})
+                    found = {x: along.coord_map[x] for x in names}
+                cut.append((at, found))
+            choices.append(cut)
+        for position in product(*choices):
+            starts = [at for at, _ in position]
+            if not any(starts):
+                continue
+            if joint:
+                other = self._tile(meta, window, starts)
+            else:
+                merged = dict(coords.coord_map)
+                for _, found in position:
+                    merged.update(found)
+                frozen = type(coords.coord_map)(merged)
+                other = tile.new(coords=coords.model_copy(update={"coord_map": frozen}))
+            if not _same(plan, self._planned(other)[1]):
+                self._refuse("what it does depends on where the window sits.")
 
     def _lazy_dtype(self, meta, made, plan) -> np.dtype:
         """Return the dtype of the blended windows, by running one of zeros."""
@@ -380,6 +441,11 @@ class Windowed(PatchProcessor):
             self._refuse("it settles its result from the data it computed.")
         if operation._inputs()[1]:
             self._refuse("it takes another patch, which a window cannot cut yet.")
+        if any(np.shape(x) == meta.shape for x in operation.kwargs.values()):
+            self._refuse(
+                "it was given an array shaped like the patch, which a window "
+                "cannot cut yet."
+            )
         window = _blended_window(
             meta,
             self.model_extra or {},
@@ -401,16 +467,17 @@ class Windowed(PatchProcessor):
             tile, dims=operation.required_dims, coords=operation.required_coords
         )
         check_patch_attrs(tile, operation.required_attrs)
-        made, inner = operation.get_metadata(tile)
-        if made.dims != tile.dims or made.shape != tile.shape:
+        made, inner = self._planned(tile)
+        if made.shape != tile.shape:
             self._refuse(
                 f"it turns a window of shape {tile.shape} into one of "
                 f"{made.shape}, and only windows which keep their shape are "
                 "blended."
             )
-        if made is not tile and made.coords != tile.coords:
-            self._refuse("it changes the window's coordinates.")
-        self._check_everywhere(meta, window, inner)
+        if made is not tile and not _coords_kept(made, tile):
+            self._refuse("it changes the window's dimensions or coordinates.")
+        if not type(operation)._is_position_free():
+            self._check_everywhere(meta, window, tile, inner)
         lazy = meta.backend == LAZY_BACKEND
         plan = {
             "axes": axes,
@@ -502,10 +569,7 @@ class Windowed(PatchProcessor):
         for index in product(*(range(first, last) for first, last in tiles)):
             starts = ((k - t[0]) * step for k, t, step in zip(index, tiles, stride))
             pick = (..., *(slice(at, at + z) for at, z in zip(starts, size)))
-            tile = padded[pick]
-            if analysis is not None:
-                tile = tile * _taper_like(analysis, tile)
-            tile = np.moveaxis(tile, tail, axes)
+            tile = np.moveaxis(_windowed(padded[pick], analysis), tail, axes)
             made = kernel(operation, tile, **inner)
             if np.shape(made) != tile.shape:
                 name = type(operation).__name__
@@ -521,6 +585,19 @@ class Windowed(PatchProcessor):
             out[pick] += made * weights
         assert out is not None  # an axis with a sample has a window
         return np.moveaxis(out[inside], tail, axes), made.dtype
+
+
+def _coords_kept(made, tile) -> bool:
+    """Whether an operation left a window's dimensions and coordinates alone."""
+    # Units and private coordinates as well, which equality passes over:
+    # the result takes the patch's coordinates, so a change would be lost.
+    before, after = tile.coords.coord_map, made.coords.coord_map
+    return (
+        made.dims == tile.dims
+        and made.coords == tile.coords
+        and set(before) == set(after)
+        and all(before[x].units == after[x].units for x in before)
+    )
 
 
 def _warn_if_integers(made, blended) -> None:
@@ -567,12 +644,11 @@ class PatchWindow:
             raise AttributeError(name)
         method = getattr(type(self.patch), name, None)
         if method is None or getattr(method, "__processor__", None) is None:
-            what = "is not an operation" if method is not None else "does not exist"
             msg = (
-                f"{name} {what} which can run in a window. A window runs the "
-                "patch operations written as processors, such as detrend, "
-                "taper or pass_filter; anything else is a function given to "
-                "apply."
+                f"{name} is not a patch operation a window can run. A window "
+                "runs the patch operations written as processors, such as "
+                "detrend, taper or pass_filter; anything else is a function "
+                "given to apply."
             )
             raise AttributeError(msg)
 

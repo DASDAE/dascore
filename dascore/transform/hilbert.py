@@ -86,6 +86,9 @@ class Hilbert(PatchProcessor):
 
     data_type = ""
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the axis, once it is known to be evenly sampled."""
         meta.get_coord(self.dim, require_evenly_sampled=True)

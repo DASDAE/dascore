@@ -316,18 +316,29 @@ class TestWindowed:
             out = getattr(ints.window(time=64, samples=True, **window), name)()
             eager = ints.load().window(time=64, samples=True, **window)
             expected = getattr(eager, name)()
+            # Said once when declared, and not again for each box computed.
+            with config_context(lazy_block_size=10 * ROW):
+                loaded = out.load()
         blends = [x for x in caught if "Blending windows of" in str(x.message)]
         assert len(blends) == 2 * len(expected_warning)
-        with config_context(lazy_block_size=10 * ROW):
-            loaded = out.load()
         assert out.dtype == loaded.dtype == expected.dtype
         assert np.array_equal(loaded.data, expected.data)
 
-    def test_bad_blend_refused_before_reading(self, lazy, recipe_loads):
+    @pytest.mark.parametrize("name, args", (("abs", ()), ("set_units", ("m",))))
+    def test_bad_blend_refused_before_reading(self, lazy, recipe_loads, name, args):
         """A taper whose ramps would cross is refused when it is called."""
+        window = lazy.window(time=64, overlap=48, samples=True)
+        # Whether or not the operation computes anything to blend.
         with pytest.raises(ParameterError, match="ramps would cross"):
-            lazy.window(time=64, overlap=48, samples=True).abs()
+            getattr(window, name)(*args)
         assert not recipe_loads
+
+    def test_declaring_is_quiet(self, lazy, recipe_loads):
+        """The window of zeros run to find the dtype raises no warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = lazy.window(time=64, samples=True).standardize("time")
+        assert out.dtype == np.float64 and not recipe_loads
 
     def test_metadata_only_adds_no_step(self, lazy):
         """An operation with no kernel leaves the lazy array as it was."""

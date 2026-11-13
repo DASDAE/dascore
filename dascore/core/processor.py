@@ -133,6 +133,13 @@ class PatchProcessor(DascoreBaseModel):
       the input, which is what lets the operation run on a lazy array.
       None, the default, says it cannot.
 
+    A class whose `get_metadata` returns the same plan wherever the
+    patch's coordinates start sets `position_free = True`, beside the
+    method. It then runs in any number of windows of
+    [`Patch.window`](`dascore.Patch.window`) at once; without it each
+    window's plan is worked out to check, and beyond 2000 windows the
+    operation is refused.
+
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that
     name, written in the body of `Patch` or, for an operation with no
@@ -166,6 +173,13 @@ class PatchProcessor(DascoreBaseModel):
     required_attrs: ClassVar[attr_type] = None
     # The result's data_type: None keeps the input's, "" clears it.
     data_type: ClassVar[str | None] = None
+    # Whether `get_metadata` returns the same plan wherever the patch's
+    # coordinates start, as one which reads only axes, lengths, steps and
+    # units does. It lets the operation run in the windows of `Patch.window`
+    # without each window's plan being worked out to check. Read from the
+    # class which writes `get_metadata`, so a subclass which overrides the
+    # method says so again.
+    position_free: ClassVar[bool] = False
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
     # The fields a call may give positionally, in order; None for all.
@@ -229,6 +243,13 @@ class PatchProcessor(DascoreBaseModel):
                 raise TypeError(msg)
             kwargs = {**given, **kwargs}
         super().__init__(**kwargs)
+
+    @classmethod
+    def _is_position_free(cls) -> bool:
+        """Whether the plan is known not to depend on where coordinates start."""
+        owner = next(x for x in cls.__mro__ if "get_metadata" in x.__dict__)
+        # The base plans nothing, which no position can change.
+        return owner is PatchProcessor or bool(owner.__dict__.get("position_free"))
 
     @property
     def kwargs(self) -> dict[str, Any]:

@@ -977,12 +977,17 @@ class Patch(NamespaceOwner, PatchMeta):
         - A patch operation can run in a window if it is written as a
           [`PatchProcessor`](`dascore.core.processor.PatchProcessor`),
           gives back a window of the same shape and coordinates, takes no
-          other patch, and does the same thing wherever its window sits.
-          Anything else is refused when it is called; a function given to
-          `apply` has no such limits.
+          other patch, does not settle its result from the data it
+          computed, and does the same thing wherever its window sits; the
+          window must also fit inside its dimension. Anything else is
+          refused before any data are touched; a function given to `apply`
+          has no such limits. See
+          [`Windowed`](`dascore.proc.window.Windowed`) for how an
+          operation says the last, and what is done for one which does not.
         - On a lazy patch an operation in a window needs only the windows
           a chunk overlaps, so a windowed dimension is computed in pieces
-          even where the operation alone would need it whole.
+          even where the operation alone would need it whole. `apply` and
+          the reductions do not run on a lazy patch yet.
         """
         return PatchWindow(
             self,

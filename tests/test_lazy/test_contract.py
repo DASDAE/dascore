@@ -20,6 +20,7 @@ from dascore.lazy.contract import (
     Unchanged,
     Window,
 )
+from dascore.utils.tiles import get_tile_plan
 
 
 class TestContracts:
@@ -122,8 +123,9 @@ class TestTiles:
         """Each tile holding a sample of the box is among those named."""
         size, stride, length = 7, 3, 40
         tiles = Tiles({0: (size, stride, length)})
-        margin = (-(-size // stride) - 1) * stride
-        count = (length - 1 + margin) // stride + 1
+        # From the plan the eager tiles are cut by, not from the contract.
+        plan = get_tile_plan((length,), (size,), (stride,))
+        margin, count = plan.margin[0], plan.grid[0]
         for start in range(length):
             for stop in range(start + 1, length + 1):
                 first, last = tiles.tiles((slice(start, stop),))[0]

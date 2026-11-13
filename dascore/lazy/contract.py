@@ -183,6 +183,12 @@ class WholeAxis(ChunkContract):
         return tuple(out)
 
 
+def _margin(size: int, stride: int) -> int:
+    """Return how far before an axis its first tile starts."""
+    # As `dascore.utils.tiles.TilePlan.margin`, which this module cannot import.
+    return (-(-size // stride) - 1) * stride
+
+
 @dataclass(frozen=True)
 class Tiles(ChunkContract):
     """
@@ -190,8 +196,9 @@ class Tiles(ChunkContract):
 
     The operation cuts some axes into overlapping tiles, computes each tile
     from itself alone, and blends them. The tiles are placed by the array,
-    not by the chunk: tile ``k`` of an axis starts at ``k * stride``, less
-    the whole strides it takes for a tile to reach back before the first
+    not by the chunk: tile ``k`` of an axis starts at ``k * stride -
+    margin``, where ``margin`` is the largest multiple of the stride less
+    than the tile's size, so tile 0 is the earliest which holds the first
     sample. A chunk is grown out to the edges of the tiles which overlap
     it, so each of those tiles is computed whole and the chunk is the same
     however the work is cut.
@@ -233,7 +240,7 @@ class Tiles(ChunkContract):
         """Return the first tile overlapping a box, and one past the last."""
         out = []
         for axis, (size, stride, length) in self.spans.items():
-            margin = (-(-size // stride) - 1) * stride
+            margin = _margin(size, stride)
             count = (length - 1 + margin) // stride + 1
             first = max((box[axis].start + margin - size) // stride + 1, 0)
             last = min((box[axis].stop - 1 + margin) // stride + 1, count)
@@ -247,7 +254,7 @@ class Tiles(ChunkContract):
         )
         spans = zip(self.spans.items(), self.tiles(box), strict=True)
         for (axis, (size, stride, length)), (first, last) in spans:
-            margin = (-(-size // stride) - 1) * stride
+            margin = _margin(size, stride)
             start = max(first * stride - margin, 0)
             out[axis] = slice(start, min((last - 1) * stride - margin + size, length))
         return tuple(out)
