@@ -1313,6 +1313,11 @@ class TestSort:
         with pytest.raises(CoordSortError, match="more than one dimension"):
             cm.sort("quality")
 
+    def test_sort_2d_coord_error_names_only_it(self, cm_multidim):
+        """The error names only the coordinate spanning several dimensions."""
+        with pytest.raises(CoordSortError, match=r"coordinate\(s\) \['quality'\]"):
+            cm_multidim.sort("time", "quality")
+
     def test_sort_two_coords_same_dim_raises(self, cm_multidim):
         """Trying to sort on two coords which share a dim should raise."""
         # need to make distance un sorted.
