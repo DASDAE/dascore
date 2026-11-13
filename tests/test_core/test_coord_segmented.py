@@ -22,6 +22,7 @@ from dascore.core.coords import (
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity
+from dascore.warnings import DASCoreWarning
 
 
 @pytest.fixture(scope="session")
@@ -422,10 +423,18 @@ class TestSegmentLimit:
     @pytest.mark.parametrize("timed", [False, True])
     @pytest.mark.parametrize("stretches", [256, 257])
     def test_limit(self, stretches, timed):
-        """256 stretches stay segments; 257 are one list with no step."""
+        """256 stretches stay segments; 257 are one list with no step, warned."""
         patch, mask = _pairs_patch(stretches, timed)
-        out = patch.select(time=mask)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = patch.select(time=mask)
         coord = out.get_coord("time")
+        said = [x for x in caught if issubclass(x.category, DASCoreWarning)]
+        assert len(said) == (stretches > 256)
+        if said:  # it says what is lost and how to keep it, at the caller's line
+            assert said[0].filename == __file__
+            assert "fill_gaps, split_gaps" in str(said[0].message)
+            assert "max_index_runs" in str(said[0].message)
         assert coord.runs_count == (256 if stretches == 256 else 1)
         if stretches > 256:
             assert isinstance(coord.runs[0], Labels) and coord.step is None

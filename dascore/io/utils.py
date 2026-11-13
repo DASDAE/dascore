@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, snap_type
+from dascore.constants import _DASCORE_DIR, INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, _stored_float_dtype, get_coord
 from dascore.core.summary import normalize_source_patch_key
@@ -35,8 +35,6 @@ from dascore.utils.time import to_exact_fraction
 from dascore.warnings import SnapWarning
 
 _CF_CALENDARS = frozenset(("standard", "gregorian", "proleptic_gregorian"))
-# Warnings point past DASCore to the caller which read the file.
-_DASCORE_DIR = str(Path(dc.__file__).parent)
 
 
 def cf_time_values(node, index=slice(None)):

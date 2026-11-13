@@ -7,7 +7,6 @@ import inspect
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from pathlib import Path
 from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
@@ -19,6 +18,7 @@ from pydantic import TypeAdapter
 import dascore as dc
 from dascore.config import get_config
 from dascore.constants import (
+    _DASCORE_DIR,
     CONFLICT,
     WARN_LEVELS,
     PatchMetaType,
@@ -1700,8 +1700,7 @@ def _concatenate_group(
                     f"Concatenating along {dim!r} gave labels out of order, as "
                     "the patches overlap or are not in order."
                 )
-                here = str(Path(dc.__file__).parent)  # the caller's line
-                warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(here,))
+                warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops the rest
         riders = {}

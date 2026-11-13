@@ -10,7 +10,6 @@ import abc
 import dataclasses
 import itertools
 import math
-import os
 import re
 import warnings
 from collections.abc import Mapping, Sequence, Sized
@@ -42,7 +41,12 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
+from dascore.constants import (
+    _AGG_FUNCS,
+    _DASCORE_DIR,
+    DIM_REDUCE_DOCS,
+    dascore_styles,
+)
 from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
@@ -101,6 +105,7 @@ from dascore.utils.time import (
     to_float,
     to_int,
 )
+from dascore.warnings import DASCoreWarning
 
 # Values for min/max/step. The CoordSummary validator coerces these to match
 # the summary dtype (datetime64, float, etc.) so they are open-ended here.
@@ -3041,7 +3046,16 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         # a segment per stretch within a run, or one list past the limit
         which = np.searchsorted(self._run_offsets(), indices, side="right")
         edges = np.flatnonzero((diffs != stride) | (np.diff(which) != 0)) + 1
-        if len(edges) >= dc.get_config().max_index_runs:
+        if len(edges) >= (limit := dc.get_config().max_index_runs):
+            msg = (
+                f"Removing these samples leaves {len(edges) + 1} segments, more "
+                f"than max_index_runs ({limit}), so the labels are kept as one "
+                "list with no step: fill_gaps, split_gaps and the operations "
+                f"refusing several segments no longer see its {len(edges)} gaps. "
+                "Fill or split before removing samples, or raise "
+                "dascore.config.max_index_runs."
+            )
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
             return self._with_runs((self._get_index_values(indices),), step=None)
         runs = []
         for first, stop in zip(np.r_[0, edges], np.r_[edges, len(indices)]):
@@ -3441,8 +3455,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 f"Snapping moved labels by up to {moved:.3g} steps; a gap in "
                 "them is spread over the grid. Use fill_gaps to keep it."
             )
-            here = os.path.dirname(dc.__file__)  # the caller's line, not ours
-            warnings.warn(msg, UserWarning, skip_file_prefixes=(here,))
+            warnings.warn(msg, UserWarning, skip_file_prefixes=(_DASCORE_DIR,))
         return out
 
     def _on_step(self, step) -> BaseCoord:

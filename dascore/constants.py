@@ -31,6 +31,9 @@ class ExecutorType(Protocol):
         """Map function for applying concurrency of some flavor."""
 
 
+# Warnings point past DASCore's own files to the caller's line.
+_DASCORE_DIR = str(Path(dc.__file__).parent)
+
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"
 
