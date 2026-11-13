@@ -2583,7 +2583,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if not isinstance(other, NumericCoord):
             return sensible_model_equals(self._label_fields(), other)
         a, b = self._grid, other._grid
-        if a is not None and b is not None and self.shape == other.shape:
+        if a is not None and b is not None and a != b and self.shape == other.shape:
             ends, kind = np.array([0, len(self) - 1]), self.dtype  # where most differ
             if not np.array_equal(a.labels(ends, kind), b.labels(ends, kind)):
                 return False
