@@ -2782,6 +2782,11 @@ def build_chunk_plan(
     stretch gets one grid (`_fit_grids`), which windows are cut from;
     ``fill_value`` instead fills the seams `tolerance` joins, keeping each
     source's labels.
+
+    ``df`` must be the spool's own relation, which carries each grid's exact
+    terms. The frame `Spool.get_contents` returns rounds steps to whole
+    nanoseconds, so a plan built from it can drift on a fractional grid;
+    use `Spool.chunk` instead.
     """
     if len(kwargs) != 1:
         msg = (
