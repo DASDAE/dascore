@@ -184,6 +184,9 @@ class HampelFilter(_WindowFilter):
     _positional_fields = ()
     _window_rules: ClassVar[dict[str, Any]] = {"require_odd": True, "min_samples": 3}
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the window, warning when it will be slow to filter with."""
         threshold = self.threshold

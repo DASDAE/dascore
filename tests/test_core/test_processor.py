@@ -21,7 +21,11 @@ import dascore as dc
 from dascore.config import config_context
 from dascore.constants import PatchMetaType, PatchType
 from dascore.core import processor as processor_module
-from dascore.core.processor import PatchProcessor, register_kernel
+from dascore.core.processor import (
+    PatchProcessor,
+    captured_operation,
+    register_kernel,
+)
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     LazyOperationError,
@@ -2237,3 +2241,30 @@ class TestLazyStep:
             raw = SeamLazyScale.patch_function.raw_function(lazy_patch, factor=3)
         assert out.data.chain.last.data_id == out.attrs.data_id == ""
         assert raw.data.chain.last.data_id == raw.attrs.data_id == ""
+
+
+class TestCapturedOperation:
+    """A patch method's operation can be had without running it."""
+
+    def test_returns_the_operation(self):
+        """The method's arguments are resolved into its processor."""
+        patch = dc.get_example_patch()
+        found = captured_operation(dc.Patch.detrend, patch, "time", type="constant")
+        assert found == dc.proc.Detrend(dim="time", type="constant")
+        # Nothing is left behind: the next call runs.
+        assert patch.abs() is not patch
+
+    def test_a_failed_call_leaves_nothing_behind(self):
+        """A method which raises still hands operations back to being run."""
+        patch = dc.get_example_patch()
+        with pytest.raises(TypeError):
+            captured_operation(dc.Patch.detrend, patch, not_an_argument=1)
+        assert patch.abs() is not patch
+
+    @pytest.mark.parametrize(
+        "method", (lambda x: x, lambda x: x.abs().real()), ids=("none", "two")
+    )
+    def test_refuses_what_is_not_one_operation(self, method):
+        """A function which runs no operation, or several, is not one."""
+        with pytest.raises(ParameterError, match="not a single patch operation"):
+            captured_operation(method, dc.get_example_patch())

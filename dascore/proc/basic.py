@@ -516,6 +516,9 @@ class Abs(PatchProcessor):
     >>> out = patch.abs()
     """
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Complex data have a real magnitude; every other dtype keeps its own."""
         return _real_dtype_metadata(meta)
@@ -565,6 +568,9 @@ class Real(PatchProcessor):
     >>> out = pa.real()
     """
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Complex data have a real part of the real dtype; real data are kept."""
         return _real_dtype_metadata(meta)
@@ -590,6 +596,9 @@ class Imag(PatchProcessor):
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """The imaginary part is real; real data give zeros of their own dtype."""
@@ -624,6 +633,9 @@ class Angle(PatchProcessor):
     """
 
     data_type = ""
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """
@@ -714,6 +726,9 @@ class Normalize(PatchProcessor):
     samples: bool = False
 
     data_type = ""
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the metadata as it is, the axis, and any window in samples."""
@@ -1037,6 +1052,9 @@ class Standardize(PatchProcessor):
     dim: str
 
     data_type = ""
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the metadata as it is, and the axis to standardize along."""
@@ -1654,6 +1672,9 @@ class Demedian(PatchProcessor):
 
     dim: str = "time"
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the axis to remove the median along."""
         return meta, {"axis": meta.get_axis(self.dim)}
@@ -1715,6 +1736,9 @@ class Demean(PatchProcessor):
     """
 
     dim: str = "time"
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the metadata as it is, and the axis to demean along."""

@@ -72,6 +72,9 @@ class WienerFilter(_WindowFilter):
     _positional_fields = ()
     _window_rules: ClassVar[dict[str, Any]] = {}
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the window, once one is known to be given."""
         if not self.model_extra:

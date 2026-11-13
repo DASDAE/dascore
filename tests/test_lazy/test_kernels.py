@@ -186,6 +186,7 @@ CALLS = {
         polyorder=2, time=7, distance=5, samples=True, mode="mirror"
     ),
     "GaussianFilter": lambda x: x.gaussian_filter(time=1.5, distance=1, samples=True),
+    "Windowed": lambda x: x.window(time=64, distance=8, samples=True).detrend("time"),
 }
 
 # Cuts of the two axes: uneven ones, and pieces shorter than any halo.

@@ -60,6 +60,10 @@ class TestForwarding:
         assert np.array_equal(reduced.values, expected, equal_nan=True)
         applied = data_array.dc.window(time=16, samples=True).apply(np.negative)
         assert isinstance(applied, xr.DataArray)
+        detrended = data_array.dc.window(time=16, samples=True).detrend("time")
+        assert isinstance(detrended, xr.DataArray)
+        expected = patch.window(time=16, samples=True).detrend("time").data
+        assert np.array_equal(detrended.values, expected)
 
     def test_a_window_forwards_no_private_name(self, data_array):
         """A private name is not the window's to answer, so copying finds none."""
