@@ -93,7 +93,7 @@ boxes = chunk_boxes(chain.data)
 print(boxes, read_schedule(chain.data, boxes))
 ```
 
-The whole result is still put together in memory; writing each box out as it is made is a later change. Until then:
+The whole result is still put together in memory; writing each box out as it is made is a later change, and [Windowed and Lazy Processing](windowed_processing.qmd) is the plan for it and for what else is to come. Until then:
 
 - Nothing is kept between loads. Each piece a spool cuts from a lazy patch runs the chain for itself, so a piece cut along an axis a step needs whole reads and computes that whole axis again.
 - A kernel is not run until the chain is, so an argument its kernel refuses, such as an edge mode scipy does not know, is refused at `load` rather than at the call.
