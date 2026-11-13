@@ -354,12 +354,7 @@ def _trim_to_member_windows(
 
 
 def _fill_held(outputs: pd.DataFrame, members: pd.DataFrame, dim: str):
-    """
-    Each output of a fill: the samples its members hold in it, and its size.
-
-    A member a window inside a gap reads lies
-    outside the window, so holds none of it.
-    """
+    """Each fill output's samples its members hold (none in a gap), and size."""
     spec = members[f"_{dim}_stretch"]
     ids = members["output_id"]
     bounds = outputs.set_index("output_id").reindex(ids.to_numpy())
@@ -410,9 +405,8 @@ def _aux_coord_info(
     alike (see `merge_coord_managers`): "drop", or a rider some member
     lacks, leaves it out; "keep_first" describes the first member's.
 
-    A fill (``filled``, from `_fill_held`) gives a rider NaN or NaT where
-    it fills, so one holding neither is left out of an output it fills,
-    and an output only of fill states no values for the rest.
+    A fill (``filled``, from `_fill_held`) gives a rider NaN or NaT, so one
+    holding neither is left out of an output it fills.
     """
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
@@ -1220,8 +1214,7 @@ def derived_catalog(
     ``plan.members``; ``parent`` supplies the resolver (live registry,
     file root, nested plans) and the residual selections its view
     carried, which member loading re-applies; ``stamped`` may map to dtypes.
-    ``snapped`` maps an output to the coordinates a snap gives it as it
-    loads, which its record states in place of its source's.
+    ``snapped`` maps outputs to the coordinates a snap gives them at load.
     """
     token = secrets.token_hex(8)
     name = plan.dim
@@ -1435,13 +1428,8 @@ def _segment_runs(coord, members, runs, index_rows, name: str):
     if len(records) < 2:
         return coord
     grid = dict.fromkeys(("step_float", "step_int", *_EXACT_GRID_FIELDS))
-    return replace(
-        coord,
-        **grid,
-        is_exact=False,
-        run_count=len(records),
-        runs=stored_runs(records, kind, absolute),
-    )
+    runs = stored_runs(records, kind, absolute)
+    return replace(coord, **grid, is_exact=False, run_count=len(records), runs=runs)
 
 
 # What a coordinate's runs say of it, beyond its envelope.

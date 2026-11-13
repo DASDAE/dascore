@@ -101,16 +101,14 @@ class _Reorder(PatchProcessor):
     def get_metadata(self, meta):
         """Return the sorted coordinates and the indexing they imply."""
         recorder = _IndexRecorder()
-        method = self._method(meta.coords)
+        # a snap states where to put the labels; a sort does not
+        snap = {x: getattr(self, x) for x in ("step", "max_shift") if hasattr(self, x)}
+        method = partial(meta.coords.snap, **snap) if snap else meta.coords.sort
         coords, _ = method(*self.coords, array=recorder, reverse=self.reverse)
         # The manager hands back itself when there was nothing to sort.
         if coords is meta.coords:
             return meta, {}
         return meta.new(coords=coords), {"keys": tuple(recorder.keys)}
-
-    def _method(self, coords):
-        """The manager's method putting the coordinates in order."""
-        return coords.sort
 
     def kernel(self, data, *, keys=()):
         """Return the data reordered the way the coordinates were."""
@@ -165,10 +163,6 @@ class SnapCoords(_Reorder):
 
     step: Any = None
     max_shift: float | None = None
-
-    def _method(self, coords):
-        """Snap once sorted, onto the step's grid if one is given."""
-        return partial(coords.snap, step=self.step, max_shift=self.max_shift)
 
 
 class SortCoords(_Reorder):
@@ -1577,11 +1571,7 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
 
 
 def _fill_riders(coords, dim: str, length: int, blocks, action: str):
-    """
-    The coordinates with those along ``dim`` placed as the data is, and the
-    rider arrays to restate once the grid is: NaN or NaT fill between the
-    blocks, and riders of other dtypes are dropped with a warning.
-    """
+    """The coordinates, and riders along ``dim`` placed as the data is (NaN/NaT)."""
     riders = {}
     if sum(stop - start for start, stop, _ in blocks) == length:  # none filled
         return coords, riders
@@ -1683,9 +1673,8 @@ class FillGaps(PatchProcessor):
         if layout is None:
             return meta, {"axis": axis, "length": None, "blocks": None}
         coord, blocks, moved = layout
-        # beyond the rounding a float label carries
-        limit = _GRID_RTOL
-        if coord.dtype.kind == "f":  # in steps of the grid after the first gap
+        limit = _GRID_RTOL  # beyond the rounding a float label carries, in steps
+        if coord.dtype.kind == "f":
             step = abs(coord.runs[0].step(coord.dtype))
             limit = _float_allowance(np.array([coord.min(), coord.max()]), step) / step
         if moved > limit:

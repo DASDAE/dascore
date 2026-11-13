@@ -2591,14 +2591,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return False  # one grid each says all of its labels
         for fields in (mine, theirs):  # the labels say all a step or runs do
             fields.pop("runs"), fields.pop("step")
-        return sensible_model_equals(mine, theirs) and self._same_labels(other)
-
-    def _same_labels(self, other: NumericCoord) -> bool:
-        """
-        Whether a coordinate as long holds equal labels: run by run where
-        both split alike (equal runs hold equal labels), and elsewhere a
-        block at a time, so no grid is spelled out whole.
-        """
+        if not sensible_model_equals(mine, theirs):
+            return False
+        # the labels compared run by run where both split alike (equal runs
+        # hold equal labels), elsewhere a few megabytes of float64 at a time,
+        # so no grid is spelled out whole
         size, starts = int(self.shape[0]), self._run_offsets()
         spans = [(0, size)]
         if np.array_equal(starts, other._run_offsets()):
@@ -2606,8 +2603,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             pairs = zip(starts.tolist(), stops, self.runs, other.runs, strict=True)
             spans = [(a, b) for a, b, x, y in pairs if x != y]
         for start, stop in spans:
-            for low in range(start, stop, _EQ_BLOCK):
-                high = min(low + _EQ_BLOCK, stop)
+            for low in range(start, stop, 2**18):
+                high = min(low + 2**18, stop)
                 mine, theirs = self[low:high].values, other[low:high].values
                 if not (np.array_equal(mine, theirs) or values_equal(mine, theirs)):
                     return False
@@ -4170,14 +4167,10 @@ def _labels_to_runs(values, step, absorb=False) -> tuple[tuple, np.dtype, Any]:
 
 def _step_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
     """
-    Labels placed on a declared step's grid.
-
-    Each spacing is the nearest whole number of steps; more than one is a
-    hole. Labels each grid restates make one grid per stretch of
-    consecutive positions (segments), as does a float grid within float
-    exactness of them where ``absorb``; others stay one stored run keeping
-    the step. Two labels on one
-    position, or labels drifting half a step from the grid, raise.
+    Labels placed on a declared step's grid: a grid (segment) per stretch of
+    consecutive positions where grids restate the labels, within float
+    exactness if ``absorb``, else one stored run keeping the step. Two
+    labels on one position, or labels drifting half a step, raise.
     """
     magnitude = np.abs(np.asarray(step))[()]
     signed = magnitude if values[-1] > values[0] else -magnitude
@@ -4884,10 +4877,6 @@ def _range_coord(spec: dict, units, dtype=None) -> BaseCoord:
     """The evenly sampled coordinate a set of range inputs describes."""
     grid, inferred = _range_run(spec)
     return NumericCoord(runs=(grid,), units=units, dtype=dtype or inferred)
-
-
-# Labels equality spells out at a time: a few megabytes of float64.
-_EQ_BLOCK = 2**18
 
 
 def _same_step(step, other) -> bool:

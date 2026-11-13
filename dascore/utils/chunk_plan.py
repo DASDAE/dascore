@@ -1952,11 +1952,9 @@ def _fit_grids(rows, codes, n_parts, name, max_shift, dtype, lattice):
 
 def _fill_grids(rows, codes, n_parts, name, dtype, lattice):
     """
-    Each stretch of a fill on its first row's grid, and each row's position.
-
-    A row sits at the position nearest its first label, so positions count
-    the samples the fill writes, as `Patch.fill_gaps` places segments; a
-    stretch holding a row with no step has no grid.
+    Each stretch of a fill on its first row's grid (none if a row has no
+    step), and each row's position, nearest its first label, as
+    `Patch.fill_gaps` places segments.
     """
     ticks = _counts_ticks(dtype)
     own, sign = rows["_own"].to_numpy(), rows["_forward"].to_numpy()

@@ -1162,12 +1162,8 @@ def _uneven_message(name: str, coord, caller: str) -> str:
 
 def _refuse_segments(patch, dims, operation: str) -> None:
     """
-    Refuse dims whose coordinate holds more than one segment.
-
-    The one check for operations computing across samples: a gap between
-    segments would be computed across as if it were not there. One list
-    of labels is an irregular axis, which an operation computes on by its
-    labels, as DASCore 0.1.x did.
+    Refuse dims of several segments, whose gaps an operation computing
+    across samples would ignore; one list of labels is an irregular axis.
     """
     for dim in iterate(dims):
         count = len(contiguous_windows(patch.get_coord(dim)))
