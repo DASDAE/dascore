@@ -263,51 +263,31 @@ assert len(dc.spool([p1]) + dc.spool([p1])) == 1
 
 ## Explicit output windows
 
-Pass an `(n, 2)` array for the chunked dimension to request specific absolute windows.
+`chunk` and `chunk_plan` take lengths only, and refuse an `(n, 2)` array of windows. [`Spool.select`](`dascore.Spool.select`) returns each source's part of each window, unjoined, and [`Spool.cut`](`dascore.Spool.cut`) joins each window's parts as `chunk` joins them.
 
-- Each row is independent and inclusive at both ends.
-- Input order is kept, including overlapping and duplicate rows. Within a row, compatible groups come out in a fixed group order.
-- `chunk_plan` accepts the same form and records each output's original row number in the private `_request_row` column.
-- One row may draw several source pieces; compatible, connected pieces assemble into one patch, while different groups (or disconnected pieces kept by `keep_partial`) give separate outputs.
-- An empty `(0, 2)` array returns an empty plan or spool.
-- `overlap` can't be combined with explicit windows.
-- Bare numbers use the planner's normalized coordinate units; quantities convert as absolute points.
+- Each row is one window, inclusive at both ends. `None`, `...`, NaN, NaT, or a signed infinity leaves a bound open at the edge of the data.
+- Several dimensions can take arrays with the same number of rows; row `i` of every array forms one box. A row open at both ends spans its dimension, and keeps patches lacking it.
+- Bare numbers are in each patch's own units; quantities convert to them as absolute points.
+- Outputs come in window order, overlapping and duplicate rows included, and each window's parts in coordinate order. An empty `(0, 2)` array gives an empty spool.
+- No window has to be complete (rule 9 of the [coordinate guidelines](coordinates.qmd)): a window running past the data, or into a gap, keeps the samples it holds, and one holding none gives nothing.
 
-### When a window counts as filled
+Planning pairs every window with every source in array operations, so thousands of windows plan in seconds. It reads coordinates, never data arrays: a window's samples come from each source's coordinate, which the index states for regular grids and the file states otherwise, and a source whose coordinate is unknown raises `MissingPatchError`.
 
-A window is complete when a single compatible output, under the usual continuity and tolerance rules, supplies its first and last sample positions (rounded inward to the grid). A hole ends an output unless `fill_value` fills it, even when the window lies entirely inside the hole. Filling never extends past the acquisition's overall range. When steps are unknown or uneven, the source coordinates are used where available.
-
-An unfilled window raises `ChunkError` by default. `on_incomplete="warn"` reports and skips it; `"ignore"` skips it silently. With `keep_partial=True`, whatever pieces exist inside a window are kept first, and the policy only handles windows with no data at all. These rules apply to each compatibility group whose overall range touches the window. `conflict` still separately governs attributes of the members that actually contribute.
-
-Planning uses only coordinate metadata and doesn't load data; source changes and unrelated read errors still surface when patches load.
-
-### Boxes across several dimensions
-
-Several dimensions can take window arrays with the same number of rows; row `i` of every array forms one box.
-
-- The first dimension is chunked as above; the others trim each output under the same completeness, `keep_partial`, and `on_incomplete` rules. A trimmed dimension holding no samples is an unfilled window.
-- Trimmed dimensions never merge, so put the dimension you want merged across patches first.
-- A group of patches the box misses on any dimension is skipped and needs no coverage.
-- `None`, `...`, NaN, NaT, or a signed infinity leaves a bound open at the edge of the data. A row open at both ends spans its whole dimension: on the chunked dimension it gives each contiguous segment whole, like `chunk(time=None)`; on others it keeps patches lacking that dimension.
-- `select` accepts the same form.
-
-Restrictions: a coordinate that is non-dimensional on any patch can't share a call with another array; every other keyword must also be an array, not a chunk size or a merge (`None`); and `fill_value` is refused.
+`cut` then joins the parts of each window which share a kind (rules 1–3 above) across the seams the seam test passes, along every dimension, taking `tolerance` and `max_shift` as `chunk` does along the dimensions the windows bound. Parts are cut at their sources' holes, so a window split by a gap gives fragments, each stating the window's row as its `window` attribute. A window held in one part is not rejoined and keeps its recorded labels.
 
 ```{python}
 import numpy as np
-import pytest
-from dascore.exceptions import ChunkError
 
 patch = dc.get_example_patch().select(distance=(0, 9))
 source = dc.spool(patch)
 windows = np.array([[2, 4], [8, 10]])
-with pytest.raises(ChunkError):
-    source.chunk(distance=windows)
-partial = source.chunk(distance=windows, keep_partial=True)
-assert [(p.get_coord("distance").min(), p.get_coord("distance").max()) for p in partial] == [(2, 4), (8, 9)]
-accepted = source.chunk(distance=windows, on_incomplete="ignore")
-assert len(accepted) == 1
-assert len(source.chunk_plan(distance=windows, on_incomplete="ignore").outputs) == 1
-boxes = source.chunk(time=np.array([[None, None]] * 2), distance=windows, keep_partial=True)
+cut = source.cut(distance=windows)
+ends = [(p.get_coord("distance").min(), p.get_coord("distance").max()) for p in cut]
+assert ends == [(2, 4), (8, 9)]
+assert cut.get_contents()["window"].tolist() == [0, 1]
+boxes = source.cut(time=np.array([[None, None]] * 2), distance=windows)
 assert [p.get_coord("distance").max() for p in boxes] == [4, 9]
+# a gap splits a window into fragments, labelled by the window
+gapped = dc.spool([patch.select(distance=(0, 4)), patch.select(distance=(7, 9))])
+assert gapped.cut(distance=np.array([[2, 8]])).get_contents()["window"].tolist() == [0, 0]
 ```

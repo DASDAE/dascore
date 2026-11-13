@@ -123,7 +123,18 @@ bounded = spool.chunk(time=1 * megabytes)
 
 `overlap` accepts the same coordinate-unit, quantity, or data-size forms as the chunk length. `keep_partial=True` retains a shorter final window. Passing `time=None` asks DASCore to merge every contiguous compatible segment.
 
-`chunk` also accepts explicit windows as an `(n, 2)` array, and [`chunk_plan`](`dascore.core.spool.Spool.chunk_plan`) shows what a call would produce without loading data. See [Spool chunking](../notes/spool_chunking.qmd) for how the planner works.
+`chunk` takes lengths only. To request particular absolute windows, pass an `(n, 2)` array to `select` or `cut`. `select` returns each matching source piece separately; `cut` joins the pieces of each window as `chunk` joins patches, so a window crossing files gives one patch, and a gap leaves fragments labelled by the window's row. Rows stay in input order, including overlaps and duplicates, and a window running past the data keeps the samples it holds. Neither loads measurement arrays until a patch is asked for.
+
+```{python}
+small = dc.spool(dc.get_example_patch().select(distance=(0, 9)))
+windows = np.array([[2, 4], [6, 8]])
+source_pieces = small.select(distance=windows)
+cut = small.cut(distance=windows)
+assert len(source_pieces) == len(cut) == 2
+assert cut.get_contents()["window"].tolist() == [0, 1]
+```
+
+[`chunk_plan`](`dascore.core.spool.Spool.chunk_plan`) shows what a `chunk` call would produce without loading data. See [Spool chunking](../notes/spool_chunking.qmd) for how the planner works.
 
 Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
 

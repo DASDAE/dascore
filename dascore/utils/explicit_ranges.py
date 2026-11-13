@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.config import config_context
-from dascore.exceptions import ChunkError, ParameterError
+from dascore.exceptions import ParameterError
 from dascore.units import Quantity, convert_units
 from dascore.utils.misc import express_range_for_coord
 
@@ -32,8 +32,6 @@ def looks_explicit(value) -> bool:
 
 def explicit_ranges(value) -> ExplicitRanges | None:
     """Return validated window rows, or None for an existing input form."""
-    if isinstance(value, ExplicitRanges):  # already validated
-        return value
     if not looks_explicit(value):
         if isinstance(value, np.ndarray) and value.ndim == 1:
             msg = "Explicit ranges must have shape (n, 2), not a 1D array."
@@ -272,19 +270,9 @@ def _planned_manager(plan, row, files=None, projection=None):
     # Patch utilities import spool/chunk planning; defer until plans are read.
     from dascore.utils import patch_assembly as pa  # noqa: PLC0415
 
-    if not recovered:
-        if projected:
-            raise ChunkError("plan output has no members or reconstructable grid")
-        anchor_id = plan._output_rows[int(key)].get("_anchor_patch_row")
-        anchor = plan._anchor_rows.get(anchor_id)
-        coords = (
-            None
-            if anchor is None
-            else _source_manager(plan.loader, anchor, files, projection=projection)
-        )
-        if coords is not None:
-            coords = _select_manager(coords, plan.parent_residuals)
-    elif len(recovered) == 1:
+    if not recovered:  # an output only of fill has no source to state them
+        return None
+    if len(recovered) == 1:
         coords = recovered[0]
     else:
         from dascore.utils.patch import (  # noqa: PLC0415
@@ -300,16 +288,7 @@ def _planned_manager(plan, row, files=None, projection=None):
             fuse=pa._fuses(rows, plan.dim),
             **_split_coord_merge_kwargs(plan.merge_kwargs)[1],
         )
-    if coords is not None and len(members):
-        coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
-    if coords is None:
-        return None
-    if projected:
-        target = row.get(f"_{plan.dim}_units")
-        current = coords.coord_map[plan.dim].units
-        if target is not None and not pd.isnull(target) and current is not None:
-            if str(current) != str(target):
-                coords = coords.convert_units(**{plan.dim: target})
+    coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
     if plan.merge_kwargs.get("fill_value") is None or plan.dim not in coords.dims:
         return _project_manager(coords, requested_projection)
     # A filled output takes its grid from the output, not its anchor.

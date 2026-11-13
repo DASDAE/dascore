@@ -16,7 +16,7 @@ from collections.abc import (
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
-from functools import partial, singledispatch
+from functools import singledispatch
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -109,15 +109,14 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_row,
     _resolve_group_attrs,
     _structural,
-    _trim_explicit,
     build_chunk_plan,
     build_concat_plan,
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
     coalesce_runs,
-    refuse_riders,
     subdivision_pieces,
+    window_plan,
     with_runs,
 )
 from dascore.utils.concurrency import _prefetch
@@ -137,7 +136,6 @@ from dascore.utils.display import (
 from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
-    ExplicitRanges,
     _select_manager,
     _source_manager,
     explicit_windows,
@@ -220,12 +218,27 @@ def _warn_snap_coords(snap_coords) -> None:
     warnings.warn(msg, DeprecationWarning, stacklevel=3)
 
 
-def _stamp_key(feature, label) -> tuple:
-    """A cut output's (feature_id, annotation), however a table spells blanks."""
-    return (
-        feature if isinstance(feature, str) else "",
-        None if pd.isna(label) else int(label),
+def _stamp_key(*stamps) -> tuple:
+    """A cut output's stamps, however a table spells blanks."""
+    return tuple(
+        None if pd.isna(x) or x == "" else x if isinstance(x, str) else int(x)
+        for x in stamps
     )
+
+
+def _window_rows(kwargs, present) -> list[dict]:
+    """Explicit cut windows as one {dim: bounds} per row, refusing other forms."""
+    ranges = explicit_windows(kwargs)
+    if not kwargs or set(ranges) != set(kwargs):
+        msg = "cut takes an annotation set or (n, 2) windows, eg time=windows; "
+        msg += f"not {', '.join(x for x in kwargs if x not in ranges) or 'nothing'}."
+        raise ParameterError(msg)
+    rows = list(zip(*(x.rows for x in ranges.values())))
+    windows = [{x: y for x, y in zip(ranges, row) if y != (None, None)} for row in rows]
+    if present and (lacking := {x for window in windows for x in window} - present):
+        msg = f"cut windows bound {sorted(lacking)}, which the spool lacks."
+        raise ParameterError(msg)
+    return windows
 
 
 def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
@@ -784,7 +797,9 @@ class Spool(NodeRepr, NamespaceOwner):
             or an ``(n, 2)`` array of absolute ranges (``None``, NaN or NaT
             is open); arrays on several coordinates need equal row counts,
             row ``i`` of each forming one box. Rows select independently in
-            input order, so overlaps and duplicates return separate pieces.
+            input order, so overlaps and duplicates return separate pieces,
+            each row's in its sources' order;
+            [`Spool.cut`](`dascore.Spool.cut`) joins each row's pieces.
             Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
 
@@ -2120,7 +2135,9 @@ class Spool(NodeRepr, NamespaceOwner):
 
     # --- restructuring (materializing) operations -----------------------
 
-    def _plan_frames(self, dim: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _plan_frames(
+        self, dim: str | None = None, *cut_dims: str
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Return (source_rows, working) frames for planning along ``dim``.
 
@@ -2131,7 +2148,8 @@ class Spool(NodeRepr, NamespaceOwner):
         boundaries, so it plans over the current output rows themselves
         (loaded through the plan resolver). Patch-local sample and relative
         residuals adjust the working envelopes so plans reflect the
-        loading truth.
+        loading truth. Rows are cut at their holes along `dim` and
+        `cut_dims`.
         """
         from dascore.io.index.planned import (  # noqa: PLC0415
             PlanResolver,
@@ -2155,8 +2173,8 @@ class Spool(NodeRepr, NamespaceOwner):
         # a sample or relative selection resolves against the whole patch at
         # load, so its runs cannot be planned apart
         local = any(s or r for _, s, r in self._catalog.residuals)
-        if cut and dim is not None and not local:
-            working = self._with_runs(working, dim, modified=True)
+        for name in (dim, *cut_dims) if cut and dim is not None and not local else ():
+            working = self._with_runs(working, name, modified=True)
         base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
@@ -2191,18 +2209,8 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build one plan from this spool's current source rows."""
-        name = next(iter(dim_kwargs), None)
-        source_rows, working = self._plan_frames(name)
-        windows = explicit_windows(dim_kwargs)
-        refuse_riders(windows, source_rows)
-        exact = {}
-        if name in windows:
-            exact = known_coordinates(self._catalog, source_rows, name)
-        kwargs = dim_kwargs | windows  # validated once
-        plan = build_chunk_plan(working, _exact_coords=exact, **params, **kwargs)
-        if trims := {k: v for k, v in windows.items() if k != name}:
-            lookup = partial(known_coordinates, self._catalog)  # members' only
-            plan = _trim_explicit(plan, source_rows, trims, lookup)
+        source_rows, working = self._plan_frames(next(iter(dim_kwargs), None))
+        plan = build_chunk_plan(working, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
@@ -2215,7 +2223,6 @@ class Spool(NodeRepr, NamespaceOwner):
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
-        on_incomplete: WARN_LEVELS = "raise",
         max_shift: float | None = None,
         **kwargs,
     ):
@@ -2236,11 +2243,8 @@ class Spool(NodeRepr, NamespaceOwner):
         and how many of its samples an earlier patch's overlap dropped
         (`dropped`).
         Accepts the same arguments as
-        [`chunk`](`dascore.Spool.chunk`). A dimension can be an ``(n, 2)``
-        array of absolute inclusive windows. Each requested window is checked
-        against compatible source groups, and ``on_incomplete`` controls
-        requests that cannot produce a complete output after ``keep_partial``
-        and the existing tolerance/fill rules are applied.
+        [`chunk`](`dascore.Spool.chunk`), so lengths only; explicit
+        windows go to [`Spool.cut`](`dascore.Spool.cut`).
 
         Examples
         --------
@@ -2265,7 +2269,6 @@ class Spool(NodeRepr, NamespaceOwner):
             group=group,
             on_missing_dim=on_missing_dim,
             fill_value=fill_value,
-            on_incomplete=on_incomplete,
         )
         return plan
 
@@ -2481,7 +2484,6 @@ class Spool(NodeRepr, NamespaceOwner):
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
-        on_incomplete: WARN_LEVELS = "raise",
         max_shift: float | None = None,
         **kwargs,
     ) -> Self:
@@ -2527,13 +2529,6 @@ class Spool(NodeRepr, NamespaceOwner):
         on_missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
-        on_incomplete
-            For explicit ``(n, 2)`` windows, ``"raise"`` (default) raises
-            ``ChunkError`` for an unmet request, ``"warn"`` reports and skips
-            it, and ``"ignore"`` skips it silently. With ``keep_partial=True``,
-            nonempty available pieces are accepted before this policy is
-            applied; wholly absent requests still follow it. Other chunk
-            modes retain their existing behavior.
         fill_value
             If given, a seam `tolerance` joins is filled with this value
             rather than refitted, and every source keeps its labels. The
@@ -2559,14 +2554,11 @@ class Spool(NodeRepr, NamespaceOwner):
             The value may also be a quantity: one of the coordinate's own
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.
-            `overlap` accepts the same forms. An ``(n, 2)`` array instead
-            requests absolute coordinate windows with inclusive
-            endpoints, in input order. Overlapping and duplicate windows
-            produce separate outputs. Explicit windows do not accept
-            ``overlap``; quantities in their bounds are absolute points.
-            ``None``, ``...``, NaN, NaT or a signed infinity is open. Arrays on
-            several dimensions need equal row counts, row ``i`` of each one
-            window: the first is chunked, the others trim (see the notes).
+            `overlap` accepts the same forms. An ``(n, 2)`` array of
+            explicit windows is refused: use
+            [`Spool.cut`](`dascore.Spool.cut`) to join each window, or
+            [`Spool.select`](`dascore.Spool.select`) for each source's
+            matching part unjoined.
 
         Examples
         --------
@@ -2588,19 +2580,6 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> released = spool.chunk(time=..., tolerance=1.5)
         >>> # merge across holes of up to 9 missing samples, filling them
         >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
-        >>> # Request two independent absolute windows and inspect the plan.
-        >>> start = spool.get_contents()["time_min"].min()
-        >>> step = spool.get_contents()["time_step"].iloc[0]
-        >>> windows = np.array([
-        ...     [start, start + 4 * step],
-        ...     [start + 8 * step, start + 12 * step],
-        ... ])
-        >>> selected = spool.select(time=windows)
-        >>> explicit = spool.chunk(time=windows, on_incomplete="ignore")
-        >>> explicit_plan = spool.chunk_plan(time=windows, on_incomplete="ignore")
-        >>> assert len(explicit_plan.outputs) == len(explicit)
-        >>> # the same windows, each trimmed to distances 10 through 20
-        >>> boxes = spool.chunk(time=windows, distance=np.array([[10, 20]] * 2))
 
         Notes
         -----
@@ -2633,6 +2612,14 @@ class Spool(NodeRepr, NamespaceOwner):
         which takes the same arguments and returns the plan without
         touching any data.
 
+        See Also
+        --------
+        [`Spool.cut`](`dascore.Spool.cut`) joins each of a set of explicit
+        windows, as chunk joins.
+
+        [`Spool.select`](`dascore.Spool.select`) returns each source's part
+        of explicit windows, unjoined.
+
         Keywords
         --------
         spool, chunking, overlapping chunks, gaps, archive
@@ -2648,11 +2635,10 @@ class Spool(NodeRepr, NamespaceOwner):
             group=group,
             on_missing_dim=on_missing_dim,
             fill_value=fill_value,
-            on_incomplete=on_incomplete,
         )
         return self._chunked(source_rows, plan)
 
-    def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=None):
+    def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=False):
         """
         Return the spool a chunk plan describes.
 
@@ -2672,56 +2658,156 @@ class Spool(NodeRepr, NamespaceOwner):
             mode="chunk",
             origin_path=self.spool_path,
             stamped=dtypes or tuple(stamp or ()),
-            lossy=isinstance(plan.value, ExplicitRanges) if lossy is None else lossy,
+            lossy=lossy,
         )
         return self._new_from_catalog(catalog)
 
     @compose_docstring(experimental=experimental_note)
-    def cut(self, annotations: dc.AnnotationSet, /, **pads) -> Self:
+    def cut(
+        self,
+        annotations: dc.AnnotationSet | None = None,
+        /,
+        *,
+        tolerance: float | Quantity | np.timedelta64 | None = None,
+        max_shift: float | None = None,
+        **kwargs,
+    ) -> Self:
         """
-        Return one lazy patch per feature of an annotation set.
+        Return one lazy patch per window, from explicit windows or annotations.
 
         {experimental}
 
-        Each feature, lone rows included, is cut to its bounds (see
-        `AnnotationSet.bounds`) and merged across source patches along
-        every dimension, as `chunk` merges, so a gap still leaves several
-        patches. A feature skips any patch lacking a dimension it bounds.
-        Selection includes both ends, so the sample at a range's
-        (half-open) maximum is kept; an empty range gives nothing. A
-        feature spanning a dimension keeps the spool's full extent along
-        it, one holding no samples gives nothing, and overlapping features
-        duplicate data. Nothing is loaded.
+        Each window is cut from the sources it reaches and joined across
+        them as [`chunk`](`dascore.Spool.chunk`) joins, along every
+        dimension, so a gap leaves labelled fragments. Windows are either
+        `(n, 2)` arrays (`time=windows`), several pairing row by row, or
+        the features of an annotation set, lone rows included, cut to
+        their bounds (see `AnnotationSet.bounds`). Bounds include both
+        ends, so the sample at an annotation range's (half-open) maximum
+        is kept; an open end (`None`, `...`, NaN, NaT, an infinity) reaches
+        the data's edge. A window skips any patch lacking a dimension it
+        bounds, one holding no samples gives nothing, and overlapping
+        windows duplicate data. Unlike `chunk`'s windows, no window need
+        be complete. Planning reads coordinates but no data arrays, and
+        plans every window at once.
 
-        Each output states `feature_id` (blank for a lone row) and
-        `annotation` (a lone row's index label, blank for a feature), as
-        attrs and as `get_contents` columns, which join back to the set.
-        Their envelopes are the samples kept, not the window asked for.
+        Each output states, as attrs and `get_contents` columns, its
+        `window` (its row) or, cut by annotations, its `feature_id` (blank
+        for a lone row) and `annotation` (a lone row's index label, blank
+        for a feature), which join back to the set. Their envelopes are the
+        samples kept, not the window asked for.
 
         Parameters
         ----------
         annotations
-            The set to cut by.
-        **pads
-            `dim=(before, after)`: offsets added to a feature's ends along
-            `dim` which are stated values, `before` (usually negative) to
-            its minimum and `after` to its maximum; range ends are kept. A
-            feature at a single value needs one. Time offsets are
-            timedeltas, strings with units such as "-1s", or seconds.
+            The set to cut by; without it, keywords give the windows.
+        tolerance
+            As for `chunk`, along each dimension the windows bound.
+        max_shift
+            As for `chunk`, along each dimension the windows bound.
+        **kwargs
+            Without `annotations`, `dim=windows`: an `(n, 2)` array of
+            absolute bounds; quantities convert to each patch's units.
+            With them, `dim=(before, after)`: offsets added to a feature's
+            ends along `dim` which are stated values, `before` (usually
+            negative) to its minimum and `after` to its maximum; range ends
+            are kept. A feature at a single value needs one. Time offsets
+            are timedeltas, strings with units such as "-1s", or seconds.
 
         Examples
         --------
+        >>> import numpy as np
         >>> import pandas as pd
         >>> import dascore as dc
         >>> spool = dc.get_example_spool()
         >>> start = spool.get_contents()["time_min"].min()
+        >>> second = np.timedelta64(1, "s")
+        >>> # two windows, each joined across the files it spans
+        >>> windows = np.array([[start, start + 9 * second], [start, start + second]])
+        >>> cut = spool.cut(time=windows)
+        >>> assert cut.get_contents()["window"].tolist() == [0, 1]
+        >>> # or cut around the times an annotation set picks
         >>> frame = pd.DataFrame({"time": [start + pd.Timedelta("10s")]})
         >>> picks = dc.AnnotationSet(frame, dims=("distance", "time"))
         >>> cut = spool.cut(picks, time=("-1s", "3s"))
         >>> assert len(cut) == 1
         """
         present = {x for dims in self._df["dims"] for x in dims.split(",")}
-        dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
+        if annotations is None:
+            windows = _window_rows(kwargs, present)
+            stamps, dtypes = [(x,) for x in range(len(windows))], {"window": "Int64"}
+        else:
+            windows, stamps = self._annotation_windows(annotations, present, kwargs)
+            dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
+        columns = np.array(stamps, dtype=object).reshape(-1, len(dtypes)).T
+        sets = self._df["dims"].map(lambda x: ",".join(sorted(x.split(","))))
+        cuts = []  # one plan per set of patch dims, then one merge per dim
+        for have, rows in self._df["_patch_row"].groupby(sets, sort=False):
+            have = str(have).split(",")
+            asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
+            if not asks:  # every window bounds a dim these patches lack
+                continue
+            part = self._restrict_to_rows(rows)
+            # the pieces' first dim is the one with the most distinct starts
+            # (ties: the one most windows bound); merges then join every dim
+            split = {x: part._df[f"{x}_min"].nunique() for x in have}
+            counts = {x: sum(x in windows[i] for i in asks) for x in have}
+            main = min(have, key=lambda x: (-split[x], -counts[x]))
+            others = [x for x in have if x != main]
+            # pieces never span a hole, so only a window in several needs joins
+            ends = [[windows[i].get(x, (None,) * 2) for i in asks] for x in have]
+            arrays = {
+                x: np.array(ends[have.index(x)], dtype=object) for x in [main, *others]
+            }
+            source_rows, working = part._plan_frames(main, *others)
+
+            def lookup(rows, dim, part=part, sources=source_rows):
+                """The coordinates of the sources of rows, which lack their paths."""
+                held = sources["_patch_row"].isin(rows["_patch_row"])
+                return known_coordinates(part._catalog, sources[held], dim)
+
+            plan = window_plan(working, explicit_windows(arrays), lookup)
+            if plan.outputs.empty:
+                continue
+            asked = np.take(asks, plan.outputs["_request_row"])
+            stamp = {
+                x: pd.array(np.take(y, asked), "Int64") if t == "Int64" else y[asked]
+                for (x, t), y in zip(dtypes.items(), columns)
+            }
+            out = part._chunked(source_rows, plan, stamp, dtypes, lossy=True)
+            group = [*_resolve_group_attrs(None, set(out._df)), *dtypes]
+            joins = {"tolerance": tolerance, "max_shift": max_shift}
+            again = [main] if any(counts[x] for x in others) else []
+            for dim in [main, *others, *again]:
+                # only a window in several pieces has anything to join
+                many = out._df[list(dtypes)].astype(object).duplicated(keep=False)
+                if not many.any():
+                    continue
+                bounded = joins if counts[dim] else {}
+                joined = out[many.to_numpy()].chunk(
+                    **{dim: None}, group=group, **bounded
+                )
+                out = joined if many.all() else out[~many.to_numpy()] + joined
+            cuts.append(out)
+        if not cuts:
+            return self._new_from_catalog(
+                self._restrict_to_rows([])._materialize_lossy({}, dtypes)
+            )
+        out = sum(cuts[1:], cuts[0])
+        # back into window order, each window's pieces in coordinate order
+        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
+        keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
+        ranked = sorted(sorted(present), key=lambda x: -self._df[f"{x}_min"].nunique())
+        mins = [f"{x}_min" for x in ranked if f"{x}_min" in out._df]
+        frame = out._df[mins].assign(_rank=[rank[_stamp_key(*x)] for x in keys])
+        frame = frame.reset_index(drop=True).sort_values(["_rank", *mins])
+        return out._new_from_catalog(out._catalog.restrict(frame.index.to_numpy()))
+
+    def _annotation_windows(self, annotations, present, pads) -> tuple[list, list]:
+        """An annotation set's windows, as {dim: bounds}, and their stamps."""
+        if any(looks_explicit(x) for x in pads.values()):
+            msg = "cut takes pads with an annotation set, or windows without one."
+            raise ParameterError(msg)
         bounds, closed = annotations._extents()
         for dim, pad in pads.items():
             known = dim in set(annotations.dims) & present
@@ -2752,54 +2838,7 @@ class Spool(NodeRepr, NamespaceOwner):
             if window is not None:  # None: an empty range
                 windows.append(window)
                 stamps.append((row["feature_id"] or "", row["annotation"]))
-        feature_ids, labels = np.array(stamps, dtype=object).reshape(-1, 2).T
-        sets = self._df["dims"].map(lambda x: ",".join(sorted(x.split(","))))
-        cuts = []  # one plan per set of patch dims, then one merge per dim
-        for have, rows in self._df["_patch_row"].groupby(sets, sort=False):
-            have = str(have).split(",")
-            asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
-            if not asks:  # every window bounds a dim these patches lack
-                continue
-            part = self._restrict_to_rows(rows)
-            # the plan merges along the dim with the most distinct starts
-            # (ties: the one most windows bound); it trims the rest
-            split = {x: part._df[f"{x}_min"].nunique() for x in have}
-            counts = {x: sum(x in windows[i] for i in asks) for x in have}
-            main = min(have, key=lambda x: (-split[x], -counts[x]))
-            others = [x for x in have if x != main]
-            dims = [main, *(x for x in others if counts[x])]
-            ends = [[windows[i].get(x, (None,) * 2) for i in asks] for x in dims]
-            arrays = {x: np.array(y) for x, y in zip(dims, ends, strict=True)}
-            source_rows, plan = part._build_chunk_plan(
-                arrays, keep_partial=True, on_incomplete="ignore"
-            )
-            if plan.outputs.empty:
-                continue
-            asked = np.take(asks, plan.outputs["_request_row"])
-            stamp = {
-                "feature_id": np.take(feature_ids, asked),
-                "annotation": pd.array(np.take(labels, asked), "Int64"),
-            }
-            out = part._chunked(source_rows, plan, stamp, dtypes)
-            # merging each feature along the other dims splits their holes;
-            # after a trim, along the first again joins what it made alike
-            group = [*_resolve_group_attrs(None, set(out._df)), *dtypes]
-            for dim in [*others, *([main] if len(dims) > 1 else [])]:
-                out = out.chunk(**{dim: None}, group=group)
-            cuts.append(out)
-        if not cuts:
-            return self._new_from_catalog(
-                self._restrict_to_rows([])._materialize_lossy({}, dtypes)
-            )
-        out = sum(cuts[1:], cuts[0])
-        # back into feature order, each feature's pieces in coordinate order
-        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
-        keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
-        ranked = sorted(sorted(present), key=lambda x: -self._df[f"{x}_min"].nunique())
-        mins = [f"{x}_min" for x in ranked if f"{x}_min" in out._df]
-        frame = out._df[mins].assign(_rank=[rank[_stamp_key(*x)] for x in keys])
-        frame = frame.reset_index(drop=True).sort_values(["_rank", *mins])
-        return out._new_from_catalog(out._catalog.restrict(frame.index.to_numpy()))
+        return windows, stamps
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
