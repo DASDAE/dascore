@@ -3018,8 +3018,6 @@ def build_chunk_plan(
         _, stride, *_, width, own_min, own_max = lattice
         plain = (stride == 0) | ((src1 == own_min) & (src2 == own_max))
         edge = src2 + 2 * _GRID_SNAP_RTOL * width if src2.dtype.kind == "f" else src2
-        # the kept source holding each partition's last sample
-        end_rows = pd.Series(src2).groupby(kcodes).idxmax().to_numpy()
     has_dtype = "_dtype" in sorted_df.columns
     if has_dtype:
         # The element dtype resolves per *output*, not per partition: a
@@ -3131,11 +3129,7 @@ def build_chunk_plan(
             stops_p = g_stops[part : part + 1]
         else:
             sub_sample[part] = not pd.isnull(part_step) and value_c < abs(part_step)
-            cell, row = abs(part_step), end_rows[part]
-            if lattice[2][row] > 1:  # a fractional grid's gap to its next label
-                stop = to_int(g_stops[part : part + 1])
-                gap = (_lattice_label(stop + 1, [x[row] for x in lattice]) - stop)[0]
-                cell = np.timedelta64(gap, "ns") if g_stops.dtype.kind in "Mm" else gap
+            cell = abs(part_step)
             try:
                 start_stop = get_intervals(
                     g_starts[part],

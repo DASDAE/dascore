@@ -357,11 +357,10 @@ def _fill_held(outputs: pd.DataFrame, members: pd.DataFrame, dim: str):
     """
     Each output of a fill: the samples its members hold in it, and its size.
 
-    None unless the plan fills. A member a window inside a gap reads lies
+    A member a window inside a gap reads lies
     outside the window, so holds none of it.
     """
-    if (spec := members.get(f"_{dim}_stretch")) is None or outputs.empty:
-        return None
+    spec = members[f"_{dim}_stretch"]
     ids = members["output_id"]
     bounds = outputs.set_index("output_id").reindex(ids.to_numpy())
     lows, highs = (members[f"{dim}_{x}"].to_numpy() for x in ("min", "max"))
