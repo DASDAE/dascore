@@ -63,8 +63,7 @@ def decode_cf_time(attrs, raw) -> np.ndarray:
     except (ValueError, OverflowError) as exc:
         msg = f"Cannot decode the time units {units!r}."
         raise InvalidFiberFileError(msg) from exc
-    out = out.tz_convert(None) if out.tz is not None else out
-    return out.to_numpy()
+    return dc.to_datetime64(out)
 
 
 def should_snap(snap: snap_type, name: str) -> bool:
