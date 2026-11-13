@@ -54,9 +54,11 @@ def _reduce_meta(meta, dim, dim_reduce):
     steps = []
     for name, _, _ in dfo:
         axis = meta.get_axis(name)
-        new_coord = meta.get_coord(name).reduce_coord(dim_reduce=dim_reduce)
-        # The dimension collapses, and what rode it can go nowhere else.
-        coords = meta.coords.drop_associated(name, None)
+        coord, coords = meta.get_coord(name), meta.coords
+        new_coord = coord.reduce_coord(dim_reduce=dim_reduce)
+        if new_coord is None or len(coord) > 1:
+            # The dimension collapses, and what rode it can go nowhere else.
+            coords = coords.drop_associated(name, None)
         if new_coord is None:
             coords = coords.drop_coords(name)[0]
         else:

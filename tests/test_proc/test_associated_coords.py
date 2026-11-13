@@ -1,10 +1,9 @@
 """
 What operations along a dimension do to the coordinates associated with it.
 
-The coordinate guidelines (`notes/coordinates.qmd`, Scope) ask that whatever
-an operation does along a dimension it does to its associated coordinates,
-or drops them with a warning (silently where it collapses the dimension),
-and that units survive.
+Whatever an operation does along a dimension it does to its associated
+coordinates, or drops them with a warning; operations which collapse the
+dimension drop them silently. Units survive.
 """
 
 from __future__ import annotations
@@ -99,6 +98,20 @@ class TestDroppedSilently:
             out = func(patch)
         assert "tcoord" not in out.coords.coord_map
         _assert_rides(out, "dcoord", patch.get_array("dcoord"))
+
+    @pytest.mark.parametrize(
+        "func",
+        [
+            lambda x: x.mean("time"),
+            lambda x: x.first("time"),
+            lambda x: x.integrate("time", definite=True),
+        ],
+    )
+    def test_single_sample_keeps_riders(self, patch, func):
+        """A dimension already one sample long keeps what rides it."""
+        single = patch.select(time=(0, 1), samples=True)
+        out = func(single)
+        _assert_rides(out, "tcoord", single.get_array("tcoord"))
 
 
 class TestDroppedWithWarning:

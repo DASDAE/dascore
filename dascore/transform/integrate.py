@@ -35,8 +35,9 @@ def _get_definite_coords(meta, dims):
     """Return coords with each dim collapsed to one sample, keeping its min and max."""
     new_coords, coords = {}, meta.coords
     for name in dims:
-        coords = coords.drop_associated(name, None)  # collapsed, so no warning
         coord = meta.get_coord(name)
+        if len(coord) > 1:  # collapsed, so no warning
+            coords = coords.drop_associated(name, None)
         # the label and the bounds keep the dimension's units
         new_coords[name] = coord.update(values=_quasi_mean(coord.values))
         for end in ("min", "max"):
