@@ -12,8 +12,9 @@ import math
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from functools import partial, update_wrapper
+from functools import partial
 from itertools import product
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -23,11 +24,11 @@ from dascore.core.processor import PatchProcessor, captured_operation
 from dascore.exceptions import ParameterError, PatchError
 from dascore.lazy.contract import Halo, Pointwise, Tiles, Unchanged, WholeAxis
 from dascore.proc.rolling import _pandas_agrees, _rolling_pandas
-from dascore.proc.tile_apply import TileApply, _windows
+from dascore.proc.tile_apply import TileApply, _blended_window, _windows
 from dascore.utils.array_api import LAZY_BACKEND
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
-from dascore.utils.tiles import _taper_like, blend_dtype, fill_dtype, get_tile_plan
+from dascore.utils.tiles import _taper_like, fill_dtype, get_tile_plan
 from dascore.utils.window import resolve_window
 
 __all__ = ("PatchWindow", "WindowReduce", "Windowed")
@@ -251,6 +252,10 @@ def _same(one, other) -> bool:
     )
 
 
+# The most windows along one dimension whose plans are compared.
+_POSITIONS = 64
+
+
 class Windowed(PatchProcessor):
     """
     Run an operation in each window of a patch, and blend the windows.
@@ -281,10 +286,13 @@ class Windowed(PatchProcessor):
     - Everything is decided from the metadata of one window before any
       data are read: the operation must give back a window of the same
       shape and coordinates, and must work the same way wherever the
-      window sits.
+      window sits. The plans of up to 64 windows along each dimension,
+      evenly spread, are compared to check the last.
+    - An operation which only changes metadata leaves the data as they are.
     - On a lazy patch an output chunk needs only the windows which overlap
       it, so a windowed dimension can be cut even where the operation
-      itself needs its dimension whole.
+      itself needs its dimension whole. The dtype is found by running the
+      operation once on a window of zeros.
     """
 
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
@@ -319,24 +327,6 @@ class Windowed(PatchProcessor):
         coords, _ = meta.coords.isel(**index)
         return meta.new(coords=coords)
 
-    def _made_dtype(self, meta, made, plan) -> np.dtype:
-        """Return the dtype the operation gives a window."""
-        kernel = type(self.operation).kernel_for("numpy")
-        if meta.backend != LAZY_BACKEND or kernel is None:
-            # In memory the array which comes back says what it is.
-            return np.dtype(made.dtype)
-        # A lazy patch states its dtype before anything is read, and an
-        # operation's metadata need not say what its kernel returns: a
-        # detrend of integers is float. A window of zeros is run to find out.
-        dtype = np.dtype(meta.dtype)
-        if self.fill is not None and self.fill != 0:
-            dtype = fill_dtype(dtype, self.fill)
-        if self.analysis is not None:
-            dtype = blend_dtype(dtype)
-        probe = np.zeros(made.shape, dtype)
-        with np.errstate(all="ignore"), suppress_warnings():
-            return np.asarray(kernel(self.operation, probe, **plan)).dtype
-
     def _refuse(self, why: str):
         """Raise for an operation which cannot run in a window."""
         operation = self.operation
@@ -346,6 +336,39 @@ class Windowed(PatchProcessor):
             "given to Patch.window(...).apply can do anything."
         )
         raise ParameterError(msg)
+
+    def _check_everywhere(self, meta, window, plan):
+        """Refuse an operation whose plan is not the one plan of every window."""
+        length = tuple(meta.shape[x] for x in window.axes)
+        for place, (n, size, step) in enumerate(
+            zip(length, window.size, window.stride, strict=True)
+        ):
+            # Every whole window along this dimension, or a spread of them.
+            starts = range(step, n - size + 1, step)
+            picked = np.linspace(0, len(starts) - 1, min(len(starts), _POSITIONS))
+            for at in sorted({starts[int(x)] for x in picked}):
+                where = [0] * len(length)
+                where[place] = at
+                other = self.operation.get_metadata(self._tile(meta, window, where))
+                if not _same(plan, other[1]):
+                    self._refuse("what it does depends on where the window sits.")
+
+    def _lazy_dtype(self, meta, made, plan) -> np.dtype:
+        """Return the dtype of the blended windows, by running one of zeros."""
+        # A lazy patch states its dtype before anything is read, and an
+        # operation's metadata need not say what its kernel returns: a
+        # detrend of integers is float. The one window which starts where
+        # the array does is run, as if it were all there is.
+        size, stride = plan["size"], plan["stride"]
+        only = tuple(-(-z // step) for z, step in zip(size, stride, strict=True))
+        where = {x: plan[x] for x in ("axes", "size", "stride", "inner")}
+        probe = np.zeros(made.shape, meta.dtype)
+        with np.errstate(all="ignore"), suppress_warnings():
+            out, before = self._blend(
+                probe, length=size, tiles=tuple((x - 1, x) for x in only), **where
+            )
+        _warn_if_integers(before, out.dtype)
+        return out.dtype
 
     def get_metadata(self, meta):
         """Return the blended metadata, the tiling, and one window's plan."""
@@ -357,33 +380,28 @@ class Windowed(PatchProcessor):
             self._refuse("it settles its result from the data it computed.")
         if operation._inputs()[1]:
             self._refuse("it takes another patch, which a window cannot cut yet.")
-        window = resolve_window(
+        window = _blended_window(
             meta,
             self.model_extra or {},
             samples=self.samples,
             overlap=self.overlap,
             step=self.step,
-            # Half the window, the most the taper's ramps allow.
-            default_overlap=lambda size: size // 2,
-            min_samples=2,
-            enforce_lt_coord=True,
+            taper=self.taper,
+            analysis=self.analysis,
+            whole=True,
         )
         assert window.stride is not None
-        # In the patch's axis order, whatever order they were named in.
-        order = np.argsort(window.axes)
-        axes = tuple(int(window.axes[x]) for x in order)
-        size = tuple(int(window.size[x]) for x in order)
-        stride = tuple(int(window.stride[x]) for x in order)
-        dims = tuple(window.dims[x] for x in order)
-        length = tuple(meta.shape[x] for x in axes)
-        window = type(window)(dims, axes, size, stride, window.ndim)
-        # The first whole window, and the last, stand for every one.
+        axes, size, stride = window.axes, window.size, window.stride
+        # Refused here, not when the data are read: a taper whose ramps
+        # would cross, or an analysis window with no dual at this stride.
+        _windows(self.analysis, self.taper, window.tiles(meta.shape), window.overlap)
+        # The first whole window stands for every one.
         tile = self._tile(meta, window, (0,) * len(axes))
         check_patch_coords(
             tile, dims=operation.required_dims, coords=operation.required_coords
         )
         check_patch_attrs(tile, operation.required_attrs)
-        made, plan = operation.get_metadata(tile)
+        made, inner = operation.get_metadata(tile)
         if made.dims != tile.dims or made.shape != tile.shape:
             self._refuse(
                 f"it turns a window of shape {tile.shape} into one of "
@@ -392,28 +410,26 @@ class Windowed(PatchProcessor):
             )
         if made is not tile and made.coords != tile.coords:
             self._refuse("it changes the window's coordinates.")
-        last = tuple(n - z for n, z in zip(length, size, strict=True))
-        if any(last) and not _same(
-            plan, operation.get_metadata(self._tile(meta, window, last))[1]
-        ):
-            self._refuse("what it does depends on where the window sits.")
-        dtype = self._made_dtype(meta, made, plan)
-        if dtype.kind in "biu":
-            msg = (
-                f"Blending windows of {dtype} data gives {blend_dtype(dtype)}: "
-                "each sample is a weighted sum of the windows which hold it."
-            )
-            warnings.warn(msg, UserWarning, stacklevel=2)
-        out = meta.new(attrs=made.attrs, dtype=blend_dtype(dtype))
-        others = tuple(x for x in range(len(meta.shape)) if x not in axes)
-        return out, {
+        self._check_everywhere(meta, window, inner)
+        lazy = meta.backend == LAZY_BACKEND
+        plan = {
             "axes": axes,
             "size": size,
             "stride": stride,
-            "length": length,
-            "others": others,
-            "inner": plan,
+            # The whole length of each windowed axis, which places the tiles.
+            "length": tuple(meta.shape[x] for x in axes),
+            "others": tuple(x for x in range(len(meta.shape)) if x not in axes),
+            "inner": inner,
         }
+        out = meta.new(attrs=operation._result_attrs(made))
+        if type(operation).kernel_for("numpy") is None:
+            # Nothing is computed, so nothing is blended.
+            return out, {**plan, "quiet": True}
+        if not lazy:
+            # In memory the array which comes back says what it is.
+            return out, {**plan, "quiet": False}
+        dtype = self._lazy_dtype(meta, made, plan)
+        return out.new(dtype=dtype), {**plan, "quiet": True}
 
     def chunk_contract(self, dtype, plan):
         """Return the tiles a chunk needs, and what the operation reads besides."""
@@ -421,6 +437,8 @@ class Windowed(PatchProcessor):
         # reads files through modules which import the processors.
         from dascore.lazy.kernels import _contract  # noqa: PLC0415
 
+        if type(self.operation).kernel_for("numpy") is None:
+            return Unchanged()
         axes, others = plan["axes"], plan["others"]
         spans = dict(zip(axes, zip(plan["size"], plan["stride"], plan["length"])))
         inner = _contract(self.operation, dtype, plan["inner"])
@@ -435,15 +453,26 @@ class Windowed(PatchProcessor):
         return Tiles(spans, whole=others)
 
     def numpy_kernel(
-        self, data, *, axes, size, stride, length, others, inner, tiles=None
+        self, data, *, axes, size, stride, length, others, inner, quiet, tiles=None
     ):
         """
         Return the windows the operation made, blended.
 
         `tiles`, given by a chunk, names the windows the data hold: for each
         windowed axis the first and one past the last. Without it the data
-        are the whole array and hold every window.
+        are the whole array and hold every window. `quiet` says the caller
+        has already said what blending does to integers.
         """
+        if type(self.operation).kernel_for("numpy") is None:
+            return data
+        where = {"axes": axes, "size": size, "stride": stride, "length": length}
+        out, made = self._blend(data, inner=inner, tiles=tiles, **where)
+        if not quiet:
+            _warn_if_integers(made, out.dtype)
+        return out
+
+    def _blend(self, data, *, axes, size, stride, length, inner, tiles):
+        """Return the blended windows, and the dtype the operation made."""
         operation = self.operation
         kernel = type(operation).kernel_for("numpy")
         plan = get_tile_plan(length, size, stride)
@@ -477,7 +506,7 @@ class Windowed(PatchProcessor):
             if analysis is not None:
                 tile = tile * _taper_like(analysis, tile)
             tile = np.moveaxis(tile, tail, axes)
-            made = tile if kernel is None else kernel(operation, tile, **inner)
+            made = kernel(operation, tile, **inner)
             if np.shape(made) != tile.shape:
                 name = type(operation).__name__
                 msg = (
@@ -491,7 +520,19 @@ class Windowed(PatchProcessor):
                 out = np.zeros(padded.shape, dtype=np.result_type(made, weights))
             out[pick] += made * weights
         assert out is not None  # an axis with a sample has a window
-        return np.moveaxis(out[inside], tail, axes)
+        return np.moveaxis(out[inside], tail, axes), made.dtype
+
+
+def _warn_if_integers(made, blended) -> None:
+    """Warn that integers or booleans an operation made are blended to floats."""
+    if np.dtype(made).kind not in "biu":
+        return
+    msg = (
+        f"Blending windows of {made} data gives {blended}: each sample is a "
+        "weighted sum of the windows which hold it."
+    )
+    prefix = str(Path(__file__).parent.parent)
+    warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
 
 
 @dataclass(frozen=True)
@@ -513,7 +554,8 @@ class PatchWindow:
     overlap: Any = None
     step: Any = None
     samples: bool = False
-    taper: Any = None
+    # Not `taper`, which is the patch operation of that name.
+    blend_taper: Any = None
     analysis: Any = None
     ends: str = "pad"
     align: str = "center"
@@ -533,7 +575,15 @@ class PatchWindow:
                 "apply."
             )
             raise AttributeError(msg)
-        return update_wrapper(partial(self._windowed, method), method)
+
+        def windowed(*args, **kwargs):
+            """Run the operation in each window, and blend the windows."""
+            return self._windowed(method, *args, **kwargs)
+
+        # Its name and nothing else: the method's signature takes a patch,
+        # and its bypass and processor are the operation's without a window.
+        windowed.__name__ = windowed.__qualname__ = name
+        return windowed
 
     def _windowed(self, method, /, *args, **kwargs):
         """Run a patch method's operation in each window, and blend them."""
@@ -543,7 +593,7 @@ class PatchWindow:
             operation=operation,
             overlap=self.overlap,
             step=self.step,
-            taper=self.taper,
+            taper=self.blend_taper,
             analysis=self.analysis,
             fill=self.fill,
             samples=self.samples,
@@ -647,7 +697,7 @@ class PatchWindow:
             mode=mode,
             overlap=self.overlap,
             step=self.step,
-            taper=self.taper,
+            taper=self.blend_taper,
             analysis=self.analysis,
             fill=self.fill,
             samples=self.samples,
@@ -700,7 +750,7 @@ class PatchWindow:
           faster and agrees with NumPy to rounding: a few parts in ten
           million for float32, less for float64.
         """
-        if self.taper is not None or self.analysis is not None:
+        if self.blend_taper is not None or self.analysis is not None:
             msg = "A reduction blends nothing, so it takes no taper or analysis."
             raise ParameterError(msg)
         if self.fill is not None and self.ends == "drop":

@@ -45,12 +45,6 @@ def _taper_like(taper: np.ndarray, array: np.ndarray) -> np.ndarray:
     return taper.astype(np.float64 if double else np.float32, copy=False)
 
 
-def blend_dtype(dtype) -> np.dtype:
-    """Return the dtype tiles of `dtype` have once blended under a taper."""
-    taper = _taper_like(np.empty(0), np.empty(0, dtype))
-    return np.result_type(dtype, taper)
-
-
 @dataclass(frozen=True)
 class TilePlan:
     """

@@ -2252,7 +2252,14 @@ class TestCapturedOperation:
         found = captured_operation(dc.Patch.detrend, patch, "time", type="constant")
         assert found == dc.proc.Detrend(dim="time", type="constant")
         # Nothing is left behind: the next call runs.
-        assert patch.detrend("time").shape == patch.shape
+        assert patch.abs() is not patch
+
+    def test_a_failed_call_leaves_nothing_behind(self):
+        """A method which raises still hands operations back to being run."""
+        patch = dc.get_example_patch()
+        with pytest.raises(TypeError):
+            captured_operation(dc.Patch.detrend, patch, not_an_argument=1)
+        assert patch.abs() is not patch
 
     @pytest.mark.parametrize(
         "method", (lambda x: x, lambda x: x.abs().real()), ids=("none", "two")

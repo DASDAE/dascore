@@ -990,7 +990,7 @@ class Patch(NamespaceOwner, PatchMeta):
             overlap=overlap,
             step=step,
             samples=samples,
-            taper=taper,
+            blend_taper=taper,
             analysis=analysis,
             ends=ends,
             align=align,

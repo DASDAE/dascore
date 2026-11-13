@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import ClassVar
 
 import numpy as np
@@ -9,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.exceptions import LazyOperationError, PatchError
+from dascore.exceptions import LazyOperationError, ParameterError, PatchError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.contract import Pointwise, Window
@@ -296,6 +297,43 @@ class TestWindowed:
         box = (slice(10, 20), slice(1000, 1010))
         # Windows of 64 every 32, the first starting 32 before the array.
         assert read_schedule(array, [box]) == [(slice(10, 20), slice(960, 1056))]
+
+    @pytest.mark.parametrize(
+        "window",
+        ({}, {"fill": 2.5}, {"analysis": "hann", "overlap": 48}),
+        ids=("plain", "fill", "analysis"),
+    )
+    @pytest.mark.parametrize("name", ("abs", "real"))
+    def test_states_the_dtype_of_integers(self, tmp_path_factory, window, name):
+        """The dtype stated before anything is read is the one computed."""
+        data = np.random.default_rng(2).integers(-9, 9, (300, 2000), np.int16)
+        ints = lazy_patch(stored_patch(tmp_path_factory.mktemp("ints"), data))
+        # Only integers which reach the blend as integers are warned of: a
+        # fill or an analysis window has made floats of them already.
+        expected_warning = () if window else (UserWarning,)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = getattr(ints.window(time=64, samples=True, **window), name)()
+            eager = ints.load().window(time=64, samples=True, **window)
+            expected = getattr(eager, name)()
+        blends = [x for x in caught if "Blending windows of" in str(x.message)]
+        assert len(blends) == 2 * len(expected_warning)
+        with config_context(lazy_block_size=10 * ROW):
+            loaded = out.load()
+        assert out.dtype == loaded.dtype == expected.dtype
+        assert np.array_equal(loaded.data, expected.data)
+
+    def test_bad_blend_refused_before_reading(self, lazy, recipe_loads):
+        """A taper whose ramps would cross is refused when it is called."""
+        with pytest.raises(ParameterError, match="ramps would cross"):
+            lazy.window(time=64, overlap=48, samples=True).abs()
+        assert not recipe_loads
+
+    def test_metadata_only_adds_no_step(self, lazy):
+        """An operation with no kernel leaves the lazy array as it was."""
+        out = lazy.window(time=64, samples=True).set_units("m/s")
+        assert out.data is lazy.data
+        assert out.attrs.data_units == dc.get_quantity("m/s")
 
     def test_reduction_still_refused(self, lazy, recipe_loads):
         """A reduction in a window states no contract yet."""
