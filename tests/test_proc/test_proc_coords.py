@@ -118,7 +118,10 @@ class TestSnapDims:
     def test_step_on_time_in_seconds(self, random_patch):
         """A time step may be given in seconds."""
         time = random_patch.get_coord("time")
-        out = random_patch.snap_coords("time", step=dc.to_float(time.step))
+        # labels a third of a step off the grid, which the step puts back
+        jitter = np.where(np.arange(len(time)) % 2, time.step // 3, 0)
+        off = random_patch.update_coords(time=get_coord(data=time.values + jitter))
+        out = off.snap_coords("time", step=dc.to_float(time.step))
         snapped = out.get_coord("time")
         assert snapped == time and snapped.evenly_sampled
         assert snapped.step == time.step

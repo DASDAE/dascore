@@ -528,7 +528,12 @@ class TestSpoolFillGaps:
         """A later chunk cuts the filled stretch into whole windows."""
         chunked = gappy_spool.fill_gaps("time").chunk(time=4)
         expected = dc.spool([gappy_spool.fill_gaps("time")[0]]).chunk(time=4)
-        assert [x.shape for x in chunked] == [x.shape for x in expected]
+        assert len(chunked) == len(expected)
+        for got, want in zip(chunked, expected, strict=True):
+            np.testing.assert_array_equal(got.data, want.data)  # NaN where
+            coord = got.get_coord("time")
+            assert coord == want.get_coord("time")
+            assert segment_layout(coord) == segment_layout(want.get_coord("time"))
 
     @pytest.mark.parametrize(
         "kwargs", [{"tolerance": 3}, {"tolerance": 3, "max_shift": 0.01}]

@@ -27,6 +27,7 @@ from dascore.io.segy.core import SegyV0_0, SegyV0_100, SegyV1_0, SegyV2_0, SegyV
 from dascore.io.wav import WavIO
 from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.misc import suppress_warnings
+from tests.conftest import segment_layout
 
 # Every writer DASCore ships, checked against the plugin manager below.
 WRITERS = [
@@ -257,7 +258,10 @@ class TestManySegments:
             patch = self._patch(1_500, keep=10, period=13)
         patch.io.write(tmp_path / file_name, name)
         back = dc.read(tmp_path / file_name)[0].get_coord("time")
-        assert back.runs_count == 1_500 and back == patch.get_coord("time")
+        coord = patch.get_coord("time")
+        assert back.runs_count == 1_500 and back == coord
+        assert segment_layout(back) == segment_layout(coord)
+        assert {x.step for x in back.segments} == {coord.segments[0].step}
 
     def test_dasdae_refuses_more_segments_than_it_records(self, tmp_path):
         """An HDF5 attribute holds only so many lengths; the refusal says why."""

@@ -15,6 +15,7 @@ import dascore.utils.patch
 from dascore.core.coords import NumericCoord, get_coord
 from dascore.exceptions import CoordError
 from dascore.io.dasdae.utils import _read_stored_coord, _save_coord
+from tests.conftest import segment_layout
 
 T0 = np.datetime64("2024-01-01T00:00:00", "ns")
 MS = np.timedelta64(1, "ms")
@@ -240,16 +241,20 @@ class TestMicrosecondGrid:
         assert {x.step_exact for x in back.segments} == {Fraction(1, 1024)}
         assert np.array_equal(back.values, holed.values)
 
-    def test_dasdae_strided_run_keeps_its_step(self, tmp_path):
-        """A stored run one stride apart reads back on its declared step."""
+    def test_dasdae_strided_segment_reads_back_as_its_grid(self, tmp_path):
+        """
+        Labels one stride apart, a segment of labels once concatenated, which
+        states no step, read back as the grid inference finds in them.
+        """
         sparse = get_coord(data=np.arange(0, 2000, 2), step=1)
         dense = get_coord(start=3000, stop=3010, step=1)
         coord = dc.core.coords.concat_coords(sparse, dense)
+        assert segment_layout(coord) == [("Labels", None, 1000), ("Grid", 1, 10)]
         with h5py.File(tmp_path / "strided.h5", "w") as h5:
             _save_coord(coord, "_coord_x", h5, compact=True)
             back = _read_stored_coord(h5["_coord_x"], "x", {})
-        assert back == coord and back.runs_count == 2
-        np.testing.assert_array_equal(back.values, coord.values)
+        assert back == coord
+        assert segment_layout(back) == [("Grid", 2, 1000), ("Grid", 1, 10)]
 
     def test_dasdae_round_trip(self, coord, labels, tmp_path):
         """DASDAE stores the grid and reads back the same labels."""

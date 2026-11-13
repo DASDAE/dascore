@@ -308,8 +308,8 @@ class TestSobelFilter:
         with pytest.raises(CoordError, match="more than one segment"):
             holed_patch.sobel_filter("distance")
 
-    def test_jitter_computes(self, jittered_patch, jittered_forms):
-        """One list of labels is an irregular axis, computed on by its labels."""
+    def test_jitter_filters(self, jittered_patch, jittered_forms):
+        """One list of jittered labels is filtered, not refused, as labels are."""
         labels, _ = jittered_forms
         out = jittered_patch.sobel_filter("time")
         assert np.allclose(out.data, labels.sobel_filter("time").data)

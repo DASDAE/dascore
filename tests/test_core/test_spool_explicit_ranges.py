@@ -1335,6 +1335,23 @@ class TestWindowsOverFilledGaps:
         assert patch.coords["distance"].values.tolist() == [3, 4, 5, 6, 7, 8]
         assert patch.data[:, 0].tolist() == [1, 1, -1, -1, 1, 1]
 
+    def test_window_over_an_output_only_of_fill(self):
+        """A window over an output holding only fill keeps the fill."""
+        source, time = _gapped_2d(0, 10)
+        filled = source.fill_gaps(distance=6, fill_value=-1).chunk(distance=2)
+        narrowed = filled.select(reference_time=(time[0], time[1]))
+        (patch,) = narrowed.cut(distance=np.array([[5.5, 7]]))
+        assert patch.coords["distance"].values.tolist() == [6, 7]
+        assert (patch.data == -1).all() and patch.shape == (2, 2)
+
+    def test_rider_selection_over_selected_pieces(self):
+        """Windows over selected pieces, narrowed by a rider, join them."""
+        source, _ = _gapped_2d(0, 5, depth=True)
+        pieces = source.select(distance=np.array([[0, 9]]))
+        (patch,) = pieces.select(depth=(4, 12)).cut(distance=np.array([[1, 7]]))
+        assert patch.coords["distance"].values.tolist() == [2, 3, 4, 5, 6]
+        assert patch.coords["depth"].values.tolist() == [4, 6, 8, 10, 12]
+
     def test_nothing_to_fill_keeps_riders(self):
         """Contiguous patches fill nothing, so a rider window keeps its riders."""
         source, time = _gapped_2d(0, 5)

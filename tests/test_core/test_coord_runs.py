@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import pickle
+import warnings
 from fractions import Fraction
 
 import h5py
@@ -26,6 +27,8 @@ from dascore.io.dasdae import DASDAEV2
 from dascore.io.dasdae.utils import _read_stored_coord
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance, get_gap_edges, run_holes
+from dascore.warnings import DASCoreWarning
+from tests.conftest import segment_layout
 
 PRESENT = [1, 3, 4, 10, 11, 12]
 T0 = np.datetime64("2020-01-01T00:00:00")
@@ -750,7 +753,8 @@ class TestReviewRoundTwo:
         patch = base.update_coords(distance=coord)
         (back,) = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))
         out = back.get_coord("distance")
-        assert out == coord and out.runs_count == coord.runs_count
+        assert out == coord and segment_layout(out) == segment_layout(coord)
+        assert {x.step for x in out.segments} == {1.0}
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):
         """A single value with a step gets a cell of that width, without a warning."""
@@ -1125,6 +1129,18 @@ class TestStepContract:
         assert out.step is None and out.segments[0].step == 2.0
         np.testing.assert_array_equal(out.values, coord.values[::2])
 
+    @pytest.mark.parametrize("size", [300, 3000])  # 60 segments, then 600
+    def test_stride_agrees_across_the_segment_limit(self, size):
+        """A stride over segments, or over the list past the limit, agrees."""
+        grid = get_coord(start=0, step=1, shape=(size,))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DASCoreWarning)  # one list past it
+            masked = grid[np.arange(size) % 5 != 4]
+        assert masked.runs_count == (60 if size == 300 else 1)
+        out = masked[::2]
+        assert out.step is None and out.missing().complete
+        assert out == get_coord(data=masked.values[::2])
+
     def test_stride_promotes_a_regular_window(self):
         """Stored labels a stride leaves evenly spaced become the widened grid."""
         out = NumericCoord.from_labels(np.arange(6), step=1)[::2]
@@ -1142,6 +1158,8 @@ class TestStepContract:
         coord = concat_coords(get_coord(start=0.0, stop=10.0, step=1.0), labels)
         out = coord.fuse(tolerance=0.1)
         assert out.runs_count == 2 and out.step is None
+        assert segment_layout(out) == segment_layout(coord)
+        assert segment_layout(out)[0] == ("Grid", 1.0, 10)
         np.testing.assert_array_equal(out.values, coord.values)
 
     def test_partial_fit_drops_a_contradicted_step(self):

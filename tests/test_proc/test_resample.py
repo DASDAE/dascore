@@ -427,9 +427,13 @@ class TestDecimateHoles:
 
     def test_filtered_jitter_computes(self, jittered_patch, jittered_forms):
         """One list of labels is an irregular axis, computed on by its labels."""
-        labels, _ = jittered_forms
+        labels, grid = jittered_forms
         out = jittered_patch.decimate(time=2)
-        assert np.allclose(out.data, labels.decimate(time=2).data)
+        want = labels.decimate(time=2)
+        assert np.allclose(out.data, want.data)
+        # every second label is kept as recorded, not as the step's grid
+        assert out.get_coord("time") == want.get_coord("time")
+        assert out.get_coord("time") != grid.decimate(time=2).get_coord("time")
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still decimates."""

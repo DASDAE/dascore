@@ -352,8 +352,8 @@ class TestTaperHoles:
         with pytest.raises(CoordError, match=r"one segment.*fill_gaps.*split_gaps"):
             holed_patch.taper(time=0.1)
 
-    def test_jitter_computes(self, jittered_patch, jittered_forms):
-        """One list of labels is an irregular axis, computed on by its labels."""
+    def test_jitter_tapers(self, jittered_patch, jittered_forms):
+        """One list of jittered labels is tapered, not refused, as labels are."""
         labels, _ = jittered_forms
         out = jittered_patch.taper(time=0.1)
         assert np.allclose(out.data, labels.taper(time=0.1).data)

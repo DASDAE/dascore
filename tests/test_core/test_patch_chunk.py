@@ -2428,13 +2428,15 @@ class TestFilledWindows:
         assert np.array_equal(got.get_coord("x").values, full[20:61])
         assert np.array_equal(got.data, want.data, equal_nan=True)
 
-    def test_window_holding_no_position_is_skipped(self):
+    @pytest.mark.parametrize(
+        "select", [dict(time=(2.2, 2.9)), dict(time=(0.8, -0.1), relative=True)]
+    )
+    def test_window_holding_no_position_is_skipped(self, select):
         """A selection between two samples leaves no position to fill."""
         time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
         coords = {"distance": [0], "time": time}
         patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
-        # a relative selection resolves only as it loads, so it is absolute here
-        view = dc.spool([patch]).select(time=(2.2, 2.9))
+        view = dc.spool([patch]).select(**select)
         with pytest.raises(ChunkError, match="chunk"):
             view.fill_gaps("time").chunk(time=2.0, keep_partial=True)
 
