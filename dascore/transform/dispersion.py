@@ -202,8 +202,12 @@ class DispersionPhaseShift(PatchProcessor):
             fft_d[np.isnan(fft_d)] = 0
         fft_d = fft_d[..., live]
         preamb = (1j * np.outer(dist, w)).reshape(nchan, *[1] * (fft_d.ndim - 2), -1)
-        stacks = [abs(sum(np.exp(preamb / v) * fft_d)) for v in self.phase_velocities]
-        return np.stack(stacks, axis=-2) / nchan
+        velocities = self.phase_velocities
+        out = np.empty((*fft_d.shape[1:-1], len(velocities), fft_d.shape[-1]))
+        for i, velocity in enumerate(velocities):
+            out[..., i, :] = abs(sum(np.exp(preamb / velocity) * fft_d))
+        out /= nchan
+        return out
 
 
 def _frequency_range(phase_velocities, approx_resolution, approx_freq, dt):
