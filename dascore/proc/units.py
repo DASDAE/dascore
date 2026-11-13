@@ -70,6 +70,8 @@ class SetUnits(PatchProcessor):
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
 
+    __version__ = "1.1"
+
     data_units: Any = _UNSET
 
     model_config = ConfigDict(extra="allow")
