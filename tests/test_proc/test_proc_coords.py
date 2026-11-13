@@ -30,6 +30,7 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
+from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 from tests.conftest import segment_layout
 
@@ -907,6 +908,19 @@ class TestUnselect:
         whole = random_patch.get_array("distance")
         assert not set(kept) & set(dropped)
         assert sorted([*kept, *dropped]) == sorted(whole)
+
+    @pytest.mark.parametrize("every", [3, 300])  # past max_index_runs, and not
+    def test_segments_as_select_leaves_them(self, random_patch, every):
+        """Removing samples gives the coordinate a select of the rest gives."""
+        size = len(random_patch.get_coord("time"))
+        dropped = np.arange(5, size - 5, every)
+        kept = np.setdiff1d(np.arange(size), dropped)
+        with suppress_warnings(DASCoreWarning):  # one list past the limit
+            out = random_patch.unselect(time=dropped, samples=True)
+            want = random_patch.select(time=kept, samples=True)
+        coord, other = out.get_coord("time"), want.get_coord("time")
+        assert coord == other and segment_layout(coord) == segment_layout(other)
+        assert (coord.runs_count == 1) == (every == 3)
 
     def test_interior_range_leaves_a_hole(self, random_patch):
         """
