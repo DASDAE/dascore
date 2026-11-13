@@ -1039,13 +1039,14 @@ class _SampleTracker:
             return np.array([], dtype=np.int64), None, None, []
         return np.concatenate(places), np.concatenate(mins), np.concatenate(maxs), grids
 
-    def trim(self, after: pd.DataFrame, names) -> pd.DataFrame:
+    def trim(self, after: pd.DataFrame, names, riders=True) -> pd.DataFrame:
         """
         Give each coordinate on a dimension a selection moved its new ends.
 
         A coordinate the selection named keeps the envelope its own
         selection drew, unless another on its dimension was named beside
-        it: then each is cut to the samples both keep.
+        it: then each is cut to the samples both keep. ``riders`` False
+        leaves the coordinates it did not name as they were.
         """
         for key, state in self.kept.items():
             rows = np.flatnonzero(state.moved & (state.status == _FOLLOWED))
@@ -1055,7 +1056,7 @@ class _SampleTracker:
             on = [x for x in self.names if (self.dims[x][rows] == key).any()]
             named = [x for x in on if x in names]
             for name in on:
-                if name in named and len(named) < 2:
+                if (name in named and len(named) < 2) or not (riders or name in named):
                     continue
                 sizes = self.held(name).sizes[rows]
                 part = rows[
@@ -1091,7 +1092,7 @@ class _SampleTracker:
 
 
 def patch_local_adjusted_envelopes(
-    df: pd.DataFrame, residuals, drop_empty: bool = True
+    df: pd.DataFrame, residuals, drop_empty: bool = True, riders: bool = True
 ) -> pd.DataFrame:
     """
     Replay coordinate residuals onto relation envelopes in call order.
@@ -1106,6 +1107,12 @@ def patch_local_adjusted_envelopes(
     ``drop_empty`` removes rows emptied by sample selection for planning;
     presentation keeps those rows. Relative selections always remove rows
     whose resolved windows are empty.
+
+    ``riders`` False leaves the coordinates the last selection did not
+    name, but which share a dimension with one it did, untrimmed: wider
+    than what loads, as an envelope may be, and enough to load from. An
+    earlier selection still trims them, since a later one selects rows
+    by them.
     """
 
     def _usable_index(value) -> bool:
@@ -1124,8 +1131,11 @@ def patch_local_adjusted_envelopes(
                 df = _adjust_relative_envelopes(df, coords, uncertain)
             else:
                 df = _adjust_absolute_envelopes(df, coords)
-            tracker.follow_values(before, df, coords, relative, uncertain)
-            df = tracker.trim(df, coords)
+            # only riders, or two coordinates cut to what both keep, need
+            # the samples followed
+            if riders or position < len(residuals) - 1 or len(coords) > 1:
+                tracker.follow_values(before, df, coords, relative, uncertain)
+                df = tracker.trim(df, coords)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
@@ -1204,7 +1214,7 @@ def patch_local_adjusted_envelopes(
                 empty = ~keep & ~unresolved
                 df[cols] = df[cols].mask(empty)
                 df[_PATCH_LOCAL_EMPTY] = df.get(_PATCH_LOCAL_EMPTY, False) | empty
-        df = tracker.trim(df, coords)
+        df = tracker.trim(df, coords, riders or position < len(residuals) - 1)
     return df
 
 

@@ -956,6 +956,28 @@ class TestSelectSharedDimension:
             arc.max(),
         )
 
+    def test_loading_leaves_the_last_riders(self, sensor_spool):
+        """Loading skips the last selection's riders, which it never reads."""
+        out = sensor_spool.select(distance=(10, 20))
+        catalog = out._catalog
+        load = catalog._load_df()
+        assert (load["sensor_min"].iloc[0], load["sensor_max"].iloc[0]) == (1000, 1598)
+        # iterating reads from it, and never builds the trimmed relation
+        assert [x.shape for x in out] == [x.shape for x in out]
+        assert catalog._df_cache.get(catalog._revision.value) is None
+        full = catalog.to_df()
+        assert list(full["_patch_row"]) == list(load["_patch_row"])
+        low, high = full["sensor_min"].iloc[0], full["sensor_max"].iloc[0]
+        assert 1019.99 < low <= 1020 and 1040 <= high < 1040.01
+
+    def test_loading_keeps_earlier_riders(self, sensor_spool):
+        """A rider a later selection may select rows by is trimmed for loading."""
+        out = sensor_spool.select(sensor=(1020, 1040)).select(
+            time=(1, None), samples=True
+        )
+        load = out._catalog._load_df()
+        assert (load["distance_min"].iloc[0], load["distance_max"].iloc[0]) == (10, 20)
+
     def test_range_between_samples(self, sensor_spool):
         """A range holding no sample leaves the other envelopes whole."""
         contents = sensor_spool.select(sensor=(1020.5, 1021.5)).get_contents()
