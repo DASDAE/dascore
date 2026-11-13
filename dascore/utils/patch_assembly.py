@@ -575,22 +575,6 @@ def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
         )
 
 
-def _fill_limit(tolerance) -> tuple:
-    """
-    The widest hole a fill may close, as `Patch.fill_gaps` states limits.
-
-    A tolerance admits a spacing of so many steps; a hole of that spacing
-    is missing one fewer sample than it spans. An infinite count sets no
-    limit, which is the one way to ask for every hole to be filled.
-    """
-    if (count := tolerance.count) is not None:
-        if not np.isfinite(count):
-            return None, False
-        return max(int(np.floor(count)) - 1, 0), True
-    # an absolute excess is already stated per hole, not per spacing
-    return tolerance, False
-
-
 def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     """
     Fill a fill plan's assembled members, as `Patch.fill_gaps` does, onto the
@@ -604,7 +588,10 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
         _place_blocks,
     )
 
-    limit, samples = _fill_limit(merge["tolerance"])
+    # the size `Spool.fill_gaps` gave: samples and one, every gap, or a width
+    tol = merge["tolerance"]
+    samples = tol.count is not None and bool(np.isfinite(tol.count))
+    limit = int(tol.count) - 1 if samples else None if tol.count else tol
     patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
     coord: Any = patch.get_coord(dim)  # numeric, as only those fill
     if grid is None or coord == grid:

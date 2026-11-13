@@ -2295,9 +2295,7 @@ class Spool(NodeRepr, NamespaceOwner):
             msg = "chunk takes no fill_value: fill gaps first with Spool.fill_gaps"
             raise ParameterError(msg + ", eg spool.fill_gaps(time=10).chunk(time=60).")
         dim = next(iter(dim_kwargs), None)
-        fill = self._catalog
-        # straight onto the files, unless a seam test of the caller's own
-        # joins the fill's outputs, as over the outputs themselves
+        fill = self._catalog  # onto its files, unless the caller's seam test joins it
         own = params["tolerance"] is not None or params["max_shift"] is not None
         if isinstance(fill, _PendingFill) and fill.dim == dim and not own:
             return fill.frames[0], fill.windows(params, dim_kwargs)
@@ -2772,9 +2770,8 @@ class Spool(NodeRepr, NamespaceOwner):
             tolerance = GapTolerance(count=float(size + 1), nearest=True)
         else:
             tolerance = GapTolerance(excess=size, nearest=True)  # past one step
-        # a later segment moves onto the grid by under half a step; None
-        # fills as Patch.fill_gaps reads it, a null of the data's dtype
-        fill_value = np.nan if fill_value is None else fill_value
+        fill_value = np.nan if fill_value is None else fill_value  # as a patch's
+        # a later segment moves onto the grid by under half a step
         merge = dict(tolerance=tolerance, conflict=conflict, fill_value=fill_value)
         merge["max_shift"] = np.nextafter(0.5, 0)
         return self._new_from_catalog(_PendingFill(self, dim, merge))

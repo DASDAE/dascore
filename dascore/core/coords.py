@@ -41,12 +41,7 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.compat import array, is_array
-from dascore.constants import (
-    _AGG_FUNCS,
-    _DASCORE_DIR,
-    DIM_REDUCE_DOCS,
-    dascore_styles,
-)
+from dascore.constants import _AGG_FUNCS, _DASCORE_DIR, DIM_REDUCE_DOCS, dascore_styles
 from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
@@ -2587,13 +2582,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """Whether two coordinates hold equal labels and units, however split."""
         if not isinstance(other, NumericCoord):
             return sensible_model_equals(self._label_fields(), other)
-        mine, theirs = self._grid, other._grid
-        if mine is not None and theirs is not None and self.shape == other.shape:
-            ends = np.array([0, len(self) - 1])
-            # most unequal grids differ at an end
-            if not np.array_equal(
-                mine.labels(ends, self.dtype), theirs.labels(ends, self.dtype)
-            ):
+        a, b = self._grid, other._grid
+        if a is not None and b is not None and self.shape == other.shape:
+            ends, kind = np.array([0, len(self) - 1]), self.dtype  # where most differ
+            if not np.array_equal(a.labels(ends, kind), b.labels(ends, kind)):
                 return False
         mine, theirs = self._label_fields(), other._label_fields()
         if sensible_model_equals(mine, theirs):
@@ -3048,12 +3040,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         edges = np.flatnonzero((diffs != stride) | (np.diff(which) != 0)) + 1
         if len(edges) >= (limit := dc.get_config().max_index_runs):
             msg = (
-                f"Removing these samples leaves {len(edges) + 1} segments, more "
-                f"than max_index_runs ({limit}), so the labels are kept as one "
-                "list with no step: fill_gaps, split_gaps and the operations "
-                f"refusing several segments no longer see its {len(edges)} gaps. "
-                "Fill or split before removing samples, or raise "
-                "dascore.config.max_index_runs."
+                f"Removing these samples leaves {len(edges) + 1} segments, more than "
+                f"max_index_runs ({limit}), so the labels are kept as one list with "
+                "no step: fill_gaps, split_gaps and the operations refusing several "
+                f"segments no longer see its {len(edges)} gaps. Fill or split before "
+                "removing samples, or raise dascore.config.max_index_runs."
             )
             warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
             return self._with_runs((self._get_index_values(indices),), step=None)
@@ -4274,11 +4265,9 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
                     raise CoordError(msg)
                 step = abs(anchor.step(coord.dtype))
                 # a move within a float label's rounding is no move
-                floats = coord.dtype.kind == "f"
-                if shift > (
-                    _float_allowance(ends, step) / step if floats else _GRID_RTOL
-                ):
-                    moved = max(moved, shift)
+                rounding = _GRID_RTOL if coord.dtype.kind != "f" else None
+                rounding = rounding or _float_allowance(ends, step) / step
+                moved = max(moved, shift if shift > rounding else 0.0)
                 groups[-1][0] = anchor
                 blocks.append((source, stop, position))
                 groups[-1][1] = position + piece.count
