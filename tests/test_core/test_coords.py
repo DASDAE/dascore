@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.constants import ONE_SECOND
 from dascore.core.coords import (
     BaseCoord,
     Blank,
@@ -2403,6 +2404,39 @@ class TestCoercion:
         out, _indexer = coord.select(drange)
         assert isinstance(out, coord.__class__)
         assert out.dtype == coord.dtype
+
+
+class TestPandasTimes:
+    """Tests for coordinates built from pandas datetimes."""
+
+    @pytest.fixture()
+    def tz_index(self):
+        """A timezone-aware index, 5 s apart."""
+        start = "2018-03-28 02:00"
+        return pd.date_range(start, periods=5, freq="5s", tz="Europe/Amsterdam")
+
+    def test_tz_index_patch(self, tz_index):
+        """A tz-aware index becomes an evenly sampled UTC datetime64 coord."""
+        patch = dc.Patch(data=np.arange(5.0), coords={"time": tz_index}, dims=("time",))
+        coord = patch.get_coord("time")
+        expected = np.datetime64("2018-03-28T00:00:00") + np.arange(5) * ONE_SECOND * 5
+        assert np.all(coord.values == expected)
+        assert coord.step == ONE_SECOND * 5
+        out = patch.select(time=(np.datetime64("2018-03-28T00:00:05"), None))
+        assert out.shape == (4,)
+
+    @pytest.mark.parametrize("container", [pd.Series, lambda index: index.array])
+    def test_tz_series_and_array(self, tz_index, container):
+        """A tz-aware Series or pandas array converts the same way."""
+        with suppress_warnings(action="error"):
+            coord = get_coord(data=container(tz_index))
+        assert coord == get_coord(data=dc.to_datetime64(tz_index))
+        assert coord.step == ONE_SECOND * 5
+
+    def test_naive_index_unchanged(self, tz_index):
+        """A tz-naive index gives the coordinate it always did."""
+        naive = tz_index.tz_localize(None)
+        assert get_coord(data=naive) == get_coord(data=naive.values)
 
 
 class TestGetSampleCount:
