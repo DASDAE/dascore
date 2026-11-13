@@ -93,16 +93,17 @@ When `chunk` merges whole files, it reads their arrays directly and rebuilds coo
 
 # Filling bridged holes
 
-With `fill_value`, a `tolerance` wide enough to span a hole merges the patches on either side and writes the missing samples instead of spreading the labels, so the output is an ordinary evenly sampled patch on the sources' own grid.
+[`Spool.fill_gaps`](`dascore.Spool.fill_gaps`) joins the patches either side of each gap up to a given size and writes the missing samples, so each output is an ordinary evenly sampled patch on its first patch's grid. It is lazy: a later `chunk` or `cut` joins across the filled gaps, and loads only the files each window reaches. `chunk` itself never fills.
 
 ```{python}
 from dascore.examples import random_spool
 
 with_gaps = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
-filled = with_gaps.chunk(time=None, tolerance=300, fill_value=np.nan)
+filled = with_gaps.fill_gaps(time=2)  # gaps up to 2 s
+windows = filled.chunk(time=5)
 ```
 
-`tolerance` decides which holes are bridged: a hole it does not span separates patches as before, and nothing is filled across it. When a chunk length is given as well, the windows cover the whole bridged span, so one lying entirely inside a hole comes back as an all-fill patch and one the sources only partly feed is padded rather than left short. The fill value has to survive a cast to the data's own dtype, so `np.nan` needs float data; fill integer data with an integer, or cast it first. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) does the same to a patch you already hold.
+The size decides which gaps are filled: a wider one separates patches as before. A window lying entirely inside a filled gap comes back as an all-fill patch. The fill value has to survive a cast to the data's own dtype, so `np.nan` needs float data; fill integer data with an integer, or cast it first. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) does the same to a patch you already hold.
 
 # Gaps and coverage
 

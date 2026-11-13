@@ -26,7 +26,6 @@ import pandas as pd
 from upath import UPath
 
 import dascore as dc
-from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import UnknownFiberFormatError
@@ -47,6 +46,8 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
+    index_runs,
+    stored_runs,
     typed_value,
 )
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
@@ -61,17 +62,18 @@ from dascore.utils.chunk_plan import (
     grid_fits,
     patch_local_adjusted_envelopes,
 )
+from dascore.utils.gaps import RunRecord
 from dascore.utils.misc import is_range
 from dascore.utils.misc import stated_units as _stated_units
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     SOURCE_RANGE_ENDS,
     PatchAssembler,
-    fill_to_row,
-    patch_from_fill,
+    fill_on_grid,
     source_range_column,
 )
 from dascore.utils.paths import is_local_path, is_memory_uri
+from dascore.utils.time import to_float
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -694,7 +696,6 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
-        output_rows: pd.DataFrame | None = None,
         trim_dims: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
@@ -729,17 +730,6 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
-        # What each output advertises about itself, which only a filling
-        # plan needs: the row reaching `resolve` is the caller's, and a
-        # nested plan loading this one's outputs passes its own member
-        # row instead -- trim instructions, with no envelope to fill to.
-        self._output_rows: dict[int, Mapping] = {}
-        # a sibling's coordinates per output which has none of its own
-        self._fill_coords: dict[int, CoordManager] = {}
-        if merge_kwargs.get("fill_value") is not None and output_rows is not None:
-            self._output_rows = {
-                int(row["output_id"]): row for row in output_rows.to_dict("records")
-            }
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -751,19 +741,13 @@ class PlanResolver(PatchResolver):
         nested[f"{PLAN_SCHEME}{self.token}/"] = self
         return nested
 
-    def _assembler(self, *, fill=True):
-        merge_kwargs = (
-            self.merge_kwargs
-            if fill
-            else {
-                key: value
-                for key, value in self.merge_kwargs.items()
-                if key != "fill_value"
-            }
-        )
+    def _assembler(self):
+        # the fill is written once the members merge (`_filled`), so the
+        # merge, and the ids it stamps, never see it
+        merge = {k: v for k, v in self.merge_kwargs.items() if k != "fill_value"}
         return PatchAssembler(
             load_patch=self._load_member,
-            merge_kwargs=merge_kwargs,
+            merge_kwargs=merge,
             plan_dim=self.dim,
             array_source=self._member_array_source,
             can_use_index=self._can_load_member_from_index,
@@ -1008,24 +992,19 @@ class PlanResolver(PatchResolver):
         """Assemble the output patch a plan row describes."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
-        fill_value = self.merge_kwargs.get("fill_value")
-        fill_row = self._output_rows.get(output_id) if fill_value is not None else None
-        can_fill = fill_row is not None
-        if not len(members):
-            # only a fill plan publishes an output no source feeds
-            assert fill_row is not None, "no plan members found for output row"
-            coords = self._sibling_coords(output_id)
-            filled = patch_from_fill(coords, fill_row, self.dim, fill_value)
-            return self._stamp(filled, row)
+        if self.merge_kwargs.get("fill_value") is not None:
+            return self._stamp(self._filled(output_id, members, trim), row)
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
             patch = self._load_member(members.iloc[0].to_dict())
+            if (snap := self.merge_kwargs.get("snap")) is not None:
+                patch = patch.snap_coords(*snap[0], **snap[1])
         elif self.mode == "concat":
             # the plan decided what fits together; assembly executes it
-            loaded = [
-                self._load_member(kwargs) for kwargs in members.to_dict("records")
-            ]
+            # each member trimmed as the plan cut it, as assembly trims one
+            load = self._assembler()._load_trimmed_patch
+            loaded = [load(x, members) for x in members.to_dict("records")]
             patch = concatenate_planned(
                 loaded,
                 self.dim,
@@ -1033,42 +1012,48 @@ class PlanResolver(PatchResolver):
                 conflict=self.merge_kwargs.get("conflict", "raise"),
             )
         else:
-            joined = members.assign(current_index=output_id)
-            assembled = self._assembler(fill=can_fill)._patch_from_instruction_df(
-                joined
-            )
-            assert len(assembled) == 1
-            patch = assembled[0]
-            if can_fill:
-                patch = fill_to_row(
-                    patch,
-                    self.dim,
-                    fill_row,
-                    fill_value,
-                    self.merge_kwargs["tolerance"],
-                )
+            patch = self._assembled(output_id, members)
         return self._stamp(patch, row)
 
-    def _sibling_coords(self, output_id: int):
-        """
-        The coordinates of the nearest output a source actually feeds.
+    def _assembled(self, output_id: int, members: pd.DataFrame) -> dc.Patch:
+        """The one patch a chunk plan's members assemble into."""
+        joined = members.assign(current_index=output_id)
+        (patch,) = self._assembler()._patch_from_instruction_df(joined)
+        return patch
 
-        An output with no members still has to look like the ones beside
-        it -- the same coordinates, values, dtypes and units on every
-        dimension but the chunked one -- and only a real patch states
-        those; an envelope cannot restate an arbitrary array, and the
-        frame holds every numeric one as float. Outputs are numbered in
-        order, so the nearest fed one is a neighbour in the same
-        partition.
+    def _filled(self, output_id: int, members: pd.DataFrame, trim) -> dc.Patch:
         """
-        ids = self.member_rows["output_id"].to_numpy()
-        assert len(ids), "a fill plan with no members anywhere has no structure"
-        nearest = int(ids[np.argmin(np.abs(ids - output_id))])
-        if nearest not in self._fill_coords:
-            rows = self.member_rows[self.member_rows["output_id"] == nearest]
-            patch = self._load_member(rows.iloc[0].to_dict())
-            self._fill_coords[nearest] = patch.coords
-        return self._fill_coords[nearest]
+        A fill plan's output, loading only the members a trim reaches.
+
+        Members within half a step of it are read too; a trim inside a gap
+        reads one sample of the nearest, for the other dimensions.
+        """
+        dim, window = self.dim, trim.get(self.dim)
+        if window is not None:
+            low, high = members[f"{dim}_min"], members[f"{dim}_max"]
+            start = low.min() if window[0] is None else window[0]
+            stop = high.max() if window[1] is None else window[1]
+            half = members[f"{dim}_step"].abs().max() / 2
+            reach = (high >= start - half) & (low <= stop + half)
+            if not reach.any():  # one sample of the nearest member
+                near = (low - start).abs().to_numpy().argmin()
+                one = {f"{dim}_max": low.iloc[near], "_modified": True}
+                members = members.iloc[[near]].assign(**one)
+            else:
+                members = members[reach].assign(
+                    **{
+                        f"{dim}_min": low[reach].clip(lower=start - half),
+                        f"{dim}_max": high[reach].clip(upper=stop + half),
+                    },
+                    _modified=True,
+                )
+            window = (start, stop)
+        patch = self._assembled(output_id, members)
+        fill, tolerance = (
+            self.merge_kwargs["fill_value"],
+            self.merge_kwargs["tolerance"],
+        )
+        return fill_on_grid(patch, dim, window, fill, tolerance)
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -1297,7 +1282,6 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
-        output_rows=plan.outputs,
         trim_dims=plan.trim_dims,
     )
     backend = get_backend(":memory:")
@@ -1318,8 +1302,6 @@ def derived_catalog(
         conflict=merge_kwargs.get("conflict"),
         source_trimmed=_trimmed_dims(parent_residuals, coord_dims_map),
     )
-    if merge_kwargs.get("fill_value") is not None:
-        aux_info = _aux_info_for_unfed(aux_info, outputs, trims)
     outputs = _with_windowed_dims(outputs, aux_info, name)
     records = _output_records(
         outputs,
@@ -1329,13 +1311,16 @@ def derived_catalog(
         plan_dim=name,
     )
     if parent is not None and "_index_row" in sources.columns:
-        records = _with_parent_runs(records, parent.backend, trims, sources, name)
+        concat = mode == "concat"
+        records = _with_parent_runs(
+            records, parent.backend, trims, sources, name, concat
+        )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)
 
 
 def _with_parent_runs(
-    records, parent_backend, trims: pd.DataFrame, sources: pd.DataFrame, name: str
+    records, parent_backend, trims, sources, name: str, concat: bool = False
 ) -> list:
     """
     The records with the runs their members' coordinates hold in the parent.
@@ -1344,7 +1329,8 @@ def _with_parent_runs(
     so it takes the member's runs; the reports clip runs to each row's
     envelope. An output of several takes runs only for a coordinate which
     kept its identity, and so equals each member's. None takes runs along
-    the planned dimension, which the plan cut at its holes (or filled).
+    the planned dimension, which the plan cut at its holes (or filled),
+    except a concatenation's, which keeps each member's runs as segments.
     Members find their runs through the parent's patch rows (``_index_row``).
     """
     index_rows = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
@@ -1353,8 +1339,9 @@ def _with_parent_runs(
         members.setdefault(str(int(output_id)), []).append(index_rows.get(patch_row))
     known = {x for ids in members.values() for x in ids if pd.notna(x)}
     runs = parent_backend.patch_runs(known)
-    if not runs:
+    if not runs and not concat:
         return records
+    rows = trims.groupby("output_id", sort=False)
     out = []
     for source in records:
         patches = []
@@ -1366,6 +1353,9 @@ def _with_parent_runs(
                 planned = name in str(coord.coord_dims).split(",")
                 parent = held.get(coord.coord_name)
                 several = len(ids) > 1 and not coord.data_id
+                if concat and coord.coord_name == name and len(ids) > 1:
+                    group = rows.get_group(int(patch.source_patch_key))
+                    coord = _segment_runs(coord, group, runs, index_rows, name)
                 if parent is None or planned or several:
                     coords.append(coord)
                     continue
@@ -1376,6 +1366,48 @@ def _with_parent_runs(
             patches.append(replace(patch, coords=tuple(coords)))
         out.append(replace(source, patches=tuple(patches)))
     return out
+
+
+def _segment_runs(coord, members, runs, index_rows, name: str):
+    """A concatenated coordinate's runs: each member's, or the member as one."""
+    kind, absolute = coord.value_kind, not coord.is_relative
+    if f"{name}_step" not in members:  # a dimension the concatenation made
+        return coord
+    records = []
+    for row in members.to_dict("records"):
+        held = runs.get(index_rows.get(row["_patch_row"]), {}).get(coord.coord_name)
+        if held is not None and held.runs:
+            records.extend(index_runs(held.runs, kind, absolute))
+            continue
+        low, high, step = (row[f"{name}_{x}"] for x in ("min", "max", "step"))
+        if pd.isnull(step):  # its count is unknown, so its runs are too
+            return coord
+        count = round(to_float(high - low) / abs(to_float(step))) + 1
+        record = RunRecord(count, low, high, step)
+        prev = records[-1] if records else None
+        if (
+            prev is not None
+            and step == prev.step
+            and abs(step)
+            in (
+                low - prev.max,
+                prev.min - high,
+            )
+        ):  # it continues the grid before it exactly, so it is part of it
+            low, high = min(low, prev.min), max(high, prev.max)
+            record = RunRecord(prev.count + count, low, high, step)
+            records.pop()
+        records.append(record)
+    if len(records) < 2:
+        return coord
+    grid = dict.fromkeys(("step_float", "step_int", *_EXACT_GRID_FIELDS))
+    return replace(
+        coord,
+        **grid,
+        is_exact=False,
+        run_count=len(records),
+        runs=stored_runs(records, kind, absolute),
+    )
 
 
 # What a coordinate's runs say of it, beyond its envelope.
@@ -1389,20 +1421,6 @@ _CARRIED_RUN_FIELDS = (
     "run_count",
     "runs",
 )
-
-
-def _aux_info_for_unfed(aux_info: Mapping, outputs, members) -> dict:
-    """
-    Describe fill-only outputs as their nearest fed sibling, as they load
-    (`PlanResolver._sibling_coords`): its info, if it has any.
-    """
-    out, fed = dict(aux_info), np.unique(members["output_id"].to_numpy(np.int64))
-    for output_id in outputs["output_id"].to_numpy(np.int64):
-        # a fed output is described by its members, even with nothing left
-        if len(fed) and output_id not in fed:
-            nearest = int(fed[np.argmin(np.abs(fed - output_id))])
-            out[int(output_id)] = aux_info.get(nearest, {})
-    return {x: y for x, y in out.items() if y}
 
 
 def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:

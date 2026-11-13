@@ -95,12 +95,8 @@ def written_step(name: str, coord, why: str):
     """
     The step to write beside a coordinate's labels, or None if they need none.
 
-    Labels which restate their coordinate (a grid, or stepless labels) need
-    none. Others, such as a lone sample, labels with jitter, or segments,
-    need the step they share, which reading them back with places them as
-    they are. Where nothing does (segments of different steps, or a 1024 Hz
-    grid with holes, whose step is not a whole tick), the writer refuses
-    them (rule 13 of the coordinate guidelines), saying to fill or split.
+    Labels read back as they are alone, or with the step all segments share;
+    otherwise the writer refuses them (rule 13 of the coordinate notes).
     """
     if coord.ndim != 1 or coord._partial or not hasattr(coord, "segments"):
         return None

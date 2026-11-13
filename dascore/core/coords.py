@@ -3392,13 +3392,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         Snap the coordinates to evenly sampled grid points.
 
-        Without ``step`` the min and max remain unchanged and every other
-        label spreads evenly between them; an evenly sampled coordinate is
-        left alone. With ``step`` each label moves to the nearest position
-        of that step's grid through the first label, segments where it
-        skips positions. A label moved more than one step warns, since a
-        gap is being spread, and one moved more than ``max_shift`` steps
-        raises.
+        The labels spread evenly between the min and max, or with ``step``
+        go to the nearest positions of its grid through the first. A move
+        over one step warns; one over ``max_shift`` steps raises.
         """
         if self._partial or (self._grid is not None and step is None):
             return self

@@ -11,6 +11,7 @@ import dascore as dc
 import dascore.core.spool as spool_module
 from dascore.core.coords import CoordSummary, concat_coords, get_coord
 from dascore.core.summary import PatchSummary
+from dascore.exceptions import ParameterError
 from dascore.io.dasdae.utils import _save_patch
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
@@ -243,8 +244,8 @@ class TestPlans:
         """Each run is a trimmed member; runs in one output are read once."""
         members = gapped_directory.chunk_plan(time=None).members
         assert len(members) == 3 and members["_modified"].sum() == 2
-        bridged = gapped_directory.chunk_plan(time=None, tolerance=5, fill_value=np.nan)
-        assert len(bridged.members) == 2
+        with pytest.raises(ParameterError, match=r"Spool\.fill_gaps"):
+            gapped_directory.chunk_plan(time=None, tolerance=5, fill_value=np.nan)
 
     def test_chunk_outputs(self, gapped_directory):
         """Chunk splits at the hole, and its outputs report it as a gap."""
@@ -252,7 +253,7 @@ class TestPlans:
         assert len(chunked) == 3
         assert not any(x.get_coord("time").gapped for x in chunked)
         assert chunked.get_gaps().sort_values("time_min")["gap_size"].iloc[0] == HOLE
-        joined = gapped_directory.chunk(time=None, tolerance=10_000, fill_value=np.nan)
+        joined = gapped_directory.fill_gaps("time")
         assert joined.get_gaps().empty
 
     def test_other_dimension_keeps_runs(self, gapped_patch):

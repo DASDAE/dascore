@@ -514,7 +514,7 @@ def spool_to_xarray(
             "again."
         )
         raise PatchConversionError(msg)
-    assembler = resolver._assembler(fill=False)
+    assembler = resolver._assembler()
     if resolver.parent_residuals:
         # a residual re-trims the loaded patch, which a window read skips
         assembler = replace(assembler, array_source=None)

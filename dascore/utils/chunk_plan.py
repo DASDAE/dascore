@@ -2779,9 +2779,9 @@ def build_chunk_plan(
     Parameters mirror `Spool.chunk` (see the chunking formalities spec);
     one keyword names the dimension to chunk and its length (`None`/`...`
     merges). Patches join under the seam test (`_cell_seams`) and each
-    stretch gets one grid (`_fit_grids`), which windows are cut from;
-    ``fill_value`` instead fills the seams `tolerance` joins, keeping each
-    source's labels.
+    stretch gets one grid (`_fit_grids`), which windows are cut from.
+    ``fill_value``, which only `Spool.fill_gaps` passes and only to merge,
+    instead fills the seams `tolerance` joins, keeping each source's labels.
     """
     if len(kwargs) != 1:
         msg = (
@@ -2809,6 +2809,7 @@ def build_chunk_plan(
     for label, quant in (("chunk value", value), ("overlap", overlap)):
         _validate_quantity(label, quant, name)
     merge_mode = bool(pd.isnull(value))
+    assert merge_mode or fill_value is None, "a fill plan merges"
     if merge_mode and (keep_partial or overlap):
         msg = (
             "When chunk value is None (ie chunking is used for merging) "
@@ -2912,8 +2913,6 @@ def build_chunk_plan(
         _, stride, *_, width, own_min, own_max = lattice
         plain = (stride == 0) | ((src1 == own_min) & (src2 == own_max))
         edge = src2 + 2 * _GRID_SNAP_RTOL * width if src2.dtype.kind == "f" else src2
-        # the kept source holding each partition's last sample
-        end_rows = pd.Series(src2).groupby(kcodes).idxmax().to_numpy()
     has_dtype = "_dtype" in sorted_df.columns
     if has_dtype:
         # The element dtype resolves per *output*, not per partition: a
@@ -2939,9 +2938,6 @@ def build_chunk_plan(
         # per-output dtype pools are simple slices
         kdt = kdtypes[koffsets[part] : koffsets[part + 1]]
         bounds = np.cumsum(m_counts) - m_counts
-        # an all-fill output draws from no member, so it is the
-        # partition, not its own pool, which names its dtype
-        whole = _combined_dtype(pd.Series(part_dtypes, dtype=object))
         combined = [
             _combined_dtype(
                 pd.Series(
@@ -2949,8 +2945,6 @@ def build_chunk_plan(
                     dtype=object,
                 )
             )
-            if m_counts[out]
-            else whole
             for out in np.flatnonzero(fed)
         ]
         return np.array(["" if x is None else str(x) for x in combined], dtype=object)
@@ -3025,11 +3019,7 @@ def build_chunk_plan(
             stops_p = g_stops[part : part + 1]
         else:
             sub_sample[part] = not pd.isnull(part_step) and value_c < abs(part_step)
-            cell, row = abs(part_step), end_rows[part]
-            if lattice[2][row] > 1:  # a fractional grid's gap to its next label
-                stop = to_int(g_stops[part : part + 1])
-                gap = (_lattice_label(stop + 1, [x[row] for x in lattice]) - stop)[0]
-                cell = np.timedelta64(gap, "ns") if g_stops.dtype.kind in "Mm" else gap
+            cell = abs(part_step)
             try:
                 start_stop = get_intervals(
                     g_starts[part],
@@ -3050,19 +3040,6 @@ def build_chunk_plan(
                 break
             starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
             ends_p = stops_p
-            if fill_value is not None:
-                # filled windows hold the first source's grid, else the partition's
-                grid = [x[koffsets[part]][None] for x in lattice]
-                if not grid[1][0]:
-                    grid[0][:] = to_int(g_starts[part])
-                    grid[1][:] = to_int(abs(part_step))
-                edges = g_starts[part : part + 1], g_stops[part : part + 1]
-                starts_p, stops_p = _member_samples(*edges, starts_p, ends_p, grid)
-                keep = starts_p <= stops_p
-                starts_p, stops_p, ends_p = starts_p[keep], stops_p[keep], ends_p[keep]
-            # A filled window can hold no sample at all, nor then a partition.
-            if not len(starts_p):
-                continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -3098,13 +3075,10 @@ def build_chunk_plan(
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
-        # runtime error; it is not surfaced at all. A fill value lifts
-        # that: a window lying wholly inside a bridged hole has no source
-        # to draw from and is assembled from fill alone, so the outputs
-        # cover the partition evenly instead of skipping the hole.
-        fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
+        # runtime error; it is not surfaced at all.
+        fed = m_counts > 0
         fed_counts[part] = int(fed.sum())
-        if regular and fill_value is None and total:
+        if regular and total:
             # an output's envelope is its members' first and last samples
             if total == n_out and fed.all():  # one member each
                 starts_p, stops_p = lo, hi
@@ -3280,7 +3254,7 @@ def build_chunk_plan(
         outputs, members, pieces, kept_df, src_rows, name, label_dtype
     )
     members["shift"] = shift_all[src_rows]
-    outputs = _carry_grids(outputs, members, sorted_df, name)
+    outputs = _carry_grids(outputs, members, sorted_df, name, fill_value is not None)
     # integers counted in ticks go back to the frame's floats
     back = dict.fromkeys([min_name, max_name], frame_dtype)
     return ChunkPlan(outputs.astype(back), members.astype(back), name, value, params)
@@ -4104,7 +4078,7 @@ def stretch_coordinate(spec, units=None):
     return get_coord(runs=(run,), dtype=dtype, units=units)
 
 
-def _carry_grids(outputs, members, sources, name):
+def _carry_grids(outputs, members, sources, name, fill=False):
     """
     Give outputs on one exact grid the grid of their samples.
 
@@ -4113,7 +4087,7 @@ def _carry_grids(outputs, members, sources, name):
     ``(ideal + k * num) // den`` ticks; members on one lattice share num,
     den and ideal origin modulo num. A grid counts only where its labels
     end on the row's bounds (a trimmed row's do not) and its members hold
-    every sample.
+    every sample, or a fill writes the rest on its first member's grid.
     """
     col, (low, high, _) = f"_{name}_grid", _dim_columns(outputs, name)
     fitted = outputs.get(f"_{name}_stretch", pd.Series(None, index=outputs.index))
@@ -4136,15 +4110,14 @@ def _carry_grids(outputs, members, sources, name):
             held[out] = held.get(out, 0) + k1 - k0 + 1
     grids = []
     for out, lo, hi in zip(outputs["output_id"], outputs[low], outputs[high]):
-        if len(kinds.get(out, ())) != 1 or first[out] not in lattice:
+        if first.get(out) not in lattice or (len(kinds[out]) != 1 and not fill):
             grids.append(None)
             continue
         num, den, _, ideal = lattice[first[out]]
         k0, k1 = _lattice_span(lattice[first[out]], to_int(lo), to_int(hi))
         # slicing keeps a reduced grid reduced: num and den set what divides phase
         grid = (num, den, (ideal + k0 * num) % den, k1 - k0 + 1)
-        # a fill the members do not hold is padded on whole ticks, off the grid
-        grids.append(grid if grid[-1] == held[out] else None)
+        grids.append(grid if fill or grid[-1] == held[out] else None)
     if fitted.any():  # a stretch's grid states its own (see `_describe_pieces`)
         grids = [x if not y else z for x, y, z in zip(grids, fitted, outputs[col])]
     return outputs.assign(**{col: grids})

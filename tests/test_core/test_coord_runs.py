@@ -320,7 +320,7 @@ class TestFractionalGaps:
         assert spool.get_gaps(tolerance=width).empty
         assert len(spool.get_gaps(tolerance=1.5)) == 1
         assert len(spool.chunk(time=None, tolerance=1.5)) == 2
-        out = spool.chunk(time=None, tolerance=2, fill_value=np.nan)
+        out = spool.fill_gaps(time=1, samples=True)
         assert len(out) == 1
         np.testing.assert_array_equal(out[0].get_coord("time").values, full.values)
         assert np.flatnonzero(np.isnan(out[0].data)).tolist() == [3 if selected else 5]
@@ -404,8 +404,8 @@ class TestFractionalGaps:
         spool = dc.spool(patches)
         found = [len(spool.get_gaps(tolerance=x)) for x in (1.5, 2, 3)]
         assert found == [2, 1, 0]
-        kwargs = {"time": None, "fill_value": np.nan}
-        assert [len(spool.chunk(tolerance=x, **kwargs)) for x in (2, 3)] == [2, 1]
+        filled = [spool.fill_gaps(time=x, samples=True) for x in (1, 2)]
+        assert [len(x) for x in filled] == [2, 1]
 
     @pytest.mark.parametrize("step", [Fraction(10, 3), -3])
     def test_integer_grid(self, step):
@@ -549,9 +549,8 @@ class TestReviewFindings:
         dist = first.get_coord("distance")
         second = first.update_coords(distance_min=dist.max() + 2.4 * dist.step)
         spool = dc.spool([first, second])
-        kwargs = {"distance": None, "fill_value": np.nan}
-        assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 1
-        assert len(spool.chunk(tolerance=GapTolerance.absolute(1), **kwargs)) == 2
+        assert len(spool.fill_gaps(distance=2)) == 1
+        assert len(spool.fill_gaps(distance=1)) == 2
 
     @pytest.fixture()
     def dense_patch(self):
@@ -604,11 +603,10 @@ class TestReviewFindings:
         time = first.get_coord("time")
         second = first.update_coords(time_min=time.max() + 2.4 * time.step)
         spool = dc.spool([first, second])
-        kwargs = {"time": None, "fill_value": np.nan}
         wide = float(2 * time.step / np.timedelta64(1, "s"))
-        assert len(spool.chunk(tolerance=GapTolerance.absolute(wide), **kwargs)) == 1
+        assert len(spool.fill_gaps(time=wide)) == 1
         narrow = float(time.step / np.timedelta64(1, "s"))
-        assert len(spool.chunk(tolerance=GapTolerance.absolute(narrow), **kwargs)) == 2
+        assert len(spool.fill_gaps(time=narrow)) == 2
 
     def test_seam_after_an_undeclared_singleton(self):
         """A seam whose run states no spacing reports no excess and no gap."""
@@ -1196,7 +1194,7 @@ class TestRefactorParity:
         assert len(spool) == 2 and len(spool.get_coverage("distance")) == 1
         assert len(spool.get_gaps("distance")) == 1
         assert len(spool.chunk(distance=None)) == 2
-        (out,) = spool.chunk(distance=None, tolerance=2, fill_value=np.nan)
+        (out,) = spool.fill_gaps(distance=1, samples=True)
         assert out.get_coord("distance").step == pytest.approx(0.1)
         assert out.shape == (20, 4)
 

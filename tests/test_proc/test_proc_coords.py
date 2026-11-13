@@ -2128,7 +2128,7 @@ class TestFillGaps:
         assert np.array_equal(out.get_coord("time").values, full.values)
         assert patch.fill_gaps(time=5 * step).shape == patch.shape
         assert patch.fill_gaps(time=10 * step).shape == out.shape
-        chunked = dc.spool([patch]).chunk(time=None, tolerance=100, fill_value=np.nan)
+        chunked = dc.spool([patch]).fill_gaps("time")
         assert chunked[0].shape == out.shape
 
     def test_fills_hole(self, gapped):

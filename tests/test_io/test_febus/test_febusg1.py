@@ -230,9 +230,7 @@ class TestMisc:
         """
         spool = dc.spool(g1_two_file_directory)
         # These weren't directly adjacent files, so the hole is filled.
-        merged = spool.chunk(
-            time=None, tolerance=3, conflict="keep_first", fill_value=np.nan
-        )
+        merged = spool.fill_gaps(time=2, samples=True, conflict="keep_first")
         assert len(merged) == 1
 
     def test_mtx_read_raises(self, g1_mtx_buffer):

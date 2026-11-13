@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import functools
 import inspect
+import itertools
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
@@ -1688,9 +1690,14 @@ def _concatenate_group(
             members = [
                 x if x.units is None else x.convert_units(units) for x in members
             ]
-        values = np.concatenate(_joinable(members, dim), axis=0)
-        # the released snap, until concatenation joins labels exactly
-        joined_dim = dc.core.coords.get_coord(data=values, units=units, snap=True)
+        joined_dim = None
+        if _chains(members):
+            # members chaining in order join exactly, each its own segment
+            with suppress(CoordError):  # unless they are text, or mix kinds
+                joined_dim = dc.core.coords.concat_coords(*members)
+        if joined_dim is None:  # others join by value, as released
+            values = np.concatenate(_joinable(members, dim), axis=0)
+            joined_dim = dc.core.coords.get_coord(data=values, units=units, snap=True)
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops the rest
         riders = {}
@@ -1726,6 +1733,16 @@ def _concatenate_group(
     attrs = stamp(attrs, [x.attrs for x in patches], operation)
     with operation_context():
         return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+
+
+def _chains(coords) -> bool:
+    """Whether coordinates follow one another in order, without overlap."""
+    pairs = list(itertools.pairwise(coords))
+    try:
+        up = all(a.max() < b.min() for a, b in pairs)
+        return up or all(a.min() > b.max() for a, b in pairs)
+    except TypeError:  # labels of kinds which do not compare, as a blank's
+        return False
 
 
 def _joinable(coords, dim: str) -> list[np.ndarray]:

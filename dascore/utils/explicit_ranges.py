@@ -239,11 +239,6 @@ def _planned_manager(plan, row, files=None, projection=None):
     # Patch utilities import spool/chunk planning; defer until plans are read.
     from dascore.utils import patch_assembly as pa  # noqa: PLC0415
 
-    if not recovered:  # only fill: its nearest fed sibling's, on this one's grid
-        ids = plan.member_rows["output_id"].to_numpy(np.int64)
-        near = str(ids[np.argmin(np.abs(ids - int(key)))])
-        sibling = {**row, "source_patch_key": near}
-        return _planned_manager(plan, sibling, files, requested_projection)
     if len(recovered) == 1:
         coords = recovered[0]
     else:
@@ -269,14 +264,7 @@ def _planned_manager(plan, row, files=None, projection=None):
     # A filled output takes its grid from the output, not its anchor.
     filled = _row_coordinate(row, plan.dim)
     current = coords.coord_map[plan.dim]
-    if filled is None or (
-        filled.shape == current.shape
-        and filled.min() == current.min()
-        and filled.max() == current.max()
-        and filled.step == current.step
-        and str(filled.units) == str(current.units)
-    ):
-        # Float index envelopes can describe an identical integer grid.
+    if filled is None or filled == current:  # nothing filled, riders keep
         return _project_manager(coords, requested_projection)
     riding = [
         name

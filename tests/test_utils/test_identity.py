@@ -1188,9 +1188,7 @@ class TestInternalRoutes:
             patch.select(time=(0, 2), relative=True),
             patch.select(time=(6, None), relative=True),
         ]
-        chunked = dc.spool(members).chunk(
-            time=1, tolerance=dc.to_timedelta64(5), fill_value=np.nan
-        )
+        chunked = dc.spool(members).fill_gaps(time=5).chunk(time=1)
         nans = [np.isnan(x.data) for x in chunked]
         padded = [i for i, x in enumerate(nans) if x.any() and not x.all()]
         assert padded, "no partially filled chunk to check"

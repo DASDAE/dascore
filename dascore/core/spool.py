@@ -26,6 +26,7 @@ from typing import (
     NamedTuple,
     Self,
     TypeVar,
+    cast,
     overload,
 )
 
@@ -143,6 +144,7 @@ from dascore.utils.explicit_ranges import (
     explicit_windows,
     looks_explicit,
 )
+from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import (
     _spool_map,
     available_memory,
@@ -2131,7 +2133,7 @@ class Spool(NodeRepr, NamespaceOwner):
         catalog = self._catalog
         return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
-    def _materialize_lossy(self, stamp=None, dtypes=None):
+    def _materialize_lossy(self, stamp=None, dtypes=None, rows=None, **merge):
         """
         Bake residual trims and presentation order into a derived catalog.
 
@@ -2143,7 +2145,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        rows = self._df.reset_index(drop=True)
+        rows = self._df.reset_index(drop=True) if rows is None else rows
         working = rows.reset_index(drop=True)
         ids = np.arange(len(working), dtype=np.int64)
         # outputs are not file rows: source bookkeeping stays on the
@@ -2163,16 +2165,18 @@ class Spool(NodeRepr, NamespaceOwner):
             source_rows=working,
             plan=plan,
             parent=self._catalog,
-            merge_kwargs={},
+            merge_kwargs=merge,
             mode="identity",
             origin_path=self.spool_path,
             stamped=dtypes or tuple(stamp or ()),
+            # a re-plan from the members would load them unsnapped
+            lossy=bool(merge),
         )
 
     # --- restructuring (materializing) operations -----------------------
 
     def _plan_frames(
-        self, dim: str | None = None, *cut_dims: str
+        self, dim: str | None = None, *cut_dims: str, runs: bool = True
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Return (source_rows, working) frames for planning along ``dim``.
@@ -2185,7 +2189,7 @@ class Spool(NodeRepr, NamespaceOwner):
         (loaded through the plan resolver). Patch-local sample and relative
         residuals adjust the working envelopes so plans reflect the
         loading truth. Rows are cut at their holes along `dim` and
-        `cut_dims`.
+        `cut_dims`, unless not `runs`.
         """
         from dascore.io.index.planned import (  # noqa: PLC0415
             PlanResolver,
@@ -2196,7 +2200,7 @@ class Spool(NodeRepr, NamespaceOwner):
         same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
         base = collapse_working_df(self._catalog) if same_dim else None
         # a collapsed re-plan's members are already cut at their holes
-        cut = base is None
+        cut = base is None and runs
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
             if "_patch_row" in base.columns:
@@ -2249,6 +2253,13 @@ class Spool(NodeRepr, NamespaceOwner):
             msg = "chunk's on_incomplete was removed with its explicit windows; drop "
             msg += "it, and pass explicit windows to Spool.cut, which keeps "
             raise ParameterError(msg + "incomplete windows' samples.")
+        if "fill_value" in dim_kwargs:
+            msg = (
+                "chunk takes no fill_value: fill the gaps first with "
+                "Spool.fill_gaps, which chunk then joins across, eg "
+                "spool.fill_gaps(time=10).chunk(time=60)."
+            )
+            raise ParameterError(msg)
         source_rows, working = self._plan_frames(next(iter(dim_kwargs), None))
         plan = build_chunk_plan(working, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
@@ -2262,7 +2273,6 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "raise",
-        fill_value=None,
         max_shift: float | None = None,
         **kwargs,
     ):
@@ -2308,7 +2318,6 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             on_missing_dim=on_missing_dim,
-            fill_value=fill_value,
         )
         return plan
 
@@ -2523,7 +2532,6 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         on_missing_dim: Literal["raise", "drop"] = "raise",
-        fill_value=None,
         max_shift: float | None = None,
         **kwargs,
     ) -> Self:
@@ -2569,12 +2577,6 @@ class Spool(NodeRepr, NamespaceOwner):
         on_missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
-        fill_value
-            If given, a seam `tolerance` joins is filled with this value
-            rather than refitted, and every source keeps its labels. The
-            value has to survive a cast to the data's own dtype, so
-            `np.nan` needs float data; fill integer data with an integer,
-            or cast it first.
         max_shift
             How far, as a fraction of a step, a seam may be from one step
             wide and still join: two patches join when the later starts one
@@ -2618,8 +2620,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> time_merged = spool.chunk(time=...)
         >>> # also join seams up to 1.5 steps wide, as v0.1.24 did by default
         >>> released = spool.chunk(time=..., tolerance=1.5)
-        >>> # merge across holes of up to 9 missing samples, filling them
-        >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
+        >>> # fill gaps of up to 10 seconds first, then chunk across them
+        >>> gapless = spool.fill_gaps(time=10).chunk(time=...)
 
         Notes
         -----
@@ -2657,6 +2659,9 @@ class Spool(NodeRepr, NamespaceOwner):
         [`Spool.cut`](`dascore.Spool.cut`) joins each of a set of explicit
         windows, as chunk joins.
 
+        [`Spool.fill_gaps`](`dascore.Spool.fill_gaps`) fills gaps, which
+        chunk then joins across; chunk itself never fills.
+
         [`Spool.select`](`dascore.Spool.select`) returns each source's part
         of explicit windows, unjoined.
 
@@ -2674,9 +2679,79 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             on_missing_dim=on_missing_dim,
-            fill_value=fill_value,
         )
         return self._chunked(source_rows, plan)
+
+    @compose_docstring(conflict_desc=attr_conflict_description)
+    def fill_gaps(
+        self,
+        *args,
+        fill_value: Any = np.nan,
+        samples: bool = False,
+        conflict: CONFLICT = "raise",
+        **kwargs,
+    ) -> Self:
+        """
+        Fill the gaps within and between patches along a dimension.
+
+        Lazily joins patches, and each patch's segments, across gaps up to
+        the given size into one patch per stretch, filled as
+        [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) fills; wider gaps
+        stay. A later [`chunk`](`dascore.Spool.chunk`) or
+        [`cut`](`dascore.Spool.cut`) joins across the filled gaps, loading
+        only the files each output reaches.
+
+        Parameters
+        ----------
+        *args
+            The dimension to fill every gap along, eg
+            `spool.fill_gaps("time")`.
+        fill_value
+            The value written at filled positions; it must fit the data's
+            dtype, so NaN needs float data. A value the data cannot hold
+            raises as a patch loads.
+        samples
+            If True, the size given with the dimension counts missing samples.
+        conflict
+            {conflict_desc}
+        **kwargs
+            The dimension and the widest gap to fill, in the coordinate's
+            units (seconds for time), or as a quantity or timedelta, eg
+            `time=10`. A gap's width is its missing samples times the step;
+            None fills every gap.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das", time_gap=1)
+        >>> # fill gaps of up to 2 seconds: the patches join into one
+        >>> filled = spool.fill_gaps(time=2)
+        >>> assert len(filled) == 1
+        >>> # then cut it into 4 second chunks
+        >>> chunks = filled.chunk(time=4)
+        """
+        if len(args) + len(kwargs) != 1:
+            msg = "fill_gaps fills along one dimension, eg fill_gaps(time=10)."
+            raise ParameterError(msg)
+        dim, size = (args[0], None) if args else next(iter(kwargs.items()))
+        if size is None:
+            tolerance = GapTolerance.samples(np.inf)
+        elif samples:
+            if isinstance(size, bool) or not isinstance(size, numbers.Integral):
+                msg = f"A sample count must be a non-negative integer, got {size!r}."
+                raise ParameterError(msg)
+            tolerance = GapTolerance.samples(size + 1)  # a gap's spacing in steps
+        else:
+            tolerance = GapTolerance.absolute(size)  # past one step
+        source_rows, working = self._plan_frames(dim)
+        plan = build_chunk_plan(
+            working,
+            tolerance=tolerance,
+            conflict=conflict,
+            fill_value=fill_value,
+            **cast("dict[str, Any]", {dim: None}),
+        )
+        return self._chunked(source_rows, coalesce_runs(plan, working))
 
     def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=False):
         """
@@ -2700,6 +2775,40 @@ class Spool(NodeRepr, NamespaceOwner):
             stamped=dtypes or tuple(stamp or ()),
             lossy=lossy,
         )
+        return self._new_from_catalog(catalog)
+
+    def snap_coords(
+        self, *coords, reverse: bool = False, step=None, max_shift=None
+    ) -> Self:
+        """
+        Lazily snap each patch alone, as `Patch.snap_coords` does as it loads.
+
+        Takes `Patch.snap_coords`' arguments. Planning reads the coordinate
+        of each patch the index states no step for, to state the snapped
+        one, so a `max_shift` it breaks raises here.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.spool([dc.get_example_patch("wacky_dim_coords_patch")])
+        >>> snapped = spool.snap_coords("time")
+        >>> assert snapped[0].get_coord("time").evenly_sampled
+        """
+        rows, files = self._df.reset_index(drop=True).copy(), {}
+        resolver, residuals = self._catalog.resolver, self._catalog.residuals
+        kwargs = dict(reverse=reverse, step=step, max_shift=max_shift)
+        dims = rows["dims"].fillna("").astype(str).str.split(",")
+        for dim in coords or sorted({x for row in dims for x in row if x}):
+            col = f"{dim}_step"
+            stepless = dims.map(lambda x, d=dim: d in x) & rows[col].isna()
+            for index in np.flatnonzero(stepless.to_numpy()):
+                row = rows.iloc[index].to_dict()
+                manager = _source_manager(resolver, row, files, projection=dim)
+                coord = _select_manager(manager, residuals).coord_map[dim]
+                with suppress_warnings(UserWarning):  # warned as patches load
+                    coord = coord.snap(step=step, max_shift=max_shift)
+                rows.loc[rows.index[index], col] = coord.step
+        catalog = self._materialize_lossy(rows=rows, snap=(coords, kwargs))
         return self._new_from_catalog(catalog)
 
     @compose_docstring(experimental=experimental_note)
@@ -2985,7 +3094,8 @@ class Spool(NodeRepr, NamespaceOwner):
             )
             warnings.warn(msg, DeprecationWarning, stacklevel=2)
         dim = next(iter(kwargs), None)
-        source_rows, working = self._plan_frames(dim)
+        # each patch joins whole, its segments kept
+        source_rows, working = self._plan_frames(dim, runs=False)
         plan = build_concat_plan(working, conflict=conflict, group=group, **kwargs)
         merge_kwargs = {"conflict": conflict, "count": plan.params["count"]}
         catalog = derived_catalog(
