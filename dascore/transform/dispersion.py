@@ -116,7 +116,8 @@ class DispersionPhaseShift(PatchProcessor):
         coords = dict(velocity=phase_velocities, frequency=w / (2 * np.pi))
         dims = ["velocity", "frequency"]
         out = meta.new(coords=coords, attrs=attrs, dims=dims, dtype=np.float64)
-        out, _ = SetUnits(velocity="m/s", frequency="Hz").get_metadata(out)
+        units = SetUnits(data_units=None, velocity="m/s", frequency="Hz")
+        out, _ = units.get_metadata(out)
         return out, {
             "axes": transpose.get("axes"),
             "nf": nf,
