@@ -125,7 +125,7 @@ filled = gapped.fill_gaps("x", fill_value=0)
 assert filled.shape == (12,) and filled.data.sum() == len(coord)
 ```
 
-[`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the seams between runs, and for a monotonic array every spacing that is not its declared step (or its median spacing when it declares none). Its `tolerance` is an excess over one step in coordinate units; pass [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) to count steps instead, which is how `Spool.chunk` and `waterfall(gap_factor=)` judge the same spacing.
+[`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the seams between runs, and for a monotonic array every spacing that is not its declared step (or its median spacing when it declares none). Its `tolerance` is an excess over one step in coordinate units; pass [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) to count steps instead, which is how `waterfall(gap_factor=)` judges the same spacing. `Spool.chunk` judges the seams between patches by `max_shift` instead, and its `tolerance` is the widest seam it joins.
 
 ## Updating and units
 

@@ -51,15 +51,15 @@ Patches merge only when they agree on all four of these.
 
 **3. Sampling.** Step sizes must be within `config.sampling_group_tolerance` (default 5%) of the group's smallest absolute step, and in the same direction. Ascending never merges with descending, though contiguous descending patches merge with each other.
 
-**4. Continuity.** Patches must be within `tolerance` samples of each other, checked within each group so unrelated patches can't bridge a gap. A patch with holes is one row, which the planner cuts at its holes (the pieces [`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns) using the runs the index stores. A hole inside a patch is therefore judged like a gap between patches, and pieces landing in one output are read from their patch once.
+**4. Continuity.** Within each group, so unrelated patches can't bridge a gap, rows are taken in coordinate order and each seam is judged against the furthest label reached so far, the earlier patch's end, on that patch's step (`_cell_seams`). The later patch joins when its first label lies one step past that end, give or take `max_shift` (a fraction of a step, `dascore.config.max_shift` by default) and the precision labels are stored in: a tick for integers and times on a step of 100 ticks or more, float exactness for floats. A wider seam is a gap and starts a new stretch. A patch with holes is one row, which the planner cuts at its holes (the pieces [`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns) using the runs the index stores. A hole inside a patch is therefore judged like a gap between patches, and pieces landing in one output are read from their patch once.
 
-`tolerance` can also be a quantity (`1 * s`, `2 * m`) or a timedelta. This sets the allowed excess over one step, in the coordinate's units, instead of counting steps. A spacing is a gap when it exceeds `step + tolerance`, so adjacent patches stay contiguous under any tolerance, and zero excess allows exactly one step. Because it needs no step, an absolute tolerance can also find gaps between patches with unknown step (treating the step as zero). A sample-count tolerance has nothing to scale there, so it never splits them.
+A later patch which starts sooner than that overlaps: each sample is kept once and the earlier patch wins. It continues from the first of its own samples at least one step less `max_shift` past the earlier end, if that sample passes the test, and its earlier samples are dropped; otherwise its samples past the earlier end start a new stretch, and a patch with none is dropped. An overlap on the earlier patch's grid therefore joins, and one half a step off it splits.
 
-Both forms are one object, [`GapTolerance`](`dascore.utils.gaps.GapTolerance`). Its single test is also used by coordinates' `get_discontinuities` and the waterfall's `gap_factor`, so all three agree on every spacing given the same object. Note that a bare number passed to `get_discontinuities` is an absolute excess, not a sample count.
+`tolerance`, off by default, widens the test: a number `t` also joins seams up to `t` steps wide, and a quantity (`1 * s`, `2 * m`) or a timedelta joins seams up to that width in the coordinate's units. Patches with no step have none to judge a seam against, so they join where they overlap or touch, and otherwise only under that form. A seam wider than 1.5 steps joined because of `tolerance` warns, as `chunk`'s default did in DASCore 0.1.24, unless `fill_value` fills it, since then no labels are spread. A [`GapTolerance`](`dascore.utils.gaps.GapTolerance`) passed as `tolerance` keeps its own meaning, an absolute value being the excess over one step, as coordinates' `get_discontinuities` and the waterfall's `gap_factor` read it.
 
 ### Gap and coverage reports
 
-[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) use the same grouping. A `get_coverage` row is one group under rules 1–3. A `get_gaps` row is a boundary rule 4 won't close, given a `fill_value`; without one a hole always ends an output, whatever the tolerance. On a spool of unplanned patches, merging gives one patch per coverage row plus one per gap. The reports describe the rows a spool currently shows, not a plan's members, so a chunked spool reports on its chunked patches, and re-chunking it need not reproduce those counts.
+[`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) use the same grouping. A `get_coverage` row is one group under rules 1–3. A `get_gaps` row is a seam rule 4 starts a new stretch at, under the same `tolerance` and `max_shift`, with the samples it is missing; a seam 1.3 steps wide is listed, missing none, unless `tolerance` spans it. On a spool of unplanned patches, merging gives one patch per coverage row plus one per gap. The reports describe the rows a spool currently shows, not a plan's members, so a chunked spool reports on its chunked patches, and re-chunking it need not reproduce those counts.
 
 ```{python}
 import numpy as np
@@ -128,9 +128,36 @@ with pytest.raises(ChunkError, match="non-dimensional coordinate"):
     dc.spool([aux]).chunk(sensor=100)
 ```
 
+## One grid per stretch
+
+Before any window is cut, each stretch gets one grid (`_fit_grids`). It starts at the stretch's first label, and its samples are numbered consecutively across its patches, overlaps already trimmed. Its step is the roundest one any patch states (fewest significant digits in the rate or the step; ties go to the earliest patch) for which every patch's first and last label lies within `max_shift` of its numbered position; this is found for all stated steps at once, as the interval of steps every patch's ends allow. If none fits, the step spreads the stretch evenly from its first label to its last, as DASCore 0.1.24 did; that is also how a seam joined only by `tolerance` is closed. Integer and time steps are exact fractions of a tick, so a stretch of 1024 Hz files keeps its exact step. A stretch holding a patch with no step has no grid and keeps its labels as recorded, as does one under `fill_value`, which fills the seams `tolerance` joins instead.
+
+Each output's members carry its slice of that grid (`_{dim}_stretch`), which assembly labels the output with, so every output is one evenly sampled run and chunk outputs rejoin exactly; a float slice reproduces the stretch's `linspace` labels bit for bit. A stretch of one whole patch on its own grid is left with its own labels. `chunk_plan`'s members record why each starts where it does (`reason`), how far the grid moved its labels (`shift`, in steps) and how many samples an overlap dropped (`dropped`).
+
+```{python}
+from dascore.core.coords import get_coord
+
+def late(steps):
+    """A patch starting `steps` samples after the first one's start."""
+    step = np.timedelta64(1, "ms")
+    start = np.datetime64("2020-01-01", "ns") + int(steps * 1_000_000) * np.timedelta64(1, "ns")
+    return dc.Patch(
+        data=np.zeros(1000), coords={"time": get_coord(start=start, step=step, shape=(1000,))}, dims=("time",)
+    )
+
+# each file 0.15 step later than the last: they join, and the grid spreads them
+drifting = dc.spool([late(i * 1000.15) for i in range(5)])
+(joined,) = drifting.chunk(time=None)
+assert joined.get_coord("time").evenly_sampled
+assert drifting.chunk_plan(time=None).members["shift"].max() > 0  # in steps
+# and windows cut from that grid rejoin to it exactly
+rejoined = dc.spool(list(drifting.chunk(time=0.25))).chunk(time=None)
+assert rejoined[0].get_coord("time") == joined.get_coord("time")
+```
+
 ## Regular windows
 
-A chunk length splits each group into half-open windows `[start, start + length)`, each starting `length - overlap` after the previous one. A window holds exactly the samples whose labels fall inside it, judged on each source's own sample grid.
+A chunk length splits each stretch into half-open windows `[start, start + length)`, the first starting at the stretch's first label and each `length - overlap` after the previous one. A window holds exactly the samples whose labels on the stretch's grid fall inside it.
 
 - **No overlap:** windows split the samples with no repeats. A length that isn't a whole number of samples gives windows whose sample counts differ by one.
 - **With overlap:** windows stop at the first one holding the group's last sample, so the last window always holds a sample the previous one doesn't.
@@ -189,30 +216,35 @@ A size counts only the data array; coordinates, attributes, and copies made by l
 
 ## Merged coordinates
 
-Assembly joins the chunked dimension's coordinates exactly. Contiguous members become one evenly sampled range, and every real seam is recorded.
+Assembly joins the members' data and coordinates, then labels the chunked dimension with the output's slice of its stretch's grid (see above). `chunk`'s `snap_coords` argument is deprecated and ignored: use `Spool.concatenate` to keep recorded labels, and `Patch.snap_coords` to regularize them.
 
-With `snap_coords=True` (default), the result is then smoothed with bounded error. No value moves more than `tolerance * step`, or more than the tolerance itself when it is in the coordinate's units, and the sampling step never changes. This absorbs the sub-sample jitter of labels rounded when written to a file. A gap the tolerance merged across still stays a run boundary, though: its samples are missing, which is not the same as a slower sampling rate. `fill_value` writes those samples, and then the output is one evenly sampled run.
+A gap `tolerance` joins is closed by that grid, spreading the stretch's labels evenly over it. With `fill_value` it is filled instead: the sources keep their labels and the missing samples are written, so the output is one evenly sampled run on their own step.
 
 ```{python}
-# Contiguous members: exact fuse to one evenly sampled run.
+import warnings
+
+# Contiguous members: one evenly sampled run.
 patch = dc.spool([p1, p2]).chunk(time=None)[0]
 assert patch.get_coord("time").evenly_sampled
 
-# Without fill_value a hole always ends an output, however loose the
-# tolerance: a chunk never yields a patch holding a hole.
+# A seam three steps wide is a gap unless a tolerance spans it ...
 gap_start = time.max() + 3 * time.step
 p_gap = dc.get_example_patch(time_min=gap_start, acquisition_key="XX1.R2D1..RAW")
-assert len(dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)) == 2
-
-# fill_value writes the missing samples, so a tolerance spanning the hole
-# merges the patches into one evenly sampled output. An absolute
-# tolerance (a quantity or timedelta) says the same in the coordinate's units.
-filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
-assert filled.get_coord("time").evenly_sampled
+assert len(dc.spool([p1, p_gap]).chunk(time=None)) == 2
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")  # joining across a gap warns, as released
+    # ... which spreads the labels over it,
+    spread = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
+    # or, with fill_value, writes the missing samples on the sources' step.
+    filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
+    # A tolerance in the coordinate's units is the seam's width.
+    absolute = dc.spool([p1, p_gap]).chunk(
+        time=None, tolerance=3 * time.step, fill_value=np.nan
+    )[0]
+assert spread.get_coord("time").evenly_sampled
+assert len(spread.get_coord("time")) == 2 * len(time)
+assert filled.get_coord("time").step == time.step
 assert np.isnan(filled.data).any()
-absolute = dc.spool([p1, p_gap]).chunk(
-    time=None, tolerance=5 * time.step, fill_value=np.nan
-)[0]
 assert absolute.get_coord("time") == filled.get_coord("time")
 ```
 

@@ -1440,15 +1440,12 @@ class TestRechunk:
 
 
 class TestArrayApi:
-    """A lazy array says which backend owns it."""
+    """A recipe names no backend: the lazy array which holds it does."""
 
-    def test_backend_name(self, lazy):
-        """The array api reports the lazy backend."""
-        assert backend_name(lazy) == "lazy"
-
-    def test_namespace(self, lazy):
-        """The namespace is the one the backend name comes from."""
-        assert lazy.__array_namespace__().__name__ == "lazy"
+    def test_no_namespace(self, lazy):
+        """Only numpy's protocol, which loads; see `LazyArray`."""
+        assert not hasattr(lazy, "__array_namespace__")
+        assert backend_name(lazy) == "numpy"
 
 
 def column_case(rng):

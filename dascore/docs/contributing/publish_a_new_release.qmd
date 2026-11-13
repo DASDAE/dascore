@@ -20,19 +20,19 @@ For alpha, beta, or release-candidate builds:
 
 1. Target the branch containing the code, usually `dev`; GitHub otherwise defaults to `master`.
 2. Use a [PEP 440](https://peps.python.org/pep-0440/) tag such as `v0.2.0a1`, `v0.2.0b1`, or `v0.2.0rc1`.
-3. Select **Set as a pre-release**. The docs workflow uses this flag to avoid replacing stable docs.
+3. Select **Set as a pre-release**, which keeps GitHub from marking it the latest release. The docs workflow treats a release as a pre-release when this is set or when the tag is not a plain `vX.Y.Z`, and then leaves the stable docs alone.
 4. Do not publish the pre-release to conda-forge's main channel.
 
-State how to install it (`pip install --pre dascore==0.2.0b1`), that it is unavailable on conda-forge, where to report problems, and what breaks relative to the last stable release. The docs workflow still builds and attaches `docs.zip`; it intentionally skips deployment.
+State how to install it (`pip install --pre dascore==0.2.0b1`), that it is unavailable on conda-forge, where to report problems, and what breaks relative to the last stable release. The docs workflow builds the docs, attaches `docs.zip`, and publishes them to [dascore.netlify.app](https://dascore.netlify.app) rather than dascore.org. That site holds the latest pre-release's docs; to publish a docs fix between pre-releases, run `BuildDeployDevDocs` manually from `dev`.
 
 ## Verify and recover
 
 Confirm these workflows succeed:
 
 - `PublishPackage`: uploads distributions to [PyPI](https://pypi.org/project/dascore/).
-- `BuildDeployStableDocs`: builds docs, attaches `docs.zip`, and deploys stable releases.
+- `BuildDeployStableDocs`: builds docs, attaches `docs.zip`, and deploys stable releases to dascore.org and pre-releases to dascore.netlify.app.
 
-Then verify PyPI and, for stable releases, [dascore.org](https://dascore.org). For pre-releases, inspect `docs.zip` instead.
+Then verify PyPI and, for stable releases, [dascore.org](https://dascore.org). For pre-releases, verify [dascore.netlify.app](https://dascore.netlify.app) instead.
 
 Release jobs check out the tag, so reruns use the same commit after its branch advances. Re-run a transient docs job as needed. Re-run `PublishPackage` only when nothing reached PyPI: PyPI never permits reusing a filename, even after deletion, so partial uploads or source fixes require a new tag. Never move a public tag.
 

@@ -17,3 +17,5 @@ if find_spec("xarray") is None:
     collect_ignore += ["dascore/xarray/index.py", "dascore/xarray/patch.py"]
 if find_spec("pyarrow") is None:
     collect_ignore += ["dascore/io/arrow/core.py"]
+if find_spec("msgpack") is None:
+    collect_ignore += ["dascore/io/nokia/__init__.py"]

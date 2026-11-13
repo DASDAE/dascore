@@ -4,7 +4,7 @@ title: Guidelines
 
 # Branches and versions
 
-Develop each change on its own branch and merge it into `dev` by pull request. Releases merge `dev` into `master`. The [development docs](https://dascore.netlify.app) track `dev`; [stable docs](https://dascore.org) update on release.
+Develop each change on its own branch and merge it into `dev` by pull request. Releases merge `dev` into `master`. The [stable docs](https://dascore.org) update on each stable release and the [pre-release docs](https://dascore.netlify.app) on each pre-release.
 
 DASCore loosely follows [semantic versioning](https://semver.org/): features normally advance the minor version and fixes the patch version.
 

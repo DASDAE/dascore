@@ -185,6 +185,42 @@ _RANGE = "CoordRange"
 _EXACT = "exact"
 
 
+def grid_fields(coord) -> dict | None:
+    """
+    The fields describing an evenly sampled coordinate's grid, else None.
+
+    They are a version 2 `CoordRange` node's attributes, from which
+    [`read_grid_fields`](`dascore.io.dasdae.utils.read_grid_fields`)
+    rebuilds the coordinate without its labels.
+    """
+    grid = coord._grid
+    if grid is None or _extended_float(coord):
+        return None
+    dtype = coord.dtype
+    origin, num = grid.canonical()[:2]
+    fields = {"dtype": str(dtype), "length": len(coord)}
+    if grid.exact:
+        fields["start"] = _raw(grid.labels(0, dtype)[()], dtype)
+        terms = _grid_terms(grid, dtype)
+        fields.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+        return fields
+    fields["start"] = _raw(origin, dtype)
+    fields["stop"] = _raw(origin + num * grid.count, dtype)
+    fields["step"] = _raw(num, dtype)
+    if grid.parent_count is not None:
+        # Keep the ordinary range fields meaningful to older readers.
+        fields["start"] = _raw(grid.labels(0, dtype)[()], dtype)
+        fields["stop"] = _raw(grid.labels(grid.count, dtype)[()], dtype)
+        fields["step"] = _raw(coord.step, dtype)
+        fields["grid_origin"] = _raw(grid.origin, dtype)
+        fields["grid_step"] = _raw(grid.step_num, dtype)
+        fields["grid_step_is_numpy"] = isinstance(grid.step_num, np.floating)
+        fields["parent_count"] = grid.parent_count
+        fields["k0"] = grid.k0
+        fields["stride"] = grid.stride
+    return fields
+
+
 def _save_coord(coord, name, group, compact: bool, options=None):
     """
     Save one coordinate node.
@@ -195,45 +231,19 @@ def _save_coord(coord, name, group, compact: bool, options=None):
 
     `CoordRange` is the format's own name, not a class's tag.
     """
-    grid = coord._grid
     object_type = get_model_tag(type(coord))
-    if compact and grid is not None and not _extended_float(coord):
+    if compact and (fields := grid_fields(coord)) is not None:
         object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
-        origin, num = grid.canonical()[:2]
-        node.attrs["dtype"] = str(coord.dtype)
-        node.attrs["length"] = len(coord)
-        if grid.exact:
-            terms = _grid_terms(grid, coord.dtype)
-            node.attrs["start"] = _raw(grid.labels(0, coord.dtype)[()], coord.dtype)
-            for field, value in zip(_EXACT_GRID_FIELDS, terms, strict=True):
-                node.attrs[field] = value
-        else:
-            node.attrs["start"] = _raw(origin, coord.dtype)
-            node.attrs["stop"] = _raw(origin + num * grid.count, coord.dtype)
-            node.attrs["step"] = _raw(num, coord.dtype)
-            if grid.parent_count is not None:
-                # Keep the ordinary range fields meaningful to older readers.
-                node.attrs["start"] = _raw(grid.labels(0, coord.dtype)[()], coord.dtype)
-                node.attrs["stop"] = _raw(
-                    grid.labels(grid.count, coord.dtype)[()], coord.dtype
-                )
-                node.attrs["step"] = _raw(coord.step, coord.dtype)
-                node.attrs["grid_origin"] = _raw(grid.origin, coord.dtype)
-                node.attrs["grid_step"] = _raw(grid.step_num, coord.dtype)
-                node.attrs["grid_step_is_numpy"] = isinstance(
-                    grid.step_num, np.floating
-                )
-                node.attrs["parent_count"] = grid.parent_count
-                node.attrs["k0"] = grid.k0
-                node.attrs["stride"] = grid.stride
+        for field, value in fields.items():
+            node.attrs[field] = value
     else:
         node = _save_array(coord.values, name, group, options)
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
         step = coord.step
-        if step is not None and (compact or grid is not None):
+        if step is not None and (compact or coord._grid is not None):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
@@ -354,9 +364,8 @@ def _read_array_sample(table_array, index):
     return out
 
 
-def _read_range(node, units):
-    """Rebuild a range from its version-2 description."""
-    attrs = node.attrs
+def read_grid_fields(attrs, units):
+    """Rebuild a range from the fields `grid_fields` gives (a version 2 node's)."""
     dtype = np.dtype(unbyte(attrs["dtype"]))
     start = np.asarray(attrs["start"]).astype(dtype)[()]
     shape = (int(attrs["length"]),)
@@ -418,7 +427,7 @@ def _read_stored_coord(node, name, attrs2):
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
     if object_type == _RANGE and "start" in node_attrs:
-        return _read_range(node, units)
+        return read_grid_fields(node_attrs, units)
     # any other class, a range too wide to describe, and every version 1
     # node hold their values
     node_step = _node_step(node_attrs)

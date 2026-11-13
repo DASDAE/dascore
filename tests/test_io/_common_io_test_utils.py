@@ -7,12 +7,14 @@ import socket
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from urllib import error as urllib_error
 
 import pytest
 
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import iterate
 
 
@@ -46,6 +48,27 @@ def _is_timeout_error(exc: BaseException) -> bool:
         reason = exc.reason
         return isinstance(reason, TimeoutError | socket.timeout)
     return False
+
+
+@dataclass(frozen=True)
+class FixtureFile:
+    """
+    A common IO matrix entry naming a fixture which returns a file path.
+
+    Use it for a format with no registry file, such as one whose tests write
+    a synthetic file. The fixture must be session scoped, like the matrix
+    fixtures which request it.
+    """
+
+    name: str
+
+
+def get_matrix_path(entry: str | FixtureFile, request: pytest.FixtureRequest):
+    """Return the local path of a matrix entry, fetching registry files."""
+    if isinstance(entry, FixtureFile):
+        return request.getfixturevalue(entry.name)
+    with skip_timeout():
+        return fetch(entry)
 
 
 def get_flat_io_test(common_io_read_tests: dict) -> list[list[dc.FiberIO | str]]:

@@ -40,6 +40,7 @@ from dascore.utils.array_api import (
     backend_name,
     is_foreign,
     is_numpy,
+    refuse_lazy,
     to_numpy,
     warn_numpy_fallback,
 )
@@ -50,7 +51,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -403,6 +404,12 @@ def _to_numpy_arg(obj):
     return obj
 
 
+def _operand_arrays(args, kwargs=None):
+    """Yield every operand, a patch as its data."""
+    for value in (*args, *(kwargs or {}).values()):
+        yield value.data if isinstance(value, dc.Patch) else value
+
+
 def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
     """
     Apply a function numpy can perform but the patch's backend cannot.
@@ -426,7 +433,14 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
         Keyword arguments for func; patches and arrays are converted.
     stacklevel
         The stack level, as understood by warnings.warn, of the caller.
+
+    Raises
+    ------
+    LazyOperationError
+        If any operand is lazy: converting it would read it, which the lazy
+        backend never does behind the caller's back.
     """
+    refuse_lazy(name, (data, *_operand_arrays(args, kwargs)))
     warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
     # Crossing the backend boundary is part of the operation being applied,
     # not data replacement: the same values are the same data, and what
@@ -638,31 +652,36 @@ def _get_merge_dim(df) -> str | None:
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
+    tolerance = merge_kwargs.pop("tolerance", None)
     coord_kwargs = {
-        "snap_coords": merge_kwargs.pop("snap_coords", True),
-        "tolerance": merge_kwargs.pop("tolerance", 1.5),
+        "tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance,
         # attrs and conflicting non-dimensional coords share one policy
         "conflict": merge_kwargs.get("conflict") or "raise",
     }
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
+    merge_kwargs.pop("max_shift", None)  # the plan's, which names the merge
     return merge_kwargs, coord_kwargs
 
 
-def _get_merged_coord(df, merge_dim, coords, snap_coords=True, tolerance=1.5, **kwargs):
+def _get_merged_coord(
+    df, merge_dim, coords, tolerance=DEFAULT_TOLERANCE, fuse=True, **kwargs
+):
     """
     Get merged coordinates for patches combined along merge_dim.
 
     The merged dimension coordinate is built by truth-preserving
     concatenation of the member coords (exactly contiguous members fuse to
-    a plain range; recorded seams otherwise), then — when `snap_coords` —
-    simplified with bounded error: no value moves more than the tolerance
-    allows, `tolerance` steps for a count or the excess itself for a
-    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
-    members' own step is kept, so a merge across a hole (only where a
-    caller bridges holes, as `to_xarray` does) stays segmented rather than
-    being relabeled at a slower rate. `kwargs` go to `merge_coord_managers`.
+    a plain range; recorded seams otherwise), then, if ``fuse`` (a chunk
+    plan keeping a stretch's labels says not), simplified with bounded
+    error: no value moves
+    more than the tolerance allows, `tolerance` steps for a count or the
+    excess itself for a quantity or timedelta (see
+    `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
+    A chunk output whose stretch has a grid then takes its labels from
+    that grid (see `dascore.utils.patch_assembly.on_stretch_grid`).
+    `kwargs` go to `merge_coord_managers`.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -672,7 +691,7 @@ def _get_merged_coord(df, merge_dim, coords, snap_coords=True, tolerance=1.5, **
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
         # fall back to raw value concatenation of the dim coord.
         return merge_coord_managers(coords, dim=merge_dim, **kwargs)
-    if snap_coords:
+    if fuse:
         merged = merged.fuse(
             GapTolerance.from_user(tolerance, merge_dim), keep_step=True
         )
@@ -681,7 +700,7 @@ def _get_merged_coord(df, merge_dim, coords, snap_coords=True, tolerance=1.5, **
     return merge_coord_managers(coords, dim=merge_dim, dim_coord=merged, **kwargs)
 
 
-def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
+def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     """
     Force a merge of the patches along a dimension.
 
@@ -708,7 +727,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    new_coord = _get_merged_coord(df, merge_dim, coords, **coord_kwargs)
+    new_coord = _get_merged_coord(df, merge_dim, coords, fuse=fuse, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.
@@ -858,7 +877,7 @@ def get_patch_names(
     # names don't depend on which metadata engine produced the dataframe.
     coord_fields = zip([f"{x}_min" for x in coords], [f"{x}_max" for x in coords])
     fields = list(attrs) + [field for pair in coord_fields for field in pair]
-    sub = df.reindex(columns=fields).pipe(_format_time_columns).fillna("").astype(str)
+    sub = df.reindex(columns=fields).pipe(_format_time_columns).astype(str).fillna("")
     out = f"{prefix}_{sep}" + sub[fields[0]].str.cat(sub[fields[1:]], sep=sep)
     return out
 
@@ -1869,6 +1888,10 @@ def stack_patches(
     """
     # check the dims/coords of first patch (considered to be standard for rest)
     init_patch = patches[0]
+    # Adding arrays reads them, and zeros_like reads one for its shape. Each
+    # patch is checked as the loop meets it: a spool reads its files anew
+    # on every pass, so a pass made only to check would read them twice.
+    refuse_lazy("stack", (init_patch.data,))
     stack_arr = np.zeros_like(init_patch.data)
 
     # ensure dim_vary is in dims
@@ -1878,6 +1901,7 @@ def stack_patches(
 
     kept = []
     for p in patches:
+        refuse_lazy("stack", (p.data,))
         # check kind, then dimensions and coords of patch against init_patch.
         # Kind is compared strictly: a collection is being combined, so a
         # missing value is a value.

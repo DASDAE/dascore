@@ -68,6 +68,13 @@ class SegyV1_0(FiberIO):  # noqa
         Trace headers store the start in whole seconds; a Silixa textual
         header time stamp within that second refines it.
 
+        Trace header positions become x, y and z coordinates along channel:
+        GroupX and GroupY (else CDP_X and CDP_Y) and ReceiverGroupElevation,
+        with their scalars applied. Traces with x and y both zero get NaN.
+        z keeps the file's convention: Silixa writes receiver true vertical
+        depth (positive down) in ReceiverGroupElevation, so there z is depth.
+        Units are not set, since files often misstate their measurement system.
+
         The textual header is kept, one line per row, as the
         `segy_text_header` attr. Where it says the values are proportional to
         strain rate (Silixa), `data_type` is "strain_rate", and a stated scale

@@ -1984,8 +1984,10 @@ class Grid:
         """The labels at these indices, which may lie outside the run."""
         indices = np.asarray(indices)
         if self.exact:
-            offset = self.phase
-            ticks = (offset + indices.astype(np.int64) * self.step_num) // self.step_den
+            # whole and fractional parts, so only count * den need fit int64
+            whole, part = divmod(self.step_num, self.step_den)
+            indices = indices.astype(np.int64)
+            ticks = indices * whole + (self.phase + indices * part) // self.step_den
             return _ticks_as(self.origin + ticks, dtype)
         indices = self.k0 + indices * self.stride
         start, step = self.origin, self.step_num
@@ -2220,7 +2222,7 @@ def _check_grid(grid: Grid, dtype) -> None:
     num, den, count = grid.step_num, grid.step_den, grid.count
     first, last = grid.end_ticks
     wraps = min(first, last) < info.min or max(first, last) > info.max
-    if abs(count * num) + den >= 2**63 or wraps:
+    if count * den >= 2**63 or wraps:
         msg = (
             f"A grid of {count} samples with step {num}/{den} ticks from "
             f"{grid.origin} exceeds the {dtype} range."
@@ -4424,9 +4426,11 @@ def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
         if is_timedelta64(excess):
             # the limit was rounded to whole nanoseconds; allow that rounding
             excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
-        return int(Fraction(excess) // abs(exact))
-    scalar = step.step(coord.dtype)
-    return math.floor(float(np.divide(excess, np.abs(scalar))) * (1 + _GRID_RTOL))
+        whole = int(Fraction(excess) // abs(exact))
+    else:
+        ratio = float(np.divide(excess, np.abs(step.step(coord.dtype))))
+        whole = math.floor(ratio * (1 + _GRID_RTOL))
+    return max(whole - tolerance.seam, 0)  # a seam's width includes its step
 
 
 def _raise_string_coord_error(operation: str) -> NoReturn:

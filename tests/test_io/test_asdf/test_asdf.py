@@ -139,6 +139,29 @@ class TestRead:
         # Each patch's read opens only its own waveform.
         assert len(opened) == 3
 
+    def test_dotted_location(self, tmp_path):
+        """Fields between station and the last field form the location."""
+        points = (
+            ("FF.0555.2154.209353.", 0, 400.0, 6, "raw"),
+            ("FF.0556.2155.1.", 0, 400.0, 6, "raw"),
+        )
+        path = write_asdf(tmp_path / "dotted.h5", points)
+        spool = dc.spool(path)
+        assert len(spool) == 2
+        (patch,) = spool.concatenate(channel=None, group=(), conflict="drop")
+        coords = patch.coords
+        assert coords.get_array("network").tolist() == ["FF", "FF"]
+        assert coords.get_array("station").tolist() == ["0555", "0556"]
+        assert coords.get_array("location").tolist() == ["2154.209353", "2155.1"]
+        assert coords.get_array("seed_channel").tolist() == ["", ""]
+        assert np.array_equal(patch.data, np.stack([_data(i, 6) for i in range(2)]))
+        # The scan predicts what each read returns.
+        for meta, read in zip(dc.scan_payloads(path), dc.read(path)):
+            assert tuple(meta.shape) == read.shape
+            assert meta.coords.get_array("location") == read.coords.get_array(
+                "location"
+            )
+
     def test_lazy_loads_share_one_scan(self, asdf_path, monkeypatch):
         """Loading every patch through one open file scans it once."""
         metas = dc.scan_payloads(asdf_path)

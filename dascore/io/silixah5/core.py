@@ -14,6 +14,8 @@ from .utils import (
     _get_attr,
     _get_carina_attr,
     _get_carina_version_string,
+    _get_idas2_attr,
+    _get_idas2_version_string,
     _get_version_string,
 )
 
@@ -67,3 +69,21 @@ class SilixaH5V2(SilixaH5V1):
     _data_name = "Fiber"
     _version_check = staticmethod(_get_carina_version_string)
     _attr_getter = staticmethod(_get_carina_attr)
+
+
+class SilixaH5V3(SilixaH5V1):
+    """
+    Support for the Silixa hdf5 format, older iDAS raw_das_data variant.
+
+    These files (e.g. the 2020 Rhonegletscher deployment, iDAS software
+    2.4) hold one int16 "raw_das_data" dataset of shape (time, channel)
+    with all metadata as string attrs on it. Coordinates follow the V1
+    rules from its GPS time stamp, sampling_frequency_Hz,
+    start_distance_m, spatial_resolution_m and fibre_length_multiplier.
+    Data are raw interrogator counts, so no data units are set.
+    """
+
+    version = "3"
+    _data_name = "raw_das_data"
+    _version_check = staticmethod(_get_idas2_version_string)
+    _attr_getter = staticmethod(_get_idas2_attr)
