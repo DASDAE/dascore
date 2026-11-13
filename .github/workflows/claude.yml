@@ -23,9 +23,9 @@ jobs:
       )
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
+      contents: read
+      pull-requests: read
+      issues: read
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
@@ -50,9 +50,19 @@ jobs:
 
       - name: Load the agent guidelines as CLAUDE.md
         if: steps.credentials.outputs.available == 'true'
-        # CLAUDE.md is gitignored so contributors can keep their own; in CI it
-        # carries the shared guidelines, which Claude Code loads automatically.
-        run: cp .agents/agents.md CLAUDE.md
+        # Claude Code loads CLAUDE.md, not AGENTS.md. A repo-root copy would be
+        # deleted by the action, which restores CLAUDE.md from the base branch
+        # on PRs, so install the base branch's guidelines as user memory.
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}
+        run: |
+          git fetch --depth 1 --no-recurse-submodules origin "refs/heads/$BASE_REF"
+          mkdir -p ~/.claude
+          for f in AGENTS.md .agents/agents.md; do
+            if git cat-file -e "FETCH_HEAD:$f" 2>/dev/null; then
+              { echo "# $f"; echo; git show "FETCH_HEAD:$f"; echo; } >> ~/.claude/CLAUDE.md
+            fi
+          done
 
       - name: Run Claude Code
         if: steps.credentials.outputs.available == 'true'
@@ -72,3 +82,7 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr *)'
+          claude_args: >-
+            --append-system-prompt "Your user CLAUDE.md is a copy of this
+            repository's AGENTS.md and .agents/agents.md. To change the
+            guidelines, edit those files, not CLAUDE.md."
