@@ -6,13 +6,13 @@ execute:
 
 Compare three smoothing methods:
 
-- [`Patch.rolling`](`dascore.Patch.rolling`)
+- [`Patch.window`](`dascore.Patch.window`)
 - [`Patch.savgol_filter`](`dascore.Patch.savgol_filter`)
 - [`Patch.gaussian_filter`](`dascore.Patch.gaussian_filter`)
 
 
 :::{.callout-note}
-[`Patch.rolling`](`dascore.Patch.rolling`) produces edge `NaN` values; the other filters use their `mode` parameter and do not produce `NaN` values by default.
+A reduction in a [`Patch.window`](`dascore.Patch.window`) produces edge `NaN` values; the other filters use their `mode` parameter and do not produce `NaN` values by default.
 :::
 
 ## Example data
@@ -27,36 +27,36 @@ ax = patch.viz.waterfall()
 ax.set_title("un-smoothed patch");
 ```
 
-## Rolling
+## Moving windows
 
-Apply rolling aggregations along one or more dimensions:
+Reduce moving windows along one dimension at a time:
 
 ```{python}
 smoothed_patch = (
-    patch.rolling(time=0.005).mean()
+    patch.window(time=0.005).mean()
 )
 ax = smoothed_patch.viz.waterfall()
-ax.set_title("rolling time mean");
+ax.set_title("moving time mean");
 ```
 
 Median along distance:
 
 ```{python}
 smoothed_patch = (
-    patch.rolling(distance=20, samples=True).median()
+    patch.window(distance=20, samples=True).median()
 )
 ax = smoothed_patch.viz.waterfall()
-ax.set_title("rolling distance median");
+ax.set_title("moving distance median");
 ```
 
 Sequentially combine them:
 ```{python}
 smoothed_patch = (
-    patch.rolling(distance=20, samples=True).median()
-    .rolling(time=0.005).mean()
+    patch.window(distance=20, samples=True).median()
+    .window(time=0.005).mean()
 )
 ax = smoothed_patch.viz.waterfall()
-ax.set_title("rolling time mean distance median");
+ax.set_title("moving time mean distance median");
 ```
 
 Inspect the edge `NaN` values:

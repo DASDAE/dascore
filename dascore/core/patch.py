@@ -23,7 +23,7 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
-from dascore.proc.tile_apply import TileApply
+from dascore.proc.window import PatchWindow
 from dascore.transform.spectral_descriptors import (
     NegativeFrequencies,
     SpectralFormat,
@@ -876,30 +876,108 @@ class Patch(NamespaceOwner, PatchMeta):
             **kwargs,
         ).run(self)
 
-    def tile_apply(
+    def window(
         self,
         /,
-        function: Callable,
         *,
-        mode: str = "overlap_add",
         overlap: Any = None,
+        step: Any = None,
+        samples: bool = False,
         taper: Any = None,
         analysis: Any = None,
-        samples: bool = False,
-        engine: str = "auto",
+        ends: str = "pad",
+        align: str = "center",
+        fill: Any = None,
         **kwargs,
-    ) -> Self:
-        """Apply a function to overlapping tiles of the patch."""
-        return TileApply(
-            function=function,
-            mode=mode,
+    ) -> PatchWindow:
+        """
+        Declare windows over the patch, to apply a function to or reduce.
+
+        Nothing is computed. A call on what this returns is one operation,
+        and gives back a patch: see
+        [`PatchWindow`](`dascore.proc.window.PatchWindow`) for
+        [`apply`](`dascore.proc.window.PatchWindow.apply`), which blends or
+        stacks what a function makes of the windows, and for the
+        reductions, which give one value for each window.
+
+        Parameters
+        ----------
+        overlap
+            How far each window reaches into the next, in coordinate units
+            or, with `samples`, in samples; a percent is a fraction of the
+            window; a mapping gives each dimension its own.
+        step
+            How far each window advances, given instead of `overlap`.
+        samples
+            If True, windows, overlaps and steps are sample counts.
+        taper
+            For `apply`: the shape of the ramps neighbouring windows are
+            blended under -- any name `dascore.utils.signal.get_window`
+            knows. Hann when not given; ``"triang"`` blends linearly. The
+            ramps are made complementary, so windows left unchanged blend
+            back to the input exactly. Not applied in ``"stack"`` mode,
+            where `Patch.reassemble` takes the taper instead.
+        analysis
+            For `apply`: a window each one is multiplied by before the
+            function sees it -- any name, ``(name, parameter)`` tuple, or
+            one-dimensional array `get_window` knows, applied along every
+            windowed dimension, or a list with one per windowed dimension
+            in the patch's dimension order. The windows are then blended
+            back under its dual, so the blend is still exact. Exclusive
+            with `taper`.
+        ends
+            For a reduction: what becomes of a window which reaches past
+            either end of the data. ``"pad"`` keeps it, with a value of
+            NaN unless a `fill` is given; ``"drop"`` leaves it out.
+        align
+            For a reduction: which sample of a window labels it:
+            ``"center"``, the middle one (the later of two for an even
+            window); ``"right"``, the last; ``"left"``, the first.
+        fill
+            The value a window holds where it reaches beyond the data. For
+            `apply`, zero when not given. For a reduction, giving one has
+            the incomplete windows computed over data filled out with it,
+            rather than left as NaN.
+        **kwargs
+            The dimensions to window and the window along each, such as
+            ``time=0.5`` (seconds) or ``time=64, distance=16, samples=True``.
+            A dimension named as one of the options above cannot be given.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>> from dascore.units import percent
+        >>> patch = dc.get_example_patch()
+        >>>
+        >>> # A moving average over half a second, shaped like the patch.
+        >>> smooth = patch.window(time=0.5).mean()
+        >>>
+        >>> # One mean each quarter second, labelled where each window ends.
+        >>> means = patch.window(time=0.5, step=0.25, align="right").mean()
+        >>>
+        >>> # Windows overlapping by a quarter, blended linearly.
+        >>> window = patch.window(time=0.5, overlap=25 * percent, taper="triang")
+        >>> out = window.apply(lambda tiles: tiles - tiles.mean(axis=-1, keepdims=True))
+
+        Notes
+        -----
+        A window chosen here changes the result: the mean of each window is
+        not the mean of the patch, and a function applied to each window
+        and blended is not that function applied to the patch.
+        """
+        return PatchWindow(
+            self,
+            kwargs,
             overlap=overlap,
+            step=step,
+            samples=samples,
             taper=taper,
             analysis=analysis,
-            samples=samples,
-            engine=engine,
-            **kwargs,
-        ).run(self)
+            ends=ends,
+            align=align,
+            fill=fill,
+        )
 
     def pow_coord(self, relative: bool = True, **kwargs) -> Self:
         """Scale the data by coordinate values raised to a power."""

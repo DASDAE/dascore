@@ -41,7 +41,7 @@ while empty_polls < 2:
     for index in new_indices:
         identity = identities[index]
         patch = spool[index]
-        result = patch.rolling(time=window, step=step, engine="numpy").mean()
+        result = patch.window(time=window, step=step, align="right").mean()
         name = f"processed_{len(processed):06d}.h5"
         result.io.write(output_dir / name, "dasdae")
         processed.add(identity)

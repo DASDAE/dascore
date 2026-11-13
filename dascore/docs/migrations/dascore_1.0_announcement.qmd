@@ -28,7 +28,7 @@ See [installing a pre-release](../installation.qmd#pre-releases); `[extras]` bri
     - Kernels with non-NumPy backends (JAX, PyTorch) can be registered.
 - [Coding agent skills and agent-friendly documentation, including a token-efficient CLI](../tutorial/agents.qmd)
 - New Patch processors including:
-    - [`tile_apply`](`dascore.Patch.tile_apply`) for efficiently applying ND windowed operations.
+    - [`window`](`dascore.Patch.window`) for efficiently applying ND windowed operations, and for moving-window reductions; it replaces `rolling`, which is deprecated.
     - multi-dimensional [`stft`](`dascore.Patch.stft`)/[`istft`](`dascore.Patch.istft`).
     - [`adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
 - [A re-imagined coordinate class to reduce rounding errors](../tutorial/coords.qmd)

@@ -14,7 +14,7 @@ import itertools
 import numpy as np
 
 from dascore.utils.jit import maybe_numba_jit
-from dascore.utils.tiles import TilePlan, _taper_like
+from dascore.utils.tiles import TilePlan, _taper_like, fill_dtype
 
 
 @maybe_numba_jit(required=True, nopython=True, parallel=True)
@@ -49,15 +49,17 @@ def apply_jit(
     func,
     taper: np.ndarray,
     analysis: np.ndarray | None = None,
+    fill=0,
 ) -> np.ndarray:
     """
     Return the array with `func` applied to every tile and the tiles blended.
 
     `func` is a numba-compiled function of one tile returning a tile of the
     same shape. `analysis` multiplies each tile before `func` sees it; None
-    is a window of ones.
+    is a window of ones. `fill` is what a tile holds beyond the array.
     """
-    padded = plan.pad(array, dtype=np.result_type(array, np.float32))
+    dtype = fill_dtype(np.result_type(array, np.float32), fill)
+    padded = plan.pad(array, dtype=dtype, fill=fill)
     if analysis is None:
         analysis = np.ones(plan.size, dtype=padded.dtype)
     analysis = analysis.astype(padded.dtype)

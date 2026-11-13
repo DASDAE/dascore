@@ -103,20 +103,20 @@ A scalar applies the same fraction at both ends. Tuple values let asymmetric rec
 
 See the [edge-effects recipe](../recipes/edge_effects.qmd) for tapering before filters.
 
-# Rolling windows {#rolling}
+# Moving windows {#rolling}
 
-[`Patch.rolling`](`dascore.Patch.rolling`) provides moving-window reductions. Incomplete windows produce NaNs, which can be removed with `dropna`.
+[`Patch.window`](`dascore.Patch.window`) provides moving-window reductions. A window which reaches past either end of the data gives NaN, or is left out with `ends="drop"`. See the [windowing recipe](../recipes/windowing.qmd) for what else a window does.
 
 ```{python}
 event = dc.get_example_patch("example_event_1")
-smoothed = event.rolling(time=50, samples=True).mean().dropna("time")
+smoothed = event.window(time=50, samples=True, ends="drop").mean()
 ```
 
 ```{python}
 smoothed.viz.waterfall(show=True);
 ```
 
-Rolling objects provide reductions such as `mean`, `median`, `min`, `max`, `std`, and `sum`. Specify a coordinate-unit window or set `samples=True` for an exact sample count.
+A window provides the reductions `mean`, `median`, `min`, `max`, `std`, and `sum`, and `reduce` for any other function. Specify a coordinate-unit window or set `samples=True` for an exact sample count.
 
 # Gain
 
@@ -132,7 +132,7 @@ gained = event.normalize("time", norm="l2", window=0.1)
 gained.viz.waterfall(scale=0.5, show=True);
 ```
 
-`norm` may be `l2` (RMS), `l1` (mean absolute value), or `max`. Window length uses coordinate units unless `samples=True`. Reflected edge values keep the output shape and avoid the incomplete-window NaNs produced by `rolling`.
+`norm` may be `l2` (RMS), `l1` (mean absolute value), or `max`. Window length uses coordinate units unless `samples=True`. Reflected edge values keep the output shape and avoid the incomplete-window NaNs a reduction in a [`Patch.window`](`dascore.Patch.window`) produces.
 
 Without `window`, `normalize` uses one norm for the complete trace. With a window, every sample receives its own local scale. This distinction matters when amplitudes themselves carry scientific meaning.
 

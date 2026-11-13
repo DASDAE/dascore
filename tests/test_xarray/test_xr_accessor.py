@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import warnings
 
 import numpy as np
@@ -47,6 +48,25 @@ class TestForwarding:
         out = data_array.dc.abs()
         assert isinstance(out, xr.DataArray)
         assert np.array_equal(out.values, patch.abs().data)
+
+    def test_a_window_answers_in_data_arrays(self, patch, data_array):
+        """What a window does comes back as a DataArray, as any method's does."""
+        import xarray as xr  # noqa: PLC0415
+
+        window = {"time": 5, "samples": True}
+        reduced = data_array.dc.window(**window).mean()
+        assert isinstance(reduced, xr.DataArray)
+        expected = patch.window(**window).mean().data
+        assert np.array_equal(reduced.values, expected, equal_nan=True)
+        applied = data_array.dc.window(time=16, samples=True).apply(np.negative)
+        assert isinstance(applied, xr.DataArray)
+
+    def test_a_window_forwards_no_private_name(self, data_array):
+        """A private name is not the window's to answer, so copying finds none."""
+        windowed = data_array.dc.window(time=5, samples=True)
+        with pytest.raises(AttributeError):
+            windowed._not_there
+        assert copy.copy(windowed).mean().shape == windowed.mean().shape
 
     def test_arguments_reach_the_method(self, patch, data_array):
         """A method's own arguments are passed through untouched."""

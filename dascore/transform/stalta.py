@@ -11,7 +11,7 @@ from pydantic import ConfigDict
 
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, UnitError
-from dascore.proc.rolling import _PandasPatchRoller, _rolling_mean, rolling
+from dascore.proc.rolling import _PandasPatchRoller, _roller, _rolling_mean
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.array import _is_offset_unit, _quantity
 from dascore.utils.misc import check_filter_kwargs
@@ -67,7 +67,7 @@ class Stalta(PatchProcessor):
         # Let `rolling` (metadata only) pick the window sizes and engine, so the
         # result matches `patch.rolling(...).mean()`.
         sta_roll, lta_roll = (
-            rolling(meta, samples=self.samples, **{dim: x}) for x in (sta, lta)
+            _roller(meta, samples=self.samples, **{dim: x}) for x in (sta, lta)
         )
         coords = sta_roll.get_coords()
         attrs, scale = meta.attrs, None

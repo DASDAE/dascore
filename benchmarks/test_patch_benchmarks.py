@@ -384,7 +384,7 @@ class TestRollingBenchmarks:
     @pytest.fixture(scope="module")
     def small_roller(self, example_patch):
         """Get a rolling object"""
-        return example_patch.rolling(time=5, samples=True)
+        return example_patch.window(time=5, samples=True, align="right")
 
     @pytest.fixture(scope="module")
     def big_roller(self, example_patch):
@@ -392,7 +392,7 @@ class TestRollingBenchmarks:
         patch = example_patch
         time = patch.get_coord("time")
         roll_time = dc.to_float(time.coord_range()) / 4
-        return example_patch.rolling(time=roll_time)
+        return example_patch.window(time=roll_time, align="right")
 
     @pytest.mark.benchmark
     def test_rolling_small_roller_mean(self, small_roller):
@@ -407,7 +407,7 @@ class TestRollingBenchmarks:
     @pytest.mark.benchmark
     def test_rolling_mean_full_call(self, example_patch):
         """Time a complete rolling mean, including roller construction."""
-        example_patch.rolling(time=5, samples=True, center=True).mean()
+        example_patch.window(time=5, samples=True).mean()
 
 
 class TestAlignBenchmarks:

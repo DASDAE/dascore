@@ -678,7 +678,7 @@ class TestSTFT:
         patch = dc.get_example_patch()
         history = patch.stft(time=64, samples=True).attrs.history
         assert history[-1].startswith("stft(")
-        assert not any(x.startswith("tile_apply") for x in history)
+        assert not any(x.startswith("window(") for x in history)
 
     def test_type(self, chirp_stft_patch, chirp_patch):
         """Return the expected type."""

@@ -518,13 +518,16 @@ class PatchProcessor(DascoreBaseModel):
             attrs if self.data_type is None else attrs.update(data_type=self.data_type)
         )
 
+    def _spelled(self, name: str) -> str:
+        """Return how this call is written into history."""
+        return _call_str(name, self.kwargs) if self.history == "full" else name
+
     def _record(self, patch: dc.PatchMeta, out: dc.PatchMeta) -> PatchAttrs:
         """Return attrs carrying the data_type, history and ids of this call."""
         attrs = self._result_attrs(out)
         name = self.name or type(self).__name__
         if self.history is not None and get_config().patch_history != "disabled":
-            spelled = _call_str(name, self.kwargs) if self.history == "full" else name
-            attrs = _maybe_add_history_str(attrs, spelled)
+            attrs = _maybe_add_history_str(attrs, self._spelled(name))
         if not ids_enabled():
             return stamp(attrs, (), None)
         try:
@@ -831,7 +834,7 @@ def _check_signature(cls: type[PatchProcessor], func) -> None:
         )
         raise ParameterError(msg)
     # A class which takes extras needs somewhere for a call to spell them:
-    # `tile_apply(time=0.05)` is a window, not a field, and a method with no
+    # `median_filter(time=0.05)` is a window, not a field, and a method with no
     # var-keyword would refuse it before the class ever saw it.
     if cls.model_config.get("extra") == "allow" and not any(
         x.kind is x.VAR_KEYWORD for x in parameters.values()

@@ -1060,16 +1060,16 @@ class TestMutationBoundary:
     def test_a_repeated_refusal_warns_once(self, patch):
         """The same refusal warns on its first call, not on every call."""
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
-            patch.tile_apply(lambda x: x, time=0.5, distance=50)
+            patch.window(time=0.5, distance=50).apply(lambda x: x)
         with suppress_warnings(DASCoreWarning, message="No id could", action="error"):
-            patch.tile_apply(lambda x: x, time=0.5, distance=50)
+            patch.window(time=0.5, distance=50).apply(lambda x: x)
 
     def test_a_raised_refusal_raises_again(self, patch):
         """A filter turning the warning into an error holds on every call."""
         for _ in range(2):
             with suppress_warnings(DASCoreWarning, action="error"):
                 with pytest.raises(DASCoreWarning, match="No id could be"):
-                    patch.tile_apply(lambda x: x, time=0.5, distance=50)
+                    patch.window(time=0.5, distance=50).apply(lambda x: x)
 
     def test_an_operation_stamps_its_own_result(self, patch):
         """The replacements a patch function makes do not name themselves."""

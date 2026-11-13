@@ -2,8 +2,9 @@
 Cut an array into overlapping tiles, and blend them back.
 
 A :class:`TilePlan` is the geometry: where every tile of a given size and
-stride sits over an array of a given shape, zero padded so that every tile
-which reaches the array exists whole. It cuts the
+stride sits over an array of a given shape, padded -- with zeros unless
+another value is given -- so that every tile which reaches the array
+exists whole. It cuts the
 array into a dense stack of tiles, ``[n_tiles, *size]``, which one call to a
 vectorized function can transform, and adds a stack back under a taper so
 that, with a taper whose ramps are complementary, tiles of an untouched
@@ -18,13 +19,24 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import product
 
 import numpy as np
 from numpy.lib.stride_tricks import as_strided
 
 from dascore.exceptions import ParameterError
+
+
+def fill_dtype(dtype, fill) -> np.dtype:
+    """
+    Return the dtype which holds both an array's values and a fill value.
+
+    From the smallest dtype the fill fits in, not from the fill as a plain
+    number, which NumPy would squeeze into the array's dtype: -1 into a
+    uint8 as 255.
+    """
+    return np.result_type(dtype, np.min_scalar_type(fill))
 
 
 def _taper_like(taper: np.ndarray, array: np.ndarray) -> np.ndarray:
@@ -135,13 +147,20 @@ class TilePlan:
             buffer, shape=(*self.grid, *self.size), strides=strides, writeable=writeable
         )
 
-    def pad(self, array: np.ndarray, dtype=None) -> np.ndarray:
+    def pad(self, array: np.ndarray, dtype=None, fill=0) -> np.ndarray:
         """
-        Return the array inside a zeroed buffer every tile fits in whole.
+        Return the array inside a buffer every tile fits in whole.
 
-        The buffer takes the array's dtype unless one is given.
+        The buffer holds `fill`, zero by default, wherever the array is not.
+        It takes the dtype which holds both the array and `fill` unless one
+        is given.
         """
-        buffer = np.zeros(self.extended, dtype=dtype or np.asarray(array).dtype)
+        own = np.asarray(array).dtype
+        # Zero is a value of any dtype; another fill may need a wider one.
+        dtype = dtype or (own if fill == 0 else fill_dtype(own, fill))
+        # Zeros come from the allocator; any other value has to be written.
+        whole = np.zeros if fill == 0 else partial(np.full, fill_value=fill)
+        buffer = whole(self.extended, dtype=dtype)
         buffer[self._inner()] = array
         return buffer
 
@@ -149,9 +168,9 @@ class TilePlan:
         """Return the array's part of a buffer `pad` made."""
         return buffer[self._inner()]
 
-    def extract(self, array: np.ndarray, dtype=None) -> np.ndarray:
-        """Return the tiles as a stack, ``[n_tiles, *size]``, in the array's dtype."""
-        buffer = self.pad(array, dtype)
+    def extract(self, array: np.ndarray, dtype=None, fill=0) -> np.ndarray:
+        """Return the tiles as a stack, ``[n_tiles, *size]``; see `pad`."""
+        buffer = self.pad(array, dtype, fill)
         tiles = self._tile_view(buffer).reshape((self.n_tiles, *self.size))
         # A one-dimensional plan reshapes without copying, which would hand
         # out the read-only window view; a stack is for writing to.
