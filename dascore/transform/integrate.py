@@ -45,10 +45,26 @@ def _get_definite_coords(meta, dims):
     return meta.coords.update(**new_coords)
 
 
-def _get_definite_integral(array, dxs_or_vals, axes):
-    """Get a definite integral along axes."""
+def _get_trapezoids(array, dx_or_val, ax):
+    """Return the area between each pair of adjacent samples along an axis."""
+    if is_array(dx_or_val):
+        intervals = dx_or_val[1:] - dx_or_val[:-1]
+        indexer = broadcast_for_index(array.ndim, ax, slice(None), fill=None)
+        dx_or_val = intervals[indexer]
+    ndim = array.ndim
+    stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
+    start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
+    return (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
+
+
+def _get_definite_integral(array, dxs_or_vals, axes, skip_nan=False):
+    """Get a definite integral along axes; with skip_nan, NaN intervals add zero."""
     ndims = len(array.shape)
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
+        if skip_nan:
+            areas = _get_trapezoids(array, dxs_or_val, ax)
+            array = np.nansum(areas, axis=ax, keepdims=True)
+            continue
         # Numpy 2/3 compat code
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
         key = "x" if is_array(dxs_or_val) else "dx"
@@ -56,25 +72,25 @@ def _get_definite_integral(array, dxs_or_vals, axes):
     return array
 
 
-def _get_indefinite_integral(array, dxs_or_vals, axes):
+def _get_indefinite_integral(array, dxs_or_vals, axes, skip_nan=False):
     """
     Get indefinite integral along dimensions.
 
     We need to calculate the distance weighted average for the areas between
-    samples for the integration dimension.
+    samples for the integration dimension. With skip_nan, intervals touching
+    a NaN add zero and NaN samples stay NaN.
     """
     for dx_or_val, ax in zip(dxs_or_vals, axes):
         out = np.zeros_like(array)
-        if is_array(dx_or_val):
-            intervals = dx_or_val[1:] - dx_or_val[:-1]
-            indexer = broadcast_for_index(array.ndim, ax, slice(None), fill=None)
-            dx_or_val = intervals[indexer]
-        ndim = len(out.shape)
-        stop_indexer = broadcast_for_index(ndim, ax, slice(1, None), fill=slice(None))
-        start_indexer = broadcast_for_index(ndim, ax, slice(None, -1), fill=slice(None))
-        # Average each adjacent pair to form trapezoids.
-        avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
+        avs = _get_trapezoids(array, dx_or_val, ax)
+        if skip_nan:
+            avs[np.isnan(avs)] = 0
+        stop_indexer = broadcast_for_index(
+            out.ndim, ax, slice(1, None), fill=slice(None)
+        )
         out[stop_indexer] = np.cumsum(avs, axis=ax)
+        if skip_nan:
+            out[np.isnan(array)] = np.nan
         array = out
     return array
 
@@ -102,6 +118,10 @@ class Integrate(PatchProcessor):
     The number of dimensions will always remain the same regardless of `definite`
     value. To remove dimensions with length 1, use
     [`Patch.squeeze`](`dascore.Patch.squeeze`).
+
+    NaN samples are treated as missing: an interval with a NaN end adds
+    nothing, a cumulative integral carries on past a gap, and NaN samples
+    stay NaN.
 
     Integer and boolean data are converted to float64 before integration.
     Floating-point and complex data are used without an explicit dtype cast.
@@ -132,7 +152,7 @@ class Integrate(PatchProcessor):
     >>> all_integrated = patch.integrate(dim=None, definite=False)
     """
 
-    __version__ = "1.2"
+    __version__ = "1.3"
     dim: Any
     definite: Any = False
 
@@ -152,6 +172,13 @@ class Integrate(PatchProcessor):
         """Return the integral of the data along the axes."""
         if axes and data.dtype.kind in "biu":
             data = data.astype(np.float64)
-        if self.definite:
-            return _get_definite_integral(data, spacing, axes)
-        return _get_indefinite_integral(data, spacing, axes)
+        func = _get_definite_integral if self.definite else _get_indefinite_integral
+        out = func(data, spacing, axes)
+        # A NaN sample reaches the last sample of each integrated axis longer
+        # than one, so only that slice is checked before scanning the input.
+        last = broadcast_for_index(out.ndim, axes, -1, fill=slice(None))
+        single = any(data.shape[ax] == 1 for ax in axes)
+        maybe_nan = out.size and (single or np.isnan(out[last]).any())
+        if maybe_nan and np.isnan(data).any():
+            out = func(data, spacing, axes, skip_nan=True)
+        return out
