@@ -2582,27 +2582,35 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """Whether two coordinates hold equal labels and units, however split."""
         if not isinstance(other, NumericCoord):
             return sensible_model_equals(self._label_fields(), other)
+        mine, theirs = self._grid, other._grid
+        if mine is not None and theirs is not None and self.shape == other.shape:
+            ends = np.array([0, len(self) - 1])
+            # most unequal grids differ at an end
+            if not np.array_equal(
+                mine.labels(ends, self.dtype), theirs.labels(ends, self.dtype)
+            ):
+                return False
         mine, theirs = self._label_fields(), other._label_fields()
         if sensible_model_equals(mine, theirs):
             return True
-        if self.shape != other.shape or self._partial or other._partial:
+        if self.shape != other.shape or self.ndim != 1 or self._partial:
             return False
-        if self._grid is not None and other._grid is not None:
-            return False  # one grid each says all of its labels
+        if other._partial:
+            return False
         for fields in (mine, theirs):  # the labels say all a step or runs do
             fields.pop("runs"), fields.pop("step")
         if not sensible_model_equals(mine, theirs):
             return False
-        # the labels compared run by run where both split alike (equal runs
-        # hold equal labels), elsewhere a few megabytes of float64 at a time,
-        # so no grid is spelled out whole
+        # the end labels first, then run by run where both split alike (equal
+        # runs hold equal labels), elsewhere a few megabytes of float64 at a
+        # time, so no grid is spelled out whole
         size, starts = int(self.shape[0]), self._run_offsets()
         spans = [(0, size)]
         if np.array_equal(starts, other._run_offsets()):
             stops = [*starts.tolist()[1:], size]
             pairs = zip(starts.tolist(), stops, self.runs, other.runs, strict=True)
             spans = [(a, b) for a, b, x, y in pairs if x != y]
-        for start, stop in spans:
+        for start, stop in [(0, min(size, 1)), (max(size - 1, 0), size), *spans]:
             for low in range(start, stop, 2**18):
                 high = min(low + 2**18, stop)
                 mine, theirs = self[low:high].values, other[low:high].values

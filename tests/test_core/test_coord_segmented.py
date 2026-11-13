@@ -889,23 +889,32 @@ class TestEdgeCases:
         out = NumericCoord._validate_runs(float_gap_coord)
         assert out is float_gap_coord
 
-    def test_eq_by_labels(self, float_gap_coord):
-        """However labels are split or stated, only labels and units decide."""
-        labels = NumericCoord.from_labels(float_gap_coord.values)
-        assert labels == float_gap_coord
-        assert labels.set_units("m") != float_gap_coord
-        assert get_coord(data=float_gap_coord.values + 1) != float_gap_coord
-        partial = get_coord(shape=float_gap_coord.shape, dtype="float64")
-        assert partial != float_gap_coord
-
     def test_eq_other_types(self, float_gap_coord):
-        """Equal labels are equal whatever the runs; other labels are not."""
+        """Equal labels are equal whatever the runs; other labels or units not."""
         mono = get_coord(data=float_gap_coord.values)
         assert float_gap_coord == mono and mono == float_gap_coord
         three = concat_coords(
             float_gap_coord, get_coord(start=30.0, stop=40.0, step=1.0)
         )
         assert float_gap_coord != three
+        assert mono.set_units("m") != float_gap_coord
+        assert get_coord(data=float_gap_coord.values + 1) != float_gap_coord
+        partial = get_coord(shape=float_gap_coord.shape, dtype="float64")
+        assert partial != float_gap_coord
+
+    @pytest.mark.parametrize("piece", [slice(0, 2), slice(3, 12), slice(1, 40, 3)])
+    def test_eq_grids_of_equal_labels(self, piece):
+        """A sliced grid equals one rebuilt from its labels, whatever its parent."""
+        sliced = get_coord(start=0.0, stop=5.0, step=0.1)[piece]
+        rebuilt = get_coord(data=sliced.values.copy(), step=sliced.step)
+        assert sliced.runs != rebuilt.runs and sliced == rebuilt
+        assert sliced != get_coord(data=sliced.values + 1e-6, step=sliced.step)
+
+    def test_eq_scalars(self):
+        """Scalar coordinates compare by their one label."""
+        one = get_coord(data=np.array(1.0))
+        assert one == get_coord(data=np.array(1.0))
+        assert one != get_coord(data=np.array(2.0))
 
     def test_mask_keeps_a_stepless_list(self):
         """Dropping a sample from labels with no step leaves one list, as on dev."""
