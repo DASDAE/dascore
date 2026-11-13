@@ -278,14 +278,14 @@ class TestHoles:
 
     @pytest.mark.parametrize("definite", [True, False])
     def test_holes_raise(self, holed_patch, definite):
-        """Missing samples raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+        """More than one segment raises, naming the fixes."""
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.integrate("time", definite=definite)
 
-    def test_jitter_raises(self, jittered_patch):
-        """Labels off their step's grid raise."""
-        with pytest.raises(CoordError, match="off the grid"):
-            jittered_patch.integrate("time")
+    def test_jitter_computes(self, jittered_patch):
+        """One list of labels is an irregular axis, computed on by its labels."""
+        out = jittered_patch.integrate("time")
+        assert isinstance(out, dc.Patch)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, integrated by label spacing."""

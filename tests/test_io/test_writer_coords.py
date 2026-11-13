@@ -168,3 +168,16 @@ class TestWriterCoordinates:
         with _skip_without_dependency(fio):
             with pytest.raises(CoordError, match="NetCDF and Zarr"):
                 dc.write(holed, path, fio.name, fio.version)
+
+    @pytest.mark.parametrize("fio", [NetCDFCFV18(), ZarrV3()], ids=_label)
+    def test_segments_of_two_steps_refused(self, fio, tmp_path):
+        """Segments sharing no step have none to store beside their labels."""
+        first = dc.get_coord(start=0.0, step=1.0, shape=(4,))
+        second = dc.get_coord(start=10.0, step=2.0, shape=(3,))
+        coord = dc.core.coords.concat_coords(first, second)
+        data = np.zeros(len(coord))
+        patch = dc.Patch(data=data, coords={"distance": coord}, dims=("distance",))
+        path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
+        with _skip_without_dependency(fio):
+            with pytest.raises(CoordError, match=r"2 segments.*split_gaps"):
+                dc.write(patch, path, fio.name, fio.version)

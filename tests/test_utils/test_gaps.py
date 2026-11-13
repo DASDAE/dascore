@@ -201,27 +201,13 @@ class TestContiguousRuns:
         jittered = contiguous_runs(runs, step=1, jittered=True)
         assert {x.step for x in jittered} == {None}
 
-    def test_stepless_runs_split_by_sampling(self):
-        """Without a step, a change of step or a wide seam ends a stretch."""
+    def test_segments_are_their_own_stretches(self):
+        """Without a step every run is a segment, keeping its own step."""
         runs = [
             RunRecord(3, 0.0, 2.0, 1.0),
             RunRecord(3, 3.0, 4.0, 0.5),
-            RunRecord(2, 4.6, 5.1, 0.5),
-            RunRecord(2, 9.0, 9.5, 0.5),
+            RunRecord(2, 9.0, 12.0),
         ]
         out = contiguous_runs(runs)
-        assert [(x.count, x.step) for x in out] == [(3, 1.0), (5, None), (2, 0.5)]
-
-    def test_descending_seams(self):
-        """A descending run's seam is measured from its lowest label."""
-        runs = [RunRecord(3, 3.0, 5.0, -1.0), RunRecord(2, 0.0, 1.0, -1.0)]
-        assert len(contiguous_runs(runs)) == 2
-        near = [RunRecord(3, 3.0, 5.0, -1.0), RunRecord(2, 1.0, 2.0, -1.0)]
-        assert len(contiguous_runs(near)) == 1
-
-    def test_runs_without_steps_are_one(self):
-        """Irregular labels name no hole, so they are one stretch."""
-        runs = [RunRecord(3, 0.0, 2.0, 1.0), RunRecord(3, 9.0, 12.0)]
-        (out,) = contiguous_runs(runs)
-        assert (out.count, out.min, out.max, out.step) == (6, 0.0, 12.0, None)
+        assert out == runs
         assert contiguous_runs([]) == []

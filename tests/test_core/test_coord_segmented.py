@@ -210,7 +210,8 @@ class TestProperties:
 
     def test_step_is_the_common_step(self, float_gap_coord):
         """Runs of one step report it; runs of different steps report none."""
-        assert float_gap_coord.step == 1.0
+        assert float_gap_coord.step is None
+        assert [x.step for x in float_gap_coord.segments] == [1.0, 1.0]
         mixed = concat_coords(
             get_coord(start=0.0, stop=5.0, step=1.0),
             get_coord(start=8.0, stop=13.0, step=0.5),
@@ -740,9 +741,13 @@ class TestRoundTrips:
         summary = float_gap_coord.to_summary()
         assert summary.min == 0.0
         assert summary.max == 24.0
-        assert summary.step == 1.0 and summary.gapped
+        assert summary.step is None and not summary.gapped
         assert not summary.is_range_like
-        assert [(x.count, x.position) for x in summary.runs] == [(10, 0), (10, 15)]
+        # segments share no grid, so each states its own step and no position
+        assert [(x.count, x.step, x.position) for x in summary.runs] == [
+            (10, 1.0, None),
+            (10, 1.0, None),
+        ]
         assert summary.len == 20
         assert summary.data_id == float_gap_coord.data_id
 
@@ -826,10 +831,19 @@ class TestEdgeCases:
         out = NumericCoord._validate_runs(float_gap_coord)
         assert out is float_gap_coord
 
+    def test_eq_by_labels(self, float_gap_coord):
+        """However labels are split or stated, only labels and units decide."""
+        labels = NumericCoord.from_labels(float_gap_coord.values)
+        assert labels == float_gap_coord
+        assert labels.set_units("m") != float_gap_coord
+        assert get_coord(data=float_gap_coord.values + 1) != float_gap_coord
+        partial = get_coord(shape=float_gap_coord.shape, dtype="float64")
+        assert partial != float_gap_coord
+
     def test_eq_other_types(self, float_gap_coord):
-        """Equality is False for other run layouts and run counts."""
+        """Equal labels are equal whatever the runs; other labels are not."""
         mono = get_coord(data=float_gap_coord.values)
-        assert float_gap_coord != mono
+        assert float_gap_coord == mono and mono == float_gap_coord
         three = concat_coords(
             float_gap_coord, get_coord(start=30.0, stop=40.0, step=1.0)
         )
@@ -1084,13 +1098,13 @@ class TestSplitGapsAndWrite:
                 ),
                 2,
             ),
-            # irregular runs sharing no step are not gapped
+            # segments split whatever their steps, labels included
             (
                 concat_coords(
                     get_coord(start=0.0, step=1.0, shape=(3,)),
                     get_coord(data=np.array([3.0, 4.5, 7.0])),
                 ),
-                1,
+                2,
             ),
         ],
     )

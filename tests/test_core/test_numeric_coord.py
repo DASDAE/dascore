@@ -197,10 +197,8 @@ class TestHoles:
     """Missing grid positions are read from the runs, not the labels."""
 
     def test_holes_between_runs(self, gappy):
-        """The positions between two runs of one grid are missing."""
-        missing = gappy.missing()
-        assert missing.count == 4
-        assert list(missing.iter_runs()) == [(5.0, 8.0)]
+        """Segments share no grid, so none is missing between them."""
+        assert gappy.missing().complete and gappy.step is None
 
     def test_an_evenly_sampled_coord_is_complete(self):
         """One grid skips nothing."""
@@ -388,7 +386,7 @@ class TestUpdates:
         """A step given to a stored coordinate is the grid its labels sit on."""
         coord = NumericCoord.from_labels(np.array([0.0, 1.0, 3.0]))
         out = coord.new(step=1.0)
-        assert out.step == 1.0 and out.missing().count == 1
+        assert [(len(x), x.step) for x in out.segments] == [(2, 1.0), (1, 1.0)]
 
     def test_new_start_keeps_the_count(self):
         """Moving the start of a grid keeps its length and step."""

@@ -421,14 +421,14 @@ class TestDecimateHoles:
     """Filtered decimation must not filter across a coordinate hole."""
 
     def test_filtered_holes_raise(self, holed_patch):
-        """Missing samples raise before filtering, naming the fixes."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+        """More than one segment raises before filtering, naming the fixes."""
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.decimate(time=2)
 
-    def test_filtered_jitter_raises(self, jittered_patch):
-        """Labels off their step's grid raise before filtering."""
-        with pytest.raises(CoordError, match="filtered decimate"):
-            jittered_patch.decimate(time=2)
+    def test_filtered_jitter_computes(self, jittered_patch):
+        """One list of labels is an irregular axis, computed on by its labels."""
+        out = jittered_patch.decimate(time=2)
+        assert isinstance(out, dc.Patch)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still decimates."""

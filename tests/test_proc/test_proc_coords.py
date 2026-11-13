@@ -105,6 +105,41 @@ class TestSnapDims:
             assert coord.sorted
             assert coord.evenly_sampled
 
+    def test_step_places_labels_on_its_grid(self):
+        """step= moves each label to its nearest position; skips are segments."""
+        coord = get_coord(data=np.array([0.0, 1.1, 1.9, 5.05, 6.0]))
+        patch = _gapped_patch(coord, dim="x")
+        out = patch.snap_coords("x", step=1.0).get_coord("x")
+        assert [(len(x), x.step) for x in out.segments] == [(3, 1.0), (2, 1.0)]
+        assert np.allclose(out.values, [0, 1, 2, 5, 6])
+
+    def test_step_on_time_in_seconds(self, random_patch):
+        """A time step may be given in seconds."""
+        time = random_patch.get_coord("time")
+        out = random_patch.snap_coords("time", step=dc.to_float(time.step))
+        assert out.get_coord("time") == time
+
+    def test_step_collision_raises(self):
+        """Two labels nearest one position of the grid cannot both sit there."""
+        patch = _gapped_patch(get_coord(data=np.array([0.0, 0.9, 1.2])), dim="x")
+        with pytest.raises(CoordError, match="one position"):
+            patch.snap_coords("x", step=1.0)
+
+    def test_max_shift_raises(self):
+        """A move larger than max_shift raises; a smaller one passes."""
+        patch = _gapped_patch(get_coord(data=np.array([0.0, 1.3, 2.0])), dim="x")
+        with pytest.raises(CoordError, match="max_shift"):
+            patch.snap_coords("x", max_shift=0.2)
+        assert patch.snap_coords("x", max_shift=0.5).get_coord("x").evenly_sampled
+
+    def test_move_over_one_step_warns(self):
+        """Spreading labels across a gap moves them over a step, which warns."""
+        coord = get_coord(data=np.r_[np.arange(10.0), np.arange(20.0, 30.0)])
+        patch = _gapped_patch(coord, dim="x")
+        with pytest.warns(UserWarning, match="gap"):
+            out = patch.snap_coords("x")
+        assert out.get_coord("x").evenly_sampled
+
     @pytest.fixture(scope="class")
     def even_time_uneven_distance_patch(self):
         """A patch with an evenly sampled time and monotonic-uneven distance."""
@@ -884,24 +919,23 @@ class TestUnselect:
 
     @pytest.mark.parametrize("step", [None, (1, 1024), (1, 3000)])
     def test_hole_keeps_step(self, random_patch, step):
-        """The removed interior samples stay visible as one missing gap."""
+        """The removed interior samples leave two segments on the step."""
         coord = random_patch.get_coord("time")
         if step is not None:
             coord = get_coord(start=coord.min(), step=step, shape=coord.shape)
         patch = random_patch.update_coords(time=coord)
         out = patch.unselect(time=(coord[10], coord[19])).get_coord("time")
-        assert out.runs_count == 2
-        assert out.step_exact == coord.step_exact
-        assert out.missing().count == 10
+        assert out.runs_count == 2 and out.step is None
+        assert [x.step_exact for x in out.segments] == [coord.step_exact] * 2
         assert len(out.get_discontinuities("gaps")) == 1
 
     def test_second_hole_keeps_step(self, random_patch):
-        """Unselecting a segmented coordinate again keeps its step."""
+        """Unselecting a segmented coordinate again keeps each segment's step."""
         once = random_patch.unselect(time=(10, 20), samples=True)
         twice = once.unselect(time=(40, 50), samples=True)
         coord = twice.get_coord("time")
-        assert coord.step == random_patch.get_coord("time").step
-        assert coord.missing().count == 20
+        step = random_patch.get_coord("time").step
+        assert coord.runs_count == 3 and {x.step for x in coord.segments} == {step}
 
     def test_no_op_keeps_metadata(self, random_patch):
         """An unselect removing nothing leaves the patch as it was."""
@@ -915,8 +949,10 @@ class TestUnselect:
         coord = random_patch.get_coord("time")
         out = random_patch.unselect(time=(10, 20), samples=True)
         new = out.get_coord("time")
-        assert new.step == coord.step
-        assert new.missing().count == 10
+        assert [(len(x), x.step) for x in new.segments] == [
+            (10, coord.step),
+            (len(coord) - 20, coord.step),
+        ]
         assert np.array_equal(out.data, np.delete(random_patch.data, range(10, 20), 1))
 
     def test_edge_stays_one_grid(self, random_patch):
@@ -1964,6 +2000,63 @@ def _gapped_patch(coord, dim="time", dtype=np.float64):
     return dc.Patch(data=data, coords=coords, dims=("distance", dim))
 
 
+class TestFillGapsSegments:
+    """Rule 10: segments join onto the earlier one's grid, moved under half a step."""
+
+    def test_move_is_reported(self):
+        """A segment moved onto the grid before it warns, saying how far."""
+        first = get_coord(start=0, step=10, shape=(5,))
+        second = get_coord(start=73, step=10, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        with pytest.warns(UserWarning, match="0.3 of a step"):
+            out = patch.fill_gaps("x")
+        assert out.get_coord("x") == get_coord(start=0, step=10, shape=(10,))
+
+    def test_exact_seam_is_silent(self):
+        """A segment on the grid before it moves nowhere, so nothing warns."""
+        first = get_coord(start=0, step=10, shape=(5,))
+        second = get_coord(start=70, step=10, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert patch.fill_gaps("x").shape == (3, 10)
+
+    def test_labels_segment_fits_within_half_a_step(self):
+        """Labels after a grid fill onto it where each is under half a step off."""
+        first = get_coord(start=0.0, step=1.0, shape=(4,))
+        later = get_coord(data=np.array([6.1, 6.9, 8.2]))
+        patch = _gapped_patch(concat_coords(first, later), dim="x")
+        with pytest.warns(UserWarning, match="of a step"):
+            out = patch.fill_gaps("x")
+        assert out.get_coord("x") == get_coord(start=0.0, step=1.0, shape=(9,))
+        assert np.isnan(out.data[:, 4:6]).all()
+
+    def test_labels_skipping_a_position_raise(self):
+        """Labels which skip a position of the grid do not fit it."""
+        first = get_coord(start=0.0, step=1.0, shape=(4,))
+        later = get_coord(data=np.array([6.0, 7.0, 9.0]))
+        patch = _gapped_patch(concat_coords(first, later), dim="x")
+        with pytest.raises(CoordError, match="not within half a step"):
+            patch.fill_gaps("x")
+
+    def test_labels_cannot_be_filled_after(self):
+        """A gap after labels with no step has no grid to fill onto."""
+        first = get_coord(data=np.array([0.0, 1.1, 2.5]))
+        later = get_coord(start=10.0, step=1.0, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, later), dim="x")
+        with pytest.raises(CoordError, match="no step"):
+            patch.fill_gaps("x")
+
+    def test_wider_gap_keeps_another_step(self):
+        """A gap past the limit stays a boundary, whatever the step after it."""
+        first = get_coord(start=0.0, step=1.0, shape=(4,))
+        second = get_coord(start=5.0, step=1.0, shape=(3,))
+        third = get_coord(start=100.0, step=2.0, shape=(3,))
+        coord = concat_coords(first, second, third)
+        out = _gapped_patch(coord, dim="x").fill_gaps(x=5).get_coord("x")
+        assert [(len(x), x.step) for x in out.segments] == [(8, 1.0), (3, 2.0)]
+
+
 class TestFillGapsProcessor:
     """What the FillGaps class guarantees beyond the framework."""
 
@@ -2149,13 +2242,13 @@ class TestFillGaps:
         first = get_coord(start=self.t0, step=self.ms, shape=(5,))
         second = get_coord(start=self.t0 + 8 * self.ms, step=2 * self.ms, shape=(4,))
         patch = _gapped_patch(concat_coords(first, second))
-        with pytest.raises(CoordError, match="different steps"):
+        with pytest.raises(CoordError, match="not within half a step"):
             patch.fill_gaps("time")
 
     def test_no_step_raises(self):
         """An array coordinate without a declared step has no grid to fill."""
         patch = _gapped_patch(get_coord(data=np.array([0.0, 1.0, 5.0])), dim="x")
-        with pytest.raises(CoordError, match="declared step"):
+        with pytest.raises(CoordError, match="no step"):
             patch.fill_gaps("x")
 
     def test_jittered_raises(self):
@@ -2252,8 +2345,8 @@ class TestFillGaps:
         assert np.array_equal(out.data[:, 9:], patch.data[:, 5:])
 
     def test_array_segment_offset(self):
-        """An array segment inside a segmented coordinate keeps its data."""
-        array = NumericCoord.from_labels(np.array([10, 11, 13]), step=1)
+        """Labels placed on a stated step fill beside a grid, keeping their data."""
+        array = get_coord(data=np.array([10, 11, 13]), step=1)
         coord = concat_coords(get_coord(start=0, step=1, shape=(4,)), array)
         patch = _gapped_patch(coord, dim="x")
         out = patch.fill_gaps("x")
@@ -2290,7 +2383,7 @@ class TestFillGaps:
         first = get_coord(start=0.0, step=0.1, shape=(5,))
         second = get_coord(start=1.0, step=0.2, shape=(3,))
         patch = _gapped_patch(concat_coords(first, second), dim="x")
-        with pytest.raises(CoordError, match="different steps"):
+        with pytest.raises(CoordError, match="not within half a step"):
             patch.fill_gaps("x")
 
     def test_float_step_drift_raises(self):
@@ -2298,7 +2391,7 @@ class TestFillGaps:
         first = get_coord(start=0.0, step=1.0, shape=(5,))
         second = get_coord(start=10.0, step=1.0000009, shape=(1000,))
         patch = _gapped_patch(concat_coords(first, second), dim="x")
-        with pytest.raises(CoordError, match="different steps"):
+        with pytest.raises(CoordError, match="not within half a step"):
             patch.fill_gaps("x")
 
     @pytest.mark.parametrize(

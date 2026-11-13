@@ -11,15 +11,15 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
-from dascore.exceptions import CoordError, InvalidFiberFileError
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.dasdae.utils import read_grid_fields
 from dascore.io.utils import (
     resolve_keyed_source,
     should_snap,
     stored_coord,
     windows_to_slices,
+    written_step,
 )
-from dascore.utils.patch import _uneven_message
 from dascore.utils.time import to_int
 from dascore.xarray import patch_to_xarray
 from dascore.xarray.patch import _cf_attrs, _cf_units
@@ -200,30 +200,9 @@ def get_scan_coord(coord, snap: snap_type = False, where=""):
 
 
 def _stated_step(name, coord):
-    """
-    The step a coordinate's labels need written beside them, or None.
-
-    Labels which restate their coordinate (a grid of several samples, or
-    stepless labels) need none. Others, such as a lone sample or labels
-    with holes or jitter, store their step; where even that does not place
-    them back as they are (a 1024 Hz grid with holes, whose step is not a
-    whole tick), the writer refuses them (rule 13 of the coordinate
-    guidelines).
-    """
-    if coord.ndim != 1 or coord.step is None or coord._partial:
-        return None
-    flags = (coord.step, coord.jittered, coord.gapped)
-    inferred = get_coord(data=coord.values, units=coord.units, snap=False)
-    if (inferred.step, inferred.jittered, inferred.gapped) == flags:
-        return None
-    try:
-        back = get_coord(data=coord.values, step=coord.step, units=coord.units)
-    except CoordError:  # a long fractional grid drifts off its whole-tick step
-        back = None
-    if back is None or (back.step, back.jittered, back.gapped) != flags:
-        why = "NetCDF and Zarr, which store labels with one step"
-        raise CoordError(_uneven_message(name, coord, why))
-    step = coord.step
+    """The step a coordinate's labels need written beside them, or None."""
+    why = "NetCDF and Zarr, which store labels with one step"
+    step = written_step(name, coord, why)
     return to_int(step) if isinstance(step, np.timedelta64) else step
 
 

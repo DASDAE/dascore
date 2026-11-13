@@ -551,7 +551,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
         return out, array
 
     def snap(
-        self, *coords, array: MaybeArray = None, reverse: bool = False
+        self,
+        *coords,
+        array: MaybeArray = None,
+        reverse: bool = False,
+        step=None,
+        max_shift=None,
     ) -> tuple[Self, MaybeArray]:
         """
         Force the specified coordinates to be monotonic and evenly sampled.
@@ -567,6 +572,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
             The array to sort/snap.
         reverse
             If true, sort in descending order, else ascending.
+        step
+            Place the labels on this step's grid instead of spreading them.
+        max_shift
+            Raise where a label would move further than this many steps.
         """
         coords = self.dims if len(coords) == 0 else coords
         cm, array = self.sort(*coords, array=array, reverse=reverse)
@@ -576,7 +585,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
         updates = {}
         for coord_name in coords:
             current = cm.coord_map[coord_name]
-            snapped = current.snap()
+            snapped = current.snap(step=step, max_shift=max_shift)
             if snapped is not current:
                 updates[coord_name] = snapped
         if not updates:

@@ -33,7 +33,7 @@ def gapped_patch():
     first = patch.select(time=(None, t0 + 1000 * MS))
     second = patch.select(time=(t0 + 1012 * MS, None))
     out = join_patches([first, second])
-    assert out.get_coord("time").gapped
+    assert out.get_coord("time").runs_count == 2
     return out
 
 
@@ -56,12 +56,13 @@ class TestCoordinateRecords:
     """A coordinate record states the step, flags, offsets and runs."""
 
     def test_gapped(self, gapped_patch):
-        """A gapped coordinate keeps its step and states its two runs."""
+        """Segments state no shared step; each run states its own."""
         time = _time_record(gapped_patch)
-        assert time.step_int == 4_000_000 and not time.is_exact
-        assert time.gapped and not time.jittered
+        assert time.step_int is None and not time.is_exact
+        assert not time.gapped and not time.jittered
         assert time.run_count == len(time.runs) == 2
-        assert time.offset_min == time.offset_max == 0.0
+        # (count, position, ..., step in ns): no position, each its step
+        assert [(x[1], x[-1]) for x in time.runs] == [(None, 4_000_000)] * 2
 
     def test_jittered(self):
         """A jittered coordinate keeps its step and its offset bounds."""
@@ -111,9 +112,9 @@ class TestStoredRuns:
         backend.write_sources(_records(gapped_patch))
         runs = backend._fetch_df("SELECT * FROM coord_runs ORDER BY run")
         assert runs["run"].tolist() == [0, 1]
-        assert runs["position"].tolist() == [0, 253]
+        assert runs["position"].isna().all()  # segments have no positions
         defs = backend._fetch_df("SELECT * FROM coord_defs WHERE run_count = 2")
-        assert defs["gapped"].tolist() == [1]
+        assert defs["gapped"].tolist() == [0]
 
     def test_export_keeps_runs(self, gapped_patch):
         """Records exported for a union carry the runs and flags."""
@@ -153,7 +154,7 @@ class TestRunCap:
         with pytest.warns(UserWarning, match=r"a\.h5.*257 runs.*max_index_runs"):
             records = _records(patch)
         (time,) = [x for x in records[0].patches[0].coords if x.coord_name == "time"]
-        assert time.run_count == 257 and time.runs == () and time.gapped
+        assert time.run_count == 257 and time.runs == ()
 
     def test_cap_is_configurable(self):
         """Raising the cap stores every run, silently."""
@@ -370,6 +371,12 @@ class TestReviewFindings:
         assert len(gaps) == 2 and set(gaps["station"]) == {""}
         (capped,) = contents[contents["station"] == "b"].to_dict("records")
         assert capped["time_max"] - capped["time_min"] == pd.Timedelta(540_009, "ms")
+
+    def test_selection_on_a_dimension_without_runs(self, gapped_patch):
+        """A range on a dimension holding no runs keeps the envelope it trims."""
+        dist = gapped_patch.get_coord("distance")
+        spool = dc.spool([gapped_patch]).select(distance=(None, dist.values[10]))
+        assert spool.get_contents()["distance_max"].tolist() == [dist.values[10]]
 
     def test_runs_survive_a_summary_dump(self, gapped_patch):
         """A summary rebuilt from its dump, even as text, states the same runs."""

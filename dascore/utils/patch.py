@@ -51,7 +51,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, contiguous_windows
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -1140,34 +1140,42 @@ def _get_dx_or_spacing_and_axes(
 
 def _uneven_message(name: str, coord, caller: str) -> str:
     """Why a coordinate is not evenly sampled for caller, and what fixes it."""
+    count = len(contiguous_windows(coord))
     why = [
         text
         for text, applies in (
             ("its labels sit off the grid of its step", coord.jittered),
-            ("it has missing samples", coord.gapped),
+            (f"it has {count} segments", count > 1),
         )
         if applies
     ]
-    split = ", Patch.split_gaps to split at them" if coord.gapped else ""
+    split = ", Patch.split_gaps to split at them" if count > 1 else ""
     return (
         f"Coordinate {name} is not evenly sampled as required by {caller}: "
         f"{' and '.join(why) or 'it has no step'}. Use Patch.fill_gaps to "
-        f"fill holes{split}, or Patch.snap_coords to put the labels on a grid."
+        f"fill gaps{split}, or Patch.snap_coords to put the labels on a grid."
     )
 
 
-def _refuse_holes_and_jitter(patch, dims, operation: str) -> None:
+def _refuse_segments(patch, dims, operation: str) -> None:
     """
-    Refuse dims with missing samples or labels off their step's grid.
+    Refuse dims whose coordinate holds more than one segment.
 
-    A coordinate with no step is an irregular axis, which an operation
-    computes on by its labels, as DASCore 0.1.x did; one with a step it does
-    not keep (holes or jitter) raises a CoordError naming the operation.
+    The one check for operations computing across samples: a gap between
+    segments would be computed across as if it were not there. One list
+    of labels is an irregular axis, which an operation computes on by its
+    labels, as DASCore 0.1.x did.
     """
     for dim in iterate(dims):
-        coord = patch.get_coord(dim)
-        if coord.gapped or coord.jittered:
-            raise CoordError(_uneven_message(dim, coord, operation))
+        count = len(contiguous_windows(patch.get_coord(dim)))
+        if count > 1:
+            msg = (
+                f"Coordinate {dim} has {count} segments, which {operation} "
+                "would compute across as if no gap were between them. Use "
+                "Patch.fill_gaps to fill the gaps, or Patch.split_gaps to "
+                "split at them, first."
+            )
+            raise CoordError(msg)
 
 
 def align_patch_coords(

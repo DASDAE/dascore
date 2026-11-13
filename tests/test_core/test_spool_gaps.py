@@ -389,12 +389,12 @@ class TestGappedPatchRows:
         assert len(patch.split_gaps()) == 6
 
     def test_read_selection_with_holes_is_one_patch(self, tmp_path):
-        """A read picking labels which leave holes gives one gapped patch."""
+        """A read picking labels which leave holes gives one segmented patch."""
         patch = dc.get_example_patch()
         path = dc.write(patch, tmp_path / "one.h5", "dasdae")
         values = patch.get_coord("distance").values
         (out,) = dc.read(path, distance=values[[1, 2, 5]])
-        assert out.get_coord("distance").gapped
+        assert out.get_coord("distance").runs_count == 2
         assert len(dc.spool([patch.select(distance=values[[1, 2, 5]])])) == 1
 
     def test_identity_is_stable(self):

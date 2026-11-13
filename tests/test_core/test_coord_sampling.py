@@ -64,11 +64,12 @@ class TestFlags:
         assert not coord.jittered and not coord.gapped
 
     def test_gapped(self):
-        """Labels on a stated grid with skipped positions are gapped."""
+        """Labels on a stated grid with skipped positions are segments."""
         coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-        assert coord.gapped and not coord.jittered
-        assert not coord.evenly_sampled
-        assert coord.step == 1
+        assert coord.runs_count == 3 and not coord.jittered
+        assert not coord.evenly_sampled and not coord.gapped
+        # segments share no grid; each states its own step
+        assert coord.step is None and {x.step for x in coord.segments} == {1}
 
     def test_jittered(self):
         """Labels within half a step of a grid keep it and are jittered."""
@@ -235,8 +236,9 @@ class TestMicrosecondGrid:
         with h5py.File(tmp_path / "holed.h5", "w") as h5:
             _save_coord(holed, "_coord_time", h5, compact=True)
             back = _read_stored_coord(h5["_coord_time"], "time", {})
-        assert back.step_exact == Fraction(1, 1024) and not back.jittered
-        assert back.gapped and np.array_equal(back.values, holed.values)
+        assert back.runs_count == 2 and not back.jittered
+        assert {x.step_exact for x in back.segments} == {Fraction(1, 1024)}
+        assert np.array_equal(back.values, holed.values)
 
     def test_dasdae_strided_run_keeps_its_step(self, tmp_path):
         """A stored run one stride apart reads back on its declared step."""
@@ -246,7 +248,7 @@ class TestMicrosecondGrid:
         with h5py.File(tmp_path / "strided.h5", "w") as h5:
             _save_coord(coord, "_coord_x", h5, compact=True)
             back = _read_stored_coord(h5["_coord_x"], "x", {})
-        assert back.step == 1 and back.gapped
+        assert back == coord and back.runs_count == 2
         np.testing.assert_array_equal(back.values, coord.values)
 
     def test_dasdae_round_trip(self, coord, labels, tmp_path):
@@ -268,9 +270,8 @@ class TestMicrosecondGrid:
         """Missing positions of a microsecond grid are microsecond labels."""
         coord = get_coord(data=labels)
         holed = coord[np.r_[0:10, 15:30]]
-        missing = holed.missing()
-        assert missing.count == 5
-        np.testing.assert_array_equal(missing.positions(), labels[10:15])
+        assert [x.step_exact for x in holed.segments] == [coord.step_exact] * 2
+        np.testing.assert_array_equal(holed.values, labels[np.r_[0:10, 15:30]])
 
     def test_month_labels(self):
         """Months have no length in ticks, so they find no fractional grid."""
@@ -291,9 +292,9 @@ class TestStatedStep:
     """With a stated step, labels are placed on that grid (rule 2)."""
 
     def test_holes(self):
-        """Skipped positions are holes."""
+        """Skipped positions end a segment of the grid."""
         coord = get_coord(data=[0.0, 1.0, 2.0, 5.0, 6.0], step=1.0)
-        assert coord.gapped and coord.missing().count == 2
+        assert [(len(x), x.step) for x in coord.segments] == [(3, 1.0), (2, 1.0)]
 
     def test_jitter(self):
         """Labels off the stated grid by under half a step are kept, jittered."""
@@ -405,12 +406,12 @@ class TestSelectionKeepsStep:
         return get_coord(start=0, stop=20, step=1)
 
     def test_mask(self, coord):
-        """A mask removing a block leaves a hole."""
+        """A mask removing a block leaves two segments on the original step."""
         mask = np.ones(20, dtype=bool)
         mask[5:10] = False
         out, _ = coord.select(mask)
-        assert out.step == 1 and out.gapped
-        assert out.missing().count == 5
+        assert out.step is None and out == coord[np.flatnonzero(mask)]
+        assert [(len(x), x.step) for x in out.segments] == [(5, 1), (10, 1)]
 
     def test_regular_mask(self, coord):
         """Samples one stride apart, by mask or array, are that stride."""
@@ -427,10 +428,9 @@ class TestSelectionKeepsStep:
         """A hole in jittered labels counts the samples removed, or states no step."""
         jittered = get_coord(data=[0.0, 1.1, 1.9, 3.05, 4.0], step=1.0)
         out = jittered[np.array([0, 3, 4])]
-        assert out.step == 1.0 and out.missing().count == 2
-        # 2.8 is nearer three steps than the two it was taken from
-        wide = get_coord(data=[0.0, 1.4, 2.8, 3.6], step=1.0)
-        assert wide[np.array([0, 2, 3])].step is None
+        # each stretch is its own segment, keeping its labels; none is moved
+        assert out.runs_count == 2 and out.step is None
+        np.testing.assert_array_equal(out.values, [0.0, 3.05, 4.0])
 
     def test_stepless_take_stays_stepless(self):
         """Removing samples from labels with no step invents no grid."""
@@ -472,26 +472,26 @@ class TestSelectionKeepsStep:
         data[tuple(index)] = np.nan
         out = random_patch.new(data=data).dropna("time")
         time = out.get_coord("time")
-        assert time.step == random_patch.get_coord("time").step
-        assert time.missing().count == 10
+        step = random_patch.get_coord("time").step
+        assert time.runs_count == 2 and {x.step for x in time.segments} == {step}
 
     def test_isel_array(self, random_patch):
         """Picking positions leaves holes."""
         out = random_patch.isel(time=[0, 1, 2, 7, 8])
         time = out.get_coord("time")
-        assert time.step == random_patch.get_coord("time").step
-        assert time.missing().count == 4
+        step = random_patch.get_coord("time").step
+        assert time.runs_count == 2 and {x.step for x in time.segments} == {step}
 
     def test_isel_slice_of_gapped(self, holed_patch):
-        """Slicing a gapped coordinate by position keeps its step."""
+        """Slicing a segmented coordinate by position keeps its segments."""
         out = holed_patch.isel(time=slice(50, 70))
         time = out.get_coord("time")
-        assert time.step == 1.0 and time.gapped
+        assert [(len(x), x.step) for x in time.segments] == [(10, 1.0), (10, 1.0)]
 
     def test_sel_of_gapped(self, holed_patch):
-        """Slicing a gapped coordinate by value keeps its step."""
+        """Slicing a segmented coordinate by value keeps its segments."""
         out = holed_patch.sel(time=slice(50.0, 110.0))
-        assert out.get_coord("time").gapped
+        assert out.get_coord("time").runs_count == 2
 
 
 class TestRequireEvenlySampled:

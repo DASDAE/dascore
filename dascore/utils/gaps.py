@@ -291,24 +291,14 @@ def run_holes(records) -> list[int]:
     return out
 
 
-def _seam(before: RunRecord, after: RunRecord) -> float:
-    """How far one run starts from where the run before it ends."""
-    ascending = before.step > np.zeros_like(before.step)
-    end = before.max if ascending else before.min
-    start = after.min if ascending else after.max
-    return abs(to_float(start - end))
-
-
 def contiguous_runs(records, step=None, jittered: bool = False) -> list[RunRecord]:
     """
     Join a coordinate's runs into the stretches its holes leave.
 
-    On a coordinate with a step a stretch ends at each hole, and keeps the
-    step unless the labels are jittered. On one without, it ends where a
-    run changes step or starts further from its predecessor than the
-    default tolerance allows, and keeps a step only as one lone run; runs
-    holding labels with no step (e.g. an exact array of jittered times)
-    are irregular rather than gapped, so they make one stretch.
+    Segments share no grid, so on a coordinate without a step each run is
+    its own stretch, keeping its own step. On one run of labels with a
+    step a stretch ends at each hole, and keeps the step unless the labels
+    are jittered.
 
     Examples
     --------
@@ -317,41 +307,24 @@ def contiguous_runs(records, step=None, jittered: bool = False) -> list[RunRecor
     >>> [(x.count, x.min, x.max) for x in contiguous_runs(runs, step=1)]
     [(3, 0, 2), (2, 5, 6)]
     """
-    if not records:
-        return []
-    stepless = pd.isnull(step)
-    if stepless and any(pd.isnull(x.step) for x in records):
-        groups = [list(records)]
-    else:
-        holes = run_holes(records)
-        groups = [[records[0]]]
-        for num in range(1, len(records)):
-            before, after = records[num - 1], records[num]
-            if stepless:
-                width = DEFAULT_TOLERANCE * to_float(abs(after.step))
-                split = after.step != before.step or _seam(before, after) > width
-            else:
-                split = holes[num] > 0
-            if split:
-                groups.append([after])
-            else:
-                groups[-1].append(after)
-    out = []
-    for group in groups:
-        if not stepless:
-            kept = None if jittered else step
+    if not records or pd.isnull(step):
+        return list(records or ())
+    groups: list[list[RunRecord]] = []
+    for record, hole in zip(records, run_holes(records), strict=True):
+        if hole > 0 or not groups:
+            groups.append([record])
         else:
-            kept = group[0].step if len(group) == 1 else None
-        out.append(
-            RunRecord(
-                count=sum(x.count for x in group),
-                min=min(x.min for x in group),
-                max=max(x.max for x in group),
-                step=kept,
-                position=group[0].position,
-            )
+            groups[-1].append(record)
+    return [
+        RunRecord(
+            count=sum(x.count for x in group),
+            min=min(x.min for x in group),
+            max=max(x.max for x in group),
+            step=None if jittered else step,
+            position=group[0].position,
         )
-    return out
+        for group in groups
+    ]
 
 
 def contiguous_windows(coord) -> list[tuple[int, int]]:
@@ -414,9 +387,9 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     Cells follow the centre convention: an edge sits halfway between
     neighbouring values, and across a gap each side gets a cell one step
     wide instead. The step is the coordinate's declared one when it has
-    one and the median spacing otherwise. Timedelta coordinates are
-    converted to seconds; datetimes are kept for plotting libraries which
-    convert them.
+    one, else its first segment's, and the median spacing otherwise.
+    Timedelta coordinates are converted to seconds; datetimes are kept for
+    plotting libraries which convert them.
 
     Parameters
     ----------
@@ -437,7 +410,12 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     index rather than from a coordinate's values.
     """
     values = _normalize_coord_values(getattr(coord, "values", coord))
-    step = _cell_step(getattr(coord, "step", None), values)
+    declared = getattr(coord, "step", None)
+    if declared is None and len(getattr(coord, "runs", ())) > 1:
+        # segments share no step, so the first one stating its own sizes cells
+        steps = (x.step for x in coord.segments if not pd.isnull(x.step))
+        declared = next(steps, None)
+    step = _cell_step(declared, values)
     if len(values) == 1:
         if step is None:
             msg = "Singleton coordinate has no inferred cell width; using a default."

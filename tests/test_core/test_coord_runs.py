@@ -18,7 +18,6 @@ from dascore.core.coords import (
     Labels,
     Missing,
     NumericCoord,
-    _lattice_gap,
     concat_coords,
     get_coord,
 )
@@ -40,8 +39,14 @@ def _is_stored(coord):
 
 @pytest.fixture(scope="module")
 def design_case():
-    """The plan's design case: six labels on a step-1 grid with six missing."""
+    """Six labels on a step-1 grid with six missing: three segments."""
     return get_coord(data=PRESENT, step=1)
+
+
+@pytest.fixture(scope="module")
+def stored_case():
+    """The same labels as one stored run declaring its step, holes and all."""
+    return NumericCoord.from_labels(np.array(PRESENT), step=1)
 
 
 class TestDeclaredStep:
@@ -52,7 +57,9 @@ class TestDeclaredStep:
         assert design_case.runs_count == 3
         assert all(x.evenly_sampled for x in design_case.segments)
         assert [len(x) for x in design_case.segments] == [1, 2, 3]
-        assert design_case.step == 1
+        # segments share no grid, so only each states the step
+        assert design_case.step is None
+        assert [x.step for x in design_case.segments] == [1, 1, 1]
         np.testing.assert_array_equal(design_case.values, PRESENT)
 
     def test_no_step_makes_no_claim(self):
@@ -86,19 +93,16 @@ class TestDeclaredStep:
     def test_float_grid(self):
         """Floats sit on a grid within a small tolerance of the step."""
         coord = get_coord(data=[0.0, 0.1, 0.2, 0.5, 0.6], step=0.1)
-        assert coord.runs_count == 2
-        assert coord.missing().count == 2
+        assert coord.runs_count == 2 and coord.step is None
+        assert [len(x) for x in coord.segments] == [3, 2]
 
     @pytest.mark.parametrize("step", [1, -1])
     def test_descending_values(self, step):
         """Descending values keep their order; the step's sign follows them."""
         coord = get_coord(data=PRESENT[::-1], step=step)
         assert coord.reverse_sorted
-        assert coord.step == -1
+        assert {x.step for x in coord.segments} == {-1}
         np.testing.assert_array_equal(coord.values, PRESENT[::-1])
-        missing = coord.missing()
-        assert list(missing.iter_runs()) == [(9, 5), (2, 2)]
-        np.testing.assert_array_equal(missing.positions(), [9, 8, 7, 6, 5, 2])
         dense = NumericCoord.from_labels(np.array([9, 6, 5, 1]), step=1)
         assert list(dense.missing().iter_runs()) == [(8, 7), (4, 2)]
 
@@ -107,15 +111,12 @@ class TestDeclaredStep:
         labels = T0 + np.array([0, 4, 8, 20, 24]) * MS
         coord = get_coord(data=labels, step=4 * MS)
         assert coord.runs_count == 2
-        missing = coord.missing()
-        assert missing.count == 2
-        assert list(missing.iter_runs()) == [(T0 + 12 * MS, T0 + 16 * MS)]
+        assert [x.step for x in coord.segments] == [4 * MS, 4 * MS]
 
     def test_two_values(self):
         """Two values apart by more than a step are two runs."""
         coord = get_coord(data=[0, 5], step=1)
-        assert coord.runs_count == 2
-        assert coord.missing().count == 4
+        assert coord.runs_count == 2 and coord.step is None
 
     def test_dense_guard_keeps_the_step(self):
         """Past the guard the values stay one array, step and missing intact."""
@@ -126,8 +127,8 @@ class TestDeclaredStep:
         assert as_runs.runs_count > 1
         assert _is_stored(as_array)
         assert as_array.step == 1
+        assert as_runs.step is None
         # the trailing removed position lies past the last sample
-        assert as_runs.missing().count == 99
         assert as_array.missing().count == 999
         # slicing and units keep the declaration; a fancy index that
         # loses the order loses it, since nothing could hold it
@@ -153,7 +154,8 @@ class TestDeclaredStep:
     def test_summary_states_step_and_holes(self, design_case):
         """A summary states the step and its holes, and rebuilds no range."""
         summary = design_case.to_summary()
-        assert summary.step == 1 and summary.gapped and not summary.is_range_like
+        assert summary.step is None and summary.run_count == 3
+        assert not summary.is_range_like
         array = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         summary = array.to_summary()
         assert summary.gapped and summary.run_count == 1000 and summary.runs is None
@@ -201,12 +203,12 @@ class TestFusion:
         assert coord.step is None
 
     def test_declared_arrays_fuse_across_one_step(self):
-        """Arrays on one grid meeting one step apart leave no gap at the seam."""
+        """Arrays on one grid are placed on it, as segments where they skip."""
         left = NumericCoord.from_labels(np.array([0, 2, 3]), step=1)
         right = NumericCoord.from_labels(np.array([4, 7, 9]), step=1)
         coord = concat_coords(left, right)
-        assert coord.step == 1
-        assert coord.missing().count == 4
+        assert [len(x) for x in coord.segments] == [1, 3, 1, 1]
+        assert {x.step for x in coord.segments} == {1}
 
     def test_declared_arrays_keep_a_gap(self):
         """A seam wider than a step stays a seam."""
@@ -214,8 +216,7 @@ class TestFusion:
         right = NumericCoord.from_labels(np.array([6, 9, 11]), step=1)
         coord = concat_coords(left, right)
         assert coord.runs_count > 1
-        assert coord.step == 1
-        assert coord.missing().count == 6
+        assert coord.step is None
 
     def test_one_declared_one_not_keeps_the_seam(self):
         """An expectation on one side is not shared by the other."""
@@ -227,9 +228,9 @@ class TestFusion:
 class TestMissing:
     """The positions a grid has no sample at."""
 
-    def test_design_case(self, design_case):
+    def test_design_case(self, stored_case):
         """[1, 3, 4, 10, 11, 12] on a step-1 grid misses six positions."""
-        missing = design_case.missing()
+        missing = stored_case.missing()
         assert isinstance(missing, Missing)
         assert missing.count == 6
         assert not missing.complete
@@ -243,10 +244,10 @@ class TestMissing:
         assert missing.complete and missing.count == 0
         assert not len(missing.positions())
 
-    def test_positions_limit(self, design_case):
+    def test_positions_limit(self, stored_case):
         """Spelling out more positions than the limit raises."""
         with pytest.raises(ParameterError, match="exceed the limit"):
-            design_case.missing().positions(limit=5)
+            stored_case.missing().positions(limit=5)
 
     def test_no_step_misses_nothing(self):
         """Missing is relative to a grid nothing declared."""
@@ -259,16 +260,6 @@ class TestMissing:
         missing = coord.missing()
         assert list(missing.iter_runs()) == [(2, 4), (7, 8)]
         np.testing.assert_array_equal(missing.positions(), [2, 3, 4, 7, 8])
-
-    def test_both_sides_of_the_guard_agree(self):
-        """Runs and the guarded array answer missing the same way."""
-        values = np.arange(3000)[np.arange(3000) % 3 != 2]
-        runs = get_coord(data=values[values < 300], step=1)
-        array = get_coord(data=values, step=1)
-        assert runs.runs_count > 1 and _is_stored(array)
-        assert (
-            list(runs.missing().iter_runs()) == list(array.missing().iter_runs())[:99]
-        )
 
 
 class TestFractionalGaps:
@@ -285,13 +276,13 @@ class TestFractionalGaps:
         if reverse:
             full = full[::-1]
         coord = concat_coords(full[2:7], full[11:18], full[22:])
-        missing = coord.missing()
-        assert coord.step_exact == full.step_exact
-        assert missing.count == 8
-        assert missing == Missing(missing.step, missing.runs, missing.dtype)
-        np.testing.assert_array_equal(
-            missing.positions(), np.concatenate([full.values[7:11], full.values[18:22]])
+        # each segment keeps the grid's cadence and phase; none is shared
+        assert coord.step_exact is None and coord.missing().complete
+        assert {x.step_exact for x in coord.segments} == {full.step_exact}
+        expected = np.concatenate(
+            [full.values[2:7], full.values[11:18], full.values[22:]]
         )
+        np.testing.assert_array_equal(coord.values, expected)
 
     def test_one_verdict(self, full):
         """A one-sample hole meets a two-step spacing limit everywhere."""
@@ -356,25 +347,6 @@ class TestFractionalGaps:
         rebuilt = coord.new(dtype=coord.dtype, units="s")
         np.testing.assert_array_equal(rebuilt.values, coord.values)
 
-    def test_long_outage_labels(self):
-        """A weeks-long hole on a fractional grid keeps ordered end labels."""
-        start = np.datetime64("2024-01-01", "ns")
-        a = get_coord(start=start, step=Fraction(1, 3001), shape=(5,))
-        b = get_coord(
-            start=start + np.timedelta64(60, "D"), step=a.step_exact, shape=(5,)
-        )
-        ((first, last, count),) = concat_coords(a, b).missing().runs
-        assert first < last < b.min()
-        assert count == 60 * 86_400 * 3001 - 5
-
-    def test_declared_finer_step(self):
-        """A declared step finer than the runs' grid names the holes."""
-        coord = NumericCoord(
-            runs=(Grid(0, 2, 1, 1), Grid(4, 2, 1, 1)), dtype="int64", step=1
-        )
-        assert coord.missing().positions().tolist() == [1, 2, 3]
-        assert coord.step_exact == 1
-
     def test_elapsed_time_edges(self):
         """Elapsed-time seams get the same verdict as the coordinate report."""
         full = get_coord(
@@ -389,17 +361,6 @@ class TestFractionalGaps:
         full = get_coord(start=100, step=Fraction(10, 3), shape=(5,), dtype="int64")
         other = get_coord(start=121, step=Fraction(10, 3), shape=(5,), dtype="int64")
         assert concat_coords(full, other).step_exact is None
-
-    def test_metadata_only(self, monkeypatch):
-        """A long outage is counted without allocating the coordinate labels."""
-        full = get_coord(start=T0, step=Fraction(1, 1024), shape=(2_000_000_000,))
-        coord = concat_coords(full[:5], full[-5:])
-
-        def refuse_values(self):
-            raise AssertionError("materialized the coordinate")
-
-        monkeypatch.setattr(NumericCoord, "values", property(refuse_values))
-        assert coord.missing().count == 1_999_999_990
 
     def test_index_round_trip(self, tmp_path):
         """A reopened file index retains fractional run phases after selection."""
@@ -419,7 +380,8 @@ class TestFractionalGaps:
         """Fusing with keep_step leaves a whole-sample hole in place."""
         coord = concat_coords(full[:5], full[7:])
         fused = coord.fuse(GapTolerance.samples(3), keep_step=True)
-        assert fused.missing().count == 2
+        assert fused.runs_count == 2
+        np.testing.assert_array_equal(fused.values, coord.values)
 
     def test_partial_fuse(self, full):
         """Fusing some runs off the lattice keeps the others as they were."""
@@ -450,8 +412,8 @@ class TestFractionalGaps:
         """Fractional grids of integer labels also retain their exact holes."""
         full = get_coord(start=100, step=step, shape=(30,), dtype="int64")
         coord = concat_coords(full[:5], full[9:])
-        assert coord.step_exact == full.step_exact
-        np.testing.assert_array_equal(coord.missing().positions(), full.values[5:9])
+        assert [x.step_exact for x in coord.segments] == [full.step_exact] * 2
+        np.testing.assert_array_equal(coord.values[5:], full.values[9:])
 
 
 class TestDiscontinuities:
@@ -546,7 +508,7 @@ class TestReviewFindings:
         """Descending values whose runs are all singletons stay descending."""
         coord = get_coord(data=[9, 6, 3], step=1)
         np.testing.assert_array_equal(coord.values, [9, 6, 3])
-        assert coord.step == -1 and coord.missing().count == 4
+        assert coord.reverse_sorted and coord.runs_count == 3
 
     def test_promotion_respects_the_declared_grid(self):
         """Even spacing on a finer declared grid is not a range of that spacing."""
@@ -720,7 +682,7 @@ class TestReviewRoundTwo:
         second = np.timedelta64(1, "s")
         labels = T0 + np.array([0, 1, 2, 5]) * second
         coord = get_coord(data=labels, step=(1, 1))
-        assert coord.step == second and coord.missing().count == 2
+        assert [x.step for x in coord.segments] == [second, second]
         off = T0 + np.array([0, 1]) * np.timedelta64(1, "ns")
         with pytest.raises(CoordError, match="not on a grid"):
             get_coord(data=off, step=(1, 1))
@@ -744,7 +706,7 @@ class TestReviewRoundTwo:
     def test_segmented_strided_index_widens_the_step(self, design_case):
         """A strided selection states the widened grid, or none it leaves."""
         assert design_case[::2].step is None
-        assert design_case[::-1].step == -1
+        assert [x.step for x in design_case[::-1].segments] == [-1, -1, -1]
         assert design_case[[3, 0, 1]].step is None
 
     def test_segments_with_a_contradicting_step_raise(self, design_case):
@@ -758,7 +720,7 @@ class TestReviewRoundTwo:
         coord = get_coord(start=0, stop=5, step=1).new(
             values=np.array([0, 2, 4]), step=1
         )
-        assert coord.step == 1 and coord.missing().count == 2
+        assert coord.runs_count == 3 and {x.step for x in coord.segments} == {1}
 
     def test_exporters_refuse_runs(self, design_case):
         """Formats holding one contiguous trace refuse a coordinate with holes."""
@@ -789,7 +751,7 @@ class TestReviewRoundTwo:
         patch = base.update_coords(distance=coord)
         (back,) = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))
         out = back.get_coord("distance")
-        assert out == coord and out.step == 1.0 and out.gapped
+        assert out == coord and out.runs_count == coord.runs_count
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):
         """A single value with a step gets a cell of that width, without a warning."""
@@ -820,8 +782,7 @@ class TestReviewRoundThree:
             NumericCoord.from_labels(np.array([6, 8, 10]), step=1),
         )
         out = coord[:]
-        assert out.step == coord.step == 1
-        assert out.missing().count == coord.missing().count == 5
+        assert out == coord and out.runs == coord.runs
 
     def test_integer_index_of_nd_labels(self):
         """An integer index of an N-D coordinate returns a coordinate."""
@@ -915,8 +876,8 @@ class TestReviewRoundThree:
             NumericCoord.from_labels(np.array([10.0, 12.0, 14.0]), step=1.0, units="m"),
         )
         out = coord.convert_units("cm")
-        assert out.step == 100.0
-        assert out.missing().count == coord.missing().count
+        assert out.runs_count == coord.runs_count
+        np.testing.assert_allclose(out.values, coord.values * 100)
 
     def test_metadata_updates_do_not_materialize(self, monkeypatch):
         """A step or unit change on a huge grid stays arithmetic."""
@@ -971,7 +932,6 @@ class TestReviewRoundFour:
         """A step says which grid the labels sit on, not that one restates them."""
         values = np.array([0.0, 1.00000001, 2.0, 4.0])
         coord = get_coord(data=values, step=1.0, snap=False)
-        assert coord.step == 1.0
         np.testing.assert_array_equal(coord.values, values)
 
     def test_an_input_may_fill_another_gap(self):
@@ -1136,25 +1096,20 @@ class TestStepContract:
 
     @pytest.mark.parametrize("stride", [2, 3])
     def test_stride_restates_the_step(self, full, stride):
-        """A strided slice states its runs' step and counts holes on it."""
+        """A strided slice widens each segment's own step."""
         coord = concat_coords(full[:12], full[12 + 2 * stride :])
         out = coord[::stride]
-        assert out.runs_count == 2
-        assert out.step == out.runs[0].step(out.dtype)
-        assert out.step_exact == full.step_exact * stride
-        missing = out.missing()
-        assert missing.count == 2
-        expected = full.values[12 : 12 + 2 * stride : stride]
-        np.testing.assert_array_equal(missing.positions(), expected)
+        assert out.runs_count == 2 and out.step is None
+        assert [x.step_exact for x in out.segments] == [full.step_exact * stride] * 2
+        np.testing.assert_array_equal(out.values, coord.values[::stride])
 
     def test_decimate_restates_the_step(self, full):
         """Decimating without a filter states the decimated grid's step."""
         time = concat_coords(full[:20], full[24:])
         patch = dc.Patch(data=np.ones(len(time)), coords={"time": time}, dims=("time",))
         out = patch.decimate(time=2, filter_type=None).get_coord("time")
-        assert out.step == out.runs[0].step(out.dtype)
-        assert out.step_exact == full.step_exact * 2
-        assert out.missing().count == 2
+        assert out.step is None
+        assert [x.step_exact for x in out.segments] == [full.step_exact * 2] * 2
 
     def test_off_lattice_stride_states_no_step(self, full):
         """A stride which leaves the runs on different lattices states nothing."""
@@ -1168,15 +1123,8 @@ class TestStepContract:
         )
         coord = concat_coords(get_coord(start=0.0, stop=12.0, step=1.0), labels)
         out = coord[::2]
-        assert out.step == 2.0
-        assert out.missing().positions().tolist() == [12.0, 14.0, 16.0, 18.0, 24.0]
-
-    def test_stride_agrees_across_the_dense_guard(self):
-        """Runs and the guarded array answer a stride the same way."""
-        for size in (300, 3000):
-            values = np.arange(size)[np.arange(size) % 5 != 4]
-            out = get_coord(data=values, step=1)[::2]
-            assert out.step is None and out.missing().complete
+        assert out.step is None and out.segments[0].step == 2.0
+        np.testing.assert_array_equal(out.values, coord.values[::2])
 
     def test_stride_promotes_a_regular_window(self):
         """Stored labels a stride leaves evenly spaced become the widened grid."""
@@ -1195,26 +1143,20 @@ class TestStepContract:
         with pytest.raises(ValidationError, match="contradicts"):
             NumericCoord(runs=runs, dtype="int64", step=2)
 
-    def test_descending_fractional_grids_keep_the_step(self):
-        """A positive declared step holds over descending runs of one lattice."""
-        runs = (Grid(12, -3, 2, 3), Grid(3, -3, 2, 3))
-        coord = NumericCoord(runs=runs, dtype="int64", step=2)
-        assert coord.step == -2
-        assert coord.missing().positions().tolist() == [7, 6, 4]
-
     def test_declared_step_a_grid_contradicts_raises(self):
         """A declared step other than the one the grid runs sit on raises."""
         runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))
         with pytest.raises(ValidationError, match="contradicts"):
             NumericCoord(runs=runs, dtype="int64", step=1)
-        assert NumericCoord(runs=runs, dtype="int64", step=2).missing().count == 5
+        assert NumericCoord(runs=runs, dtype="int64", step=2).step is None
 
     def test_fit_keeps_a_step_it_leaves_intact(self):
         """A fuse which refits nothing keeps the declared step."""
         labels = NumericCoord.from_labels(np.array([12.0, 13.0, 15.0]), step=1.0)
         coord = concat_coords(get_coord(start=0.0, stop=10.0, step=1.0), labels)
         out = coord.fuse(tolerance=0.1)
-        assert out.step == 1.0 and out.missing().count == 3
+        assert out.runs_count == 2 and out.step is None
+        np.testing.assert_array_equal(out.values, coord.values)
 
     def test_partial_fit_drops_a_contradicted_step(self):
         """A re-fit run the declared step no longer fits leaves no step."""
@@ -1235,7 +1177,8 @@ class TestRefactorParity:
         """A float re-fit a few ULP off the step keeps the stated step."""
         values = np.delete(-7.7105 + np.arange(11) * 0.001, 2)
         coord = get_coord(data=values, step=0.001)
-        assert coord.fuse(1.0, keep_step=True).step == 0.001
+        fused = coord.fuse(1.0, keep_step=True)
+        assert [x.step for x in fused.segments] == pytest.approx([0.001] * 2)
 
     def test_merged_float_patches_fill(self):
         """Float pieces keep their step, so a chunk can fill their holes."""
@@ -1262,8 +1205,7 @@ class TestRefactorParity:
         full = get_coord(start=0, step=4, shape=(20,))
         coord = concat_coords(full[:10], full[12:])[::2]
         fused = coord.fuse()
-        assert fused.step == coord.step
-        assert fused.missing().count == coord.missing().count
+        assert fused.runs == coord.runs
 
     @pytest.mark.parametrize("shape", [(0,), (2, 3)])
     def test_new_shape_not_a_range(self, shape):
@@ -1281,16 +1223,6 @@ class TestRefactorParity:
         """An exact grid takes a scalar shape, as get_coord does."""
         coord = get_coord(start=0, step=1, shape=5).new(shape=3)
         assert coord.shape == (3,)
-
-    def test_odd_phase_hole_ends(self):
-        """A hole on a fractional lattice ends on its floored label."""
-        full = get_coord(start=0, step=(3, 2), shape=(20,))
-        missing = concat_coords(full[:3], full[6:]).missing()
-        assert missing.runs == ((4, 7, 3),)
-
-    def test_lattice_gap_needs_one_step(self):
-        """Grids of different steps share no lattice."""
-        assert _lattice_gap(Grid(0, 1, 1, 4), Grid(6, 2, 1, 3)) is None
 
     def test_reversed_unsigned_empty(self):
         """An empty reversed unsigned grid does not overflow."""
@@ -1313,17 +1245,9 @@ class TestRunRecords:
         "coord",
         [
             get_coord(start=0, step=1, shape=(10,)),
-            get_coord(data=PRESENT, step=1),
-            get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1),
+            NumericCoord.from_labels(np.array(PRESENT), step=1),
+            NumericCoord.from_labels(np.array([9, 8, 7, 4, 3, 1, 0]), step=-1),
             get_coord(data=np.delete(np.arange(1500), np.arange(2, 1500, 3)), step=1),
-            concat_coords(
-                get_coord(data=np.delete(np.arange(9), [2, 5]), step=1),
-                get_coord(start=20, step=1, shape=(3,)),
-            ),
-            concat_coords(
-                get_coord(start=T0, step=(1, 1024), shape=(30,)),
-                get_coord(start=T0, step=(1, 1024), shape=(60,))[33:],
-            ),
             get_coord(data=[0.0, 1.1, 1.95, 3.02, 6.01], step=1.0),
         ],
     )
@@ -1342,7 +1266,7 @@ class TestRunRecords:
 
     def test_envelopes(self):
         """Each record spans its own labels, whichever way they run."""
-        coord = get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1)
+        coord = NumericCoord.from_labels(np.array([9, 8, 7, 4, 3, 1, 0]), step=-1)
         records = coord._run_records()
         assert [(x.min, x.max) for x in records] == [(7, 9), (3, 4), (0, 1)]
         assert [x.position for x in records] == [0, 5, 8]
@@ -1374,5 +1298,9 @@ class TestRunRecords:
         jittered = get_coord(data=[0.0, 1.1, 1.95, 3.02, 6.01], step=1.0)
         low, high = jittered._offset_bounds()
         assert low == pytest.approx(-0.05) and high == pytest.approx(0.1)
-        assert get_coord(data=PRESENT, step=1)._offset_bounds() == (0.0, 0.0)
+        assert get_coord(data=PRESENT, step=1)._offset_bounds() is None  # segments
+        assert NumericCoord.from_labels(np.arange(3), step=1)._offset_bounds() == (
+            0.0,
+            0.0,
+        )
         assert get_coord(data=[1.0, 2.5, 7.0])._offset_bounds() is None

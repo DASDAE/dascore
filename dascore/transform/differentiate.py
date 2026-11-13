@@ -15,7 +15,7 @@ from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    _refuse_holes_and_jitter,
+    _refuse_segments,
 )
 
 
@@ -68,7 +68,7 @@ def _strided_diff(order, data, axes, dx_or_spacing, step):
 
 def _derivative_metadata(meta, dims, step):
     """Return the attrs of a derivative over dims, and the kernel's plan."""
-    _refuse_holes_and_jitter(meta, dims, "differentiate")
+    _refuse_segments(meta, dims, "differentiate")
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(meta, dims)
     if step > 1 and len(axes) > 1:
         msg = "Step in patch.differentiate can only be used along one axis."
@@ -147,11 +147,10 @@ class Differentiate(_Derivative):
     quantity with no label here, and clears `data_type` rather than
     leaving a stale one on it.
 
-    A dimension with missing samples (holes in its step) or labels off its
-    step's grid (jitter) raises; use [split_gaps](`dascore.Patch.split_gaps`),
-    [fill_gaps](`dascore.Patch.fill_gaps`) or
-    [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with no
-    step is an irregular axis, differentiated by its label spacing.
+    A dimension of more than one segment (from `concatenate`, or samples
+    removed from its middle) raises; use [fill_gaps](`dascore.Patch.fill_gaps`)
+    or [split_gaps](`dascore.Patch.split_gaps`) first. One list of labels,
+    with or without a step, is an irregular axis, differentiated by its label spacing.
 
     Examples
     --------

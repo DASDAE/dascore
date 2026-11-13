@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import warnings
 from functools import partial
-from typing import Any, ClassVar, Self
+from typing import Any, Self
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, _fill_layout, concat_coords
+from dascore.core.coords import _GRID_RTOL, BaseCoord, _fill_layout, concat_coords
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -86,8 +86,6 @@ class _Reorder(PatchProcessor):
     reverse: bool = False
 
     name = None
-    # Whether the coordinates are snapped to even samples once sorted.
-    _snap: ClassVar[bool] = False
 
     @field_validator("coords", mode="before")
     @classmethod
@@ -98,12 +96,16 @@ class _Reorder(PatchProcessor):
     def get_metadata(self, meta):
         """Return the sorted coordinates and the indexing they imply."""
         recorder = _IndexRecorder()
-        method = meta.coords.snap if self._snap else meta.coords.sort
+        method = self._method(meta.coords)
         coords, _ = method(*self.coords, array=recorder, reverse=self.reverse)
         # The manager hands back itself when there was nothing to sort.
         if coords is meta.coords:
             return meta, {}
         return meta.new(coords=coords), {"keys": tuple(recorder.keys)}
+
+    def _method(self, coords):
+        """The manager's method putting the coordinates in order."""
+        return coords.sort
 
     def kernel(self, data, *, keys=()):
         """Return the data reordered the way the coordinates were."""
@@ -118,7 +120,9 @@ class SnapCoords(_Reorder):
 
     Sorts each specified coordinate, then replaces its labels with evenly spaced
     values between its endpoints in the selected sort direction. Data remain
-    unchanged after sorting, so snapping can shift labels. Use
+    unchanged after sorting, so snapping can shift labels: a label moved
+    more than one step warns, since a gap is being spread (use
+    [fill_gaps](`dascore.Patch.fill_gaps`) to keep it). Use
     [interpolate](`dascore.Patch.interpolate`) when linear interpolation is preferable.
 
     Parameters
@@ -127,6 +131,13 @@ class SnapCoords(_Reorder):
         Dimensions to snap. By default, snap every dimensional coordinate.
     reverse
         If True, reverse the sorting of the coordinates.
+    step
+        If given, move each label to the nearest position of this step's
+        grid through the first label instead, so labels skipping positions
+        become segments. Time steps may be given in seconds.
+    max_shift
+        If given, raise rather than move any label further than this many
+        steps.
 
     Examples
     --------
@@ -139,9 +150,20 @@ class SnapCoords(_Reorder):
     >>>
     >>> # snap the distance dimension
     >>> dist_snap = patch.snap_coords("distance")
+    >>>
+    >>> # put time on a 1 ms grid, refusing to move any label half a step
+    >>> import numpy as np
+    >>> time = patch.get_coord("time")
+    >>> step = np.diff(time.values).min()
+    >>> grid_snap = patch.snap_coords("time", step=step, max_shift=0.5)
     """
 
-    _snap = True
+    step: Any = None
+    max_shift: float | None = None
+
+    def _method(self, coords):
+        """Snap once sorted, onto the step's grid if one is given."""
+        return partial(coords.snap, step=self.step, max_shift=self.max_shift)
 
 
 class SortCoords(_Reorder):
@@ -1551,12 +1573,14 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
 
 class FillGaps(PatchProcessor):
     """
-    Fill the holes along a dimension with a constant value.
+    Fill the gaps between a dimension's segments with a constant value.
 
-    Places runs of samples on one evenly sampled grid and writes `fill_value`
-    where no sample sits, so a segmented coordinate (for example from
+    Joins segments onto one grid, on the earlier segment's step, and writes
+    `fill_value` where no sample sits, so a segmented coordinate (from
+    [`Spool.concatenate`](`dascore.Spool.concatenate`), or
     [`Patch.select`](`dascore.Patch.select`) with a mask removing samples)
-    becomes a plain range, unless a limit leaves wider holes as seams.
+    becomes one grid, unless a limit leaves wider gaps as segment
+    boundaries.
 
     Parameters
     ----------
@@ -1580,10 +1604,12 @@ class FillGaps(PatchProcessor):
 
     Notes
     -----
-    The coordinate needs a declared step: a segmented coordinate whose
-    runs share one step (different steps raise; resample first), or an
-    array declared with a step. A sample or run off the grid moves to the
-    nearest position, by at most half a step.
+    The segment after each gap filled moves onto the grid of the one before
+    it, to the positions nearest its labels, by under half a step; a move
+    beyond the rounding of a float label warns, saying how far. A segment
+    whose samples do not fit consecutive positions of that grid within half
+    a step (another step, or labels with none) raises: resample or snap it
+    first. So does a fill value the data's dtype cannot hold.
 
     Non-dimensional coordinates along the dimension are dropped with a
     warning, since their values at the filled positions are unknown.
@@ -1629,7 +1655,13 @@ class FillGaps(PatchProcessor):
         layout = _fill_layout(meta.get_coord(dim), limit, samples=self.samples)
         if layout is None:
             return meta, {"axis": axis, "length": None, "blocks": None}
-        coord, blocks = layout
+        coord, blocks, moved = layout
+        if moved > _GRID_RTOL:  # beyond the rounding a float label carries
+            msg = (
+                f"Filling gaps along {dim!r} moved the samples after a gap by "
+                f"up to {moved:.3g} of a step, onto the grid before it."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=3)
         coords = drop_associated_coords(meta.coords, dim, "Filling gaps along")
         out = meta.new(coords=coords._update_grid(dim, **{dim: coord}))
         return out, {"axis": axis, "length": len(coord), "blocks": blocks}

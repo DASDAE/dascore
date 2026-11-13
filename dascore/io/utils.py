@@ -85,6 +85,39 @@ def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
             raise CoordError(_uneven_message(dim, coord, f"the {writer} writer"))
 
 
+def _layout(coord) -> tuple:
+    """What a written coordinate must read back as: its steps and segments."""
+    segments = tuple((len(x), x.step) for x in coord.segments)
+    return coord.step, coord.jittered, coord.gapped, segments
+
+
+def written_step(name: str, coord, why: str):
+    """
+    The step to write beside a coordinate's labels, or None if they need none.
+
+    Labels which restate their coordinate (a grid, or stepless labels) need
+    none. Others, such as a lone sample, labels with jitter, or segments,
+    need the step they share, which reading them back with places them as
+    they are. Where nothing does (segments of different steps, or a 1024 Hz
+    grid with holes, whose step is not a whole tick), the writer refuses
+    them (rule 13 of the coordinate guidelines), saying to fill or split.
+    """
+    if coord.ndim != 1 or coord._partial or not hasattr(coord, "segments"):
+        return None
+    layout = _layout(coord)
+    if _layout(get_coord(data=coord.values, units=coord.units, snap=False)) == layout:
+        return None
+    steps = {x.step for x in coord.segments}
+    try:  # a long fractional grid drifts off its whole-tick step
+        step = steps.pop() if len(steps) == 1 else None
+        back = get_coord(data=coord.values, step=step, units=coord.units)
+    except CoordError:
+        back = None
+    if step is None or back is None or _layout(back) != layout:
+        raise CoordError(_uneven_message(name, coord, why))
+    return step
+
+
 def get_attr_names(attr_cls) -> set[str]:
     """
     Return the attr names a reader's attr class accepts from a file header.
