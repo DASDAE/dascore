@@ -19,6 +19,7 @@ from dascore.io.index.planned import (
     _aux_coord_info,
     _coord_record_from_row,
     _ns,
+    _record_once,
     _stated_units,
     collapse_working_df,
     derived_catalog,
@@ -332,6 +333,111 @@ class TestAuxiliaryCoords:
         assert contents["station_min"].iloc[0] == "s000"
         assert contents["station_max"].iloc[0] == f"s{n - 1:03d}"
         assert "station" in derived[0].coords.coord_map
+
+
+def _bounds(contents, spool, name):
+    """Each row's advertised and each patch's loaded extent of a coordinate."""
+    advertised = list(zip(contents[f"{name}_min"], contents[f"{name}_max"]))
+    loaded = [(x.get_coord(name).min(), x.get_coord(name).max()) for x in spool]
+    return advertised, loaded
+
+
+def _assert_holds(advertised, loaded, tolerance=1e-5):
+    """
+    Each advertised range holds what loads, and no more than float rounding.
+
+    A float range may pass the loaded one by the float exactness of the
+    coordinate contract; anything else matches exactly.
+    """
+    assert len(advertised) == len(loaded)
+    for (low, high), (first, last) in zip(advertised, loaded, strict=True):
+        if np.asarray(first).dtype.kind != "f":
+            assert (low, high) == (first, last)
+            continue
+        assert 0 <= first - low <= tolerance
+        assert 0 <= high - last <= tolerance
+
+
+class TestWindowedRiders:
+    """A window on one coordinate trims every coordinate on its dimension."""
+
+    @pytest.fixture(scope="class")
+    def sensor_patch(self):
+        """The example patch with a sensor coordinate riding distance."""
+        patch = dc.get_example_patch()
+        sensor = 1000.0 + 2 * np.arange(patch.shape[patch.get_axis("distance")])
+        return patch.update_coords(sensor=("distance", sensor))
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def sensor_spool(self, request, sensor_patch, tmp_path_factory):
+        """The sensor patch in an in-memory and in a directory spool."""
+        if request.param == "memory":
+            return dc.spool([sensor_patch])
+        path = tmp_path_factory.mktemp("windowed_riders")
+        dc.write(sensor_patch, path / "sensor.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    @pytest.mark.parametrize(
+        "derive",
+        [
+            lambda x: x.chunk(distance=50),
+            lambda x: x.chunk(distance=np.array([[10, 20], [50, 55]])),
+            lambda x: x.select(distance=np.array([[10, 20], [50, 55]])),
+            lambda x: x.select(sensor=np.array([[1020, 1040], [1100, 1110]])),
+        ],
+    )
+    def test_contents_match_patches(self, sensor_spool, derive):
+        """Each output advertises the samples it loads on the dimension."""
+        out = derive(sensor_spool)
+        contents = out.get_contents()
+        for name in ("distance", "sensor"):
+            _assert_holds(*_bounds(contents, out, name))
+
+    def test_windowed_identity(self, sensor_spool):
+        """A trimmed coordinate no longer claims its source's identity."""
+        source = sensor_spool._catalog.to_df()
+        out = sensor_spool.select(sensor=np.array([[1020, 1040]]))
+        key = out._catalog.to_df()["_distance_def_key"].iloc[0]
+        assert key != source["_distance_def_key"].iloc[0]
+        out = sensor_spool.select(distance=np.array([[10, 20]]))
+        assert pd.isnull(out._catalog.to_df()["_sensor_def_key"].iloc[0])
+
+    def test_trimmed_source_keeps_superset(self, sensor_spool):
+        """Sources already trimmed on the dimension keep their envelopes."""
+        out = sensor_spool.select(distance=(10.5, 200)).chunk(distance=50)
+        advertised, loaded = _bounds(out.get_contents(), out, "sensor")
+        assert len(set(advertised)) == 1
+        assert advertised[0] == pytest.approx((1022.0, 1400.0), abs=1e-5)
+        assert all(a[0] <= b[0] and b[1] <= a[1] for a, b in zip(advertised, loaded))
+
+    def test_window_in_another_unit_keeps_superset(self, sensor_patch):
+        """A window in a unit the source does not use keeps its envelopes."""
+        feet = sensor_patch.update_coords(distance_min=1000).set_units(distance="ft")
+        spool = dc.spool([sensor_patch, feet])
+        out = spool.chunk(distance=np.array([[310, 320]]), conflict="drop")
+        advertised, loaded = _bounds(out.get_contents(), out, "sensor")
+        assert advertised == [(1000.0, 1598.0)]
+        assert loaded == [(1036.0, 1098.0)]
+
+
+class TestRecordOnce:
+    """Outputs stating one coordinate share the record built for it."""
+
+    def test_same_cells_share_a_record(self):
+        """A second row with the same cells reuses the first's record."""
+        cache = {}
+        row = {"distance_min": 10.0, "distance_max": 20.0, "distance_step": 1.0}
+        first = _record_once(cache, row, "distance")
+        assert _record_once(cache, dict(row), "distance") is first
+        assert first == _coord_record_from_row(row, "distance")
+
+    def test_negative_zero_is_its_own_cell(self):
+        """-0.0 equals 0.0 but is keyed apart, as its bits differ."""
+        cache = {}
+        row = {"distance_min": 0.0, "distance_max": 20.0, "distance_step": 1.0}
+        _record_once(cache, row, "distance")
+        _record_once(cache, {**row, "distance_min": -0.0}, "distance")
+        assert len(cache) == 2
 
 
 class TestAuxInfoEdges:

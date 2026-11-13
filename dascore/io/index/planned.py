@@ -57,6 +57,7 @@ from dascore.utils.chunk_plan import (
     PIECE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
+    _SampleTracker,
     grid_fits,
     patch_local_adjusted_envelopes,
 )
@@ -318,6 +319,48 @@ def _extrema(grouped, how: str) -> np.ndarray:
     return np.array(values, dtype=object)
 
 
+def _trim_to_member_windows(
+    joined: pd.DataFrame,
+    members: pd.DataFrame,
+    coord_dims_map: Mapping[str, str],
+    source_trimmed: frozenset[str],
+) -> pd.DataFrame:
+    """
+    Trim each member's coordinates to the samples its windows keep.
+
+    A member cut to a window on one coordinate loads only those samples of
+    every coordinate on that coordinate's dimension. Only a source row
+    describing the whole of that dimension, in the unit the window is in,
+    says which samples those are; any other keeps its source envelopes as
+    candidacy supersets.
+    """
+    windows = [
+        x
+        for x, dims in coord_dims_map.items()
+        if {f"{x}_min", f"{x}_max"}.issubset(members.columns)
+        and f"{x}_min" in joined.columns
+        and str(dims) not in source_trimmed
+        and "," not in str(dims)
+    ]
+    if not windows:
+        return joined
+    cut = joined.copy(deep=False)
+    for name in windows:
+        native = joined.get(_source_units_column(name), joined.get(f"_{name}_units"))
+        planned = members.get(f"_{name}_units")
+        same = np.ones(len(joined), dtype=bool)
+        if native is not None and planned is not None:
+            pairs = zip(native.to_numpy(), planned.to_numpy(), strict=True)
+            same = np.array([_is_missing(a) or a == b for a, b in pairs], dtype=bool)
+        for end in ("min", "max"):
+            column = f"{name}_{end}"
+            window = pd.Series(members[column].to_numpy(), index=joined.index)
+            cut[column] = window.where(same, joined[column])
+    tracker = _SampleTracker(joined)
+    tracker.follow_values(joined, cut, dict.fromkeys(windows), False, {})
+    return tracker.trim(cut, windows)
+
+
 def _aux_coord_info(
     source_rows: pd.DataFrame,
     members: pd.DataFrame,
@@ -326,12 +369,16 @@ def _aux_coord_info(
     trimmed_dims: frozenset[str] = frozenset(),
     concat: bool = False,
     conflict: str | None = None,
+    source_trimmed: frozenset[str] = frozenset(),
 ) -> dict[int, dict[str, dict]]:
     """
     Aggregate per-output envelope info for auxiliary coordinates.
 
     Aggregated from the *member source rows* (authoritative, unlike the
-    planner's carried columns). Structural identity (def key and step,
+    planner's carried columns), trimmed to the samples each member's
+    windows keep (see `_trim_to_member_windows`; ``source_trimmed`` names
+    the dimensions the source rows were already trimmed on). A coordinate
+    a window trims claims no identity. Structural identity (def key and step,
     which permit value-identity claims) is kept only when every member
     shares one def key and the values provably survive assembly: a
     coordinate riding the planned dimension is trimmed/merged with it,
@@ -351,7 +398,8 @@ def _aux_coord_info(
     if not len(members) or not coord_dims_map:
         return out
     cols = [c for c in ("output_id", "_patch_row", "_modified") if c in members.columns]
-    joined = members[cols].merge(source_rows, on="_patch_row", how="left")
+    whole = members[cols].merge(source_rows, on="_patch_row", how="left")
+    joined = _trim_to_member_windows(whole, members, coord_dims_map, source_trimmed)
     grouped = joined.groupby("output_id", sort=True)
     output_ids = grouped.size().index.to_numpy()
     single = (grouped.size() == 1).to_numpy()
@@ -386,6 +434,11 @@ def _aux_coord_info(
             if grid_col in joined.columns:
                 grid_first = grouped[grid_col].first().to_numpy()
         keep = keep & (not trimmed)
+        # a window cut the values the source's identity describes
+        windowed = (joined[cmin] != whole[cmin]) | (joined[cmax] != whole[cmax])
+        windowed &= joined[cmin].notna()
+        windowed = windowed.groupby(joined["output_id"], sort=True).any().to_numpy()
+        keep = keep & ~windowed
         all_null = pd.isnull(lows) & pd.isnull(highs)
         if rides:
             # a rider's values differ member by member, so only a lone
@@ -432,7 +485,7 @@ def _aux_coord_info(
             ends = [c for c in (cmin, cmax, key_col, unit_col) if c in joined]
             lacking = ~by_output.all().to_numpy()
             differs = (grouped[ends].nunique(dropna=False) > 1).any(axis=1)
-            settled = lacking if rides else lacking | differs.to_numpy()
+            settled = lacking if rides else lacking | np.asarray(differs)
             heads = joined.drop_duplicates("output_id").sort_values("output_id")
             first = heads[ends].to_numpy().T
             gone = ~holds[heads.index].to_numpy() | (conflict == "drop") | rides
@@ -456,9 +509,60 @@ def _aux_coord_info(
                 grid_col: grid if keep[index] else None,
                 unit_col: unit if unit_ok[index] else None,
                 "dims": dims,
+                "windowed": bool(windowed[index]),
             }
             out.setdefault(int(output_ids[index]), {})[name] = info
     return out
+
+
+def _with_windowed_dims(outputs: pd.DataFrame, aux_info, plan_dim: str):
+    """
+    Give each output the envelopes its windows left on its other dimensions.
+
+    A window on a coordinate riding a dimension cuts that dimension too,
+    which the output row, carried from its sources, does not say; nor
+    can its identity still describe the values.
+    """
+    spans: dict[str, dict[int, tuple]] = {}
+    for output_id, info in aux_info.items():
+        for name, values in info.items():
+            if name != plan_dim and values["windowed"] and values["dims"] == (name,):
+                ends = (values[f"{name}_min"], values[f"{name}_max"])
+                spans.setdefault(name, {})[output_id] = ends
+    if not spans:
+        return outputs
+    outputs = outputs.copy(deep=False)
+    ids = outputs["output_id"].astype(int)
+    for name, ends in spans.items():
+        hit = ids.isin(list(ends)).to_numpy()
+        for position, end in enumerate(("min", "max")):
+            new = ids.map({k: v[position] for k, v in ends.items()})
+            outputs[f"{name}_{end}"] = outputs[f"{name}_{end}"].where(~hit, new)
+        if (key := f"_{name}_def_key") in outputs:
+            outputs[key] = outputs[key].astype(object).where(~hit, None)
+    return outputs
+
+
+def _cell_key(value):
+    """A cell as a cache key: a float by its bits, so -0.0 is not 0.0."""
+    return value.hex() if isinstance(value, float) else (type(value), value)
+
+
+def _record_once(cache: dict, row: Mapping, name: str, **kwargs):
+    """
+    `_coord_record_from_row`, built once per distinct coordinate.
+
+    Outputs cut to the same window state the same coordinate, and
+    rebuilding a range's identity is the costly part. Records are frozen,
+    so outputs can share one. The key is every cell the record reads.
+    """
+    cells = [row.get(f"{name}_{x}") for x in ("min", "max", "step")]
+    cells += [row.get(f"_{name}_{x}") for x in ("units", "coord_dtype", "def_key")]
+    cells += [row.get(f"_{name}_grid")]
+    key = (name, *sorted(kwargs.items()), *map(_cell_key, cells))
+    if key not in cache:
+        cache[key] = _coord_record_from_row(row, name, **kwargs)
+    return cache[key]
 
 
 def _output_records(
@@ -489,6 +593,7 @@ def _output_records(
     }
     base_names |= {"time", "distance"}  # fixed patches-table envelopes
     envelope_cache: dict[tuple, set[str]] = {}
+    coord_cache: dict[tuple, CoordRecord | None] = {}
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
         dims = str(row.get("dims") or "")
@@ -496,7 +601,7 @@ def _output_records(
         aux = aux_info.get(output_id, {})
         coords = []
         for name in dim_names:
-            record = _coord_record_from_row(row, name, planned=name == plan_dim)
+            record = _record_once(coord_cache, row, name, planned=name == plan_dim)
             if record is not None:
                 coords.append(record)
         # auxiliary (non-dimension) coordinates remain on the assembled
@@ -504,8 +609,8 @@ def _output_records(
         for name, info in aux.items():
             if name in dim_names:
                 continue
-            record = _coord_record_from_row(
-                info, name, dims=info["dims"], name_is_held=True
+            record = _record_once(
+                coord_cache, info, name, dims=info["dims"], name_is_held=True
             )
             if record is not None:
                 coords.append(record)
@@ -1261,11 +1366,13 @@ def derived_catalog(
         trimmed_dims,
         concat=mode == "concat",
         conflict=merge_kwargs.get("conflict"),
+        source_trimmed=_trimmed_dims(parent_residuals, coord_dims_map),
     )
     if merge_kwargs.get("fill_value") is not None:
         aux_info = _aux_info_for_unfed(
             aux_info, outputs, sources, name, coord_dims_map, trimmed_dims, trims
         )
+    outputs = _with_windowed_dims(outputs, aux_info, name)
     records = _output_records(
         outputs,
         token,
