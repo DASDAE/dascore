@@ -14,9 +14,8 @@ when that rate is missing, zero or not finite.
 ``PRODML_FLAT`` reads files holding one root ``DAS`` (time, locus) dataset
 whose attrs use PRODML raw-node and user-setting names (``PartStartTime``,
 ``OutputDataRate``, ``StartDistance``, ``SpatialResolution``,
-``FibreLengthMultiplier``, ...). ``Count`` and ``NumberOfLoci`` must match
-the array's shape, and distances are taken as metres, which these files do
-not state. ``AmpScaling`` is the factor already applied to the stored
+``FibreLengthMultiplier``, ...). Distances are taken as metres, which these
+files do not state. ``AmpScaling`` is the factor already applied to the stored
 samples, so ``RawDataUnit`` describes them as stored; it is kept as the
 ``amp_scaling`` attr.
 

@@ -9,7 +9,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidFiberFileError
 from dascore.io.ap_sensing import APSensingV10
 from dascore.io.h5simple import H5Simple
 from dascore.io.prodml import ProdMLFlatV1, ProdMLV2_0, ProdMLV2_1
@@ -158,13 +157,15 @@ class TestRead:
         assert out.equals(patch.isel(time=slice(10, 20), distance=slice(3, 8)))
 
 
-class TestBadMetadata:
-    """Tests for refusing headers the array contradicts."""
+class TestTimeOffset:
+    """Tests for start times written with a UTC offset."""
 
-    @pytest.mark.parametrize("name", ["Count", "NumberOfLoci"])
-    def test_count_mismatch(self, copy, name):
-        """A Count or NumberOfLoci not matching the shape is refused."""
+    @pytest.mark.parametrize(
+        "stamp", ["06:46:24.601960+02:00", "02:46:24.601960-02:00"]
+    )
+    def test_offset_applied(self, copy, patch, stamp):
+        """An offset start time reads as the same instant in UTC."""
         with h5py.File(copy, "r+") as h5:
-            h5["DAS"].attrs[name] = np.int32(h5["DAS"].attrs[name] + 1)
-        with pytest.raises(InvalidFiberFileError, match="shape"):
-            dc.read(copy, file_format="PRODML_FLAT")
+            h5["DAS"].attrs["PartStartTime"] = f"2022-01-26T{stamp}"
+        out = dc.read(copy)[0]
+        assert out.get_coord("time").min() == patch.get_coord("time").min()

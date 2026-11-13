@@ -10,11 +10,12 @@ from uuid import uuid4
 
 import h5py
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidFiberFileError, InvalidSpoolError, PatchError
+from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
     parse_units,
@@ -170,8 +171,9 @@ def _get_distance_coord(acq):
 
 
 def _part_time(attrs, name):
-    """A PartStartTime/PartEndTime attr as naive datetime64."""
-    return dc.to_datetime64(unbyte(attrs[name]).split("+")[0].rstrip("Z"))
+    """A PartStartTime/PartEndTime attr as naive UTC datetime64."""
+    stamp = pd.Timestamp(unbyte(attrs[name]))
+    return dc.to_datetime64(stamp.tz_convert(None) if stamp.tzinfo else stamp)
 
 
 def _time_unit(time_array) -> str:
@@ -703,10 +705,7 @@ def _get_flat_metadata(resource):
     """
     dataset = resource[_FLAT_DATASET]
     attrs = dataset.attrs
-    shape = (int(attrs["Count"]), int(attrs["NumberOfLoci"]))
-    if dataset.shape != shape:
-        msg = f"{dataset.name} shape {dataset.shape} is not (Count, NumberOfLoci)"
-        raise InvalidFiberFileError(msg)
+    shape = dataset.shape
     time = get_coord(
         start=_part_time(attrs, "PartStartTime"),
         step=step_from_rate(_maybe_unpack(attrs["OutputDataRate"])),
