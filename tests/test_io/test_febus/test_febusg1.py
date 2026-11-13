@@ -234,7 +234,7 @@ class TestMisc:
         assert len(merged) == 1
         # the files' steps differ, so a fill refuses the hole between them,
         # as `Patch.fill_gaps` does
-        with pytest.raises(CoordError, match="Resample or snap"):
+        with pytest.raises(CoordError, match="smaller size, select first, or resamp"):
             len(spool.fill_gaps(time=2, samples=True, conflict="keep_first"))
 
     def test_mtx_read_raises(self, g1_mtx_buffer):
