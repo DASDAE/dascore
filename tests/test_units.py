@@ -218,6 +218,58 @@ class TestGetQuantity:
         assert quant == (20 * dc.get_unit("s"))
 
 
+class TestTemperatureSpellings:
+    """Tests for the degree spellings files use for temperature."""
+
+    celsius = (
+        "degrees C",
+        "deg C",
+        "degree C",
+        "deg. C",
+        "degreesC",
+        "degrees_Celsius",
+        "degree Celsius",
+        "degrees Celsius",
+        "Degrees C",
+        "° C",
+    )
+    fahrenheit = ("degrees F", "deg F", "degreesF", "degrees_Fahrenheit", "° F")
+
+    @pytest.mark.parametrize("spelling", celsius)
+    def test_celsius(self, spelling):
+        """Each spelling names degrees Celsius, not coulomb degrees."""
+        assert get_quantity(spelling) == get_quantity("degC")
+        assert get_unit(spelling) == get_unit("degC")
+
+    @pytest.mark.parametrize("spelling", fahrenheit)
+    def test_fahrenheit(self, spelling):
+        """Each spelling names degrees Fahrenheit, not farad degrees."""
+        assert get_quantity(spelling) == get_quantity("degF")
+
+    @pytest.mark.parametrize(
+        ("spelling", "expected"),
+        [("C", "coulomb"), ("F", "farad"), ("deg", "degree"), ("degC", "kelvin")],
+    )
+    def test_controls_unchanged(self, spelling, expected):
+        """Strings that already parse keep their dimensions."""
+        quant = get_quantity(spelling)
+        assert quant.dimensionality == get_quantity(expected).dimensionality
+
+    def test_magnitude_without_space(self):
+        """A number written against the spelling keeps its magnitude."""
+        assert get_quantity("20degrees C") == get_quantity("20 degC")
+
+    @pytest.mark.parametrize("units", ["mdeg C", "µdeg C"])
+    def test_prefixed_degree_unchanged(self, units):
+        """A prefixed degree is not a temperature spelling."""
+        expected = get_quantity(units.replace(" ", "*"))
+        assert get_quantity(units) == expected
+
+    def test_explicit_product_unchanged(self):
+        """An explicit product of degree and coulomb stays a product."""
+        assert get_quantity("deg*C").units == get_unit("degree") * get_unit("C")
+
+
 class TestParenthesizedFactor:
     """Tests for warning on a parenthesized number in a unit string."""
 

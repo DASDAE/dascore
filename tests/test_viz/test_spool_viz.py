@@ -81,6 +81,24 @@ def _cell(ax, day) -> float:
     return float(cells[row, stamp.day - 1])
 
 
+def _seam_spool():
+    """Two one-second-step patches meeting at a seam 1.3 steps wide."""
+    step = np.timedelta64(1_000_000_000, "ns")
+    start = np.datetime64("2024-01-05T00:00:00", "ns")
+    later = start + 100 * step + 3 * step // 10
+    times = (start + np.arange(100) * step, later + np.arange(100) * step)
+    return dc.spool(
+        [
+            dc.Patch(
+                data=np.ones((1, 100)),
+                coords={"distance": [0], "time": x},
+                dims=("distance", "time"),
+            )
+            for x in times
+        ]
+    )
+
+
 class TestNamespace:
     """The plots hang off spool.viz."""
 
@@ -163,6 +181,13 @@ class TestCoverage:
         plt.close("all")
         loose = _kinds(diverse.viz.coverage(tolerance=1e6))["gap"]
         assert loose < tight
+
+    def test_max_shift_changes_what_counts(self):
+        """A larger max_shift joins a seam the default leaves a gap."""
+        spool = _seam_spool()
+        assert _kinds(spool.viz.coverage())["gap"] == 1
+        plt.close("all")
+        assert _kinds(spool.viz.coverage(max_shift=0.4))["gap"] == 0
 
     def test_absolute_tolerance(self, diverse):
         """A tolerance in the coordinate's own units closes gaps too."""
@@ -468,6 +493,14 @@ class TestCalendar:
     def test_tolerance_changes_what_counts(self, deployment):
         """A tolerance which closes the gaps fills the days they emptied."""
         assert _cell(deployment.viz.calendar(tolerance=200), "2024-01-18") == 100.0
+
+    def test_max_shift_changes_what_counts(self):
+        """A larger max_shift joins a seam the default leaves a gap."""
+        spool = _seam_spool()
+        tight = _cell(spool.viz.calendar(method="gap"), "2024-01-05")
+        plt.close("all")
+        loose = _cell(spool.viz.calendar(method="gap", max_shift=0.4), "2024-01-05")
+        assert loose < tight
 
     def test_group_reaches_the_reports(self, deployment):
         """Grouping is the spool's own argument, and its refusal stands."""

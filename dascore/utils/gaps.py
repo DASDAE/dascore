@@ -1,5 +1,5 @@
 """
-One gap contract: a tolerance, its predicate, the sweep, and mesh edges.
+One gap contract: a tolerance, its predicate, and mesh edges.
 
 A gap is a spacing wider than a sampling step allows. Every place DASCore
 asks the question (a coordinate's discontinuities, a spool's chunk plan
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -147,6 +147,8 @@ class GapTolerance:
     # exactly one is set: the allowed spacing in steps, or in units
     count: float | None = None
     excess: Any = None
+    # whether the excess is a seam's whole width, not its part past one step
+    seam: bool = False
 
     def __post_init__(self):
         if (self.count is None) == (self.excess is None):
@@ -162,7 +164,7 @@ class GapTolerance:
     def __str__(self):
         if self.count is not None:
             return f"{self.count:g} samples"
-        return f"{self.excess} excess"
+        return f"{self.excess} {'seam' if self.seam else 'excess'}"
 
     @classmethod
     def samples(cls, count) -> GapTolerance:
@@ -175,18 +177,19 @@ class GapTolerance:
         return cls(excess=excess)
 
     @classmethod
-    def from_user(cls, tolerance, name: str = "tolerance") -> GapTolerance:
+    def from_user(cls, tolerance, name: str = "tolerance", seam=False) -> GapTolerance:
         """
         Read a tolerance as the public entry points spell it.
 
         A number is a multiple of the sampling interval; a quantity or
-        timedelta states an absolute excess in the coordinate's units. A
-        dimensionless quantity is the multiple it spells out.
+        timedelta states an absolute excess in the coordinate's units, or
+        the seam's whole width if ``seam``. A dimensionless quantity is the
+        multiple it spells out.
         """
         if isinstance(tolerance, GapTolerance):
             return tolerance
         if isinstance(tolerance, timedelta) or is_timedelta64(tolerance):
-            return cls(excess=to_timedelta64(tolerance))
+            return cls(excess=to_timedelta64(tolerance), seam=seam)
         if isinstance(tolerance, Quantity):
             if is_data_size(tolerance):
                 msg = (
@@ -202,7 +205,7 @@ class GapTolerance:
                 )
                 raise UnitError(msg)
             if not tolerance.dimensionless:
-                return cls(excess=tolerance)
+                return cls(excess=tolerance, seam=seam)
             tolerance = float(tolerance.m_as("dimensionless"))
         _check_tolerance_value(tolerance, name, allow_infinite=True)
         return cls(count=float(tolerance))
@@ -226,7 +229,7 @@ class GapTolerance:
             excess = _quantity_to_dim_value(excess, dtype, units, prefix)
         elif time_like:
             excess = to_timedelta64(excess)
-        return GapTolerance.absolute(excess)
+        return replace(self, excess=excess)
 
     def is_gap(self, delta, step):
         """
@@ -243,7 +246,7 @@ class GapTolerance:
             with np.errstate(invalid="ignore"):
                 margin = step * self.count
         else:
-            margin = np.where(pd.isnull(step), 0, step) + self.excess
+            margin = np.where(pd.isnull(step) | self.seam, 0, step) + self.excess
         if is_timedelta64(margin) and np.isfinite(self.count or 0):
             # Time labels floor exact positions to whole nanoseconds and a
             # stated step rounds to one, so allow a nanosecond per step, but
@@ -254,44 +257,6 @@ class GapTolerance:
             slack = np.minimum(cap, np.maximum(room, np.timedelta64(0, "ns")))
             margin = margin + np.where(pd.isnull(step), cap, slack)
         return delta > margin
-
-
-def gap_boundaries(start, stop, step, tolerance: GapTolerance):
-    """
-    Locate the gaps between value-ordered runs.
-
-    Each row is a run: its first and last value and its step. Returns
-    ``(order, reach, has_gap)`` over the start-ordered rows. ``reach`` is
-    the furthest stop seen *before* each row, so an overlapping or fully
-    nested row can never open a gap behind it, and ``has_gap`` marks each
-    row whose start clears that reach by more than the tolerance allows.
-    The first row has nothing behind it and never reports a gap.
-
-    Arrays rather than a frame, and an explicit first-row mask rather
-    than ``shift``, whose NaN fill would upcast integer values to float:
-    ``reach`` is a reported value, not just a comparand.
-    """
-    start, stop, step = (np.asarray(x) for x in (start, stop, step))
-    order = np.argsort(start)
-    starts, stops = start[order], stop[order]
-    # runs are value-ordered regardless of coordinate orientation, so
-    # the continuity margin uses the step magnitude
-    steps = np.abs(step[order])
-    reach = np.empty_like(stops)
-    reach[:1] = stops[:1]
-    np.maximum.accumulate(stops[:-1], out=reach[1:])
-    # Measure the distance from the reach rather than comparing against
-    # `reach + step * tolerance`: a float margin promotes that sum, and
-    # an integer coordinate past 2**53 rounds both endpoints together,
-    # hiding the gap. Only rows past the reach are measured: a row which
-    # starts at or before it cannot open a gap, and subtracting there
-    # would wrap an unsigned value into an enormous phantom one.
-    has_gap = np.zeros(len(starts), dtype=bool)
-    ahead = starts > reach
-    if ahead.any():
-        has_gap[ahead] = tolerance.is_gap(starts[ahead] - reach[ahead], steps[ahead])
-    has_gap[:1] = False
-    return order, reach, has_gap
 
 
 @dataclass(frozen=True, slots=True)
