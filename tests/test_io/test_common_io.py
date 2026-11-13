@@ -42,7 +42,7 @@ from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.mseed.core import MSeedV2
-from dascore.io.netcdf import NetCDFCFV18, NetCDFNoCF
+from dascore.io.netcdf import NetCDF3V1, NetCDFCFV18, NetCDFNoCF
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
@@ -191,6 +191,7 @@ COMMON_IO_READ_TESTS = {
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
     XdasV1(): ("xdas_netcdf.nc",),
+    NetCDF3V1(): ("kolsass_dts_netcdf3.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
     **{io: (str(path),) for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items()},
@@ -225,7 +226,9 @@ SKIP_DATA_FILES = {
 # have converted away at the parse boundary.
 # Formats which hand back the attrs stored in the file rather than mapping
 # vendor fields to attrs, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"ARROW", "DASDAE", "NETCDF_CF", "ZARR", "rsf"})
+_PASS_THROUGH_FORMATS = frozenset(
+    {"ARROW", "DASDAE", "NETCDF3", "NETCDF_CF", "ZARR", "rsf"}
+)
 
 VENDOR_ATTRS = frozenset(
     {
