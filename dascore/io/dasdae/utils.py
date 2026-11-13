@@ -248,7 +248,13 @@ def _save_coord(coord, name, group, compact: bool, options=None):
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
-        step = coord.step
+        step, runs = coord.step, getattr(coord, "runs", ())
+        whole = (isinstance(x, Grid) and x.step_den < 2 for x in runs)
+        if compact and len(runs) > 1 and all(whole):
+            # segments on one whole-tick or float step state it, so each
+            # reads back on it; a fractional step is found exactly anyway
+            steps = {x.step(coord.dtype) for x in runs}
+            step = steps.pop() if len(steps) == 1 else None
         if step is not None and (compact or coord._grid is not None):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
@@ -435,12 +441,14 @@ def _read_stored_coord(node, name, attrs2):
         # grid it declares, never a range to rebuild
         array = _read_array(node)
         if (lengths := node_attrs.get(_EXACT)) is not None:
-            # each run read exactly, so a fractional grid keeps its exact
-            # step; segments share no grid, so a step an earlier writer
-            # stated beside them is not theirs
+            # each run read exactly, on the step its segments state if any,
+            # so a fractional grid keeps its exact step
             runs = []
             for values in np.split(array, np.cumsum(lengths)[:-1]):
-                grid = get_coord(data=values, snap=False)._grid
+                try:
+                    grid = get_coord(data=values, step=node_step)._grid
+                except CoordError:  # an earlier writer's step, not the run's
+                    grid = get_coord(data=values, snap=False)._grid
                 runs.append(values if grid is None else grid)
             return NumericCoord(runs=tuple(runs), units=units, dtype=array.dtype)
         if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate

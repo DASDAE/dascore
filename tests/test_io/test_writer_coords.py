@@ -181,3 +181,25 @@ class TestWriterCoordinates:
         with _skip_without_dependency(fio):
             with pytest.raises(CoordError, match=r"2 segments.*split_gaps"):
                 dc.write(patch, path, fio.name, fio.version)
+
+
+class TestDASDAESegments:
+    """DASDAE keeps a coordinate's segments and their steps."""
+
+    @pytest.mark.parametrize("start", [0.0, 12.345, 1.7e9, -3.3])
+    @pytest.mark.parametrize("step", [1.0209523, 0.1, 0.001, 1 / 3])
+    def test_float_segments_keep_steps(self, start, step, tmp_path):
+        """Float segments read back as the same segments on the same step."""
+        full = dc.get_coord(start=start, step=step, shape=(50,))
+        keep = np.ones(50, dtype=bool)
+        keep[14:18] = False
+        coords = {"distance": full, "time": np.arange(2.0)}
+        patch = dc.Patch(data=np.zeros((50, 2)), coords=coords, dims=tuple(coords))
+        patch = patch.select(distance=keep)
+        patch.io.write(tmp_path / "out.h5", "dasdae")
+        back = dc.read(tmp_path / "out.h5")[0].get_coord("distance")
+        segments = patch.get_coord("distance").segments
+        assert [(len(x), x.step) for x in back.segments] == [
+            (len(x), x.step) for x in segments
+        ]
+        assert back == patch.get_coord("distance")

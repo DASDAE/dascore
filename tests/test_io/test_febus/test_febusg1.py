@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.exceptions import CoordError
 from dascore.io.febus.core import FebusG1CSV1, FebusMTXH5V1
 from dascore.io.febus.g1utils import _is_g1_file
 from dascore.utils.downloader import fetch
@@ -229,9 +230,12 @@ class TestMisc:
         directory spools.)
         """
         spool = dc.spool(g1_two_file_directory)
-        # These weren't directly adjacent files, so the hole is filled.
-        merged = spool.fill_gaps(time=2, samples=True, conflict="keep_first")
+        merged = spool.chunk(time=None, conflict="keep_first", tolerance=3)
         assert len(merged) == 1
+        # the files' steps differ, so a fill refuses the hole between them,
+        # as `Patch.fill_gaps` does
+        with pytest.raises(CoordError, match="Resample or snap"):
+            len(spool.fill_gaps(time=2, samples=True, conflict="keep_first"))
 
     def test_mtx_read_raises(self, g1_mtx_buffer):
         """

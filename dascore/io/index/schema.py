@@ -33,7 +33,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 36 leaves the SEG-Y text
+# changes, not only when a column does. Version 37 identifies a coordinate
+# of several segments without a step, as segments state none. Version 36
+# leaves the SEG-Y text
 # header out of the index, so consecutive files merge. Version 35 reads a
 # root `units`
 # as the data units of H5Simple files and non-CF NetCDF payloads which
@@ -70,7 +72,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 36
+INDEX_VERSION = 37
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
