@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from upath import UPath
 
@@ -42,6 +44,15 @@ class TestBasic:
         new_spool = spool.update()
         new_contents = new_spool.get_contents()
         assert contents.equals(new_contents)
+
+    @pytest.mark.skipif(os.sep != "/", reason="backslash is a path separator")
+    def test_backslash_in_file_name(self, tmp_path, random_patch):
+        """A backslash in a POSIX file name is kept, so the patch loads."""
+        path = tmp_path / "a\\b.h5"
+        random_patch.io.write(path, "DASDAE")
+        spool = dc.spool(path)
+        assert spool.get_contents()["source_path"][0].endswith("a\\b.h5")
+        assert isinstance(spool[0], dc.Patch)
 
     def test_raises_bad_file(self):
         """Simply ensures a bad file will raise."""
