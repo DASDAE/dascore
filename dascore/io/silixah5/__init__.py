@@ -13,4 +13,4 @@ files state no serial for the unit itself. Earlier versions reported
 ``Devices1.SerialNum`` as ``interrogator.serial_number``.
 """
 
-from .core import SilixaH5V1, SilixaH5V2
+from .core import SilixaH5V1, SilixaH5V2, SilixaH5V3
