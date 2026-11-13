@@ -5,3 +5,10 @@ execute:
 engine: jupyter
 ---
 {{< include ../../.agents/skills/dascore-make-inventory/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+---
+# After the include, so this description replaces the skill file's.
+description: Build, check, and save an inventory of a fiber deployment, using a tunnel as the example.
+---
+:::

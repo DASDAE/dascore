@@ -116,6 +116,21 @@ class Patch(NamespaceOwner, PatchMeta):
     Coords and a dtype describe data without holding any, which is a
     [`PatchMeta`](`dascore.PatchMeta`); see
     [`drop_data`](`dascore.Patch.drop_data`).
+
+    NumPy ufuncs and most NumPy functions take patches and return patches,
+    with coordinates following the data:
+
+    - Reductions such as `np.mean(patch, axis=1)` keep the reduced dimension
+      at length one, with or without `keepdims`.
+    - `np.transpose`, `np.swapaxes`, `np.squeeze` and the `np.flip` family
+      call the matching patch methods.
+    - `np.diff` labels each difference with the midpoint of its two samples,
+      drops coordinates that depend on that dimension, and refuses
+      `prepend` and `append`.
+    - `np.gradient` returns one patch per axis.
+    - `np.sort`, `np.argsort`, `np.partition` and `numpy.fft` functions raise
+      a `ParameterError`; apply them to `patch.data`, or use
+      [`dft`](`dascore.Patch.dft`).
     """
 
     data: ArrayLike

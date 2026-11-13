@@ -4,7 +4,7 @@ execute:
   warning: false
 ---
 
-These tools help with archives too large to load at once: reading metadata without data, organizing directories, finding patches by ID, handling gaps, and processing patch by patch. They build on the [spool tutorial](spool.qmd).
+These tools help with archives too large to load at once: reading metadata without data, organizing directories and indexes, finding patches by ID, handling gaps, and processing patch by patch. They build on the [spool tutorial](spool.qmd).
 
 ```{python}
 import tempfile
@@ -51,6 +51,28 @@ Renaming a partition directory and calling `update()` refreshes path attributes 
 
 Only directories below the spool root are parsed; the root and source filename are not. Values remain strings and support the normal attribute selectors. When a path key matches a coordinate, bare `select` targets the attribute; use `_coords` for the coordinate. See the [directory index note](../notes/spool_index.qmd) for update and indexing details.
 
+# Index location
+
+A directory spool keeps its index in the data directory. Pass `index=` to place it elsewhere, such as when the data directory is not writable:
+
+```{python}
+directory = dc.examples.spool_to_directory(dc.get_example_spool())
+index_path = Path(tempfile.mkdtemp()) / "index.sqlite3"
+external_index = dc.spool(directory, index=index_path).update()
+```
+
+New spools normally rediscover an external index; an index inside the data directory takes precedence. A directory that is itself one store, such as a zarr store, keeps its index in the DASCore cache instead, so rewriting the store does not take the index with it.
+
+An index alone opens a read-only spool whose data root is the index's directory, so an index copied along with its files still works. The index, the data root, or both may be remote, such as a server publishing its files and their index over HTTP. A read-only spool never scans its files and cannot `update()`.
+
+```{python}
+published = dc.examples.spool_to_directory(dc.get_example_spool())
+dc.spool(published).update()  # writes the index beside the data
+read_only = dc.spool(index=published / ".dascore_index.sqlite3")
+# The same for a remote index, its root being the URL's parent:
+# dc.spool(index="https://example.com/data/.dascore_index.sqlite3")
+```
+
 # Finding a patch by ID
 
 File-backed `origin_id` values are indexed, so a recorded ID can locate its source without loading every patch:
@@ -61,9 +83,13 @@ found = spool.select(origin_id=wanted)
 assert found[0].attrs.origin_id == wanted
 ```
 
-`data_id` is also indexed. Attribute queries match the stored source ID. A value trim clears the ID in presented contents because the loaded patch names the window it read and so carries a different value; sample selections defer it until loading. Built or chunked spools may have no `origin_id`, and moving a source invalidates its derived IDs until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
+`data_id` is also indexed. Attribute queries match the stored source ID. A value trim clears the ID in presented contents because the loaded patch names the window it read and so carries a different value; sample selections defer it until loading. Built or chunked spools may have no `origin_id`, and moving a source invalidates its derived IDs until the directory is rescanned. See [Keys, IDs and Rows](../notes/identity.qmd) for the identity rules.
 
 An empty ID after a file move is intentional: retaining the path-derived value would point at a source which no longer exists. Calling `update()` rebuilds the row from its new location.
+
+# Merging files from the index
+
+When `chunk` merges whole files, it reads their arrays directly and rebuilds coordinates and scalar attributes from the index. Members needing trims, associated coordinates, or metadata the index cannot reproduce go through the patch reader instead. Index-built results keep patch identities but omit stored history. To keep stored history, load the members first, as in `dc.spool(list(spool)).chunk(time=None)`.
 
 # Filling bridged holes
 

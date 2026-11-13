@@ -4,12 +4,26 @@ execute:
     warning: false
 ---
 
+Writable versions are in bold.
+
 ```{python}
 #| echo: false
 #| output: asis
 from dascore.io.core import FiberIO
 
 table = FiberIO.get_supported_io_table(combine_versions=True)
+_writers = FiberIO.get_supported_io_table().query("write")
+_writable = set(zip(_writers["name"], _writers["version"]))
+
+
+def _bold_writable(row):
+    versions = [x.strip() for x in row["version"].split(",")]
+    return ", ".join(
+        f"**{x}**" if x and (row["name"], x) in _writable else x for x in versions
+    )
+
+
+table["version"] = table.apply(_bold_writable, axis=1)
 table["write"] = table["write"].map({True: "✅", False: ""})
 out_str = table.to_markdown(index=False, stralign="center")
 

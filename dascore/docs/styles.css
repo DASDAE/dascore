@@ -190,3 +190,8 @@ banner in a navy close to the logo's, with a gold accent, the same in light and 
 .start-card strong { font-size: 1.15rem; }
 @media (max-width: 800px) { .hl-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .hl-tiles, .start-cards { grid-template-columns: 1fr; } .start-card { min-height: 0; } }
+
+/* The navbar's light background turns mid-grey under darkly; use darkly's dark grey. */
+body.quarto-dark .navbar {
+    background-color: #303030;
+}

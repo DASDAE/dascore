@@ -21,16 +21,6 @@ memory_spool = dc.spool([dc.get_example_patch()])
 file_spool = dc.spool("examples://terra15_das_1_trimmed.hdf5")
 ```
 
-Remote paths use the same constructor:
-
-```{python}
-from upath import UPath
-
-remote_file = UPath("memory://dascore/tutorial/spool-file.h5")
-dc.write(dc.get_example_patch(), remote_file, "DASDAE")
-remote_spool = dc.spool(remote_file)
-```
-
 Directory spools maintain an index for fast metadata queries. Call `update()` after files change.
 
 ```{python}
@@ -39,27 +29,7 @@ directory = dc.examples.spool_to_directory(dc.get_example_spool())
 directory_spool = dc.spool(directory).update()
 ```
 
-To place the index outside the data directory:
-
-```{python}
-import tempfile
-from pathlib import Path
-
-index_path = Path(tempfile.mkdtemp()) / "index.sqlite3"
-external_index = dc.spool(directory, index=index_path).update()
-```
-
-Pass `index=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. A directory that is itself one store, such as a zarr store, keeps its index in the DASCore cache instead, so rewriting the store does not take the index with it. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
-
-An index alone opens a read-only spool whose data root is the index's directory, so an index copied along with its files still works. The index, the data root, or both may be remote, such as a server publishing its files and their index over HTTP. A read-only spool never scans its files and cannot `update()`.
-
-```{python}
-read_only = dc.spool(index=directory / ".dascore_index.sqlite3")
-# The same for a remote index, its root being the URL's parent:
-# dc.spool(index="https://example.com/data/.dascore_index.sqlite3")
-```
-
-Directory names written as `key=value` become attributes of the patches beneath them; see [Path attributes](large_archives.qmd#path-attributes).
+Remote [`UPath`](https://pypi.org/project/universal-pathlib/) resources use the same constructor; see [Working with remote patches](remote_patches.qmd). To keep the index elsewhere or open a spool from an index alone, see [Index location](large_archives.qmd#index-location); for `key=value` directory names, see [Path attributes](large_archives.qmd#path-attributes).
 
 # Accessing patches
 
@@ -137,19 +107,9 @@ regex_tags = diverse.select(tag=re.compile(r"^some"))
 not_tagged = diverse.unselect(tag="some_tag")
 ```
 
-Patch coordinates are excluded because complementing an interior range would split every patch. Inventory coordinates are allowed and may increase the number of resulting patches.
+Patch coordinates are excluded because complementing an interior range would split every patch; use [`Patch.unselect`](`dascore.Patch.unselect`) for that. Inventory coordinates are allowed; see [Inventory](inventory.qmd).
 
-```{python}
-from dascore.examples import inventory_patch_pair
-
-inventory_patch, inventory = inventory_patch_pair()
-inventory_spool = dc.spool(inventory_patch).attach_inventory(inventory)
-outside_zone = inventory_spool.unselect(zone="zone_1")
-```
-
-Inventory complements may cut one input patch into several retained pieces, so an `unselect` result can contain more patches than its input.
-
-# Chunking and coverage
+# Chunking
 
 [`Spool.chunk`](`dascore.core.spool.Spool.chunk`) lazily changes patch boundaries. It can merge contiguous patches, create fixed windows with overlap, or limit array size.
 
@@ -163,24 +123,13 @@ bounded = spool.chunk(time=1 * megabytes)
 
 `overlap` accepts the same coordinate-unit, quantity, or data-size forms as the chunk length. `keep_partial=True` retains a shorter final window. Passing `time=None` asks DASCore to merge every contiguous compatible segment.
 
-To request particular absolute windows, pass an `(n, 2)` array. `select` returns each matching source piece separately; `chunk` assembles compatible pieces inside each requested row. Rows stay in input order, including overlaps and duplicates. Chunking requires every requested sampled window by default, and `chunk_plan` shows the accepted outputs without loading measurement arrays. `on_incomplete="warn"` or `"ignore"` skips unmet outputs, while `keep_partial=True` accepts available nonempty pieces before that policy applies.
-
-```{python}
-small = dc.spool(dc.get_example_patch().select(distance=(0, 9)))
-windows = np.array([[2, 4], [6, 8]])
-source_pieces = small.select(distance=windows)
-requested_chunks = small.chunk(distance=windows)
-requested_plan = small.chunk_plan(distance=windows)
-assert len(source_pieces) == len(requested_chunks) == len(requested_plan.outputs) == 2
-```
-
-Eligible whole-file merges read arrays directly and reconstruct coordinates and scalar attributes from the index. Members requiring trims, associated coordinates, or metadata the index cannot reproduce use the patch reader. Index-built results retain patch and processing identities and omit stored history. To retain stored history, load the members first, as in `dc.spool(list(file_spool)).chunk(time=None)`.
+`chunk` also accepts explicit windows as an `(n, 2)` array, and [`chunk_plan`](`dascore.core.spool.Spool.chunk_plan`) shows what a call would produce without loading data. See [Spool chunking](../notes/spool_chunking.qmd) for how the planner works.
 
 Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
 
 ## Joining across seams
 
-`chunk` joins two patches when the later starts one step after the earlier ends, give or take `dascore.config.max_shift` (a fifth of a step) or the `max_shift` argument, and then fits one evenly sampled grid to each stretch of joined patches. A wider seam is a gap, and starts a new output. `tolerance`, off by default, also joins seams up to that many steps wide (or that width, given as a quantity or timedelta) and closes them by spreading the stretch's labels evenly, as DASCore 0.1.24 did by default with `tolerance=1.5`; it warns when a joined seam is wider than 1.5 steps.
+`chunk` joins two patches when the later starts one step after the earlier ends, give or take a fraction of a step set by `max_shift`, and then fits one evenly sampled grid to each stretch of joined patches. A wider seam is a gap, and starts a new output. `tolerance`, off by default, also joins seams up to that many steps wide (or that width, given as a quantity or timedelta) and closes them by spreading the stretch's labels evenly, as DASCore 0.1.24 did by default with `tolerance=1.5`; it warns when a joined seam is wider than 1.5 steps.
 
 ```{python}
 from dascore.examples import random_spool
@@ -220,11 +169,4 @@ To load upcoming patches in the background, or apply a function to every patch, 
 
 # Inventory
 
-A spool can attach a DASDAE [inventory](inventory.qmd). Inventory labels become available to `select` and [`expand_by`](`dascore.core.spool.Spool.expand_by`); [`enrich`](`dascore.core.spool.Spool.enrich`) copies observing-system metadata onto extracted patches.
-
-```{python}
-with_inventory = dc.spool(inventory_patch).attach_inventory(inventory)
-assert len(with_inventory.expand_by("zone")) == 2
-```
-
-Directory spools automatically load `.inventory`, `.inventory.yaml`, `.inventory.yml`, or `.inventory.json` stored beside the data.
+A spool can attach an [inventory](inventory.qmd#using-an-inventory-with-a-spool), then select and enrich patches by what it states.

@@ -3,20 +3,11 @@ title: DASCore 1.0
 description: What is new in the DASCore 1.0 beta, and where to start.
 ---
 
-:::{.callout-tip}
-## Test the beta with your coding agent
-
-The simplest way to help test DASCore's beta version is a coding agent and the included [`dascore-test-beta` skill](https://github.com/DASDAE/dascore/blob/dev/dascore/.agents/skills/dascore-test-beta/SKILL.md).
-
-See [agent onboarding](../tutorial/agents.qmd) for more details.
-
-:::
-
 We are excited to announce the DASCore 1.0 beta!
 
 This release represents a huge amount of work. The [highlights](#highlights) below summarize the key features.
 
-The beta is the time to try it on real data and tell us what breaks through the [issue tracker](https://github.com/DASDAE/dascore/issues) or the [discussions](https://github.com/DASDAE/dascore/discussions), before the API settles for 1.0. The best part? Your coding agent can do it for you with the [`dascore-test-beta` skill](https://github.com/DASDAE/dascore/blob/dev/dascore/.agents/skills/dascore-test-beta/SKILL.md).
+The beta is the time to try it on real data and tell us what breaks through the [issue tracker](https://github.com/DASDAE/dascore/issues) or the [discussions](https://github.com/DASDAE/dascore/discussions), before the API settles for 1.0. Your coding agent can do this with the [`dascore-test-beta` skill](https://github.com/DASDAE/dascore/blob/dev/dascore/.agents/skills/dascore-test-beta/SKILL.md); see [agent onboarding](../tutorial/agents.qmd).
 
 Some changes break code written for 0.1.x. See the [migration guide](dascore_1.0_migration.qmd) for details.
 

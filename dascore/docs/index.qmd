@@ -33,6 +33,17 @@ It is part of the broader [DAS Data Analysis Ecosystem (DASDAE)](https://dasdae.
 [![xarray logo](_static/xarray_icon.svg){.start-logo} **Prefer to stay in xarray?** [Convert patches and spools to xarray and use DASCore from there.]{}](tutorial/xarray.qmd){.start-card}
 :::
 
+A first look: load an event, select part of the fiber, remove common-mode noise, low-pass filter, and plot.
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch("deformation_rate_event_1")
+window = patch.select(distance=(2400, 3300))
+processed = window.demedian("distance").pass_filter(time=(None, 100))
+processed.viz.waterfall(show=True);
+```
+
 # Feedback and Support
 
 Use the [project discussions](https://github.com/DASDAE/dascore/discussions) to ask a question.

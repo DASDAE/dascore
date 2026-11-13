@@ -140,6 +140,9 @@ website:
             - text: Patch
               href: tutorial/patch.qmd
 
+            - text: File IO
+              href: tutorial/file_io.qmd
+
             - text: Spool
               href: tutorial/spool.qmd
 
@@ -151,9 +154,6 @@ website:
 
             - text: Visualization
               href: tutorial/visualization.qmd
-
-            - text: File IO
-              href: tutorial/file_io.qmd
 
         - section: "Advanced"
           contents:
@@ -198,6 +198,7 @@ website:
 
             - recipes/despiking.qmd
             - recipes/smoothing.qmd
+            - recipes/whiten.qmd
             - recipes/correlate.qmd
             - recipes/edge_effects.qmd
             - recipes/fk.qmd

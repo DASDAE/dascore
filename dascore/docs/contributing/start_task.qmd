@@ -2,3 +2,10 @@
 title: Start a task
 ---
 {{< include ../../.agents/skills/dascore-start-task/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+---
+# After the include, so this description replaces the skill file's.
+description: Set up a worktree and environment for working on DASCore.
+---
+:::

@@ -3,3 +3,10 @@ title: Adding a New Format
 engine: jupyter
 ---
 {{< include ../../.agents/skills/dascore-add-format/SKILL.md >}}
+
+::: {.content-visible when-format="html"}
+---
+# After the include, so this description replaces the skill file's.
+description: Add support for a new file format to DASCore.
+---
+:::

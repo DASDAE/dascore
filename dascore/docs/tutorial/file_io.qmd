@@ -4,18 +4,45 @@ execute:
   warning: false
 ---
 
-DASCore reads and writes local `pathlib.Path` objects and remote [`UPath`](https://pypi.org/project/universal-pathlib/) resources supported by each format. See [Working with remote patches](remote_patches.qmd) for cache policy.
+DASCore reads many DAS formats and writes several; see [supported formats](../supported_formats.qmd). Paths may be local `pathlib.Path` objects or remote [`UPath`](https://pypi.org/project/universal-pathlib/) resources.
 
-# Writing and reading
+# Reading
 
-Write through `Patch.io`, then open the result as a spool:
+Open a file with [`dc.spool`](`dascore.spool`) and index the spool to load a patch. DASCore detects the format.
+
+```{python}
+import dascore as dc
+
+file_spool = dc.spool("examples://terra15_das_1_trimmed.hdf5")
+patch = file_spool[0]
+```
+
+`dc.spool(directory)` opens every supported file below a directory as one lazy spool. Select and chunk first; arrays load only when you iterate or index:
+
+```{python}
+directory = dc.examples.spool_to_directory(dc.get_example_spool("diverse_das"))
+spool = (
+    dc.spool(directory)
+    .select(acquisition_key="DAS2.*")
+    .select(time=(..., "2022-01-01"))
+    .chunk(time=2, overlap=0.5)
+)
+
+for chunk in spool:
+    processed = chunk.detrend("time")
+```
+
+The first `dc.spool(directory)` creates a hidden index, `.dascore_index.sqlite3`, which stores file metadata so selections run before data is loaded. Call `spool.update()` after files change; it scans new or modified files and drops deleted ones. See the [spool tutorial](spool.qmd) for selecting and chunking, and the [index note](../notes/spool_index.qmd) for the index lifecycle.
+
+A directory may also hold an [`.inventory` companion](inventory.qmd) describing the observing system. The index and inventory use reserved hidden names, so they are never read as data.
+
+# Writing
+
+Write a patch through `Patch.io`, naming the format:
 
 ```{python}
 from pathlib import Path
 
-import dascore as dc
-
-patch = dc.get_example_patch()
 path = Path("output_file.h5")
 patch.io.write(path, "DASDAE")
 round_trip = dc.spool(path)[0]
@@ -26,7 +53,7 @@ round_trip = dc.spool(path)[0]
 path.unlink(missing_ok=True)
 ```
 
-Remote destinations use the same interface through [universal-pathlib](https://pypi.org/project/universal-pathlib/), whose `UPath` objects support URLs implemented by [fsspec](https://filesystem-spec.readthedocs.io/):
+[`dc.write`](`dascore.write`) does the same for a patch or a spool. Remote destinations work the same way with `UPath`:
 
 ```{python}
 from upath import UPath
@@ -36,13 +63,11 @@ patch.io.write(remote_path, "DASDAE")
 remote_patch = dc.spool(remote_path)[0]
 ```
 
-Format support varies by backend: a formatter that requires a local seekable file may use the remote cache, while formats built on fsspec-compatible stores can operate directly.
-
-For compression, chunking, Zarr stores, XDAS files, and how readers grid stored coordinates, see [File formats in depth](file_formats.qmd).
+Some formats need a local, seekable file and go through a local cache; see [Working with remote patches](remote_patches.qmd). For compression, chunking, Zarr stores, XDAS files, and how readers grid stored coordinates, see [File formats in depth](file_formats.qmd).
 
 # Scanning metadata
 
-[`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.
+[`dc.scan`](`dascore.scan`) returns one [`PatchSummary`](`dascore.PatchSummary`) per patch without loading arrays.
 
 ```{python}
 summary_index = 0
@@ -52,9 +77,9 @@ print(summary.source_path)
 print(summary.get_coord_summary("time").min)
 ```
 
-Scanning also reports `source_format`, `source_version`, and `source_patch_key`, which together identify the formatter and patch inside a multi-patch file.
+Summaries also report `source_format`, `source_version`, and `source_patch_key`, which identify the formatter and the patch inside a multi-patch file. [`dc.scan_to_df`](`dascore.scan_to_df`) returns the same information as a dataframe.
 
-Use the source path and the summary's position to load the same patch through its spool. Scan results and file-spool rows have the same order, and the spool uses each row's `source_patch_key` when materializing it. For compact directory listings, use `scan` or `scan_to_df`.
+Scan results and file-spool rows share one order, so a summary's position loads the same patch:
 
 ```{python}
 source_spool = dc.spool(
@@ -65,47 +90,12 @@ source_spool = dc.spool(
 loaded = source_spool[summary_index]
 ```
 
-[`dc.scan_payloads(...)`](`dascore.scan_payloads`) returns [`PatchMeta`](`dascore.PatchMeta`) objects -- patch metadata without the data -- with each formatter's full `CoordManager`, attrs, and dtype. With `snap=False`, formats that store per-sample coordinates expose their exact values:
+[`dc.scan_payloads`](`dascore.scan_payloads`) returns [`PatchMeta`](`dascore.PatchMeta`) objects instead: patch metadata without the data, with full coordinates. With `snap=False`, formats that store per-sample coordinates expose their exact values. Payload scans may read large coordinate arrays, so reserve them for targeted files.
 
 ```{python}
 payload = dc.scan_payloads(summary.source_path, snap=False)[0]
 time = payload.coords.get_coord("time")
 ```
-
-Payload scans still may read and retain large coordinate arrays, so reserve them for targeted files.
-
-`Patch.attrs` contains non-coordinate metadata. Access coordinate bounds and steps from `Patch.summary`, `PatchSummary.get_coord_summary(...)`, or the flattened summary returned by `flat_dump()`.
-
-# Directory spools
-
-`dc.spool(directory)` creates a lazy, indexed view of every supported file below that directory:
-
-```{python}
-from dascore import examples
-
-directory = examples.spool_to_directory(dc.get_example_spool("diverse_das"))
-spool = (
-    dc.spool(directory)
-    .select(acquisition_key="DAS2.*")
-    .select(time=(..., "2022-01-01"))
-    .chunk(time=2, overlap=0.5)
-)
-```
-
-Iteration is where patch arrays are loaded:
-
-```{python}
-for chunk in spool:
-    processed = chunk.detrend("time")
-```
-
-The hidden `.dascore_index.sqlite3` stores file metadata and enables selections before patch data is loaded. Opening a new directory creates the index; call `spool.update()` after files change. See [path attributes](large_archives.qmd#path-attributes) and the [index note](../notes/spool_index.qmd) for the index lifecycle.
-
-`update()` scans new or modified files, removes rows for deleted files, and leaves unchanged rows alone. File size and modification time identify candidates for rescanning.
-
-An optional [`.inventory` companion](inventory.qmd) describes the observing system and is not scanned as data.
-
-The index and inventory are companions to the archive rather than data sources themselves, so both use reserved hidden names and are excluded from formatter discovery.
 
 # External formats
 
