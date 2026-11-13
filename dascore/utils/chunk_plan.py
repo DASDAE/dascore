@@ -35,6 +35,7 @@ from dascore.constants import CONFLICT, attr_conflict_description
 from dascore.core.coords import _GRID_RTOL, _GRID_ULPS, _MIN_FRACTION_TICKS, Grid
 from dascore.exceptions import (
     ChunkError,
+    CoordError,
     CoordMergeError,
     InvalidSpoolQueryError,
     MissingPatchError,
@@ -1799,10 +1800,15 @@ def _tolerance_joins(delta, step, tolerance, prec) -> np.ndarray:
     if tolerance is None:
         return np.zeros(len(delta), dtype=bool)
     with np.errstate(invalid="ignore"):
-        if tolerance.count is not None:
-            return delta <= tolerance.count * step + prec
-        width = _numbers(np.asarray(tolerance.excess))[()]
-        return delta <= width + (0 if tolerance.seam else np.nan_to_num(step)) + prec
+        if (count := tolerance.count) is not None:
+            reach, whole = count * step + prec, count - 1
+        else:
+            width = _numbers(np.asarray(tolerance.excess))[()]
+            reach = width + (0 if tolerance.seam else np.nan_to_num(step)) + prec
+            whole = np.floor(width / step * (1 + _GRID_RTOL))
+        if tolerance.nearest:  # a later sample counts at its nearest position
+            reach = np.where(np.isnan(step), reach, (whole + 1.5) * step)
+        return delta <= reach
 
 
 def _seams(df, name, group, tolerance, max_shift) -> pd.DataFrame:
@@ -1966,8 +1972,19 @@ def _fill_grids(rows, codes, n_parts, name, dtype, lattice):
     rows["_first"], rows["_last"] = first, last
     rows["_count"] = np.where(keep, np.nan_to_num(count, nan=-1), 0).astype(np.int64)
     heads = pd.Series(first).groupby(codes).idxmin().reindex(range(n_parts)).to_numpy()
+    head_own = own[heads[codes]]
     with np.errstate(invalid="ignore"):
-        pos = np.rint((first - first[heads[codes]]) / own[heads[codes]])
+        other = np.abs(own - head_own) > _GRID_RTOL * np.abs(head_own)
+    if other.any():  # as `Patch.fill_gaps` refuses samples on another step
+        steps, bad = rows[f"{name}_step"].to_numpy(), np.argmax(other)
+        msg = (
+            f"Cannot fill a gap along {name!r} between samples on step "
+            f"{steps[heads[codes]][bad]} and samples on step {steps[bad]}. "
+            "Resample or snap first."
+        )
+        raise CoordError(msg)
+    with np.errstate(invalid="ignore"):
+        pos = np.rint((first - first[heads[codes]]) / head_own)
     pos = np.nan_to_num(pos).astype(np.int64)
     sizes = pd.Series(pos + rows["_count"].to_numpy()).groupby(codes).max()
     grids = [None] * n_parts

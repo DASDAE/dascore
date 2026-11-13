@@ -233,7 +233,8 @@ class _PendingFill:
         """The fill's own plan, which merges each stretch."""
         if self._plan is None:
             working = self.frames[1]
-            plan = build_chunk_plan(working, **self.merge, **{self.dim: None})
+            with _any_step():
+                plan = build_chunk_plan(working, **self.merge, **{self.dim: None})
             self._plan = coalesce_runs(plan, working)
         return self._plan
 
@@ -256,10 +257,16 @@ class _PendingFill:
 
     def windows(self, params, dim_kwargs) -> ChunkPlan:
         """A chunk's windows over the fill, each fed by the files it reaches."""
-        fill = {x: self.merge[x] for x in ("tolerance", "fill_value")}
+        fill = {x: self.merge[x] for x in ("tolerance", "fill_value", "max_shift")}
         working = self.frames[1]
-        plan = build_chunk_plan(working, **(params | fill), **dim_kwargs)
+        with _any_step():
+            plan = build_chunk_plan(working, **(params | fill), **dim_kwargs)
         return coalesce_runs(plan, working)
+
+
+def _any_step():
+    """Join patches whatever their steps, so a fill judges each, as a patch's."""
+    return dc.config_context(sampling_group_tolerance=np.inf)
 
 
 def _stamp_key(*stamps) -> tuple:
@@ -2761,15 +2768,27 @@ class Spool(NodeRepr, NamespaceOwner):
             raise ParameterError(msg)
         dim, size = (args[0], None) if args else next(iter(kwargs.items()))
         if size is None:
-            tolerance = GapTolerance.samples(np.inf)
+            tolerance = GapTolerance(count=np.inf, nearest=True)
         elif samples:
-            if isinstance(size, bool) or not isinstance(size, numbers.Integral):
+            if (
+                isinstance(size, bool)
+                or not isinstance(size, numbers.Integral)
+                or size < 0
+            ):
                 msg = f"A sample count must be a non-negative integer, got {size!r}."
                 raise ParameterError(msg)
-            tolerance = GapTolerance.samples(size + 1)  # a gap's spacing in steps
+            # a gap's spacing in steps
+            tolerance = GapTolerance(count=float(size + 1), nearest=True)
         else:
-            tolerance = GapTolerance.absolute(size)  # past one step
-        merge = dict(tolerance=tolerance, conflict=conflict, fill_value=fill_value)
+            tolerance = GapTolerance(excess=size, nearest=True)  # past one step
+        # a later segment moves onto the grid by under half a step
+        shift = np.nextafter(0.5, 0)
+        merge = dict(
+            tolerance=tolerance,
+            conflict=conflict,
+            fill_value=fill_value,
+            max_shift=shift,
+        )
         pending = _PendingFill(self, dim, merge)
         return self._new_from_catalog(pending)
 

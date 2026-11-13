@@ -63,7 +63,7 @@ from dascore.utils.chunk_plan import (
     patch_local_adjusted_envelopes,
     stretch_coordinate,
 )
-from dascore.utils.gaps import RunRecord
+from dascore.utils.gaps import GapTolerance, RunRecord
 from dascore.utils.misc import is_range
 from dascore.utils.misc import stated_units as _stated_units
 from dascore.utils.patch import concatenate_planned
@@ -782,6 +782,9 @@ class PlanResolver(PatchResolver):
         # the fill is written once the members merge (`_filled`), so the
         # merge, and the ids it stamps, never see it
         merge = {k: v for k, v in self.merge_kwargs.items() if k != "fill_value"}
+        if self.merge_kwargs.get("fill_value") is not None:
+            # members keep their labels, which the fill places as a patch's
+            merge |= {"tolerance": GapTolerance.samples(0), "max_shift": 0}
         return PatchAssembler(
             load_patch=self._load_member,
             merge_kwargs=merge,

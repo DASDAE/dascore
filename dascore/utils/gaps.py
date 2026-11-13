@@ -149,6 +149,9 @@ class GapTolerance:
     excess: Any = None
     # whether the excess is a seam's whole width, not its part past one step
     seam: bool = False
+    # whether a spacing counts the missing positions a fill would write
+    # (the nearest whole steps), as `Patch.fill_gaps` measures a hole
+    nearest: bool = False
 
     def __post_init__(self):
         if (self.count is None) == (self.excess is None):

@@ -15,7 +15,8 @@ import pytest
 import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import random_spool
-from dascore.exceptions import ChunkError, ParameterError, UnitError
+from dascore.exceptions import ChunkError, CoordError, ParameterError, UnitError
+from dascore.utils.misc import suppress_warnings
 
 ONE_SECOND = np.timedelta64(1, "s")
 ONE_NS = np.timedelta64(1, "ns")
@@ -612,6 +613,54 @@ class TestSpoolFillGaps:
         for station, patch in zip(rows["station"], out, strict=True):
             assert patch.attrs.station == station
             assert patch.shape[1] == (2 if station == "A" else 3)
+
+    @pytest.mark.parametrize("offset", [0.0, 0.3, -0.3, 0.45])
+    @pytest.mark.parametrize("missing", [0, 1, 2, 3])
+    @pytest.mark.parametrize(
+        "size", [None, {"x": 1}, {"x": 2}, {"x": 2.4}, {"x": 2, "samples": True}]
+    )
+    def test_matches_patch_fill(self, offset, missing, size):
+        """A spool fills each seam exactly where the joined patch fills it."""
+        first = get_coord(start=0.0, step=1.0, shape=(10,))
+        second = get_coord(start=10.0 + missing + offset, step=1.0, shape=(6,))
+
+        def make(coord):
+            data = np.ones(len(coord))
+            return dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+
+        kwargs = {"x": None} if size is None else size
+        spool = dc.spool([make(first), make(second)])
+        joined = make(concat_coords(first, second))
+        with suppress_warnings(UserWarning):
+            want = joined.fill_gaps(**kwargs)
+            got = spool.fill_gaps(**kwargs)
+        got_coords = [x.get_coord("x") for x in got]
+        assert len(got_coords) == len(want.get_coord("x").segments)
+        if len(got_coords) == 1:
+            assert got_coords[0] == want.get_coord("x")
+            assert len(got.get_contents()) == 1
+
+    def test_negative_sample_count_raises(self, gappy_spool):
+        """A count of missing samples is never negative."""
+        with pytest.raises(ParameterError, match="non-negative"):
+            gappy_spool.fill_gaps(time=-1, samples=True)
+
+    def test_step_change_across_a_fill_raises(self):
+        """Samples on another step across a filled gap raise, as on a patch."""
+        coords = [
+            get_coord(start=0.0, step=1.0, shape=(10,)),
+            get_coord(start=12.0, step=1.5, shape=(6,)),
+        ]
+        patches = [
+            dc.Patch(data=np.ones(len(x)), coords={"x": x}, dims=("x",)) for x in coords
+        ]
+        joined = dc.Patch(
+            data=np.ones(16), coords={"x": concat_coords(*coords)}, dims=("x",)
+        )
+        with pytest.raises(CoordError, match="Resample or snap"):
+            joined.fill_gaps("x")
+        with pytest.raises(CoordError, match="Resample or snap"):
+            len(dc.spool(patches).fill_gaps("x"))  # it plans as it is asked
 
     @pytest.mark.parametrize("kwargs", [{}, {"time": 1, "distance": 1}])
     def test_one_dimension(self, gappy_spool, kwargs):

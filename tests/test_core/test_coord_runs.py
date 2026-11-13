@@ -549,8 +549,9 @@ class TestReviewFindings:
         dist = first.get_coord("distance")
         second = first.update_coords(distance_min=dist.max() + 2.4 * dist.step)
         spool = dc.spool([first, second])
-        assert len(spool.fill_gaps(distance=2)) == 1
-        assert len(spool.fill_gaps(distance=1)) == 2
+        # the later patch lands one position past the gap, as on a patch
+        assert len(spool.fill_gaps(distance=1)) == 1
+        assert len(spool.fill_gaps(distance=0.5)) == 2
 
     @pytest.fixture()
     def dense_patch(self):
@@ -605,7 +606,7 @@ class TestReviewFindings:
         spool = dc.spool([first, second])
         wide = float(2 * time.step / np.timedelta64(1, "s"))
         assert len(spool.fill_gaps(time=wide)) == 1
-        narrow = float(time.step / np.timedelta64(1, "s"))
+        narrow = float(time.step / np.timedelta64(1, "s")) / 2
         assert len(spool.fill_gaps(time=narrow)) == 2
 
     def test_seam_after_an_undeclared_singleton(self):
