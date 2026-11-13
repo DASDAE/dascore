@@ -23,7 +23,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -514,8 +514,591 @@ def _adjust_relative_envelopes(df, coords, uncertain):
     return df
 
 
+# What a row's samples on one dimension are known to be, as a selection
+# is replayed: not yet selected, followed position by position, or lost
+# to a selection the relation could not follow.
+_UNTOUCHED, _FOLLOWED, _LOST = 0, 1, 2
+
+
+def _set_cells(frame, column, rows, values) -> None:
+    """Set the cells of an object column in ``rows`` to values that may be tuples."""
+    cells = frame[column].to_numpy(dtype=object, copy=True)
+    for position, value in zip(frame.index.get_indexer(rows), values, strict=True):
+        cells[position] = value
+    frame[column] = cells
+
+
+def _grid_terms(coord) -> tuple:
+    """The exact grid a relation row states for an evenly sampled coordinate."""
+    return (*coord.runs[0].canonical()[1:], len(coord))
+
+
+def _alike(columns) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Group the rows alike in every column.
+
+    Returns each row's group, numbered in the order the groups first
+    appear, and the position of each group's first row.
+    """
+    codes = np.zeros(len(columns[0]), dtype=np.int64)
+    for values in columns:
+        part, found = pd.factorize(values, use_na_sentinel=False)
+        codes = pd.factorize(codes * len(found) + part)[0]
+    return codes, np.unique(codes, return_index=True)[1]
+
+
+def _held_coord(row: Mapping, name: str):
+    """
+    The samples of ``name`` a relation row holds, or None if it cannot say.
+
+    A plan member holds the part of its source inside its bounds, selected
+    as loading selects it; any other row holds the coordinate its envelope
+    and grid state. A row already trimmed keeps its source's grid, which
+    its envelope no longer ends on, and so states no coordinate.
+    """
+    # Circular import: patch assembly imports the index and its plan utilities.
+    from dascore.utils.patch_assembly import (  # noqa: PLC0415
+        _as_numpy,
+        _cut_coord,
+        _sized_coord,
+    )
+
+    unit = row.get(f"_{name}_units")
+    units = unit if isinstance(unit, str) and unit else None
+    if (coord := _cut_coord(row, name, units)) is None:
+        # a frame hands times back as pandas scalars, which `grid_fits` refuses
+        start, stop = (_as_numpy(row.get(f"{name}_{x}")) for x in ("min", "max"))
+        grid = row.get(f"_{name}_grid")
+        ticks = _value_family(start) not in ("number", "text")
+        if isinstance(grid, tuple) and ticks and not grid_fits(grid, start, stop):
+            return None
+        coord = _sized_coord(row, name, units=units)
+    return None if coord is None or coord._partial else coord
+
+
+class _Held(NamedTuple):
+    """The coordinate each row of a relation holds of one name."""
+
+    # each row's group; rows alike in what they hold share one
+    codes: np.ndarray
+    # each group's coordinate, None where the row cannot say
+    coords: list
+    # each row's sample count, -1 where the row cannot say
+    sizes: np.ndarray
+    # how far each row's labels sit past its group's; None when rows are
+    # grouped by their labels themselves, and so sit nowhere past them
+    shift: np.ndarray | None
+
+
+def _held_coords(source, name) -> _Held:
+    """
+    `_held_coord` for every row of ``source``, rebuilt once per group.
+
+    Rows alike in every value the coordinate is rebuilt from share one.
+    On a datetime or timedelta coordinate alike means alike counted from
+    the row's own start, so an archive of files that differ only in when
+    they start rebuilds one coordinate, and each row's labels are its
+    group's shifted by the difference in start.
+    """
+    low, high = f"{name}_min", f"{name}_max"
+    private = ("grid", "coord_dtype", "units", "units_source", "src_low")
+    private += ("src_high", "src_step")
+    columns = [low, high, f"{name}_step", *(f"_{name}_{x}" for x in private)]
+    columns = [c for c in columns if c in source]
+    keys = {c: source[c].to_numpy() for c in columns}
+    labels = [c for c in (low, high, f"_{name}_src_low", f"_{name}_src_high")]
+    labels = [c for c in labels if c in keys]
+    start, shift = keys[low], None
+    if start.dtype.kind in "mM" and all(keys[c].dtype == start.dtype for c in labels):
+        keys.update({c: keys[c] - start for c in labels})
+        shift = start
+    codes, firsts = _alike(list(keys.values()))
+    if shift is not None:
+        shift = shift - shift[firsts][codes]
+    rows = zip(*(source[c].iloc[firsts].tolist() for c in columns), strict=True)
+    coords = [_held_coord(dict(zip(columns, row, strict=True)), name) for row in rows]
+    sizes = np.array([-1 if x is None else len(x) for x in coords], dtype=np.int64)
+    return _Held(codes, coords, sizes[codes], shift)
+
+
+def _sliced(lo, hi, start, stop):
+    """The first and last positions a Python slice keeps of ``lo`` through ``hi``."""
+    size = hi - lo + 1
+    ends = []
+    for index, default in ((start, 0), (stop, size)):
+        if index is None:
+            ends.append(default)
+        elif index >= 0:
+            ends.append(np.minimum(index, size))
+        else:
+            ends.append(np.maximum(size + index, 0))
+    return lo + ends[0], lo + ends[1] - 1
+
+
+def _span(coord, low, high) -> tuple[int, int, int, int]:
+    """
+    The first and last positions of ``coord`` with labels in a value range.
+
+    Given twice: the widest span rounding allows, then the narrowest. A
+    float label is known only to rounding, so a bound within a tenth of a
+    step of one may or may not keep it; time and integer labels are exact
+    and the two agree. None leaves an end open. An empty span has its
+    first position past its last.
+    """
+    # Circular import: patch assembly imports the index and its plan utilities.
+    from dascore.utils.patch_assembly import _READ_PAD, _as_numpy  # noqa: PLC0415
+
+    low, high = (None if pd.isnull(x) else _as_numpy(x) for x in (low, high))
+    pads = [0]
+    if np.asarray(coord.min()).dtype.kind == "f":
+        pad = abs(to_float(coord.step)) * _READ_PAD
+        pads = [pad, -pad]
+    out = []
+    for pad in pads:
+        first = low if low is None or not pad else low - pad
+        last = high if high is None or not pad else high + pad
+        if first is not None and last is not None and first > last:
+            out += [1, 0]
+            continue
+        start, stop, _ = coord.select((first, last))[1].indices(len(coord))
+        out += [start, stop - 1]
+    return tuple(out * (2 // len(pads)))
+
+
+def _relative_span(coord, value, lows, highs) -> tuple[int, int, int, int]:
+    """
+    `_span` of a relative range on a coordinate kept from ``coord``.
+
+    ``lows`` and ``highs`` hold the first and last positions the row may
+    have kept. A relative bound counts from the kept coordinate's own
+    ends, so each pairing is tried, and the answer spans them all. Any
+    pairing that keeps nothing makes the span empty: the row may be.
+    """
+    found = []
+    for lo in sorted(set(lows)):
+        for hi in sorted(set(highs)):
+            kept = coord[int(lo) : int(hi) + 1]
+            range_ = express_range_for_coord(value, kept)
+            low, high = kept._get_slice_tuple(range_, relative=True)
+            if low is not None and high is not None and low > high:
+                return 1, 0, 1, 0
+            span = _span(coord, low, high)
+            found.append(
+                (max(span[0], lo), min(span[1], hi), max(span[2], lo), min(span[3], hi))
+            )
+    if any(x[0] > x[1] for x in found):
+        return 1, 0, 1, 0
+    firsts, lasts, in_firsts, in_lasts = zip(*found, strict=True)
+    return min(firsts), max(lasts), max(in_firsts), min(in_lasts)
+
+
+def _outward(values, steps, scales, dtypes, sign) -> np.ndarray:
+    """
+    Float labels moved toward ``sign`` as far as a stored label may sit.
+
+    A label rebuilt from a start and step is not the one the file holds.
+    A float coordinate is evenly sampled only while its labels spread no
+    more than twice `_float_allowance` about the grid through the first,
+    so a stored label is within that of its grid position; a third
+    allowance, four spacings of the largest label or more, covers the
+    rounding of the rebuilt label itself. ``scales`` is each row's
+    largest label in size, which the allowance is measured at in the
+    dtype the file stores.
+    """
+    out = values.astype(np.float64)
+    names = pd.Series(dtypes, dtype=object)
+    names = names.where(names.map(lambda x: isinstance(x, str)), "float64").to_numpy()
+    for name in pd.unique(names):
+        dtype = np.dtype(name) if np.dtype(name).kind == "f" else np.dtype("float64")
+        rows = names == name
+        ulps = _GRID_ULPS * np.spacing(scales[rows].astype(dtype)).astype(np.float64)
+        allowance = np.maximum(
+            _GRID_RTOL * np.abs(steps[rows].astype(np.float64)), ulps
+        )
+        out[rows] += sign * 3 * allowance
+    return out
+
+
+def _as_dtype(values, dtype, sign) -> np.ndarray:
+    """Envelope ends cast to a narrower float column, rounded outward."""
+    if not (dtype.kind == "f" and values.dtype.kind == "f"):
+        return values
+    cast = values.astype(dtype)
+    inside = (cast.astype(np.float64) - values) * sign < 0
+    out = np.nextafter(cast, np.asarray(sign * np.inf, dtype=dtype))
+    return np.where(inside, out, cast)
+
+
+class _Kept:
+    """
+    Which of the samples each row held on one dimension it still holds.
+
+    Positions count into the coordinate the row held before any
+    selection. ``lo`` and ``hi`` are the first and last sample kept at
+    the widest, ``in_lo`` and ``in_hi`` at the narrowest; they differ
+    where float rounding leaves an end sample in doubt, and the narrowest
+    is empty (``in_lo`` past ``in_hi``) where it leaves none certain.
+    """
+
+    def __init__(self, count: int):
+        self.status = np.full(count, _UNTOUCHED, dtype=np.int8)
+        self.size, self.lo, self.hi, self.in_lo, self.in_hi = (
+            np.zeros(count, dtype=np.int64) for _ in range(5)
+        )
+        # rows a selection moved since the envelopes were last trimmed
+        self.moved = np.zeros(count, dtype=bool)
+
+    def narrow(self, rows, lo, hi, in_lo, in_hi) -> None:
+        """Keep, of ``rows``, the samples inside the spans given."""
+        self.lo[rows] = np.maximum(self.lo[rows], lo)
+        self.hi[rows] = np.minimum(self.hi[rows], hi)
+        self.in_lo[rows] = np.maximum(self.in_lo[rows], in_lo)
+        self.in_hi[rows] = np.minimum(self.in_hi[rows], in_hi)
+        gone = self.lo[rows] > self.hi[rows]
+        # a row that may hold nothing is left to the selected coordinate
+        self.status[rows[gone]] = _LOST
+        self.moved[rows[~gone]] = True
+
+
+class _SampleTracker:
+    """
+    Follow the samples each row keeps as selections are replayed.
+
+    `Patch.select` on a coordinate cuts every coordinate on its dimension
+    by the same samples. An envelope cannot carry that from one
+    coordinate to another: it may sit on a query bound between samples,
+    or be a superset. So the samples themselves are followed, by position,
+    wherever the selected coordinate rebuilds from its row (see
+    `_held_coord`), and each coordinate on the dimension takes its ends
+    from the positions kept. Where a selection cannot be followed the
+    dimension is lost for that row: its envelopes stay as they are, which
+    is a superset, and nothing is counted from them again.
+
+    Rows are positions in ``source``, the relation before any selection.
+    """
+
+    def __init__(self, source: pd.DataFrame):
+        self.source = source
+        names = {
+            str(c)[1 : -len(end)]
+            for c in source.columns
+            for end in ("_dims", "_grid")
+            if str(c).startswith("_") and str(c).endswith(end)
+        }
+        ends = ("_min", "_max")
+        names = {x for x in names if {x + e for e in ends}.issubset(source.columns)}
+        self.names = sorted(names)
+        # a frame stating no dimensions has each coordinate on its own
+        own = {x: np.full(len(source), x, dtype=object) for x in self.names}
+        self.dims = {
+            x: source[f"_{x}_dims"].to_numpy(dtype=object)
+            if f"_{x}_dims" in source
+            else own[x]
+            for x in self.names
+        }
+        self.kept: dict[str, _Kept] = {}
+        self._held: dict[str, _Held] = {}
+        self._watched: dict[str, bool] = {}
+
+    def rows(self, index) -> np.ndarray:
+        """The rows of ``source`` the labels of ``index`` name."""
+        return self.source.index.get_indexer(index)
+
+    def held(self, name) -> _Held:
+        """The coordinate each row holds of ``name``, rebuilt once."""
+        if name not in self._held:
+            self._held[name] = _held_coords(self.source, name)
+        return self._held[name]
+
+    def watched(self, name) -> bool:
+        """
+        Whether selecting ``name`` moves anything but its own envelope.
+
+        It does where another coordinate shares its dimension, where it
+        spans several, or where it is on an exact grid, whose labels a
+        sample selection reads from the samples kept. Most selections are
+        on a dimension nothing else is on, and are not followed at all.
+        """
+        if name not in self.dims:
+            return False
+        if name not in self._watched:
+            mine = self.dims[name]
+            held = pd.notna(mine)
+            others = (self.dims[x] for x in self.names if x != name)
+            shared = any((x[held] == mine[held]).any() for x in others)
+            several = any("," in str(x) for x in pd.unique(mine[held]))
+            grid = self.source.get(f"_{name}_grid", ())
+            exact = any(isinstance(x, tuple) for x in grid)
+            self._watched[name] = shared or several or exact
+        return self._watched[name]
+
+    def _parts(self, name, rows):
+        """Yield each dimensions cell ``name`` has in ``rows``, with its rows."""
+        cells = self.dims[name][rows]
+        for cell in pd.unique(cells):
+            if isinstance(cell, str):
+                yield cell, rows[cells == cell]
+
+    def _state(self, key) -> _Kept:
+        return self.kept.setdefault(key, _Kept(len(self.source)))
+
+    def lose(self, name, rows) -> None:
+        """Record a selection on ``name`` that ``rows`` cannot be followed through."""
+        if not self.watched(name):
+            return
+        for cell, part in self._parts(name, rows):
+            for key in cell.split(","):
+                self._state(key).status[part] = _LOST
+
+    def lost(self, name, rows) -> np.ndarray:
+        """Whether an earlier selection on its dimension left each row unfollowed."""
+        out = np.zeros(len(rows), dtype=bool)
+        if name in self.dims:
+            cells = self.dims[name][rows]
+            for key, state in self.kept.items():
+                out |= (cells == key) & (state.status[rows] == _LOST)
+        return out
+
+    def _followed(self, name, rows, sure=False):
+        """
+        Yield each dimension's state with the rows ``name`` can move on it.
+
+        A row is followed from its first selection, and only while the
+        selected coordinate rebuilds and is as long as the dimension; the
+        rest of ``rows`` are lost. ``sure`` also loses rows with no sample
+        certain, which a count from either end cannot start from.
+        """
+        if not self.watched(name):
+            return
+        held = self.held(name)
+        for cell, part in self._parts(name, rows):
+            if "," in cell:  # a coordinate on several dimensions trims each
+                self.lose(name, part)
+                continue
+            state = self._state(cell)
+            new = part[state.status[part] == _UNTOUCHED]
+            state.status[new], state.size[new] = _FOLLOWED, held.sizes[new]
+            state.lo[new] = state.in_lo[new] = 0
+            state.hi[new] = state.in_hi[new] = held.sizes[new] - 1
+            told = (state.status[part] == _FOLLOWED) & (held.sizes[part] > 0)
+            told &= held.sizes[part] == state.size[part]
+            if sure:
+                told &= state.in_lo[part] <= state.in_hi[part]
+            state.status[part[~told]] = _LOST
+            if told.any():
+                yield state, part[told]
+
+    def by_samples(self, name, rows, value) -> None:
+        """Replay a selection of ``name`` by sample positions onto ``rows``."""
+        for state, part in self._followed(name, rows, sure=True):
+            firsts, lasts = zip(
+                *(
+                    _sliced(lo[part], hi[part], *value)
+                    for lo in (state.lo, state.in_lo)
+                    for hi in (state.hi, state.in_hi)
+                ),
+                strict=True,
+            )
+            firsts, lasts = np.array(firsts), np.array(lasts)
+            # a count from either end shifts with the end it counts from
+            empty = (lasts < firsts).any(axis=0)
+            state.lo[part], state.in_lo[part] = firsts.min(axis=0), firsts.max(axis=0)
+            state.hi[part], state.in_hi[part] = lasts.max(axis=0), lasts.min(axis=0)
+            state.status[part[empty]] = _LOST
+            state.moved[part[~empty]] = True
+
+    def by_bounds(self, name, rows, lows, highs) -> None:
+        """
+        Replay a selection of ``name`` by value onto ``rows``.
+
+        ``lows`` and ``highs`` are the row's new envelope ends, null where
+        the selection left that end alone.
+        """
+        held = self.held(name)
+        place = np.full(len(self.source), -1)
+        place[rows] = np.arange(len(rows))
+        for state, part in self._followed(name, rows):
+            ends = [x[place[part]] for x in (lows, highs)]
+            if held.shift is not None:
+                ends = [x - held.shift[part] for x in ends]
+            codes, firsts = _alike([held.codes[part], *ends])
+            spans = [
+                _span(held.coords[held.codes[part[x]]], ends[0][x], ends[1][x])
+                for x in firsts
+            ]
+            state.narrow(part, *(np.array(x)[codes] for x in zip(*spans, strict=True)))
+
+    def by_relative(self, name, rows, value) -> None:
+        """Replay a relative selection of ``name`` onto ``rows``."""
+        held = self.held(name)
+        for state, part in self._followed(name, rows, sure=True):
+            ranges = [x[part] for x in (state.lo, state.in_lo, state.hi, state.in_hi)]
+            codes, firsts = _alike([held.codes[part], *ranges])
+            spans = [
+                _relative_span(
+                    held.coords[held.codes[part[x]]],
+                    value,
+                    (ranges[0][x], ranges[1][x]),
+                    (ranges[2][x], ranges[3][x]),
+                )
+                for x in firsts
+            ]
+            state.narrow(part, *(np.array(x)[codes] for x in zip(*spans, strict=True)))
+
+    def follow_values(self, before, after, coords, relative, uncertain) -> None:
+        """
+        Replay a selection by value, from the envelopes it left.
+
+        A row is selected where its envelope moved. ``uncertain`` names,
+        by coordinate, the rows a relative selection trimmed without
+        knowing where.
+        """
+        shared = after.index.intersection(before.index)
+        was, now = before.index.get_indexer(shared), after.index.get_indexer(shared)
+        rows = self.rows(shared)
+        for name, value in coords.items():
+            if not self.watched(name):
+                continue
+            cols = [f"{name}_min", f"{name}_max"]
+            old = [before[c].to_numpy()[was] for c in cols]
+            new = [after[c].to_numpy()[now] for c in cols]
+            moved = [x != y for x, y in zip(old, new, strict=True)]
+            blind = np.isin(shared, list(uncertain.get(name, ())))
+            self.lose(name, rows[blind])
+            cut = (moved[0] | moved[1]) & ~blind
+            cut &= ~(pd.isnull(new[0]) | pd.isnull(new[1]))
+            if not cut.any():
+                continue
+            if relative:
+                self.by_relative(name, rows[cut], value)
+                continue
+            # an end the selection left alone bounds nothing: the envelope
+            # there may be a superset of the samples held
+            ends = [
+                pd.Series(x[cut]).mask(~y[cut]).to_numpy()
+                for x, y in zip(new, moved, strict=True)
+            ]
+            self.by_bounds(name, rows[cut], *ends)
+
+    def ends(self, name, state, rows):
+        """
+        The ends of what ``rows`` keep of ``name``.
+
+        Returns each row's least and greatest label, the coordinates kept
+        and which of them each row keeps. A float label is moved outward
+        to allow for rounding, except at an end of what the row first
+        held, where the row's own envelope states it.
+        """
+        held, source = self.held(name), self.source
+        codes, firsts = _alike([held.codes[rows], state.lo[rows], state.hi[rows]])
+        kept = [
+            held.coords[held.codes[x]][int(state.lo[x]) : int(state.hi[x]) + 1]
+            for x in rows[firsts]
+        ]
+        mins = np.array([x.min() for x in kept])[codes]
+        maxs = np.array([x.max() for x in kept])[codes]
+        if held.shift is not None:
+            mins, maxs = mins + held.shift[rows], maxs + held.shift[rows]
+        elif mins.dtype.kind == "f":
+            steps = to_float(source[f"{name}_step"].to_numpy()[rows])
+            dtypes = source.get(f"_{name}_coord_dtype", pd.Series(index=source.index))
+            dtypes = dtypes.to_numpy(dtype=object)[rows]
+            first = state.lo[rows] == 0
+            last = state.hi[rows] == state.size[rows] - 1
+            # the least label is the first sample, or the last if descending
+            down = steps < 0
+            low = np.minimum(source[f"{name}_min"].to_numpy()[rows], mins)
+            high = np.maximum(source[f"{name}_max"].to_numpy()[rows], maxs)
+            scales = np.maximum(np.abs(low), np.abs(high))
+            out_min = _outward(mins, steps, scales, dtypes, -1)
+            out_max = _outward(maxs, steps, scales, dtypes, 1)
+            mins = np.where(np.where(down, last, first), low, out_min)
+            maxs = np.where(np.where(down, first, last), high, out_max)
+        return mins, maxs, kept, codes
+
+    def sample_ends(self, name, rows):
+        """
+        The ends of what ``rows`` keep of ``name`` after a selection moved them.
+
+        Returns the places in ``rows`` of the rows followed, with their
+        least and greatest labels, and their exact grids: None where an
+        end sample is in doubt, which a grid cannot state.
+        """
+        places, mins, maxs, grids = [], [], [], []
+        for cell, part in self._parts(name, rows) if self.watched(name) else ():
+            state = self.kept.get(cell)
+            if state is None:
+                continue
+            part = part[(state.status[part] == _FOLLOWED) & state.moved[part]]
+            if not len(part):
+                continue
+            low, high, kept, codes = self.ends(name, state, part)
+            sure = (state.lo[part] == state.in_lo[part]) & (
+                state.hi[part] == state.in_hi[part]
+            )
+            terms = {x: _grid_terms(kept[x]) for x in set(codes[sure])}
+            grids += [terms.get(x) if y else None for x, y in zip(codes, sure)]
+            places.append(np.flatnonzero(np.isin(rows, part)))
+            mins.append(low)
+            maxs.append(high)
+        if not places:
+            return np.array([], dtype=np.int64), None, None, []
+        return np.concatenate(places), np.concatenate(mins), np.concatenate(maxs), grids
+
+    def trim(self, after: pd.DataFrame, names, riders=True) -> pd.DataFrame:
+        """
+        Give each coordinate on a dimension a selection moved its new ends.
+
+        A coordinate the selection named keeps the envelope its own
+        selection drew, unless another on its dimension was named beside
+        it: then each is cut to the samples both keep. ``riders`` False
+        leaves the coordinates it did not name as they were.
+        """
+        for key, state in self.kept.items():
+            rows = np.flatnonzero(state.moved & (state.status == _FOLLOWED))
+            state.moved[:] = False
+            if not len(rows):
+                continue
+            on = [x for x in self.names if (self.dims[x][rows] == key).any()]
+            named = [x for x in on if x in names]
+            for name in on:
+                if (name in named and len(named) < 2) or not (riders or name in named):
+                    continue
+                sizes = self.held(name).sizes[rows]
+                part = rows[
+                    (self.dims[name][rows] == key) & (sizes == state.size[rows])
+                ]
+                place = after.index.get_indexer(self.source.index[part])
+                part, place = part[place >= 0], place[place >= 0]
+                if not len(part):
+                    continue
+                mins, maxs, kept, codes = self.ends(name, state, part)
+                cols = [f"{name}_min", f"{name}_max"]
+                if name in named:
+                    mins = np.maximum(mins, after[cols[0]].to_numpy()[place])
+                    maxs = np.minimum(maxs, after[cols[1]].to_numpy()[place])
+                    some = mins <= maxs
+                    part, place, mins, maxs = (
+                        x[some] for x in (part, place, mins, maxs)
+                    )
+                labels = after.index[place]
+                after.loc[labels, cols[0]] = _as_dtype(mins, after[cols[0]].dtype, -1)
+                after.loc[labels, cols[1]] = _as_dtype(maxs, after[cols[1]].dtype, 1)
+                if name in named or (col := f"_{name}_grid") not in after:
+                    continue
+                # an exact grid restates only samples known to the sample
+                sure = (state.lo[part] == state.in_lo[part]) & (
+                    state.hi[part] == state.in_hi[part]
+                )
+                grids = after[col].to_numpy()[place]
+                sure &= np.array([isinstance(x, tuple) for x in grids], dtype=bool)
+                terms = {x: _grid_terms(kept[x]) for x in set(codes[sure])}
+                _set_cells(after, col, labels[sure], [terms[x] for x in codes[sure]])
+        return after
+
+
 def patch_local_adjusted_envelopes(
-    df: pd.DataFrame, residuals, drop_empty: bool = True
+    df: pd.DataFrame, residuals, drop_empty: bool = True, riders: bool = True
 ) -> pd.DataFrame:
     """
     Replay coordinate residuals onto relation envelopes in call order.
@@ -530,18 +1113,23 @@ def patch_local_adjusted_envelopes(
     ``drop_empty`` removes rows emptied by sample selection for planning;
     presentation keeps those rows. Relative selections always remove rows
     whose resolved windows are empty.
+
+    ``riders`` False leaves the coordinates the last selection did not
+    name, but which share a dimension with one it did, untrimmed: wider
+    than what loads, as an envelope may be, and enough to load from. An
+    earlier selection still trims them, since a later one selects rows
+    by them.
     """
 
     def _usable_index(value) -> bool:
         return value is None or isinstance(value, int | np.integer)
 
-    # Circular import: patch assembly imports the index and its plan utilities.
-    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
-
     source = df
     df = df.copy(deep=False)
+    tracker = _SampleTracker(source)
     for position, (coords, samples, relative) in enumerate(residuals):
         if not samples:
+            before, uncertain = df.copy(deep=False), {}
             if relative:
                 df, uncertain = _relative_endpoints(
                     df, source, residuals[:position], coords
@@ -549,17 +1137,26 @@ def patch_local_adjusted_envelopes(
                 df = _adjust_relative_envelopes(df, coords, uncertain)
             else:
                 df = _adjust_absolute_envelopes(df, coords)
+            # only riders, or two coordinates cut to what both keep, need
+            # the samples followed
+            if riders or position < len(residuals) - 1 or len(coords) > 1:
+                tracker.follow_values(before, df, coords, relative, uncertain)
+                df = tracker.trim(df, coords)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]
-            if not set(cols).issubset(df.columns) or not is_range(value):
+            rows = tracker.rows(df.index)
+            usable = set(cols).issubset(df.columns) and is_range(value)
+            usable = usable and all(_usable_index(x) for x in value)
+            if not usable or df[cols[2]].isna().all():  # no step to count by
+                tracker.lose(name, rows)
                 continue
             lo_idx, hi_idx = value
-            if not (_usable_index(lo_idx) and _usable_index(hi_idx)):
-                continue
             mins, maxs, steps = (df[c] for c in cols)
-            if steps.isna().all():  # no step to count samples by
-                continue
+            # a dimension an earlier selection lost has no first sample to
+            # count from; its envelope stays a superset
+            lost = tracker.lost(name, rows)
+            tracker.by_samples(name, rows, value)
             # Positions are patch-local sample indices with a stop-exclusive
             # hi, so the last included position is hi - 1. Sample 0 sits at
             # the envelope min for ascending coords and at the max for
@@ -579,7 +1176,7 @@ def patch_local_adjusted_envelopes(
                 return (counts + idx).clip(lower=0)
 
             lo_pos, hi_pos = _positions(lo_idx), _positions(hi_idx)
-            unresolved = steps.isna()
+            unresolved = steps.isna() | lost
             for pos in (lo_pos, hi_pos):
                 if pos is not None:
                     unresolved |= pos.isna()
@@ -594,21 +1191,22 @@ def patch_local_adjusted_envelopes(
             # unresolvable rows keep their envelope (candidacy superset)
             new_min = new_min.mask(unresolved, mins)
             new_max = new_max.mask(unresolved, maxs)
-            # A whole row (its envelope spans its grid) on an exact fractional
-            # grid, whose samples are not whole steps apart, takes its picks.
-            col = f"_{name}_grid"
-            codes, grids = pd.factorize(df.get(col, pd.Series(dtype=object)))
-            for code in range(len(grids)):
-                rows = (codes == code) & mins.notna().to_numpy()
-                coord = coord_from_row(df[rows].iloc[0], name) if rows.any() else None
-                if coord is None:  # emptied by an earlier selection
-                    continue
-                same = rows & ((maxs - mins) == coord.max() - coord.min()).to_numpy()
-                if same.any() and len(picked := coord.select(value, samples=True)[0]):
-                    new_min[same] = mins[same] + (picked.min() - coord.min())
-                    new_max[same] = maxs[same] - (coord.max() - picked.max())
-                    terms = (*picked.runs[0].canonical()[1:], len(picked))
-                    df[col] = [terms if x else g for x, g in zip(same, df[col])]
+            # A row whose samples are followed takes its ends from the ones
+            # it keeps: an envelope end may sit between samples, and on an
+            # exact grid samples need not be whole steps apart.
+            places, lows, highs, grids = tracker.sample_ends(name, rows)
+            if len(places):
+                labels = df.index[places]
+                new_min.loc[labels] = _as_dtype(lows, new_min.dtype, -1)
+                new_max.loc[labels] = _as_dtype(highs, new_max.dtype, 1)
+            if (col := f"_{name}_grid") in df and len(places):
+                old = df[col].to_numpy()[places]
+                exact = [
+                    isinstance(x, tuple) and y is not None
+                    for x, y in zip(old, grids, strict=True)
+                ]
+                grids = [x for x, keep in zip(grids, exact, strict=True) if keep]
+                _set_cells(df, col, labels[np.array(exact, dtype=bool)], grids)
             # rows whose window is empty or lies entirely outside the
             # patch contribute nothing; test before clipping so such
             # windows are not resurrected as one-sample envelopes
@@ -622,6 +1220,7 @@ def patch_local_adjusted_envelopes(
                 empty = ~keep & ~unresolved
                 df[cols] = df[cols].mask(empty)
                 df[_PATCH_LOCAL_EMPTY] = df.get(_PATCH_LOCAL_EMPTY, False) | empty
+        df = tracker.trim(df, coords, riders or position < len(residuals) - 1)
     return df
 
 
