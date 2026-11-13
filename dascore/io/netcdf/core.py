@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 from pathlib import Path
 
 import numpy as np
@@ -75,8 +76,11 @@ def _open_xarray_dataset(resource: H5Reader):
 
 
 def _open_classic_dataset(resource: BinaryReader):
-    """Open a netCDF-3 file as an xarray dataset; its arrays are read whole."""
-    return optional_import("xarray").open_dataset(resource, engine="scipy")
+    """Open a netCDF-3 file as an xarray dataset; the file is read whole."""
+    # A copy, because some xarray versions close the handle they are given.
+    resource.seek(0)
+    buffer = io.BytesIO(resource.read())
+    return optional_import("xarray").open_dataset(buffer, engine="scipy")
 
 
 def _int_for_bool(attrs: dict) -> dict:
