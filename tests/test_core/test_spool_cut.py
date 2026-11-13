@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.io.core as io_core
 import dascore.utils.chunk_plan as chunk_plan
 from dascore.core.spool import Spool
 from dascore.exceptions import CoordMergeError, ParameterError
@@ -385,10 +386,7 @@ class TestCut:
         plan = mock.patch.object(
             PlanResolver, "resolve", autospec=True, side_effect=PlanResolver.resolve
         )
-        # a cut loads each piece through its own plan, which reads it from its
-        # file with the window's trims (dc.read), not the array reader that a
-        # one-level merge of whole files uses
-        file = mock.patch.object(dc, "read", wraps=dc.read)
+        file = mock.patch.object(io_core, "_array_reader", wraps=io_core._array_reader)
         source = mock.patch.object(
             FileResolver, "resolve", autospec=True, side_effect=FileResolver.resolve
         )
@@ -786,7 +784,10 @@ class TestCutWindows:
         )
         cut = spool.cut(x=np.array([[50, 150]]))
         joined = spool.select(x=np.array([[50, 150]])).chunk(x=None)
-        assert [x.get_coord("x") for x in cut] == [x.get_coord("x") for x in joined]
+        for got, expected in zip(cut, joined, strict=True):  # converted on load
+            got, expected = got.get_coord("x"), expected.get_coord("x")
+            assert str(got.units) == str(expected.units)
+            np.testing.assert_allclose(got.values, expected.values, rtol=1e-12)
         metres = [x.convert_units(x="m").get_coord("x") for x in cut]
         np.testing.assert_allclose(
             [(x.min(), x.max()) for x in metres], [[16, 45], [100, 150]]
@@ -812,3 +813,16 @@ class TestCutWindows:
             )
         else:
             assert "channel" not in out.coords.coord_map
+
+    def test_crossing_window_reads_arrays(self, spool, start, tmp_path):
+        """A window across files loads each file's part with array reads."""
+        dc.examples.spool_to_directory(spool, path=tmp_path)
+        directory = dc.spool(tmp_path).update()
+        cut = directory.cut(time=_windows(start, (5, 12)))
+        arrays = mock.patch.object(
+            io_core, "_array_reader", wraps=io_core._array_reader
+        )
+        with arrays as reads, mock.patch.object(dc, "read", wraps=dc.read) as patches:
+            (patch,) = cut
+        assert reads.call_count == 2 and not patches.call_count  # one per file
+        assert _span(patch) == _seconds(start, 5, 12)

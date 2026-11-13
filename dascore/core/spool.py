@@ -227,6 +227,35 @@ def _stamp_key(*stamps) -> tuple:
     )
 
 
+def _joined(frame, many, dim, merge) -> ChunkPlan:
+    """Join the rows `many` marks along `dim`, as chunk joins; pass the rest whole."""
+    try:
+        plan = build_chunk_plan(frame[many], **merge)
+    except UnitError:  # a tolerance with units joins dims of its kind
+        plan = build_chunk_plan(frame[many], **(merge | {"tolerance": None}))
+    lone = frame[~many]
+    ends = zip(lone[f"{dim}_min"], lone[f"{dim}_max"])
+    kept = build_subdivision_plan(lone, [[x] for x in ends], dim)
+    for x in (kept.outputs, kept.members):
+        x["output_id"] += len(plan.outputs)
+    stack = lambda x: pd.concat([getattr(plan, x), getattr(kept, x)])  # noqa
+    return replace(plan, outputs=stack("outputs"), members=stack("members"))
+
+
+def _composed(plan, pieces) -> ChunkPlan:
+    """A plan joining `pieces`' outputs, restated over their sources."""
+    piece = pieces.members.set_index("output_id").loc[plan.members["_patch_row"]]
+    piece, members = piece.reset_index(drop=True), plan.members.reset_index(drop=True)
+    own = [x for x in piece if x.endswith(("_min", "_max", "_units"))]
+    members = members.assign(  # each member is its piece, narrowed along the join
+        **{x: members[x].fillna(piece[x]) if x in members else piece[x] for x in own},
+        _patch_row=piece["_patch_row"],
+        _modified=members["_modified"].to_numpy(bool)
+        | piece["_modified"].to_numpy(bool),
+    )
+    return replace(plan, members=members, trim_dims=pieces.trim_dims)
+
+
 def _window_rows(kwargs, present) -> list[dict]:
     """Explicit cut windows as one {dim: bounds} per row, refusing other forms."""
     ranges = explicit_windows(kwargs)
@@ -2797,35 +2826,39 @@ class Spool(NodeRepr, NamespaceOwner):
             }
             stamp |= {x: pd.array([None] * len(asked), y) for x, y in blank.items()}
             labels = dtypes | blank
-            out = part._chunked(source_rows, plan, stamp, labels, lossy=True)
-            group = [*_resolve_group_attrs(None, set(out._df)), *labels]
-            passes = [main, *others]
+            kinds_seen = _resolve_group_attrs(None, set(working))
+            pieces = replace(plan, outputs=plan.outputs.assign(**stamp))
+            # the first join goes onto the files, so its windows load by array
+            # reads; joins along other dims then join its outputs
+            stale = [f"_{x}_def_key" for x in plan.trim_dims]  # their trims say
+            frame = pieces.outputs.rename(columns={"output_id": "_patch_row"})
+            frame = frame.drop(columns=stale, errors="ignore").assign(_modified=False)
+            out, passes = None, [main, *others]
             for dim in passes:
+                if out is not None:
+                    source_rows, frame = out._plan_frames(dim)
                 # only pieces of one window alike on every other dim can join
                 alike = [f"{x}_{y}" for x in have if x != dim for y in ("min", "max")]
-                keys = out._df[[*dtypes, *alike]].astype(object)
-                many = keys.duplicated(keep=False)
+                many = frame[[*labels, *alike]].astype(object).duplicated(keep=False)
                 if not many.any():
+                    if out is None:
+                        out = part._chunked(
+                            source_rows, pieces, dtypes=labels, lossy=True
+                        )
                     continue
+                steps = [f"{x}_step" for x in have if x != dim]
                 merge: dict[str, Any] = {dim: None, **(joins if counts[dim] else {})}
-                source_rows, rows = out._plan_frames(dim)
-                held = rows["_patch_row"].isin(out._df["_patch_row"][many]).to_numpy()
-                kwargs: dict[str, Any] = dict(group=group, conflict=conflict, **merge)
-                try:
-                    plan = build_chunk_plan(rows[held], **kwargs)
-                except UnitError:  # a tolerance with units joins dims of its kind
-                    kwargs["tolerance"] = None
-                    plan = build_chunk_plan(rows[held], **kwargs)
-                if main not in (dim, passes[-1]) and len(plan.outputs) < held.sum():
+                merge |= dict(
+                    group=[*kinds_seen, *labels, *alike, *steps], conflict=conflict
+                )
+                joined = _joined(frame, many.to_numpy(), dim, merge)
+                if main not in (dim, passes[-1]) and len(joined.outputs) < len(frame):
                     passes.append(main)  # what others made alike may join along main
-                lone = rows[~held]  # passes through whole, in the same catalog
-                ends = zip(lone[f"{dim}_min"], lone[f"{dim}_max"])
-                kept = build_subdivision_plan(lone, [[x] for x in ends], dim)
-                for x in (kept.outputs, kept.members):
-                    x["output_id"] += len(plan.outputs)
-                stack = lambda x: pd.concat([getattr(plan, x), getattr(kept, x)])  # noqa
-                plan = replace(plan, outputs=stack("outputs"), members=stack("members"))
-                out = out._chunked(source_rows, plan, dtypes=labels, lossy=True)
+                joined = joined if out is not None else _composed(joined, pieces)
+                out = (part if out is None else out)._chunked(
+                    source_rows, joined, dtypes=labels, lossy=True
+                )
+            assert out is not None, "the first pass always plans the pieces"
             cuts.append(out)
         if not cuts:
             return self._new_from_catalog(

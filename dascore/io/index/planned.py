@@ -665,6 +665,7 @@ class PlanResolver(PatchResolver):
             sources_unchanged=self._sources_unchanged,
             trim_dims=self.trim_dims,
             aux_coords=bool(self.aux_coords),
+            stamped=self.stamped,
         )
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
