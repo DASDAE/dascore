@@ -103,13 +103,13 @@ A scalar applies the same fraction at both ends. Tuple values let asymmetric rec
 
 See the [edge-effects recipe](../recipes/edge_effects.qmd) for tapering before filters.
 
-# Rolling windows {#rolling}
+# Moving windows {#rolling}
 
-[`Patch.rolling`](`dascore.Patch.rolling`) provides moving-window reductions. Incomplete windows produce NaNs, which can be removed with `dropna`.
+[`Patch.window`](`dascore.Patch.window`) provides moving-window reductions. A window which reaches past either end of the data gives NaN, or is left out with `ends="drop"`. See the [windowing recipe](../recipes/windowing.qmd) for what else a window does.
 
 ```{python}
 event = dc.get_example_patch("example_event_1")
-smoothed = event.rolling(time=50, samples=True).mean().dropna("time")
+smoothed = event.window(time=50, samples=True, ends="drop").mean()
 ```
 
 ```{python}

@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.array_api import refuse_lazy
+from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import operation_context, stamp, try_operation_id
 from dascore.utils.patch import (
@@ -194,23 +195,7 @@ class _AutoPatchRoller(_NumpyPatchRoller):
 
     def _pandas_agrees(self) -> bool:
         """Whether pandas gives NumPy's windows and values for this data."""
-        data = self.patch.data
-        if not isinstance(data, np.ndarray):  # other array backends
-            return False
-        kind, size = data.dtype.kind, data.dtype.itemsize
-        return (
-            data.ndim <= 2
-            and self.window >= _PANDAS_RATIO * self.step
-            # pandas centres stepped windows a sample off NumPy
-            and not (self.center and self.step > 1)
-            # pandas works in float64: wider types lose precision, int64 and
-            # float16 sums stop overflowing as NumPy's do. float32 stays, as
-            # the common DAS dtype; only values past ~1e19, whose squares
-            # overflow NumPy's float32 std, differ.
-            and ((kind == "f" and size in (4, 8)) or (kind in "iu" and size <= 4))
-            # and treats infinities as missing
-            and not (kind == "f" and np.isinf(data).any())
-        )
+        return _pandas_agrees(self.patch.data, self.window, self.step, self.center)
 
     def _reduce(self, function):
         """Reduce each window by a NumPy function, through pandas if faster."""
@@ -260,6 +245,26 @@ class _PandasPatchRoller(_PatchRollerInfo):
     def sum(self):
         """Apply sum to moving window."""
         return self._call_rolling_func("sum")
+
+
+def _pandas_agrees(data, window: int, step: int, center: bool) -> bool:
+    """Whether pandas gives NumPy's windows and values for this data."""
+    if not isinstance(data, np.ndarray):  # other array backends
+        return False
+    kind, size = data.dtype.kind, data.dtype.itemsize
+    return (
+        data.ndim <= 2
+        and window >= _PANDAS_RATIO * step
+        # pandas centres stepped windows a sample off NumPy
+        and not (center and step > 1)
+        # pandas works in float64: wider types lose precision, int64 and
+        # float16 sums stop overflowing as NumPy's do. float32 stays, as
+        # the common DAS dtype; only values past ~1e19, whose squares
+        # overflow NumPy's float32 std, differ.
+        and ((kind == "f" and size in (4, 8)) or (kind in "iu" and size <= 4))
+        # and treats infinities as missing
+        and not (kind == "f" and np.isinf(data).any())
+    )
 
 
 def _start_index(window, step) -> int:
@@ -320,6 +325,15 @@ def _rolling_mean(data, *, window, step, axis, pandas):
     return roll(data, mean, args=(), kwargs={}, **options)
 
 
+_DEPRECATED = (
+    "Use Patch.window, whose reductions are labelled at the window's centre "
+    "unless told otherwise: patch.rolling(time=1, step=0.5).mean() is "
+    "patch.window(time=1, step=0.5, align='right').mean(), and center=True "
+    "is the default align='center'."
+)
+
+
+@deprecate(info=_DEPRECATED, since="1.0")
 @compose_docstring(sample_explanation=samples_arg_description)
 def rolling(
     patch: dc.Patch,
@@ -395,6 +409,21 @@ def rolling(
     >>> # drop nan at the start of the time axis.
     >>> out = mean_patch.dropna("time")
     """
+    return _roller(
+        patch,
+        step=step,
+        center=center,
+        engine=engine,
+        samples=samples,
+        overlap=overlap,
+        **kwargs,
+    )
+
+
+def _roller(
+    patch, step=None, center=False, engine=None, samples=False, overlap=None, **kwargs
+) -> _NumpyPatchRoller | _PandasPatchRoller:
+    """Return the roller `rolling` builds, with no deprecation warning."""
     # The rollers read the array whole, which lazy data never give unasked;
     # metadata, which a roller is also built on, holds none.
     refuse_lazy("rolling", [getattr(patch, "data", None)])

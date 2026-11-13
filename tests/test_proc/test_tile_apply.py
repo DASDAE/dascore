@@ -15,6 +15,11 @@ from dascore.utils.signal import get_taper, get_window
 from dascore.utils.tiles import get_tile_plan
 
 
+def tile_apply(patch, function, *, mode="overlap_add", engine="auto", **window):
+    """Apply a function to a patch's windows: the window, then what is applied."""
+    return patch.window(**window).apply(function, mode=mode, engine=engine)
+
+
 def identity(tiles):
     """The stack as it came."""
     return tiles
@@ -84,49 +89,51 @@ class TestOverlapAdd:
         """A taper never widens single precision data, on either engine."""
         patch = random_patch.new(data=random_patch.data.astype(dtype))
         func = _jitted(identity=True) if engine == "numba" else _identity
-        out = patch.tile_apply(func, time=0.5, distance=50)
+        out = tile_apply(patch, func, time=0.5, distance=50)
         assert out.data.dtype == np.result_type(dtype, np.float32)
 
     @pytest.mark.parametrize("analysis", [None, "hann"])
     def test_identity_round_trip_keeps_precision(self, random_patch, analysis):
         """An untouched stack comes back exactly, in the data's own dtype."""
         kwargs = dict(time=0.5, distance=50, analysis=analysis)
-        out = random_patch.tile_apply(_identity, **kwargs)
+        out = tile_apply(random_patch, _identity, **kwargs)
         np.testing.assert_allclose(out.data, random_patch.data, rtol=1e-12, atol=0)
         single = random_patch.new(data=random_patch.data.astype(np.float32))
-        assert single.tile_apply(_identity, **kwargs).data.dtype == np.float32
+        assert tile_apply(single, _identity, **kwargs).data.dtype == np.float32
 
     def test_identity(self, patch):
         """An unchanged stack blends back to the input."""
-        out = patch.tile_apply(identity, time=0.064, distance=16)
+        out = tile_apply(patch, identity, time=0.064, distance=16)
         assert out.dims == patch.dims
         assert out.coords == patch.coords
         np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
 
     def test_one_dimension(self, patch):
         """One windowed dimension, every other one batched."""
-        out = patch.tile_apply(halve, time=0.064)
+        out = tile_apply(patch, halve, time=0.064)
         np.testing.assert_allclose(out.data, patch.data / 2, atol=1e-5)
 
     @pytest.mark.parametrize("taper", ["hann", "triang", ("tukey", 0.5)])
     def test_any_complementary_taper(self, patch, taper):
         """The blend is exact for any taper shape, since the ramps are made so."""
-        out = patch.tile_apply(identity, taper=taper, time=32, distance=8, samples=True)
+        out = tile_apply(
+            patch, identity, taper=taper, time=32, distance=8, samples=True
+        )
         np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
 
     def test_overlap_forms(self, patch):
         """A percent, a count, and a mapping all say the same overlap."""
-        by_percent = patch.tile_apply(
-            halve, overlap=25 * percent, time=64, samples=True
+        by_percent = tile_apply(
+            patch, halve, overlap=25 * percent, time=64, samples=True
         )
-        by_count = patch.tile_apply(halve, overlap=16, time=64, samples=True)
-        by_map = patch.tile_apply(halve, overlap={"time": 16}, time=64, samples=True)
+        by_count = tile_apply(patch, halve, overlap=16, time=64, samples=True)
+        by_map = tile_apply(patch, halve, overlap={"time": 16}, time=64, samples=True)
         assert by_percent.equals(by_count) and by_count.equals(by_map)
 
     def test_agc_flattens_amplitude(self, patch):
         """Normalized windows leave every region at about the same level."""
         loud = patch.update(data=patch.data * np.linspace(1, 100, patch.shape[1]))
-        out = loud.tile_apply(agc, time=0.128, distance=32)
+        out = tile_apply(loud, agc, time=0.128, distance=32)
         first = np.std(out.data[:, :200])
         last = np.std(out.data[:, -200:])
         assert 0.5 < first / last < 2
@@ -134,7 +141,7 @@ class TestOverlapAdd:
 
     def test_batches_other_dimensions(self, cube):
         """A dimension not windowed is an independent batch."""
-        out = cube.tile_apply(halve, distance=16, time=32, samples=True)
+        out = tile_apply(cube, halve, distance=16, time=32, samples=True)
         np.testing.assert_allclose(out.data, cube.data / 2, atol=1e-5)
 
     def test_history_names_a_partial_and_an_object(self, patch):
@@ -148,8 +155,8 @@ class TestOverlapAdd:
             def __call__(self, tiles):
                 return tiles * 3
 
-        by_partial = patch.tile_apply(partial(scale, by=2), time=64, samples=True)
-        by_object = patch.tile_apply(Scaler(), time=64, samples=True)
+        by_partial = tile_apply(patch, partial(scale, by=2), time=64, samples=True)
+        by_object = tile_apply(patch, Scaler(), time=64, samples=True)
         assert "scale'" in list(by_partial.attrs.history)[-1]
         assert "0x" not in list(by_partial.attrs.history)[-1]
         assert "function='" in list(by_object.attrs.history)[-1]
@@ -157,14 +164,14 @@ class TestOverlapAdd:
 
     def test_stack_needs_no_taper(self, patch):
         """The taper is not built for a stack, so a name nothing knows is not asked."""
-        stacked = patch.tile_apply(
-            identity, mode="stack", taper="windowsXP", time=64, samples=True
+        stacked = tile_apply(
+            patch, identity, mode="stack", taper="windowsXP", time=64, samples=True
         )
         assert stacked.dims[-1] == "time_offset"
 
     def test_history_names_the_function(self, patch):
         """History says which function, by name, not by address."""
-        out = patch.tile_apply(agc, time=64, samples=True)
+        out = tile_apply(patch, agc, time=64, samples=True)
         assert "function='agc'" in list(out.attrs.history)[-1]
 
 
@@ -173,7 +180,8 @@ class TestAnalysisWindow:
 
     def test_deep_overlap_stack_starts_where_the_tiles_do(self, patch):
         """At 12 of 16 the first tile starts three strides before the data."""
-        tiles = patch.tile_apply(
+        tiles = tile_apply(
+            patch,
             lambda x: x,
             mode="stack",
             analysis="hann",
@@ -187,7 +195,8 @@ class TestAnalysisWindow:
 
     def test_deep_overlap_thinned_stack_is_placed_by_its_starts(self, patch):
         """Every other tile of a deep stack lands where the full stack put it."""
-        tiles = patch.tile_apply(
+        tiles = tile_apply(
+            patch,
             lambda x: x,
             mode="stack",
             analysis="hann",
@@ -214,21 +223,21 @@ class TestAnalysisWindow:
             seen.append(tiles.dtype)
             return tiles & 1
 
-        patch.tile_apply(parity, mode=mode, x=8, samples=True)
+        tile_apply(patch, parity, mode=mode, x=8, samples=True)
         assert seen == [np.dtype(np.int32)]
 
     @pytest.mark.parametrize("window", ["hann", "hamming", ("tukey", 0.5)])
     def test_identity_under_a_dual(self, patch, window):
         """Windowed tiles blended under the dual return the input exactly."""
-        out = patch.tile_apply(
-            identity, analysis=window, time=32, distance=8, samples=True
+        out = tile_apply(
+            patch, identity, analysis=window, time=32, distance=8, samples=True
         )
         np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
 
     def test_deep_overlap(self, patch):
         """With a dual the overlap may pass half the window: hop 4 of 16."""
-        out = patch.tile_apply(
-            identity, analysis="hann", overlap=12, time=16, samples=True
+        out = tile_apply(
+            patch, identity, analysis="hann", overlap=12, time=16, samples=True
         )
         np.testing.assert_allclose(out.data, patch.data, atol=1e-5)
 
@@ -240,13 +249,19 @@ class TestAnalysisWindow:
             seen["edge"] = float(np.abs(tiles[:, :, 0]).max())
             return tiles
 
-        patch.tile_apply(peek, analysis="hann", time=32, distance=8, samples=True)
+        tile_apply(patch, peek, analysis="hann", time=32, distance=8, samples=True)
         assert seen["edge"] == 0.0  # a hann window is zero at its first sample
 
     def test_stack_round_trip(self, patch):
         """A stack cut with an analysis window reassembles under its dual."""
-        stacked = patch.tile_apply(
-            identity, mode="stack", analysis="hann", overlap=12, time=16, samples=True
+        stacked = tile_apply(
+            patch,
+            identity,
+            mode="stack",
+            analysis="hann",
+            overlap=12,
+            time=16,
+            samples=True,
         )
         edge = stacked.get_coord("_tile_analysis_time").values
         np.testing.assert_allclose(edge, get_window("hann", 16), atol=1e-7)
@@ -256,8 +271,8 @@ class TestAnalysisWindow:
 
     def test_stack_refuses_a_taper(self, patch):
         """The dual is the only blend a windowed stack has."""
-        stacked = patch.tile_apply(
-            identity, mode="stack", analysis="hann", time=16, samples=True
+        stacked = tile_apply(
+            patch, identity, mode="stack", analysis="hann", time=16, samples=True
         )
         with pytest.raises(ParameterError, match="cannot be given"):
             stacked.reassemble(taper="triang")
@@ -265,34 +280,40 @@ class TestAnalysisWindow:
     def test_taper_and_analysis_exclusive(self, patch):
         """One or the other."""
         with pytest.raises(ParameterError, match="cannot be given as well"):
-            patch.tile_apply(
-                identity, analysis="hann", taper="triang", time=16, samples=True
+            tile_apply(
+                patch, identity, analysis="hann", taper="triang", time=16, samples=True
             )
 
     def test_an_explicit_default_taper_is_still_a_taper(self, patch):
         """Spelling out the default does not slip past the exclusivity rule."""
         with pytest.raises(ParameterError, match="cannot be given as well"):
-            patch.tile_apply(
-                lambda x: x, analysis="hann", taper="hann", time=16, samples=True
+            tile_apply(
+                patch, lambda x: x, analysis="hann", taper="hann", time=16, samples=True
             )
 
     def test_array_window(self, patch):
         """A one-dimensional array is an edge for every windowed dimension."""
         edge = get_window("hamming", 16)
-        by_array = patch.tile_apply(identity, analysis=edge, time=16, samples=True)
-        by_name = patch.tile_apply(identity, analysis="hamming", time=16, samples=True)
+        by_array = tile_apply(patch, identity, analysis=edge, time=16, samples=True)
+        by_name = tile_apply(patch, identity, analysis="hamming", time=16, samples=True)
         assert by_array.equals(by_name, close=True)
         assert by_array.equals(patch, close=True)
 
     def test_one_window_per_dimension(self, patch):
         """A list gives each windowed dimension its own, in dimension order."""
         windows = ["hann", "boxcar"]  # distance, then time: the patch's order
-        blended = patch.tile_apply(
-            identity, analysis=windows, time=16, distance=8, samples=True
+        blended = tile_apply(
+            patch, identity, analysis=windows, time=16, distance=8, samples=True
         )
         assert blended.equals(patch, close=True)
-        stacked = patch.tile_apply(
-            identity, mode="stack", analysis=windows, time=16, distance=8, samples=True
+        stacked = tile_apply(
+            patch,
+            identity,
+            mode="stack",
+            analysis=windows,
+            time=16,
+            distance=8,
+            samples=True,
         )
         assert np.all(stacked.get_coord("_tile_analysis_time").values == 1)
         assert stacked.reassemble().equals(patch, close=True)
@@ -300,22 +321,22 @@ class TestAnalysisWindow:
     def test_wrong_number_of_windows_refused(self, patch):
         """One window per windowed dimension, no more and no fewer."""
         with pytest.raises(ParameterError, match="windows were given"):
-            patch.tile_apply(
-                identity, analysis=["hann"], time=16, distance=8, samples=True
+            tile_apply(
+                patch, identity, analysis=["hann"], time=16, distance=8, samples=True
             )
 
     def test_two_dimensional_array_refused(self, patch):
         """A dual is built along each axis, which an N-D array cannot give."""
         with pytest.raises(ParameterError, match="one-dimensional"):
-            patch.tile_apply(
-                identity, analysis=np.ones((16, 16)), time=16, samples=True
+            tile_apply(
+                patch, identity, analysis=np.ones((16, 16)), time=16, samples=True
             )
 
     def test_numba_engine(self, patch):
         """The compiled path windows each tile before the function too."""
         half_tile = _jitted()
-        by_numba = patch.tile_apply(
-            half_tile, analysis="hann", time=32, distance=8, samples=True
+        by_numba = tile_apply(
+            patch, half_tile, analysis="hann", time=32, distance=8, samples=True
         )
         np.testing.assert_allclose(by_numba.data, patch.data / 2, atol=1e-4)
 
@@ -326,22 +347,22 @@ class TestStack:
     @pytest.fixture(scope="class")
     def stacked(self, patch):
         """The example patch cut into 16 by 16 tiles."""
-        return patch.tile_apply(identity, mode="stack", time=0.064, distance=16)
+        return tile_apply(patch, identity, mode="stack", time=0.064, distance=16)
 
     def test_function_is_applied(self, patch):
         """The stack is what the function made of the tiles, not the raw tiles."""
-        raw = patch.tile_apply(identity, mode="stack", time=64, samples=True)
-        halved = patch.tile_apply(halve, mode="stack", time=64, samples=True)
+        raw = tile_apply(patch, identity, mode="stack", time=64, samples=True)
+        halved = tile_apply(patch, halve, mode="stack", time=64, samples=True)
         np.testing.assert_allclose(halved.data, raw.data / 2)
 
     def test_compiled_function_stacks(self, patch):
         """A per-tile function is run over every tile of the stack, in parallel."""
         half_tile = _jitted()
-        by_numba = patch.tile_apply(
-            half_tile, mode="stack", time=64, distance=16, samples=True
+        by_numba = tile_apply(
+            patch, half_tile, mode="stack", time=64, distance=16, samples=True
         )
-        by_numpy = patch.tile_apply(
-            halve, mode="stack", time=64, distance=16, samples=True
+        by_numpy = tile_apply(
+            patch, halve, mode="stack", time=64, distance=16, samples=True
         )
         np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-6)
         assert by_numba.dims == by_numpy.dims
@@ -379,14 +400,14 @@ class TestStack:
 
     def test_float_coordinate(self, patch):
         """A numeric dimension gets numeric centres and offsets."""
-        stacked = patch.tile_apply(identity, mode="stack", distance=16, samples=True)
+        stacked = tile_apply(patch, identity, mode="stack", distance=16, samples=True)
         assert stacked.get_coord("distance_offset").values[1] == 1.0
         assert stacked.dims == ("distance", "time", "distance_offset")
 
     def test_descending_coordinate(self, patch):
         """Centres step down a descending coordinate from its first sample."""
         flipped = patch.flip("distance", flip_coords=True)
-        stacked = flipped.tile_apply(identity, mode="stack", distance=16, samples=True)
+        stacked = tile_apply(flipped, identity, mode="stack", distance=16, samples=True)
         centres = stacked.get_coord("distance").values
         assert centres[0] > centres[1]
         first = flipped.get_coord("distance").values[0]
@@ -400,13 +421,13 @@ class TestStack:
         """The coordinate the source travels under is claimed too."""
         clashing = patch.update_coords(_tile_source_time=("time", np.zeros(2000)))
         with pytest.raises(ParameterError, match="_tile_source_time"):
-            clashing.tile_apply(identity, mode="stack", time=64, samples=True)
+            tile_apply(clashing, identity, mode="stack", time=64, samples=True)
 
     def test_collision_refused(self, patch):
         """A coordinate already called what a stack would call one is refused."""
         clashing = patch.update_coords(time_offset=("time", np.zeros(2000)))
         with pytest.raises(ParameterError, match="already has a coordinate"):
-            clashing.tile_apply(identity, mode="stack", time=64, samples=True)
+            tile_apply(clashing, identity, mode="stack", time=64, samples=True)
 
 
 class TestReassemble:
@@ -414,7 +435,7 @@ class TestReassemble:
 
     def test_coordinate_on_a_tile_axis_is_dropped(self, patch):
         """A per-tile coordinate has no sample to go back to."""
-        tiles = patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        tiles = tile_apply(patch, lambda x: x, mode="stack", time=16, samples=True)
         n_tiles = tiles.shape[tiles.dims.index("time")]
         marked = tiles.update_coords(energy=("time", np.arange(n_tiles, dtype=float)))
         back = marked.reassemble()
@@ -423,13 +444,13 @@ class TestReassemble:
 
     def test_array_taper(self, patch):
         """A taper given as an array is a window like any other."""
-        tiles = patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        tiles = tile_apply(patch, lambda x: x, mode="stack", time=16, samples=True)
         back = tiles.reassemble(taper=np.hanning(17))
         assert back.equals(patch, close=True)
 
     def test_round_trip_two_dimensions(self, patch):
         """An unchanged stack reassembles to the patch, coordinates and all."""
-        stacked = patch.tile_apply(identity, mode="stack", time=0.064, distance=16)
+        stacked = tile_apply(patch, identity, mode="stack", time=0.064, distance=16)
         back = stacked.reassemble()
         assert back.equals(patch, close=True)
         assert not any(k.startswith("_tile") for k in back.coords.coord_map)
@@ -438,15 +459,15 @@ class TestReassemble:
 
     def test_round_trip_one_dimension(self, patch):
         """And with one dimension windowed."""
-        back = patch.tile_apply(
-            identity, mode="stack", time=64, samples=True
+        back = tile_apply(
+            patch, identity, mode="stack", time=64, samples=True
         ).reassemble()
         assert back.equals(patch, close=True)
 
     def test_round_trip_batched(self, cube):
         """A dimension not windowed is carried through both ways."""
-        stacked = cube.tile_apply(
-            identity, mode="stack", distance=16, time=32, samples=True
+        stacked = tile_apply(
+            cube, identity, mode="stack", distance=16, time=32, samples=True
         )
         assert stacked.dims == (
             "shot",
@@ -460,7 +481,7 @@ class TestReassemble:
     def test_coordinates_riding_a_windowed_dimension_come_back(self, patch):
         """A per-sample coordinate along a windowed dimension round-trips."""
         flagged = patch.update_coords(quality=("time", np.arange(2000) % 3))
-        stacked = flagged.tile_apply(identity, mode="stack", time=64, samples=True)
+        stacked = tile_apply(flagged, identity, mode="stack", time=64, samples=True)
         assert "quality" not in stacked.dims
         back = stacked.reassemble()
         assert back.equals(flagged, close=True)
@@ -470,23 +491,23 @@ class TestReassemble:
 
     def test_three_dimensions_windowed(self, cube):
         """Every dimension windowed at once: the plan is not two-dimensional."""
-        stacked = cube.tile_apply(
-            halve, mode="stack", shot=2, distance=16, time=32, samples=True
+        stacked = tile_apply(
+            cube, halve, mode="stack", shot=2, distance=16, time=32, samples=True
         )
         assert stacked.dims[-3:] == ("shot_offset", "distance_offset", "time_offset")
         np.testing.assert_allclose(stacked.reassemble().data, cube.data / 2, atol=1e-5)
-        blended = cube.tile_apply(identity, shot=2, distance=16, time=32, samples=True)
+        blended = tile_apply(cube, identity, shot=2, distance=16, time=32, samples=True)
         np.testing.assert_allclose(blended.data, cube.data, atol=1e-5)
 
     def test_edit_between(self, patch):
         """Work done on the stack is what comes back: halve, then blend."""
-        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        stacked = tile_apply(patch, identity, mode="stack", time=64, samples=True)
         back = stacked.update(data=stacked.data / 2).reassemble()
         np.testing.assert_allclose(back.data, patch.data / 2, atol=1e-5)
 
     def test_reordered_tiles_go_back_where_they_came_from(self, patch):
         """Each tile is placed by its start, whatever order the stack is in."""
-        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        stacked = tile_apply(patch, identity, mode="stack", time=64, samples=True)
         n = stacked.shape[stacked.get_axis("time")]
         reversed_stack = stacked.order(time=np.arange(n)[::-1], samples=True)
         assert reversed_stack.reassemble().equals(patch, close=True)
@@ -494,14 +515,14 @@ class TestReassemble:
     def test_reordered_single_precision_stays_single(self, patch):
         """A reordered float32 stack reassembles as float32."""
         single = patch.new(data=patch.data.astype(np.float32))
-        stacked = single.tile_apply(identity, mode="stack", time=64, samples=True)
+        stacked = tile_apply(single, identity, mode="stack", time=64, samples=True)
         n = stacked.shape[stacked.get_axis("time")]
         reversed_stack = stacked.order(time=np.arange(n)[::-1], samples=True)
         assert reversed_stack.reassemble().data.dtype == np.float32
 
     def test_dropped_tiles_leave_their_region_quiet(self, patch):
         """A stack with tiles removed blends what is left; the gap stays silent."""
-        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        stacked = tile_apply(patch, identity, mode="stack", time=64, samples=True)
         n = stacked.shape[stacked.get_axis("time")]
         kept = stacked.select(time=(2, n - 2), samples=True)
         back = kept.reassemble()
@@ -514,7 +535,7 @@ class TestReassemble:
 
     def test_every_other_tile(self, patch):
         """A stack thinned to alternate tiles blends under the taper it was cut for."""
-        stacked = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        stacked = tile_apply(patch, identity, mode="stack", time=64, samples=True)
         n = stacked.shape[stacked.get_axis("time")]
         thinned = stacked.select(time=np.arange(0, n, 2), samples=True)
         back = thinned.reassemble()
@@ -536,8 +557,8 @@ class TestEngines:
     def test_numba_matches_numpy(self, patch):
         """The compiled per-tile function blends to what the stack function does."""
         half_tile = _jitted()
-        by_numba = patch.tile_apply(half_tile, time=64, distance=16, samples=True)
-        by_numpy = patch.tile_apply(halve, time=64, distance=16, samples=True)
+        by_numba = tile_apply(patch, half_tile, time=64, distance=16, samples=True)
+        by_numpy = tile_apply(patch, halve, time=64, distance=16, samples=True)
         np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-5)
         assert by_numba.dims == patch.dims
 
@@ -550,7 +571,7 @@ class TestEngines:
         def to_complex(tile):
             return tile * (1 + 1j)
 
-        out = patch.tile_apply(to_complex, time=64, distance=16, samples=True)
+        out = tile_apply(patch, to_complex, time=64, distance=16, samples=True)
         assert np.iscomplexobj(out.data)
         np.testing.assert_allclose(out.data.imag, patch.data, atol=1e-4)
 
@@ -590,18 +611,18 @@ class TestEngines:
         """A per-tile function cannot take the stack."""
         half_tile = _jitted()
         with pytest.raises(ParameterError, match="one tile at a time"):
-            patch.tile_apply(half_tile, engine="numpy", time=64, samples=True)
+            tile_apply(patch, half_tile, engine="numpy", time=64, samples=True)
 
     def test_plain_function_on_numba_engine_refused(self, patch):
         """And a stack function cannot be compiled."""
         with pytest.raises(ParameterError, match="numba-compiled function"):
-            patch.tile_apply(halve, engine="numba", time=64, distance=16, samples=True)
+            tile_apply(patch, halve, engine="numba", time=64, distance=16, samples=True)
 
     def test_compiled_function_in_one_dimension(self, patch):
         """The driver tiles one dimension as readily as two."""
         half_tile = _jitted()
-        by_numba = patch.tile_apply(half_tile, time=64, samples=True)
-        by_numpy = patch.tile_apply(halve, time=64, samples=True)
+        by_numba = tile_apply(patch, half_tile, time=64, samples=True)
+        by_numpy = tile_apply(patch, halve, time=64, samples=True)
         np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-5)
 
     def test_compiled_function_in_three_dimensions(self):
@@ -618,15 +639,16 @@ class TestEngines:
             },
             dims=("a", "x", "y", "z"),
         )
-        by_numba = patch.tile_apply(half_tile, x=8, y=6, z=10, samples=True)
-        by_numpy = patch.tile_apply(halve, x=8, y=6, z=10, samples=True)
+        by_numba = tile_apply(patch, half_tile, x=8, y=6, z=10, samples=True)
+        by_numpy = tile_apply(patch, halve, x=8, y=6, z=10, samples=True)
         np.testing.assert_allclose(by_numba.data, by_numpy.data, atol=1e-5)
         np.testing.assert_allclose(by_numba.data, patch.data / 2, atol=1e-5)
 
     def test_compiled_function_under_an_analysis_window(self, patch):
         """The window goes on inside the driver, and the dual brings it back."""
         half_tile = _jitted()
-        out = patch.tile_apply(
+        out = tile_apply(
+            patch,
             half_tile,
             analysis="hann",
             overlap={"time": 48, "distance": 12},
@@ -643,12 +665,12 @@ class TestEngines:
         half_tile = _jitted()
         monkeypatch.setattr(driver, "_JIT_AVAILABLE", False)
         with pytest.raises(dc.exceptions.MissingOptionalDependencyError):
-            patch.tile_apply(half_tile, time=64, distance=16, samples=True)
+            tile_apply(patch, half_tile, time=64, distance=16, samples=True)
 
     def test_unknown_engine_refused(self, patch):
         """A name which is not an engine."""
         with pytest.raises(ParameterError, match="engine must be one of"):
-            patch.tile_apply(halve, engine="cuda", time=64, samples=True)
+            tile_apply(patch, halve, engine="cuda", time=64, samples=True)
 
 
 class TestArguments:
@@ -657,32 +679,32 @@ class TestArguments:
     def test_unknown_mode(self, patch):
         """A mode which is not one."""
         with pytest.raises(ParameterError, match="mode must be one of"):
-            patch.tile_apply(halve, mode="centre", time=64, samples=True)
+            tile_apply(patch, halve, mode="centre", time=64, samples=True)
 
     def test_needs_a_dimension(self, patch):
         """No window, nothing to tile."""
         with pytest.raises(ParameterError, match="needs a dimension"):
-            patch.tile_apply(halve)
+            tile_apply(patch, halve)
 
     def test_overlap_past_half_refused(self, patch):
         """The taper's ramps would cross."""
         with pytest.raises(ParameterError, match="ramps would cross"):
-            patch.tile_apply(halve, overlap=40, time=64, samples=True)
+            tile_apply(patch, halve, overlap=40, time=64, samples=True)
 
     def test_identity_blend_with_a_set_overlap(self, patch):
         """Unchanged tiles blend back to the input at a non-default overlap."""
-        out = patch.tile_apply(lambda x: x, time=64, overlap=16, samples=True)
+        out = tile_apply(patch, lambda x: x, time=64, overlap=16, samples=True)
         assert np.allclose(out.data, patch.data)
 
     def test_options_are_keyword_only(self, patch):
         """Only the function goes by position; a stray option raises."""
         with pytest.raises(TypeError):
-            patch.tile_apply(halve, "stack", time=64, samples=True)
+            tile_apply(patch, halve, "stack", time=64, samples=True)
 
     def test_the_processor_is_the_call(self, patch):
         """The seam: the processor and the method agree."""
         op = TileApply(function=halve, time=64, samples=True)
-        out, expected = op(patch), patch.tile_apply(halve, time=64, samples=True)
+        out, expected = op(patch), tile_apply(patch, halve, time=64, samples=True)
         assert out.equals(expected)
         assert out.attrs.history == expected.attrs.history
         assert out.attrs.data_id == expected.attrs.data_id
@@ -700,7 +722,7 @@ class TestPhysicalTileBounds:
         if reverse:
             values = values[::-1]
         original = dc.Patch(data=np.arange(32.0), coords={"x": values}, dims=("x",))
-        tiles = original.tile_apply(identity, mode="stack", x=4, samples=True)
+        tiles = tile_apply(original, identity, mode="stack", x=4, samples=True)
         low, high = tiles.get_array("x_start"), tiles.get_array("x_stop")
         labels = tiles.get_array("x")
         assert np.all(low <= labels)
@@ -711,7 +733,7 @@ class TestPhysicalTileBounds:
 
     def test_converted_units_reassemble(self, patch):
         """Changing public distance units does not change reconstruction indices."""
-        tiles = patch.tile_apply(identity, mode="stack", distance=16, samples=True)
+        tiles = tile_apply(patch, identity, mode="stack", distance=16, samples=True)
         converted = tiles.convert_units(distance="km")
         np.testing.assert_array_equal(
             converted.get_array("_tile_index_distance"),
@@ -721,7 +743,7 @@ class TestPhysicalTileBounds:
 
     def test_arbitrary_permutation_without_bounds(self, patch):
         """Dropping display bounds permits reordering while private indices remain."""
-        tiles = patch.tile_apply(identity, mode="stack", time=64, samples=True)
+        tiles = tile_apply(patch, identity, mode="stack", time=64, samples=True)
         count = len(tiles.get_coord("time"))
         permutation = np.roll(np.arange(count), 1)
         reordered = tiles.drop_coords("time_start", "time_stop").order(
@@ -739,7 +761,7 @@ class TestUnsignedTileBounds:
         patch = dc.Patch(
             data=np.arange(32.0), coords={"x": np.arange(32, dtype=dtype)}, dims=("x",)
         )
-        tiles = patch.tile_apply(identity, mode="stack", x=4, samples=True)
+        tiles = tile_apply(patch, identity, mode="stack", x=4, samples=True)
         assert tiles.get_array("x_start")[0] == -2.5
         assert tiles.get_array("x_stop")[0] == 1.5
         assert tiles.get_array("x")[0] == 0
@@ -752,7 +774,7 @@ class TestReassembleProcessor:
     @pytest.fixture()
     def tiles(self, patch):
         """A stack whose tiles were each changed differently."""
-        stack = patch.tile_apply(np.positive, mode="stack", time=16, samples=True)
+        stack = tile_apply(patch, np.positive, mode="stack", time=16, samples=True)
         axis = stack.get_axis("time")
         shape = [1] * stack.ndim
         shape[axis] = stack.shape[axis]

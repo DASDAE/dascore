@@ -428,7 +428,7 @@ def _shifted(patch):
 
 def _tiled(patch):
     """Return the patch cut into a stack of tiles along time."""
-    return patch.tile_apply(np.positive, mode="stack", time=64, samples=True)
+    return patch.window(time=64, samples=True).apply(np.positive, mode="stack")
 
 
 def _transformed(patch):

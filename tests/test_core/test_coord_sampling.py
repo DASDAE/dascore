@@ -455,7 +455,7 @@ class TestSelectionKeepsStep:
         assert distance.evenly_sampled and distance._grid is None
         patch = dc.get_example_patch().select(distance=(0, 100), samples=True)
         patch = patch.update_coords(distance=distance)
-        out = patch.tile_apply(lambda x: x, mode="stack", distance=10, samples=True)
+        out = patch.window(distance=10, samples=True).apply(lambda x: x, mode="stack")
         offsets = out.get_coord("distance_offset").values
         np.testing.assert_allclose(offsets, np.arange(10) * 0.1, atol=1e-5)
 

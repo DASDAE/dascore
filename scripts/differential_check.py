@@ -758,11 +758,11 @@ def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> 
     descending = _pinned(patch.flip("time"), "descending")
     corr = (patch.dft("time", real=True, pad=False) ** 2).idft()
     odd = _pinned(patch.isel(time=slice(0, 1999)), "odd")
-    tiles = patch.tile_apply(np.positive, mode="stack", time=0.2)
-    tiles_2d = patch.tile_apply(
-        np.positive, mode="stack", time=64, distance=50, samples=True
+    tiles = patch.window(time=0.2).apply(np.positive, mode="stack")
+    tiles_2d = patch.window(time=64, distance=50, samples=True).apply(
+        np.positive, mode="stack"
     )
-    analysed = patch.tile_apply(np.positive, mode="stack", time=0.2, analysis="hann")
+    analysed = patch.window(time=0.2, analysis="hann").apply(np.positive, mode="stack")
     return {
         # pad
         "pad_fft": lambda: patch.isel(time=slice(0, 1999)).pad(time="fft"),

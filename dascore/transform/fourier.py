@@ -775,7 +775,7 @@ class Stft(PatchProcessor):
     - Data that single precision holds (eg float32, complex64, int16) gives
       a complex64 output; wider data gives complex128.
     - The output is a stack of windows as
-      [Patch.tile_apply](`dascore.Patch.tile_apply`) makes one, transformed
+      [Patch.window](`dascore.Patch.window`) makes one, transformed
       along the window: the transformed dimension becomes the window
       centres, ``{dim}_start`` and ``{dim}_stop`` give physical cell edges
       in the dimension's units, the frequencies sit where the dimension was
@@ -841,7 +841,7 @@ class Stft(PatchProcessor):
     data_type = "fourier_transform"
 
     def _tiler(self, **kwargs) -> TileApply:
-        """Return the tile_apply which cuts the windows, bare or under the taper."""
+        """Return the operation which cuts the windows, bare or under the taper."""
         # A detrended window is tapered after the trend is removed, so the
         # stack is cut bare and the taper goes on in the kernel; an invertible
         # one is cut under the taper, which the stack then carries for istft.

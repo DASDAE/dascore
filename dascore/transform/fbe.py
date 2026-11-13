@@ -12,7 +12,7 @@ from pydantic import ConfigDict
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import UnitError
 from dascore.proc.filter import PassFilter
-from dascore.proc.rolling import _PandasPatchRoller, _rolling_mean, rolling
+from dascore.proc.rolling import _PandasPatchRoller, _roller, _rolling_mean
 from dascore.units import get_quantity
 from dascore.utils.array import _is_offset_unit
 from dascore.utils.misc import check_filter_kwargs
@@ -94,7 +94,7 @@ class Fbe(PatchProcessor):
         step = 1 / get_dim_sampling_rate(meta, dim) if self.step is None else self.step
         # Let `rolling` (metadata only) pick the window size and engine, so the
         # result matches `patch.rolling(...).mean()`.
-        roller = rolling(meta, **{dim: self.window, "step": step})
+        roller = _roller(meta, **{dim: self.window, "step": step})
         attrs = {"data_type": "frequency_band_energy"}
         if self.db:
             attrs["data_units"] = "dB"

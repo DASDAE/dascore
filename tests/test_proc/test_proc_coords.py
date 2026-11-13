@@ -1531,7 +1531,9 @@ class TestCellBoundsOperations:
 
     def test_tile_round_trip(self, bounded_patch):
         """Windowing replaces input cells and reassembly restores their bounds."""
-        out = bounded_patch.tile_apply(lambda x: x, mode="stack", time=16, samples=True)
+        out = bounded_patch.window(time=16, samples=True).apply(
+            lambda x: x, mode="stack"
+        )
         assert out.get_coord("time_start") != bounded_patch.get_coord("time_start")
         assert out.reassemble().equals(bounded_patch, close=True)
 
