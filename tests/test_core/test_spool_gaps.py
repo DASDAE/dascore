@@ -961,6 +961,17 @@ class TestConcatenatedRuns:
         assert len(merged.get_gaps()) == 2 * len(holed) - 1
         assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
 
+    @pytest.mark.parametrize("step", [1.0, -1.0])
+    def test_contiguous_members_are_one_run(self, step):
+        """Members continuing one grid, either way, give a row stating its step."""
+        coords = [get_coord(start=x * step, step=step, shape=(5,)) for x in (0, 5)]
+        patches = [
+            dc.Patch(data=x.values, coords={"x": x}, dims=("x",)) for x in coords
+        ]
+        merged = dc.spool(patches).concatenate(x=None)
+        assert merged.get_contents()["x_step"].tolist() == [step]
+        assert merged[0].get_coord("x").step == step
+
     @pytest.mark.parametrize("length", [None, 4])
     def test_chunk_splits_at_members_gaps(self, length):
         """A chunk of a concatenation splits where the joined patch's does."""

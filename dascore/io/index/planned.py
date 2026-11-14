@@ -1422,9 +1422,11 @@ def _segment_runs(coord, members, runs, index_rows, name: str):
         if pd.isnull(step):  # its count is unknown, so its runs are too
             return coord
         count = round(to_float(high - low) / abs(to_float(step))) + 1
-        if records and records[-1].step == step and low - records[-1].max == step:
-            prev = records.pop()  # it continues the grid before it exactly
-            count, low = prev.count + count, prev.min
+        if records and (prev := records[-1]).step == step:
+            # it continues the grid before it exactly, above or below it
+            if (low - prev.max if to_float(step) > 0 else high - prev.min) == step:
+                count = records.pop().count + count
+                low, high = min(low, prev.min), max(high, prev.max)
         records.append(RunRecord(count, low, high, step))
     if len(records) < 2:
         return coord
