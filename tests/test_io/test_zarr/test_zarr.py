@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import pickle
 import sys
+import tracemalloc
 from pathlib import Path
 from typing import ClassVar
 from unittest import mock
@@ -20,6 +21,7 @@ from upath import UPath
 from upath.implementations.memory import MemoryPath
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.exceptions import (
     InvalidFiberFileError,
     MissingOptionalDependencyError,
@@ -31,7 +33,7 @@ from dascore.io.core import source_identity
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.netcdf.utils import COORD_PREFIX, STEP_ATTR
-from dascore.io.zarr import ZarrV3
+from dascore.io.zarr import SPANS_ATTR, ZarrV3, coord_attrs
 from dascore.io.zarr import core as zarr_core
 from dascore.utils.misc import suppress_warnings
 from tests.conftest import segment_layout
@@ -935,6 +937,131 @@ class TestSeveralPayloads:
             ZarrV3().read_array(path, key="levels/1min")
         with pytest.raises(PatchAttributeError, match="No patch named"):
             ZarrV3().read_array(path, key="levels/1min/count")
+
+
+# A time axis at 1 s from 1970 to 2100, as a store allocated ahead of its data.
+LONG = 4_102_444_800
+ONE_SECOND = np.timedelta64(1, "s")
+
+
+def _allocated(path, size, time_attrs=None, spans=None, distance_spans=None):
+    """
+    Write a group "1s" of two statistics on (time, distance), only rows
+    20-29 of ``hi_max`` written, and a time array of ``time_attrs`` with no
+    chunks written; with ``time_attrs`` None it has no coordinate arrays.
+    """
+    group = zarr.open_group(path, mode="w", zarr_format=3).create_group("1s")
+    for name in ("hi_max", "count"):
+        group.create_array(
+            name,
+            shape=(size, 4),
+            chunks=(10, 4),
+            dtype="f4",
+            fill_value=np.nan,
+            dimension_names=("time", "distance"),
+        )
+    group["hi_max"][20:30] = np.arange(40, dtype="f4").reshape(10, 4)
+    if time_attrs is not None:
+        time = group.create_array(
+            "time", shape=(size,), chunks=(10**6,), dtype="i8", dimension_names=["time"]
+        )
+        time.attrs.update({**time_attrs, **({SPANS_ATTR: spans} if spans else {})})
+    if distance_spans is not None:
+        distance = group.create_array(
+            "distance", data=np.arange(4), dimension_names=["distance"]
+        )
+        distance.attrs[SPANS_ATTR] = distance_spans
+    with suppress_warnings(UserWarning, message="Consolidated metadata"):
+        zarr.consolidate_metadata(path)
+    return path
+
+
+def _grid(size):
+    """The attributes of a 1 s time grid from 1970 of ``size`` samples."""
+    start = np.datetime64(0, "ns")
+    return coord_attrs(get_coord(start=start, step=ONE_SECOND, shape=(size,)))
+
+
+class TestAllocatedStore:
+    """A store allocated ahead of its data states its grids and what it holds."""
+
+    def test_dim_without_coord_not_built(self, tmp_path):
+        """A dimension with no coordinate is a range of sample numbers, not built."""
+        path = _allocated(tmp_path / "bare.zarr", LONG)
+        tracemalloc.start()
+        try:
+            metas = ZarrV3().get_metadata(path)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert peak < 50e6  # the labels alone would be 33 GB
+        time = metas[0].coords.get_coord("time")
+        assert time == get_coord(start=0, stop=LONG, step=1)
+
+    def test_stated_grid(self, tmp_path):
+        """A time array holding only `coord_attrs` gives times; a window reads."""
+        path = _allocated(tmp_path / "grid.zarr", LONG, _grid(LONG))
+        spool = dc.spool(path).select(tag="hi_max")
+        start = np.datetime64("1970-01-01T00:00:22")
+        patch = spool.select(time=(start, start + 3 * ONE_SECOND))[0]
+        assert patch.get_coord("time").min() == start
+        assert patch.get_coord("time").step == ONE_SECOND
+        assert np.array_equal(patch.data, np.arange(8, 24).reshape(4, 4))
+
+    def test_spans(self, tmp_path):
+        """Each stated span of each payload is a patch, keyed by its positions."""
+        spans = [[20, 30], [50, 55]]
+        path = _allocated(tmp_path / "spans.zarr", 100, _grid(100), spans)
+        metas = {x._source.key: x for x in ZarrV3().get_metadata(path)}
+        assert sorted(metas) == [
+            "1s/count[20:30]",
+            "1s/count[50:55]",
+            "1s/hi_max[20:30]",
+            "1s/hi_max[50:55]",
+        ]
+        time = metas["1s/hi_max[50:55]"].coords.get_coord("time")
+        assert time.min() == np.datetime64("1970-01-01T00:00:50")
+        assert len(time) == 5
+        data = ZarrV3().read_array(path, ((2, 5),), key="1s/hi_max[20:30]")
+        assert np.array_equal(data, np.arange(8, 20).reshape(3, 4))
+        patch = dc.spool(path).select(tag="hi_max")[0]
+        assert np.array_equal(patch.data, np.arange(40).reshape(10, 4))
+
+    def test_no_spans_no_patches(self, tmp_path):
+        """A store stating no span written yet holds no patches."""
+        path = _allocated(tmp_path / "empty.zarr", 100, _grid(100))
+        zarr.open_group(path)["1s/time"].attrs[SPANS_ATTR] = []
+        with suppress_warnings(UserWarning, message="Consolidated metadata"):
+            zarr.consolidate_metadata(path)
+        assert ZarrV3().get_metadata(path) == []
+
+    @pytest.mark.parametrize(
+        "spans",
+        [[[5, 3]], [[0, 10], [5, 20]], [[90, 101]], [[-1, 2]], "bad", [[1]]],
+    )
+    def test_invalid_spans(self, tmp_path, spans):
+        """Spans unsorted, overlapping, empty or out of bounds name the array."""
+        path = _allocated(tmp_path / "bad.zarr", 100, _grid(100), spans)
+        with pytest.raises(InvalidFiberFileError, match="'time'"):
+            ZarrV3().get_metadata(path)
+
+    def test_spans_on_two_dims(self, tmp_path):
+        """Only one dimension of a payload may state spans."""
+        path = tmp_path / "two.zarr"
+        _allocated(path, 100, _grid(100), [[0, 10]], distance_spans=[[0, 2]])
+        with pytest.raises(InvalidFiberFileError, match="only one dimension"):
+            ZarrV3().get_metadata(path)
+
+    def test_unstated_span_key(self, tmp_path):
+        """A span key the store does not state names no patch."""
+        path = _allocated(tmp_path / "spans.zarr", 100, _grid(100), [[20, 30]])
+        with pytest.raises(PatchAttributeError, match="No span"):
+            ZarrV3().read_array(path, key="1s/hi_max[0:5]")
+
+    def test_coord_attrs_refuses_labels(self):
+        """Labels which are not one grid cannot be stated as one."""
+        with pytest.raises(ParameterError, match="labels must be stored"):
+            coord_attrs(get_coord(data=np.array([0, 1, 3])))
 
 
 def _halves(patch, dim="time"):

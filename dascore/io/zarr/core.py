@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
     CoordError,
     InvalidFiberFileError,
@@ -20,12 +23,13 @@ from dascore.io.dasdae.utils import grid_fields, read_grid_fields
 from dascore.io.netcdf.utils import (
     COORD_PREFIX,
     dataset_to_patch_meta,
+    get_xarray_data_var_name,
     payload_datasets,
     read_dataset_array,
     spool_to_cf_dataset,
     stated_range,
 )
-from dascore.io.utils import resolve_keyed_source
+from dascore.io.utils import resolve_keyed_source, windows_to_slices
 from dascore.utils.io import staged_path
 from dascore.utils.misc import optional_import, suppress_warnings
 from dascore.utils.patch import (
@@ -37,6 +41,11 @@ from dascore.utils.patch import (
 
 # The file which marks a directory as a zarr group, by zarr format.
 _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
+# The attribute of a dimension's coordinate array listing the half-open
+# [start, stop) positions along it which hold data, where not all do.
+SPANS_ATTR = "_dascore_spans"
+# The key of one span of a payload: "<payload key>[start:stop]".
+_SPAN_KEY = re.compile(r"^(?P<key>.+)\[(?P<start>\d+):(?P<stop>\d+)\]$")
 
 
 def _open_group(path: UPath, zarr_format: int | None):
@@ -116,6 +125,41 @@ def _range_fields(coord) -> dict | None:
     return fields if same and back.dtype == coord.dtype and back == coord else None
 
 
+def coord_attrs(coord) -> dict:
+    """
+    Return the attributes stating a coordinate's grid on a zarr array.
+
+    Set on a coordinate array, they describe its labels, which a scan then
+    never reads; the array may have no chunks written at all. The values
+    are JSON-safe. If the array's length is later changed, its attributes
+    must be rewritten, since a stated length unlike the array's is taken
+    as stale and the labels are read instead.
+
+    Parameters
+    ----------
+    coord
+        A coordinate of one grid.
+
+    Raises
+    ------
+    ParameterError
+        If the coordinate is not one grid JSON describes exactly.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.coords import get_coord
+    >>> from dascore.io.zarr import coord_attrs
+    >>> start, step = np.datetime64(0, "ns"), np.timedelta64(1, "s")
+    >>> time = get_coord(start=start, step=step, shape=(10,))
+    >>> attrs = coord_attrs(time)  # e.g. zarr_array.attrs.update(attrs)
+    """
+    if (fields := _range_fields(coord)) is None:
+        msg = f"Cannot state {coord} as a grid; its labels must be stored."
+        raise ParameterError(msg)
+    return {COORD_PREFIX + k: v for k, v in fields.items()}
+
+
 def _cf_dataset(spool, encoding: dict | None):
     """
     Return the only patch of a spool as a CF dataset, describing its grids.
@@ -153,6 +197,63 @@ def _payloads(dataset) -> dict:
     # a lone bounds table passes the only-variable rule
     bounds = {x.attrs.get("bounds") for x in dataset.variables.values()}
     return {k: v for k, v in payloads.items() if v[k].dims and k not in bounds}
+
+
+def _stated_spans(dataset, dims, where: str) -> tuple[str, list] | None:
+    """
+    Return the dimension whose coordinate states spans, and the spans.
+
+    None where no dimension states them (the payload is one patch).
+    """
+    variables = dataset.variables
+    stated = {
+        dim: variables[dim].attrs[SPANS_ATTR]
+        for dim in dims
+        if dim in variables and SPANS_ATTR in variables[dim].attrs
+    }
+    if not stated:
+        return None
+    if len(stated) > 1:
+        msg = (
+            f"{where}: only one dimension may state {SPANS_ATTR}, not {sorted(stated)}."
+        )
+        raise InvalidFiberFileError(msg)
+    ((dim, raw),) = stated.items()
+    try:
+        spans = [(int(start), int(stop)) for start, stop in raw]
+    except (TypeError, ValueError):
+        spans = None
+    ends = [x for span in spans or () for x in span]
+    size = dataset.sizes[dim]
+    if (
+        spans is None
+        or ends != sorted(ends)
+        or any(a >= b for a, b in spans)
+        or (ends and (ends[0] < 0 or ends[-1] > size))
+    ):
+        msg = (
+            f"{where}: {SPANS_ATTR} of {dim!r} must be sorted, non-overlapping "
+            f"[start, stop) positions within its {size} samples, not {raw!r}."
+        )
+        raise InvalidFiberFileError(msg)
+    return dim, spans
+
+
+def _span_metas(meta: dc.PatchMeta, dataset, key: str, where: str) -> list:
+    """Split a payload's description into one per span it states."""
+    if (stated := _stated_spans(dataset, meta.dims, f"{where} {key!r}")) is None:
+        return [meta]
+    dim, spans = stated
+    return [
+        dc.PatchMeta(
+            attrs=meta.attrs,
+            coords=meta.coords.select(samples=True, **{dim: (start, stop)})[0],
+            dims=meta.dims,
+            dtype=meta.dtype,
+            source=ArraySource(key=f"{key}[{start}:{stop}]"),
+        )
+        for start, stop in spans
+    ]
 
 
 def _patch_keys(group: str, payloads: dict) -> dict:
@@ -207,6 +308,22 @@ def _patches(path: UPath, zarr_format: int | None):
             continue
         with dataset:
             yield from _patch_keys(group, _payloads(dataset)).items()
+
+
+def _span_windows(payload, span, windows, where: str) -> tuple[slice, ...]:
+    """Return windows into one span of a payload as windows into the payload."""
+    name = get_xarray_data_var_name(payload)
+    dims, shape = payload[name].dims, list(payload[name].shape)
+    stated = _stated_spans(payload, dims, where)
+    if stated is None or tuple(span) not in stated[1]:
+        msg = f"No span {list(span)} stated for '{name}' in {where}."
+        raise PatchAttributeError(msg)
+    axis = dims.index(stated[0])
+    shape[axis] = span[1] - span[0]
+    slices = list(windows_to_slices(windows, shape))
+    within = slices[axis]
+    slices[axis] = slice(within.start + span[0], within.stop + span[0])
+    return tuple(slices)
 
 
 def _payload_group(root, key: str, where: str):
@@ -463,10 +580,12 @@ class ZarrV3(FiberIO):
         self, resource: UPath, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Describe each patch from its metadata and coordinates."""
+        where = str(resource)
         return [
-            meta
+            span
             for key, dataset in _patches(resource, _store_format(resource))
             for meta in dataset_to_patch_meta(dataset, snap, key=key)
+            for span in _span_metas(meta, dataset, key, where)
         ]
 
     def read_array(
@@ -474,6 +593,9 @@ class ZarrV3(FiberIO):
     ) -> np.ndarray:
         """Read a window of one patch; only the chunks it touches are read."""
         where, zarr_format = str(resource), _store_format(resource)
+        span = None
+        if match := _SPAN_KEY.match(key):  # one span of a payload
+            key, span = match["key"], (int(match["start"]), int(match["stop"]))
         if not key:  # every group is opened only when no key names a patch
             keys = [x for x, _ in _patches(resource, zarr_format)]
             key = resolve_keyed_source(dict(zip(keys, keys)), key, where)
@@ -483,6 +605,8 @@ class ZarrV3(FiberIO):
         with dataset:
             patches = _patch_keys(node.path, _payloads(dataset))
             payload = resolve_keyed_source(patches, key, where)
+            if span is not None:
+                windows = _span_windows(payload, span, windows, where)
             return read_dataset_array(payload, windows, "", where)
 
     def write(
