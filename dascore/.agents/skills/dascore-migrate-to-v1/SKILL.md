@@ -127,11 +127,11 @@ The coordinate classes were unified into one run-based [`NumericCoord`](`dascore
 
 `coord.data` remains as an alias of `coord.values`.
 
-`dc.get_coord(data=..., step=...)` now places the values on the stated grid, as one grid or a segment per stretch of consecutive positions, and keeps values it does not restate as labels with no step; 0.1.x ignored the step.
+`dc.get_coord(data=..., step=...)` now places the values on the stated grid, as one grid or a segment per stretch of consecutive positions; if it does not restate every value, or the stretches pass 256, all are kept as one list of labels with no step; 0.1.x ignored the step.
 
 Selecting samples by a mask or array (`select`, `dropna`) leaves each stretch of kept samples its own segment on the original step (past 256 segments, one list of the kept labels with no step), where 0.1.x dropped the step; `Spool.concatenate` keeps each patch its own segment too. A coordinate of several segments has no `step`, and coordinates with equal labels compare equal however they are split. `differentiate`, `integrate`, `taper`, `sobel_filter`, and filtered `decimate` raise `CoordError` on a coordinate of more than one segment, where 0.1.x computed across the gaps. Use `fill_gaps` or `split_gaps` first. One list of labels, such as irregular sensor positions or labels off a grid, is still an irregular axis these operations compute on by its labels, as in 0.1.x.
 
-**Silent:** `dc.get_coord(data=...)` without a `step` reads labels exactly by default: labels within 0.1% of one spacing of a grid, which 0.1.x snapped onto it, now come back as labels with no step unless they are a grid within float precision. Pass `snap=True` for the 0.1.x result, or call `snap_coords` on the patch. A stated `step` places labels on its grid, a segment per stretch, where it restates them; otherwise they are labels with no step.
+**Silent:** `dc.get_coord(data=...)` without a `step` reads labels exactly by default: labels within 0.1% of one spacing of a grid, which 0.1.x snapped onto it, now come back as labels with no step unless they are within two millionths of a step of a grid, which they then become. Pass `snap=True` for the 0.1.x result, or call `snap_coords` on the patch.
 
 ## Processing
 

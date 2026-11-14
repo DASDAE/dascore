@@ -85,7 +85,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-A coordinate of several segments has no `step`, though each segment keeps its own. `get_coord` keeps an array's values: labels a grid reproduces become that grid (float labels within their stored precision of it included), and anything else is one list of labels with no step. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
+A coordinate of several segments has no `step`, though each segment keeps its own. `get_coord` keeps an array's values: labels a grid reproduces become that grid (float labels within two millionths of a step of it included, moving that little), and anything else is one list of labels with no step. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
@@ -94,11 +94,11 @@ assert np.array_equal(exact.values, values)
 assert exact.runs_count == 1 and exact.step is None
 ```
 
-A spool keeps a patch with holes whole; [`Patch.split_gaps`](`dascore.Patch.split_gaps`) cuts it into one patch per segment. [`dc.write`](`dascore.write`) also writes it whole: DASDAE and pickle keep its segments and their steps, NetCDF and Zarr keep segments sharing one step, and formats that store only a grid refuse it, saying to fill or split first.
+A spool keeps a patch with holes whole; [`Patch.split_gaps`](`dascore.Patch.split_gaps`) cuts it into one patch per segment. [`dc.write`](`dascore.write`) also writes it whole: DASDAE and pickle keep its segments and their steps, NetCDF and Zarr keep segments sharing one step, and formats that store only a grid refuse it, saying to fill or split first. NetCDF and Zarr record segments as labels beside their step, so a file of more than `dascore.config.max_index_runs` segments reads back as one list of labels with no step, with a warning, unless the limit is raised; DASDAE stores segments explicitly and reads back however many it holds.
 
 ### Declaring a grid
 
-Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid but misses two positions of a step-1 grid. Passing `step` with array data declares the grid: each run of consecutive positions becomes a segment on that step. Values the grid does not restate are kept, not moved, as one list of labels with no step.
+Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid but misses two positions of a step-1 grid. Passing `step` with array data declares the grid: each run of consecutive positions becomes a segment on that step. If any value is off the grid, or the stretches outnumber `max_index_runs`, every value is kept, not moved, as one list of labels with no step.
 
 ```{python}
 coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
