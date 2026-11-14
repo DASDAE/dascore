@@ -2265,6 +2265,8 @@ def _continues(prev: Grid, run: Grid) -> bool:
                 run.stride,
             ) and run.k0 == prev.k0 + prev.count * prev.stride
         return bool(prev.origin + prev.count * prev.step_num == run.origin)
+    if prev.step_den == 1 and prev.phase == run.phase == 0:  # whole ticks
+        return run.origin == prev.origin + prev.count * prev.step_num
     step = Fraction(prev.step_num, prev.step_den)
     return run.ideal_origin == prev.ideal_origin + prev.count * step
 
@@ -3658,6 +3660,27 @@ def _restated(grid: Grid, values, dtype, near: bool) -> bool:
         return bool(np.max(np.abs(labels - values)) <= 2 * allowance)
 
 
+def _whole_tick_runs(values, step, counts, splits) -> tuple | None:
+    """
+    `_step_runs` for integer or time labels on a whole-tick step, all at
+    once: each stretch is its grid exactly where every spacing in it is the
+    step. None for other labels or steps.
+    """
+    whole = _is_int(step) or is_timedelta64(step)
+    ticked = values.dtype == np.int64 or values.dtype.str[-4:] == "[ns]"
+    if not (whole and ticked):  # others take the dtype of their grids
+        return None
+    step = _to_tick(step)
+    ticks = values.view(np.int64) if values.dtype.kind in "mM" else values
+    ticks = ticks.astype(np.int64, copy=False)
+    if np.any(np.diff(ticks)[counts == 1] != step):
+        return (values,), values.dtype
+    starts = ticks[np.r_[0, splits]].tolist()
+    lengths = np.diff(np.r_[0, splits, len(values)]).tolist()
+    runs = tuple(Grid(x, step, 1, n) for x, n in zip(starts, lengths, strict=True))
+    return runs, values.dtype
+
+
 def _step_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
     """
     Labels placed on a declared step's grid: a grid (segment) per stretch of
@@ -3668,9 +3691,12 @@ def _step_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
     signed = magnitude if values[-1] > values[0] else -magnitude
     if (counts := _on_grid(_diffs(values), signed)) is None:
         return (values,), values.dtype
+    splits = np.flatnonzero(counts != 1) + 1
+    if (whole := _whole_tick_runs(values, signed, counts, splits)) is not None:
+        return whole
     runs: list[Any] = []
     dtypes = [values.dtype]
-    for block in np.split(values, np.flatnonzero(counts != 1) + 1):
+    for block in np.split(values, splits):
         grid, dtype = _range_run(dict(start=block[0], step=signed, shape=block.shape))
         if not _restated(grid, block, dtype, absorb):
             return (values,), values.dtype
