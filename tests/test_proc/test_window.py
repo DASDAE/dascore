@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import pickle
+import tracemalloc
 import warnings
 from typing import ClassVar
 
@@ -34,6 +35,7 @@ from dascore.proc.whiten import Whiten
 from dascore.proc.window import PatchWindow, Windowed, WindowReduce
 from dascore.transform.hilbert import Envelope
 from dascore.units import percent
+from dascore.utils import array_api as array_api_module
 from dascore.utils.array_api import to_numpy
 from dascore.warnings import NumpyFallbackWarning
 
@@ -1050,8 +1052,21 @@ class TestPositionFree:
             name = None
             position_free = False
 
+        class Heir(Unsaid):
+            """A class which says nothing, below one which says no."""
+
+            name = None
+
+        class Below(_Sized):
+            """A class which says nothing, below one whose plan says nothing."""
+
+            name = None
+
         dims = ("time",)
         assert not Unsaid(dim="time")._is_position_free(dims)
+        # The nearest class to say anything decides, not only the class itself.
+        assert not Heir(dim="time")._is_position_free(dims)
+        assert not Below()._is_position_free(dims)
         assert Planless()._is_position_free(dims)
         assert dc.proc.Detrend(dim="time")._is_position_free(dims)
         assert Envelope(dim="time")._is_position_free(dims)
@@ -1123,6 +1138,7 @@ class TestPositionFree:
             (PowCoord(distance=1, relative=False), ("time",), True),
             (Whiten(time=None), ("time",), True),
             (Whiten(ft_time=None), ("ft_time",), False),
+            (Whiten(time=None), ("time", "ft_distance"), False),
             (SlopeFilter(filt=(1, 2, 3, 4)), ("time", "distance"), True),
         ),
     )
@@ -1187,8 +1203,10 @@ class TestOtherBackends:
             """Raise: nothing should be converted."""
             raise AssertionError("the data were converted to NumPy")
 
-        # The one way an operation with no implementation for the library,
-        # or a window around one, is taken through NumPy.
+        # DASCore's way of taking an array through NumPy, where it is
+        # written and where an operation with no implementation for the
+        # library reaches it.
+        monkeypatch.setattr(array_api_module, "to_numpy", refuse)
         monkeypatch.setattr(processor_module, "to_numpy", refuse)
 
     @pytest.mark.parametrize("name", CASES)
@@ -1229,7 +1247,11 @@ class TestOtherBackends:
             expected = ints.window(time=100, samples=True).abs()
         with pytest.warns(UserWarning, match="Blending windows of int16"):
             out = _on(ints, library).window(time=100, samples=True).abs()
-        assert out.backend == library and _values(out).dtype == expected.dtype
+        with warnings.catch_warnings():
+            # Said once, at the call: not again as each piece is computed.
+            warnings.simplefilter("error")
+            values = _values(out)
+        assert out.backend == library and values.dtype == expected.dtype
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
 
     def test_operation_without_the_library(self, patch, library, monkeypatch):
@@ -1296,6 +1318,13 @@ class TestOtherBackends:
         assert out.data.chunks == there.data.chunks
         # Blends outside a dask task, as the dtype is found by, hold no turn.
         assert sum(turns) == 2
+        # A dimension the operation needs whole is one piece, not its chunks.
+        turns.clear()
+        chunked = patch.new(data=dask_array.from_array(patch.data, chunks=(100, 500)))
+        out = chunked.window(time=100, samples=True).detrend("distance")
+        expected = patch.window(time=100, samples=True).detrend("distance")
+        np.testing.assert_array_equal(_values(out), expected.data)
+        assert sum(turns) == 2
 
     def test_dask_pieces_agree_on_a_dtype(self, library):
         """Every piece has the dtype stated, whatever its own values made."""
@@ -1309,7 +1338,29 @@ class TestOtherBackends:
         # Half precision windows, which a detrend widens only where one holds NaN.
         out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
         blocks = [x.compute().dtype for x in out.data.blocks]
-        assert set(blocks) == {np.dtype(out.dtype)}
+        # What a window of zeros gives, which is what the result states.
+        assert set(blocks) == {np.dtype(out.dtype)} == {np.dtype(np.float64)}
+
+    def test_dask_dtype_is_found_from_a_short_window(self, library):
+        """An operation which needs more than 64 samples is tried on 4096."""
+        if library != "dask":
+            pytest.skip("only a dask patch is planned before it is computed")
+        dask_array = pytest.importorskip("dask.array")
+        shape = (8, 2_000_000)
+        coords = {"distance": np.arange(8.0), "time": np.arange(shape[1])}
+        data = dask_array.zeros(shape, chunks=(8, 100_000))
+        patch = dc.Patch(data, coords, ("distance", "time"))
+        tracemalloc.start()
+        try:
+            # A fit to 201 samples of time, in windows of four distances.
+            out = patch.window(distance=4, samples=True).savgol_filter(
+                polyorder=2, time=201, samples=True
+            )
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # One window whole is 4 by two million samples: 64 MB.
+        assert out.dtype == np.float64 and peak < 40e6
 
     def test_dask_result_pickles(self, patch, library):
         """A windowed result on dask can be pickled, tasks and all."""
@@ -1361,19 +1412,37 @@ class TestOtherBackends:
         assert out.backend == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
 
-    def test_another_device(self, patch, library):
-        """The fill and the gaps between windows are made where the data are."""
+    @pytest.mark.parametrize(
+        "window",
+        (
+            {"time": 50, "step": 37, "fill": 2.5},
+            {"time": 64, "overlap": 48, "analysis": "hann"},
+        ),
+        ids=("fill", "analysis"),
+    )
+    def test_another_device(self, patch, library, window):
+        """
+        On a device NumPy cannot read, the windows are still cut and blended.
+
+        Nothing on that device can be made a NumPy array, so a result at
+        all says nothing was converted; the fill and the gaps between
+        windows are made where the data are. A roll moves samples within a
+        window, so the fill and the analysis window show in the result.
+        """
         if library == "dask":
             pytest.skip("dask has one device")
         strict = pytest.importorskip("array_api_strict")
         elsewhere = strict.asarray(patch.data, device=strict.Device("device1"))
-        # Windows 37 apart leave gaps within each class, and reach past the end.
-        window = {"time": 50, "step": 37, "samples": True, "fill": 2.5}
-        out = patch.new(data=elsewhere).window(**window).abs()
-        expected = patch.window(**window).abs()
+        with pytest.raises(RuntimeError, match="Can't convert"):
+            np.asarray(elsewhere)
+        there = patch.new(data=elsewhere).window(samples=True, **window)
+        out = there.roll(time=7, samples=True)
+        expected = patch.window(samples=True, **window).roll(time=7, samples=True)
+        plain = patch.window(time=window["time"], samples=True)
         assert out.data.device == elsewhere.device
         home = np.asarray(out.data.to_device(strict.Device("CPU_DEVICE")))
         np.testing.assert_allclose(home, expected.data, rtol=0, atol=1e-12)
+        assert not np.allclose(home, plain.roll(time=7, samples=True).data)
 
     def test_kernel_which_changes_the_shape(self, patch, library):
         """A kernel which does not keep the shape it stated is caught here too."""
