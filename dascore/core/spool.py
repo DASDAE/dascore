@@ -2238,6 +2238,10 @@ class Spool(NodeRepr, NamespaceOwner):
 
         resolver = self._catalog.resolver
         same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
+        # members load under the plan's sample or relative selections, which
+        # a re-plan over them as bare rows would drop
+        if same_dim and any(s or r for _, s, r in resolver.parent_residuals):
+            same_dim = False
         base = collapse_working_df(self._catalog) if same_dim else None
         # a collapsed member is cut where its output's runs say (eg the
         # segments a concatenation kept), else each row at its own seams

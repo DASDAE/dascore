@@ -1343,6 +1343,16 @@ class TestTreeMatchesChunk:
         with pytest.raises(PatchConversionError, match="sample selection"):
             spool.io.to_xarray()
 
+    def test_rechunked_relative_selection_refused(self, to_spool):
+        """A same-dimension chunk of a relative selection is refused when built."""
+        patch = dc.get_example_patch().select(
+            distance=(0, 2), time=(0, 20), samples=True
+        )
+        patch = patch.update_coords(distance=np.arange(2))
+        spool = to_spool([patch]).select(distance=(0.1, None), relative=True)
+        with pytest.raises(PatchConversionError, match="relative one"):
+            spool.chunk(time=None).io.to_xarray()
+
     @pytest.mark.parametrize("select", [dict(time=(1, -1)), dict(time=(5, None))])
     def test_rechunked_sample_selection(self, patches, to_spool, select):
         """
