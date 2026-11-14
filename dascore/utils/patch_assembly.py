@@ -805,9 +805,12 @@ class PatchAssembler:
         trims = (self.plan_dim, self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
-        # Already in the plan's units, there is nothing to convert, and a
-        # lazy member is not asked to run what would do nothing.
-        if units is None or get_quantity(patch.attrs.data_units) == get_quantity(units):
+        # Already in the plan's units, spelled as the plan spells them,
+        # there is nothing to convert, and a lazy member is not asked to
+        # run what would do nothing. The same quantity spelled another way
+        # is still converted, which restates its units.
+        stated = get_quantity(patch.attrs.data_units)
+        if units is None or str(stated) == str(get_quantity(units)):
             return patch
         return patch.convert_units(units)
 

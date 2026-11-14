@@ -370,6 +370,24 @@ class TestPendingStepsOnAnotherLibrary:
         with pytest.raises(LazyOperationError, match="_Doubles has no"):
             pending.set_backend(f"LazyArray[{STRICT}]")
 
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_operation_in_a_window(self, patch, strict, policy):
+        """A window is asked about the operation it runs, when it is chained."""
+        lazy = patch.set_backend(f"LazyArray[{STRICT}]")
+        window = lazy.window(time=100, samples=True)
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="detrend has no"):
+                    window.detrend("time")
+                return
+            with pytest.warns(NumpyFallbackWarning, match="detrend has no"):
+                out = window.detrend("time")
+        assert out.backend == "lazy"
+        # One with a kernel for the library is chained with nothing said.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert lazy.window(time=100, samples=True).abs().backend == "lazy"
+
     def test_steps_with_kernels(self, patch, strict):
         """Steps which run on any library move with nothing said."""
         pending = patch.set_backend("lazy").abs()
@@ -569,21 +587,36 @@ class TestSpoolSetBackend:
         assert len(both) == len(spool)
         assert {x.backend for x in both} == {"lazy"} and not reads
         with pytest.raises(ParameterError, match="different backends"):
-            lazy[:2] + spool[2:]
-        # Set on the sum, it is one backend again.
-        summed = (spool[:2] + spool[2:]).set_backend("lazy")
-        assert summed[0].backend == "lazy"
+            lazy[:2] + spool[2:].set_backend("numpy")
+        # A spool with none set takes the other's, so spools gathered onto
+        # an empty one keep theirs.
+        gathered = sum([lazy[:2], spool[2:]], dc.spool([]))
+        assert len(gathered) == len(spool)
+        assert {x.backend for x in gathered} == {"lazy"} and not reads
+        # And a spool is not the same spool on another backend.
+        assert lazy != spool and lazy == spool.set_backend("LazyArray")
 
     def test_update_of_one_file_keeps_it(self, path):
         """A spool of one file, looked at again, is on the same backend."""
         lazy = dc.spool(path).set_backend("lazy")
         assert lazy.update()[0].backend == "lazy"
 
-    def test_load_reads_everything(self, spool):
+    def test_load_reads_everything(self, spool, strict):
         """`load` gives a spool of patches in memory."""
         loaded = spool.set_backend("lazy").load()
         assert [x.backend for x in loaded] == ["numpy"] * len(spool)
         assert all(x.equals(y) for x, y in zip(loaded, spool, strict=True))
+        # On the library a lazy backend computes on.
+        there = spool.set_backend(f"LazyArray[{STRICT}]").load()
+        assert [x.backend for x in there] == [STRICT] * len(spool)
+
+    def test_load_reads_what_could_not_be_lazy(self, undescribed):
+        """Asked to read everything, nothing is refused for not being lazy."""
+        expected = undescribed.chunk(time=None).load()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            loaded = undescribed.set_backend("lazy").chunk(time=None).load()
+        assert len(loaded) == 1 and loaded[0].equals(expected[0])
 
     def test_another_library(self, spool, strict):
         """An array library by name, lazily or in memory."""
@@ -683,6 +716,25 @@ class TestLazyMerge:
                 merged = lazy[0]
         # Read after all, whole, by the merge which reads its members.
         assert merged.backend == "numpy" and merged.equals(expected)
+
+    def test_units_spelled_another_way_are_restated(self, tmp_path):
+        """The same quantity under another name is converted still, as it was."""
+        base = dc.get_example_patch("random_das", shape=(4, 20), time_step=0.01)
+        start = np.datetime64("2020-01-01T00:00:00")
+        for index, units in enumerate(("m/s", "mm/ms", "m/s")):
+            moved = base.update_coords(
+                time_min=start + index * np.timedelta64(200, "ms")
+            )
+            data = np.arange(moved.data.size).reshape(moved.shape) + index
+            part = moved.new(data=data.astype(np.int32)).set_units(units)
+            dc.write(part, tmp_path / f"part_{index}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        # A selection which trims the members, so each is loaded and merged.
+        window = (start + np.timedelta64(50, "ms"), start + np.timedelta64(450, "ms"))
+        merged = spool.select(time=window).chunk(time=None, conflict="drop")[0]
+        # Restated in the plan's units, which a conversion makes floats of.
+        assert merged.attrs.data_units == dc.get_quantity("m/s")
+        assert merged.dtype == np.float64
 
     def test_files_which_state_data_units(self, whole, tmp_path):
         """Members already in the plan's units are not asked to convert."""

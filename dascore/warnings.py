@@ -14,6 +14,12 @@ class NumpyFallbackWarning(DASCoreWarning):
     Some ufuncs, all numpy functions, and reductions of dtypes the standard
     excludes are applied by numpy: the data are converted, the operation
     applied, and the output converted back to the original backend.
+
+    Also issued, where the `numpy_fallback` setting is ``"warn"``, when
+    lazy data are read into memory for something which cannot be done
+    lazily: an operation with no chunk contract, or a read, a fill or a
+    merge which cannot stay lazy. Under ``"raise"`` each of these is an
+    error instead, and under ``"ignore"`` none is said.
     """
 
 

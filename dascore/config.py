@@ -239,9 +239,11 @@ class DascoreConfig(BaseModel):
             "What happens when an operation has no implementation for a "
             "patch's array backend and can only run by converting the data "
             "to NumPy: 'raise' refuses it, 'warn' converts with a "
-            "NumpyFallbackWarning, and 'ignore' converts silently. On a "
-            "lazy patch converting means reading the data into memory, and "
-            "the same setting decides a merge which cannot stay lazy. None, "
+            "NumpyFallbackWarning, and 'ignore' converts silently. The "
+            "same setting decides whether lazy data are read into memory "
+            "for an operation with no chunk contract, and for a read, a "
+            "fill or a merge which cannot stay lazy. Arithmetic and NumPy "
+            "functions on a lazy patch are refused whatever it says. None, "
             "the default, is 'raise' for lazy data and 'warn' otherwise."
         ),
     )

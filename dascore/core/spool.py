@@ -821,8 +821,14 @@ class Spool(NodeRepr, NamespaceOwner):
             raise InsufficientMemoryError(msg)
         from dascore.io.index.catalog import _patch_path  # noqa: PLC0415
 
+        # Reading everything is what was asked for, so nothing is read
+        # lazily first: a lazy backend's patches are read onto the library
+        # it computes on.
+        reader = self
+        if self._backend is not None:
+            reader = self.set_backend(parse_backend(self._backend)[1])
         patches, seen = [], set()
-        for patch in self:
+        for patch in reader:
             patch = _loaded(patch)
             # A spool of patches holds each instance once, and a row
             # presented twice (an explicit window given twice, say) gives
@@ -916,15 +922,16 @@ class Spool(NodeRepr, NamespaceOwner):
         new._catalog = union
         # The backend the patches are handed out on is the spools' own,
         # and two different ones have no combined answer.
-        backends = {x._backend for x in spools}
+        # A spool with none set takes the other's, so spools gathered onto
+        # an empty one keep theirs.
+        backends = sorted({x._backend for x in spools if x._backend is not None})
         if len(backends) > 1:
-            names = sorted("in memory, as read" if x is None else x for x in backends)
             msg = (
-                f"Spools on different backends cannot be added: {names}. Set "
-                "one backend on each, or on their sum."
+                f"Spools on different backends cannot be added: {backends}. "
+                "Set one backend on each, or on their sum."
             )
             raise ParameterError(msg)
-        (new._backend,) = backends
+        new._backend = backends[0] if backends else None
         # An attached inventory is part of what a spool yields, so it must
         # survive the union; two different ones have no combined answer.
         new._inventory, enrichment = combine_inventories(*spools)
@@ -3516,9 +3523,10 @@ class Spool(NodeRepr, NamespaceOwner):
             return deep_equality_check(self.__dict__, other_dict)
         # Models compare with ==; deep_equality_check walks their fields,
         # where an unset (NaT) time never equals itself.
-        if (self._inventory, self._enrichment()) != (
+        if (self._inventory, self._enrichment(), self._backend) != (
             other._inventory,
             other._enrichment(),
+            other._backend,
         ):
             return False
         # views over the same catalog state are equal without realizing

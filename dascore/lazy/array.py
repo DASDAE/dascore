@@ -166,11 +166,13 @@ class LazyArray:
         """
         Read the recipe and run every pending step, returning the array.
 
-        Each step runs its processor's NumPy kernel, on the whole array or,
-        when that would hold an array larger than the `lazy_block_size`
-        setting, a chunk at a time; only the samples the result needs are
-        read. What each step makes is checked against the shape and dtype
-        its metadata stated, which is what the patch said it held all along.
+        Each step runs the kernel its processor has for this array's
+        `backend`, NumPy's unless another library was named, on the whole
+        array or, when that would hold an array larger than the
+        `lazy_block_size` setting, a chunk at a time; only the samples the
+        result needs are read. The array returned is on that library. What
+        each step makes is checked against the shape and dtype its metadata
+        stated, which is what the patch said it held all along.
 
         Raises
         ------

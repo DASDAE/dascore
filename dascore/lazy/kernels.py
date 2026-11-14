@@ -7,7 +7,8 @@ plan -- a contract written above the class which owns the kernel describes
 some other kernel, so it does not count -- then:
 
 - no contract, or a `reconcile` of the processor's own, which would be
-  handed the lazy array: refuses, before anything is read;
+  handed the lazy array: refuses, before anything is read, unless the
+  `numpy_fallback` setting allows the data to be read into memory for it;
 - [`Unchanged`](`dascore.lazy.contract.Unchanged`): hands the data back, so
   the operation is the same no-op it is on data in memory;
 - any other contract: appends the operation to the chain, pending until
@@ -87,12 +88,11 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     if isinstance(contract, Unchanged):
         return data
     kernel = type(processor).kernel_for(data.backend)
-    converts = data.backend != NUMPY_BACKEND and hasattr(kernel, "_quiet")
     if isinstance(contract, ChunkContract):
-        if converts:
+        if (converted := _converted(processor, data.backend)) is not None:
             # It runs a chunk at a time still, each chunk through NumPy.
             _fall_back(
-                f"{name} has no {data.backend} implementation",
+                f"{converted} has no {data.backend} implementation",
                 "each chunk is converted to numpy to run it",
             )
         return data._appended(Node(processor, plan, contract))
@@ -130,14 +130,24 @@ def on_backend(array: LazyArray, backend: str) -> LazyArray:
     """
     if backend not in (array.backend, NUMPY_BACKEND):
         for node in array.chain:
-            processor = node.processor
-            if hasattr(type(processor).kernel_for(backend), "_quiet"):
-                name = processor.name or type(processor).__name__
+            if (converted := _converted(node.processor, backend)) is not None:
                 _fall_back(
-                    f"{name} has no {backend} implementation",
+                    f"{converted} has no {backend} implementation",
                     "each chunk is converted to numpy to run it",
                 )
     return array.with_backend(backend)
+
+
+def _converted(processor, backend: str) -> str | None:
+    """Return the operation a step would take chunks through NumPy for, if any."""
+    if backend == NUMPY_BACKEND:
+        return None
+    if hasattr(type(processor).kernel_for(backend), "_quiet"):
+        return processor.name or type(processor).__name__
+    # A step which runs another operation, as one in a window does, has a
+    # kernel for any library and converts for the operation it runs.
+    inner = getattr(processor, "operation", None)
+    return _converted(inner, backend) if isinstance(inner, PatchProcessor) else None
 
 
 def _fall_back(what: str, how: str, refusal: Exception | None = None) -> None:
