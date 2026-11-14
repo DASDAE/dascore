@@ -9,24 +9,35 @@ operation, which gives back a patch.
 from __future__ import annotations
 
 import math
+import threading
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
-from itertools import product
+from itertools import pairwise, product
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from pydantic import ConfigDict
 
-from dascore.core.processor import PatchProcessor, captured_operation
+from dascore.core.processor import PatchProcessor, _via_numpy, captured_operation
 from dascore.exceptions import ParameterError, PatchError
 from dascore.lazy.contract import Halo, Pointwise, Tiles, Unchanged, WholeAxis
+from dascore.proc.basic import _pad_array
 from dascore.proc.rolling import _pandas_agrees, _rolling_pandas
 from dascore.proc.tile_apply import TileApply, _blended_window, _windowed, _windows
-from dascore.utils.array_api import LAZY_BACKEND
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.array_api import (
+    LAZY_BACKEND,
+    _as_numpy_dtype,
+    array_namespace,
+    asarray_like,
+    backend_name,
+    device,
+    is_numpy,
+    to_numpy,
+)
+from dascore.utils.misc import optional_import, suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
 from dascore.utils.tiles import _taper_like, fill_dtype, get_tile_plan
 from dascore.utils.window import resolve_window
@@ -239,35 +250,17 @@ class WindowReduce(PatchProcessor):
         return out
 
 
-def _same(one, other) -> bool:
-    """
-    Whether two plans hold the same values, arrays included.
-
-    Exactly, and of the same types, where `values_equal` compares within a
-    tolerance: a plan which differs at all between two windows is not the
-    one plan every window is run with.
-    """
-    if isinstance(one, dict) and isinstance(other, dict):
-        return one.keys() == other.keys() and all(_same(one[x], other[x]) for x in one)
-    if isinstance(one, list | tuple) and isinstance(other, list | tuple):
-        return len(one) == len(other) and all(map(_same, one, other))
-    if isinstance(one, np.ndarray) or isinstance(other, np.ndarray):
-        return np.array_equal(
-            one, other, equal_nan=np.asarray(one).dtype.kind in "fcmM"
-        )
-    return type(one) is type(other) and (
-        one == other or (one != one and other != other)
-    )
-
-
-# The most samples of a dimension which is not windowed that a lazy patch's
-# dtype is found from.
-_PROBE = 64
-# The most windows whose plans are worked out to check an operation which
-# does not say it is `position_free`. Each costs tens of microseconds and
-# the operation's own planning, which for a taper makes about a third of a
-# second of the lot.
-_MAX_CHECKED = 1000
+# The most samples of a dimension which is not windowed that the dtype of a
+# lazy or dask patch is found from: tried in turn, before the whole dimension, for an
+# operation which cannot plan or run on so few.
+_PROBES = (64, 4096)
+# How many windows long a piece of a dask array is computed in, at least:
+# each piece is given the windows which reach into it from either side, so
+# a piece of one window would compute three to keep one.
+_DASK_WINDOWS = 8
+# DASCore's NumPy kernels are run one at a time when dask computes pieces on
+# several threads: not every one may be run from two threads at once.
+_DASK_TURN = threading.Lock()
 
 
 class Windowed(PatchProcessor):
@@ -297,21 +290,31 @@ class Windowed(PatchProcessor):
 
     Notes
     -----
-    - Everything is decided from the metadata of one window before any
-      data are read. The operation must give back a window of the same
-      shape, dimensions and coordinates, take no other patch or array
-      shaped like the patch, not settle its result from the data it
-      computed, and work the same way wherever the window sits; the
-      window must fit inside its dimension.
-    - An operation says the last itself, by setting `position_free` on its
-      class; DASCore's detrend, filters, normalizations and the like do.
-      One which does not has its plan worked out for every whole window to
-      check, and is refused where there are more than 1000 windows.
+    - One plan is worked out, from the metadata of the first window, and
+      run in every window: the kernel never changes from window to window.
+      Only an operation which acts relative to its window can be run that
+      way, and its class says that it is one by setting `position_free`;
+      DASCore's detrend, taper, filters, normalizations and the like do.
+      Any other is refused.
+    - Everything is decided before any data are read. The operation must
+      also give back a window of the same shape, dimensions and
+      coordinates, take no other patch or array shaped like the patch,
+      and not settle its result from the data it computed; the window
+      must fit inside its dimension.
+    - On an array backend other than NumPy the data stay where they are.
+      A dask array is computed a piece at a time, each from the windows
+      which overlap it, so nothing is computed when the operation is
+      called; the pieces are blended one at a time in a process, since not
+      every kernel may be run from two threads at once. On any other library the windows
+      are cut, run and blended there, which takes several array operations
+      for each window; only an operation with no implementation for the
+      library is converted through NumPy, the whole array at once as it is
+      outside a window, with a `NumpyFallbackWarning` naming it.
     - An operation which only changes metadata leaves the data as they are.
     - On a lazy patch an output chunk needs only the windows which overlap
       it, so a windowed dimension can be cut even where the operation
-      itself needs its dimension whole. The dtype is found by running the
-      operation once on a window of zeros.
+      itself needs its dimension whole. For a lazy or dask patch the dtype
+      is found by running the operation on a window of zeros.
     """
 
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
@@ -366,81 +369,28 @@ class Windowed(PatchProcessor):
         )
         raise ParameterError(msg)
 
-    def _check_everywhere(self, meta, window, tile, plan):
-        """
-        Refuse an operation whose plan is not the one plan of every window.
-
-        Only for an operation which does not say it is `position_free`.
-        Every whole window is asked, up to a limit, and along each dimension
-        the one which ends where the array does: the last windows reach past
-        the end, and no metadata describes those. A window's metadata
-        differs from the first's only in the coordinates along the windowed
-        dimensions, so those are cut once for each start and put together
-        for each window.
-        """
-        coords, dim_map = tile.coords, tile.coords.dim_map
-        counts = [
-            (meta.shape[axis] - size) // step + 1
-            for axis, size, step in zip(window.axes, window.size, window.stride)
-        ]
-        if math.prod(counts) > _MAX_CHECKED:
-            self._refuse(
-                f"its class does not set position_free, which says its plan is "
-                f"the same wherever a window sits, and {math.prod(counts)} "
-                f"windows are more than the {_MAX_CHECKED} whose plans are "
-                "worked out to check."
-            )
-        windowed = set(window.dims)
-        # A coordinate along two windowed dimensions is cut by both at once.
-        joint = any(len(windowed & set(x)) > 1 for x in dim_map.values())
-        choices = []
-        for dim, size, step in zip(window.dims, window.size, window.stride):
-            n = len(meta.get_coord(dim))
-            names = [x for x, dims in dim_map.items() if dim in dims]
-            cut: list[tuple[int, dict]] = []
-            for at in sorted({*range(0, n - size + 1, step), n - size}):
-                found: dict = {}
-                if not joint:
-                    along, _ = meta.coords.isel(**{dim: slice(at, at + size)})
-                    found = {x: along.coord_map[x] for x in names}
-                cut.append((at, found))
-            choices.append(cut)
-        for position in product(*choices):
-            starts = [at for at, _ in position]
-            if not any(starts):
-                continue
-            if joint:
-                other = self._tile(meta, window, starts)
-            else:
-                merged = dict(coords.coord_map)
-                for _, found in position:
-                    merged.update(found)
-                frozen = type(coords.coord_map)(merged)
-                other = tile.new(coords=coords.model_copy(update={"coord_map": frozen}))
-            made, planned = self._planned(other)
-            self._check_made(other, made)
-            if not _same(plan, planned):
-                self._refuse("what it does depends on where the window sits.")
-
     def _lazy_dtype(self, window, tile, plan) -> np.dtype:
         """Return the dtype of the blended windows, by running one of zeros."""
-        # A lazy patch states its dtype before anything is read, and an
-        # operation's metadata need not say what its kernel returns: a
-        # detrend of integers is float. A dtype does not depend on how long
-        # the other dimensions are, so the window is cut short along those;
-        # an operation which cannot plan or run that short is given it whole.
-        long = {
-            dim: slice(0, _PROBE)
-            for dim, n in zip(tile.dims, tile.shape)
-            if dim not in window.dims and n > _PROBE
-        }
-        if long:
+        # A lazy or dask patch states its dtype before anything is read,
+        # and an operation's metadata need not say what its kernel returns:
+        # a detrend of integers is float. A dtype does not depend on how
+        # long the other dimensions are, so the window is cut short along
+        # those; an operation which cannot plan or run that short is given
+        # it longer, and at last whole.
+        for most in _PROBES:
+            long = {
+                dim: slice(0, most)
+                for dim, n in zip(tile.dims, tile.shape)
+                if dim not in window.dims and n > most
+            }
+            if not long:
+                break
             try:
                 short = tile.new(coords=tile.coords.isel(**long)[0])
                 return self._probed(short, {**plan, "inner": self._planned(short)[1]})
             except Exception:
-                # Whatever it could not do that short, it is asked whole.
-                pass
+                # Whatever it could not do that short, it is asked longer.
+                continue
         return self._probed(tile, plan)
 
     def _probed(self, tile, plan) -> np.dtype:
@@ -467,7 +417,7 @@ class Windowed(PatchProcessor):
         """
         if self.fill in (None, 0) and self.analysis is None:
             return dtype
-        dtype = np.dtype(dtype)
+        dtype = _as_numpy_dtype(dtype)
         if self.fill is not None and self.fill != 0:
             dtype = fill_dtype(dtype, self.fill)
         if self.analysis is not None:
@@ -495,7 +445,8 @@ class Windowed(PatchProcessor):
             self._refuse("it settles its result from the data it computed.")
         if operation._inputs()[1]:
             self._refuse("it takes another patch, which a window cannot cut yet.")
-        if any(np.shape(x) == meta.shape for x in operation.kwargs.values()):
+        given = operation.kwargs.values()
+        if any(getattr(x, "shape", None) == meta.shape for x in given):
             self._refuse(
                 "it was given an array shaped like the patch, which a window "
                 "cannot cut yet."
@@ -521,11 +472,27 @@ class Windowed(PatchProcessor):
             tile, dims=operation.required_dims, coords=operation.required_coords
         )
         check_patch_attrs(tile, operation.required_attrs)
+        if not operation._is_position_free(window.dims):
+            try:
+                made = operation.get_metadata(tile)[0]
+            except Exception:
+                made = None
+            if made is not None:
+                # What it does to a window is the more useful thing to say.
+                self._check_made(tile, made)
+            self._refuse(
+                "as called it is not known to do the same thing wherever a "
+                "window sits, which its class says by position_free. One plan "
+                "is worked out and run in every window, so an operation which "
+                "reads where its coordinates start has no place in one. An "
+                "operation which takes coordinate values and has a `relative` "
+                "argument can be given them from the start of its window."
+            )
         made, inner = self._planned(tile)
         self._check_made(tile, made)
-        if not type(operation)._is_position_free():
-            self._check_everywhere(meta, window, tile, inner)
-        lazy = meta.backend == LAZY_BACKEND
+        # A lazy patch and a dask one both compute later, so both are told
+        # now what dtype the blended windows have.
+        deferred = meta.backend in (LAZY_BACKEND, "dask")
         plan = {
             "axes": axes,
             "size": size,
@@ -538,12 +505,13 @@ class Windowed(PatchProcessor):
         out = meta.new(attrs=operation._result_attrs(made))
         if type(operation).kernel_for("numpy") is None:
             # Nothing is computed, so nothing is blended.
-            return out, {**plan, "quiet": True}
-        if not lazy:
+            return out, {**plan, "quiet": True, "like": None}
+        if not deferred:
             # In memory the array which comes back says what it is.
-            return out, {**plan, "quiet": False}
+            return out, {**plan, "quiet": False, "like": None}
         dtype = self._lazy_dtype(window, tile, plan)
-        return out.new(dtype=dtype), {**plan, "quiet": True}
+        # An empty array says the dtype: a plan holds numbers and arrays.
+        return out.new(dtype=dtype), {**plan, "quiet": True, "like": np.empty(0, dtype)}
 
     def chunk_contract(self, dtype, plan):
         """Return the tiles a chunk needs, and what the operation reads besides."""
@@ -567,7 +535,18 @@ class Windowed(PatchProcessor):
         return Tiles(spans, whole=others)
 
     def numpy_kernel(
-        self, data, *, axes, size, stride, length, others, inner, quiet, tiles=None
+        self,
+        data,
+        *,
+        axes,
+        size,
+        stride,
+        length,
+        others,
+        inner,
+        quiet,
+        like=None,
+        tiles=None,
     ):
         """
         Return the windows the operation made, blended.
@@ -584,6 +563,164 @@ class Windowed(PatchProcessor):
         if not quiet:
             _warn_if_integers(made, out.dtype)
         return out
+
+    def kernel(
+        self,
+        data,
+        *,
+        axes,
+        size,
+        stride,
+        length,
+        others,
+        inner,
+        quiet,
+        like=None,
+        tiles=None,
+    ):
+        """
+        Return the windows the operation made, blended, on the data's backend.
+
+        As `numpy_kernel`, for any other array library, so the data stay
+        where they are. A dask array is computed a chunk at a time, each
+        from the windows which overlap it; see `_by_dask_chunk`. For any
+        other library the windows are cut by slicing, the operation's
+        kernel for the library is run on each, and the results are put
+        together by concatenation and addition, with nothing written in
+        place, which not every array library allows.
+        """
+        operation = self.operation
+        backend = backend_name(data)
+        kernel = type(operation).kernel_for(backend)
+        if kernel is None:
+            return data
+        where = {"axes": axes, "size": size, "stride": stride, "length": length}
+        if backend == "dask" and like is not None and tiles is None:
+            return self._by_dask_chunk(
+                data, like=like, others=others, inner=inner, **where
+            )
+        if (name := getattr(kernel, "_converts", None)) is not None:
+            # The operation has nothing for this backend and goes through
+            # NumPy. Once, for the whole array: a window at a time, a lazy
+            # backend would compute what its windows share again for each.
+            convert = _via_numpy(type(self).numpy_kernel, name)
+            rest = {"others": others, "inner": inner, "quiet": quiet, "tiles": tiles}
+            return convert(self, data, **where, **rest)
+        xp = array_namespace(data)
+        plan = get_tile_plan(length, size, stride)
+        tiles = tiles or tuple((0, count) for count in plan.grid)
+        ndim = len(axes)
+        tail = tuple(range(-ndim, 0))
+        moved = xp.moveaxis(data, axes, tail)
+        fill = 0 if self.fill is None else self.fill
+        if fill != 0:
+            wide = fill_dtype(_as_numpy_dtype(moved.dtype), fill)
+            moved = xp.astype(moved, _dtype_on(moved, wide))
+        # A window reaching beyond the array holds the fill there: the data
+        # are lengthened at each end by as much of it as the windows reach.
+        spans = zip(tiles, size, stride, plan.margin, length, strict=True)
+        extent, inside, widths = [], [], [(0, 0)] * (moved.ndim - ndim)
+        for (first, last), z, step, margin, n in spans:
+            low, high = first * step - margin, (last - 1) * step - margin + z
+            before, after = max(low, 0) - low, high - min(high, n)
+            widths.append((before, after))
+            extent.append(high - low)
+            inside.append(slice(before, high - low - after))
+        moved = _pad_array(moved, widths, fill)
+        overlap = tuple(z - step for z, step in zip(size, stride, strict=True))
+        analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
+        # Windows a whole number of colours apart never share a sample, so
+        # each such class is run, laid out with nothing between its windows,
+        # and added to the rest before the next is begun, so the windows of
+        # one class are held at a time and not of all. The classes go in one
+        # order always, by
+        # where each window sits in the array, so a sample's windows are
+        # summed the same way however the array was cut.
+        classes: dict[tuple, list] = {}
+        for index in product(*(range(first, last) for first, last in tiles)):
+            colour = tuple(k % c for k, c in zip(index, plan.colours, strict=True))
+            classes.setdefault(colour, []).append(index)
+        total, dtype = None, None
+        for colour in sorted(classes):
+            made = {}
+            for index in classes[colour]:
+                starts = ((k - t[0]) * s for k, t, s in zip(index, tiles, stride))
+                pick = (..., *(slice(at, at + z) for at, z in zip(starts, size)))
+                tile = moved[pick]
+                if analysis is not None:
+                    tile = _weighted(xp, tile, analysis)
+                tile = xp.moveaxis(tile, tail, axes)
+                out = kernel(operation, tile, **inner)
+                if backend_name(out) != backend:
+                    # A kernel which answered in NumPy whatever it was given.
+                    out = asarray_like(out, tile)
+                if tuple(out.shape) != tuple(tile.shape):
+                    name = type(operation).__name__
+                    msg = (
+                        f"{name} computed a window of shape {tuple(out.shape)} "
+                        f"from one of {tuple(tile.shape)}; its get_metadata "
+                        "stated the same shape."
+                    )
+                    raise PatchError(msg)
+                dtype = _as_numpy_dtype(out.dtype)
+                made[index] = _weighted(xp, xp.moveaxis(out, axes, tail), synthesis)
+            laid = _laid_out(xp, made, tiles, size, stride, extent)
+            total = laid if total is None else total + laid
+            # Let go before the next class is run.
+            made = laid = None
+        assert total is not None and dtype is not None  # an axis has a window
+        if not quiet:
+            _warn_if_integers(dtype, _as_numpy_dtype(total.dtype))
+        return xp.moveaxis(total[(..., *inside)], tail, axes)
+
+    def _by_dask_chunk(self, data, *, like, axes, size, stride, length, others, inner):
+        """
+        Return the blended windows of a dask array, a chunk at a time.
+
+        The result is made in pieces, each a task which is given the windows
+        that overlap its piece, whole, and blends them with the NumPy
+        kernel: what a chunk of a lazy patch is given, by the same contract.
+        So nothing is computed here, no task holds more than its piece and
+        the windows around it, and the values are the NumPy ones exactly.
+        A piece is a chunk, or along a windowed dimension several chunks
+        where they are short beside the window; a dimension the operation
+        needs whole is one piece. The result is cut back into the chunks
+        the data came in.
+        """
+        dask, array = optional_import("dask"), optional_import("dask.array")
+        where = {"axes": axes, "size": size, "stride": stride, "length": length}
+        plan = {**where, "others": others, "inner": inner}
+        contract = self.chunk_contract(_as_numpy_dtype(data.dtype), plan)
+        sizes = dict(zip(axes, size, strict=True))
+        spans = []
+        for axis, chunks in enumerate(data.chunks):
+            edges = np.cumsum((0, *chunks)).tolist()
+            if axis in contract.whole:
+                edges = [0, edges[-1]]
+            elif axis in sizes:
+                # Chunks joined until a piece is several windows long.
+                least, kept = _DASK_WINDOWS * sizes[axis], [0]
+                for edge in edges[1:-1]:
+                    if edge - kept[-1] >= least and edges[-1] - edge >= least:
+                        kept.append(edge)
+                edges = [*kept, edges[-1]]
+            spans.append(list(pairwise(edges)))
+        # What a chunk of a lazy patch is run by. Handed to every task once,
+        # not copied into each.
+        run = partial(self.numpy_kernel, **plan, quiet=True)
+        shared = dask.delayed((contract, run, like.dtype), traverse=False)
+
+        def build(prefix: tuple):
+            """Return the pieces under `prefix`, nested by axis for `block`."""
+            if len(prefix) < data.ndim:
+                return [build((*prefix, span)) for span in spans[len(prefix)]]
+            box = tuple(slice(low, high) for low, high in prefix)
+            needed = contract.needs(box, data.shape)
+            task = dask.delayed(_blended_piece)(shared, data[needed], box, needed)
+            shape = tuple(high - low for low, high in prefix)
+            return array.from_delayed(task, shape=shape, dtype=like.dtype)
+
+        return array.block(build(())).rechunk(data.chunks)
 
     def _blend(self, data, *, axes, size, stride, length, inner, tiles):
         """Return the blended windows, and the dtype the operation made."""
@@ -632,6 +769,76 @@ class Windowed(PatchProcessor):
             out[pick] += made * weights
         assert out is not None  # an axis with a sample has a window
         return np.moveaxis(out[inside], tail, axes), made.dtype
+
+
+def _blended_piece(shared, piece, box, needed):
+    """
+    Return one piece of a dask array: the windows around it blended, and cut.
+
+    The blend is NumPy's. A piece whose chunks are another library's, as
+    those of a dask array on a GPU are, is brought to NumPy for it and the
+    result put back where the piece was.
+    """
+    contract, run, dtype = shared
+    with _DASK_TURN:
+        out = contract.apply(run, to_numpy(piece), box, needed)
+    # In the dtype the result states, whatever this piece's values made.
+    out = out.astype(dtype, copy=False)
+    return out if is_numpy(piece) else asarray_like(out, piece)
+
+
+def _weighted(xp, array, weights: np.ndarray):
+    """Return an array times NumPy weights, on the array's own backend."""
+    # In the dtype NumPy would give, stated outright: an array library may
+    # refuse to mix integers with floats.
+    like = np.empty(0, _as_numpy_dtype(array.dtype))
+    weights = _taper_like(weights, like)
+    wide = np.result_type(like, weights)
+    if wide != like.dtype:
+        array = xp.astype(array, _dtype_on(array, wide))
+    return array * asarray_like(weights.astype(wide, copy=False), array)
+
+
+def _dtype_on(array, dtype: np.dtype):
+    """Return a NumPy dtype as the dtype of an array's own library."""
+    try:
+        return asarray_like(np.empty(0, dtype), array).dtype
+    except (TypeError, ValueError):
+        # A library without half precision is given single.
+        return asarray_like(np.empty(0, np.result_type(dtype, np.float32)), array).dtype
+
+
+def _block(xp, like, axis: int, length: int, fill):
+    """Return a block of `fill` as long as `length` along one axis of `like`."""
+    if not length:
+        return None
+    shape = list(like.shape)
+    shape[axis] = length
+    # On the device the data are on, where a library has more than one.
+    return xp.full(tuple(shape), fill, dtype=like.dtype, device=device(like))
+
+
+def _laid_out(xp, windows: dict, tiles, size, stride, extent, prefix: tuple = ()):
+    """
+    Return windows which share no sample, laid out over the whole extent.
+
+    `windows` holds each by its index along the windowed axes, which are
+    its last ones. Along each axis in turn the windows are joined end to
+    end, with zeros wherever none of them lies; `prefix` is the index, along
+    the axes already joined, of the windows being joined along the next.
+    """
+    level, ndim = len(prefix), len(size)
+    if level == ndim:
+        return windows[prefix]
+    axis, first = level - ndim, tiles[level][0]
+    pieces, cursor = [], 0
+    for k in sorted({x[level] for x in windows if x[:level] == prefix}):
+        block = _laid_out(xp, windows, tiles, size, stride, extent, (*prefix, k))
+        start = (k - first) * stride[level]
+        pieces += [_block(xp, block, axis, start - cursor, 0), block]
+        cursor = start + size[level]
+    pieces.append(_block(xp, pieces[-1], axis, extent[level] - cursor, 0))
+    return xp.concat([x for x in pieces if x is not None], axis=axis)
 
 
 def _coords_kept(made, tile) -> bool:

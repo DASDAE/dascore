@@ -984,16 +984,24 @@ class Patch(NamespaceOwner, PatchMeta):
         - A window chosen here changes the result: the mean of each window
           is not the mean of the patch, and an operation run in each window
           and blended is not that operation run on the patch.
-        - A patch operation can run in a window if it is written as a
-          [`PatchProcessor`](`dascore.core.processor.PatchProcessor`),
-          gives back a window of the same shape and coordinates, takes no
-          other patch, does not settle its result from the data it
-          computed, and does the same thing wherever its window sits; the
-          window must also fit inside its dimension. Anything else is
+        - One plan is worked out for the operation, from the first window,
+          and run in every window. A patch operation can therefore run in a
+          window only if it acts relative to its window, which its class
+          states (see [`Windowed`](`dascore.proc.window.Windowed`)); it
+          must also be written as a
+          [`PatchProcessor`](`dascore.core.processor.PatchProcessor`), give
+          back a window of the same shape and coordinates, take no other
+          patch, and not settle its result from the data it computed, and
+          the window must fit inside its dimension. Anything else is
           refused before any data are touched; a function given to `apply`
-          has no such limits. See
-          [`Windowed`](`dascore.proc.window.Windowed`) for how an
-          operation says the last, and what is done for one which does not.
+          has no such limits.
+        - For a patch operation, data on an array backend other than NumPy
+          stay where they are: a dask array is computed a piece at a time
+          when it is asked for, and on any other the windows are run and
+          blended there, unless the operation has no implementation for
+          it, when it is converted through NumPy as it is outside a window.
+          `apply` gives back NumPy data, and a reduction converts through
+          NumPy.
         - On a lazy patch an operation in a window needs only the windows
           a chunk overlaps, so a windowed dimension is computed in pieces
           even where the operation alone would need it whole. `apply` and
@@ -1273,12 +1281,20 @@ class Patch(NamespaceOwner, PatchMeta):
         phase_velocities: Sequence[float],
         approx_resolution: float | None = None,
         approx_freq: tuple[float, float] | None = None,
+        time_dim: str | None = None,
+        distance_dim: str = "distance",
+        source_distance: float | Quantity | None = None,
+        normalize: Literal["phase"] | None = "phase",
     ) -> Self:
         """Compute dispersion images using the phase-shift method."""
         return transform.DispersionPhaseShift(
             phase_velocities=phase_velocities,
             approx_resolution=approx_resolution,
             approx_freq=approx_freq,
+            time_dim=time_dim,
+            distance_dim=distance_dim,
+            source_distance=source_distance,
+            normalize=normalize,
         ).run(self)
 
     def tau_p(self, velocities: NDArray[np.floating]) -> Self:

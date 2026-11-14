@@ -89,6 +89,9 @@ class SetUnits(PatchProcessor):
             out.pop("data_units", None)
         return out
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the coordinates and data units with the units set."""
         data_units = self.data_units
@@ -146,6 +149,9 @@ class ConvertUnits(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return converted metadata and the affine factors for the data."""
         coords = meta.coords.convert_units(**(self.model_extra or {}))
@@ -190,6 +196,9 @@ class SimplifyUnits(PatchProcessor):
     >>> # Simplify to base units (m/s, m, s)
     >>> simplified = complex_units.simplify_units()
     """
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return base-unit metadata and the factor which scales the data."""

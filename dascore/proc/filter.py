@@ -22,7 +22,7 @@ from scipy.ndimage import sobel as nd_sobel
 
 import dascore as dc
 from dascore.constants import samples_arg_description
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, _position_free_off_frequencies
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
 from dascore.lazy.contract import Halo, WholeAxis
 from dascore.proc.basic import Real
@@ -775,6 +775,9 @@ class SlopeFilter(PatchProcessor):
             array, units = np.sort(1 / array), invert_quantity(units)
         out = convert_units(array, new_units, units)
         return out
+
+    # Away from a frequency dimension; see the function.
+    position_free = _position_free_off_frequencies
 
     def get_metadata(self, meta):
         """Return the filtered metadata, the transforms and the slope mask."""

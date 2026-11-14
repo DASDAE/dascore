@@ -21,6 +21,7 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
+from dascore.constants import SOURCE_ATTRS
 from dascore.exceptions import (
     InvalidSpoolQueryError,
     ParameterError,
@@ -92,6 +93,12 @@ def _is_collection(value) -> bool:
         return True
     return isinstance(value, list | tuple | set | frozenset)
 
+
+# The source path as the flat relation shows it, base URI joined on.
+_SOURCE_PATH_SQL = (
+    "(CASE WHEN COALESCE(s.base_uri, '') = '' THEN s.source_path "
+    "ELSE RTRIM(s.base_uri, '/') || '/' || s.source_path END)"
+)
 
 # Shared join skeleton for the patch relation. The attrs join is 1:1 (one
 # attrs row per patch), so it is safe for both the projection and the count.
@@ -272,18 +279,22 @@ def build_attr_clause(
     predicate must be re-applied in pandas (regex).
     """
     rows = attr_meta[attr_meta["attr_name"] == name]
-    if rows.empty:
-        msg = f"{name!r} is not an attribute of any patch in this spool."
-        raise InvalidSpoolQueryError(msg)
-    kinds = set(rows["value_kind"])
-    columns = dict(zip(rows["value_kind"], rows["column_name"]))
-    units = {
-        kind: _normalize_unit(unit)
-        for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
-    }
+    kinds, columns, units = {"str"}, {"str": _SOURCE_PATH_SQL}, {}
+    if name not in SOURCE_ATTRS:
+        if rows.empty:
+            msg = f"{name!r} is not an attribute of any patch in this spool."
+            raise InvalidSpoolQueryError(msg)
+        kinds = set(rows["value_kind"])
+        columns = {
+            k: f"a.{quote(c)}" for k, c in zip(rows["value_kind"], rows["column_name"])
+        }
+        units = {
+            kind: _normalize_unit(unit)
+            for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
+        }
 
     def col(kind):
-        return f"a.{quote(columns[kind])}"
+        return columns[kind]
 
     if isinstance(value, re.Pattern):
         # Regex is a residual filter; SQL only requires the attr be

@@ -17,6 +17,8 @@ To be explicit, use `_attrs` or `_coords`, in either of two forms:
 
 The index evaluates equality, membership, ranges, and glob patterns. Regular expressions use a rough SQL filter followed by an exact check in Python; several regular expressions combine with AND.
 
+`source_path` takes the same string selectors, matched against the `source_path` column of `get_contents()` (relative to the directory for a directory spool, normalised for other spools); check that column for the exact spelling.
+
 Quantities are converted to the unit the index recorded for that attribute. A dimensionally incompatible query raises rather than quietly matching the wrong rows. Values stored without units can't be proven incompatible, so they stay candidates for quantity selectors.
 
 ## Coordinate selectors

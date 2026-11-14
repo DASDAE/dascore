@@ -44,6 +44,7 @@ from dascore.constants import (
     ENRICH_CONFLICT,
     ON_MISSING,
     PROGRESS_LEVELS,
+    SOURCE_ATTRS,
     WARN_LEVELS,
     ExecutorType,
     PatchType,
@@ -842,7 +843,10 @@ class Spool(NodeRepr, NamespaceOwner):
         Can be used to specify dimension ranges, or glob matches on
         string attributes, read as SQLite's GLOB reads them. Bare keyword
         names resolve against attributes first, then coordinates; unknown
-        names raise.
+        names raise. ``source_path`` selects like a string attribute,
+        matched against the ``source_path`` column of ``get_contents()``
+        (relative to the directory for a directory spool, normalised for
+        other spools); check that column for the exact spelling.
 
         Parameters
         ----------
@@ -1153,7 +1157,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         requested = requested_selector_names(_attrs, _coords, kwargs)
         backend = self._catalog.backend
-        known_attrs = set(backend.attr_names())
+        known_attrs = set(backend.attr_names()) | SOURCE_ATTRS
         known_coords = set(backend.coord_names())
         channels: dict = {}
         selectable: set = set()

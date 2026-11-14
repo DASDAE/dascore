@@ -80,6 +80,9 @@ class Kurtosis(PatchProcessor):
     model_config = ConfigDict(extra="allow")
     data_type = "kurtosis"
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return dimensionless metadata, the axis, step and window size."""
         dim, axis, winlen = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]

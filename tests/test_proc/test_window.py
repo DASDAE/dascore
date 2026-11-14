@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
+import pickle
+import tracemalloc
 import warnings
+from typing import ClassVar
 
 import numpy as np
 import pytest
 from scipy.signal import detrend
 
 import dascore as dc
-from dascore.core.processor import PatchProcessor
+from dascore.core import processor as processor_module
+from dascore.core.processor import PatchProcessor, captured_operation
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
+    FilterValueError,
     LazyOperationError,
     ParameterError,
     PatchAttributeError,
@@ -22,10 +28,17 @@ from dascore.exceptions import (
 )
 from dascore.lazy.recipe import Recipe
 from dascore.proc import window as window_module
+from dascore.proc.basic import PowCoord
+from dascore.proc.filter import SlopeFilter
 from dascore.proc.rolling import _rolling_pandas
-from dascore.proc.window import PatchWindow, Windowed, WindowReduce, _same
+from dascore.proc.taper import TaperRange
+from dascore.proc.whiten import Whiten
+from dascore.proc.window import PatchWindow, Windowed, WindowReduce
 from dascore.transform.hilbert import Envelope
 from dascore.units import percent
+from dascore.utils import array_api as array_api_module
+from dascore.utils.array_api import to_numpy
+from dascore.warnings import NumpyFallbackWarning
 
 REDUCERS = ("mean", "median", "min", "max", "std", "sum")
 
@@ -502,35 +515,6 @@ class TestApply:
             patch.window(time=64, samples=True, **option).apply(lambda x: x)
 
 
-class _Placed(dc.PatchProcessor):
-    """An operation whose plan is where its window starts."""
-
-    name = None
-
-    def get_metadata(self, meta):
-        """Return the first time, which no two windows share."""
-        return meta, {"start": float(meta.get_coord("time").min())}
-
-    def kernel(self, data, *, start):
-        """Return the data moved by the start."""
-        return data + start
-
-
-class _Planned(dc.PatchProcessor):
-    """An operation with a plan of every kind, the same in each window."""
-
-    name = None
-
-    def get_metadata(self, meta):
-        """Return a plan holding an array, a NaN, and a nested mapping."""
-        nested = {"factor": 2.0, "pair": (1, [np.nan, None])}
-        return meta, {"weights": np.ones(3), "nested": nested}
-
-    def kernel(self, data, *, weights, nested):
-        """Return the data scaled by the nested factor."""
-        return data * nested["factor"] * weights[0]
-
-
 class _Shrinks(dc.PatchProcessor):
     """An operation whose kernel returns less than its metadata states."""
 
@@ -750,30 +734,6 @@ class TestOperations:
         assert op(patch).equals(out)
         assert op(patch).attrs.data_id == out.attrs.data_id
 
-    def test_plan_of_any_kind(self, patch):
-        """A plan holding arrays, NaN and mappings is the same in each window."""
-        out = Windowed(_Planned(), time=100, samples=True)(patch)
-        np.testing.assert_allclose(out.data, patch.data * 2, atol=1e-12)
-
-    @pytest.mark.parametrize(
-        "one, other, same",
-        (
-            ({"a": 1}, {"a": 1}, True),
-            ({"a": 1}, {"b": 1}, False),
-            ((1, 2), (1, 2, 3), False),
-            (np.arange(3), np.arange(3), True),
-            (np.arange(3), np.arange(4), False),
-            (np.nan, np.nan, True),
-            (np.array([1.0, np.nan]), np.array([1.0, np.nan]), True),
-            (np.array(["NaT"], "M8[s]"), np.array(["NaT"], "M8[s]"), True),
-            (1, 1.0, False),
-            (None, None, True),
-        ),
-    )
-    def test_same(self, one, other, same):
-        """Plans are compared by value, a NaN being itself."""
-        assert _same(one, other) is same
-
 
 class _Typed(dc.PatchProcessor):
     """An operation which plans for a dtype, and is handed that dtype."""
@@ -791,23 +751,6 @@ class _Typed(dc.PatchProcessor):
         return data
 
 
-class _Drifts(dc.PatchProcessor):
-    """An operation which renames a coordinate in every window but the first."""
-
-    name = None
-
-    def get_metadata(self, meta):
-        """Return the metadata, with a hidden coordinate changed off the start."""
-        if float(meta.get_coord("time").min()) == 0:
-            return meta, {}
-        hidden = meta.get_coord("_hidden").values + 1
-        return meta.new(coords=meta.coords.update(_hidden=("time", hidden))), {}
-
-    def kernel(self, data):
-        """Return the data."""
-        return data
-
-
 class TestWhatTheOperationIsHanded:
     """The operation plans for the window it will be given."""
 
@@ -817,17 +760,6 @@ class TestWhatTheOperationIsHanded:
         ints = patch.new(data=np.ones(patch.shape, np.int16))
         out = Windowed(_Typed(), time=100, overlap=20, samples=True, **window)(ints)
         assert out.dtype.kind == ("c" if "fill" in window else "f")
-
-    def test_every_window_is_handed_back_as_it_was(self):
-        """A change to a window's coordinates is found in whichever window."""
-        coords = {
-            "distance": np.arange(4.0),
-            "time": np.arange(300.0),
-            "_hidden": ("time", np.zeros(300)),
-        }
-        patch = dc.Patch(np.ones((4, 300)), coords, ("distance", "time"))
-        with pytest.raises(ParameterError, match="dimensions or coordinates"):
-            Windowed(_Drifts(), time=50, samples=True)(patch)
 
 
 class TestOperationsRefused:
@@ -870,74 +802,19 @@ class TestOperationsRefused:
     def test_error_of_the_operation_names_the_window(self, patch):
         """What the operation raises for one window says that is where."""
         window = patch.window(time=100, samples=True)
-        with pytest.raises(ValueError, match="out of bounds") as caught:
-            window.taper_range(time=(0.1, 0.2, 0.3, 0.4), relative=False)
+        # A corner above what any window's sampling can hold.
+        with pytest.raises(FilterValueError) as caught:
+            window.pass_filter(time=(1, 1e9))
         assert "one window of Patch.window" in caught.value.__notes__[0]
 
-    def test_position_dependence(self, patch):
-        """An operation which depends on where its window sits is refused."""
-        with pytest.raises(ParameterError, match="where the window sits"):
-            Windowed(_Placed(), time=100, samples=True)(patch)
-
-    def test_one_window_has_one_position(self, patch):
-        """A window as long as the dimension is the only one there is."""
-        size = patch.shape[1]
-        out = Windowed(_Placed(), time=size, overlap=0, samples=True)(patch)
-        start = float(patch.get_coord("time").min())
-        np.testing.assert_allclose(out.data, patch.data + start)
-
-    def test_position_dependence_in_the_middle(self):
-        """A plan which differs only in some middle window is still refused."""
-        coords = {"distance": np.arange(4.0), "time": np.arange(300) * 0.004}
-        patch = dc.Patch(np.ones((4, 300)), coords, ("distance", "time"))
-        window = patch.window(time=30, overlap=0, samples=True)
-        with pytest.raises(ParameterError, match="where the window sits"):
-            window.line_mute(time=(0.45, 0.75), relative=False)
-
-    def test_position_dependence_in_one_window_of_many(self):
-        """Every window is asked, however many there are."""
-        coords = {"distance": np.arange(4.0), "time": np.arange(4000.0)}
-        patch = dc.Patch(np.ones((4, 4000)), coords, ("distance", "time"))
-        window = patch.window(time=10, overlap=0, samples=True)
-        with pytest.raises(ParameterError, match="where the window sits"):
-            window.line_mute(time=(2013, 2017), relative=False)
-
-    @pytest.mark.parametrize("joint", (False, True), ids=("apart", "joint"))
-    def test_position_dependence_in_two_dimensions(self, joint):
-        """A plan which differs only away from both edges is still found."""
-        coords = {"distance": np.arange(40.0), "time": np.arange(60.0)}
-        if joint:
-            # A coordinate along both windowed dimensions is cut by both.
-            both = np.zeros((40, 60))
-            coords["quality"] = (("distance", "time"), both)
-        patch = dc.Patch(np.ones((40, 60)), coords, ("distance", "time"))
-        window = patch.window(time=10, distance=10, overlap=0, samples=True)
-
-        class _Corner(dc.PatchProcessor):
-            """An operation which acts in one window away from every edge."""
-
-            name = None
-
-            def get_metadata(self, meta):
-                """Return whether this is the window starting at (20, 30)."""
-                start = (meta.get_coord("distance").min(), meta.get_coord("time").min())
-                return meta, {"here": bool(start == (20.0, 30.0))}
-
-            def kernel(self, data, *, here):
-                """Return the data, emptied in the one window."""
-                return data * (not here)
-
-        with pytest.raises(ParameterError, match="where the window sits"):
-            Windowed(_Corner(), time=10, distance=10, overlap=0, samples=True)(patch)
-        assert window.abs().shape == patch.shape
-
-    def test_position_dependence_past_the_last_whole_window(self):
-        """Nor is one which differs only where the last window overhangs."""
-        coords = {"distance": np.arange(4.0), "time": np.arange(100.0)}
-        patch = dc.Patch(np.ones((4, 100)), coords, ("distance", "time"))
-        window = patch.window(time=64, overlap=0, samples=True)
-        with pytest.raises(ParameterError, match="where the window sits"):
-            window.line_mute(time=(70, 90), relative=False)
+    def test_absolute_values_are_refused_wherever_they_lie(self, patch):
+        """Absolute values no window holds are refused as those in the first are."""
+        window = patch.window(time=100, samples=True)
+        start = patch.get_coord("time").min()
+        for seconds in (0.0, 5.0):
+            edges = [start + dc.to_timedelta64(seconds + x) for x in (0.1, 0.2)]
+            with pytest.raises(ParameterError, match="has a `relative` argument"):
+                window.line_mute(time=tuple(edges), relative=False)
 
     @pytest.mark.parametrize(
         "needs, error",
@@ -1009,7 +886,7 @@ POSITION_FREE = sorted(
     }
 )
 
-# How each is called in a window. An operation declared later needs an entry.
+# How each is called. An operation declared later needs an entry.
 FREE_CALLS = {
     "Abs": lambda x: x.abs(),
     "Real": lambda x: x.real(),
@@ -1030,10 +907,28 @@ FREE_CALLS = {
     "WienerFilter": lambda x: x.wiener_filter(time=5, samples=True),
     "Hilbert": lambda x: x.envelope("time"),
     "Taper": lambda x: x.taper(time=0.1),
+    "SetUnits": lambda x: x.set_units("m/s"),
+    "SimplifyUnits": lambda x: x.simplify_units(),
+    "ConvertUnits": lambda x: x.convert_units("mm/s"),
+    "Differentiate": lambda x: x.differentiate("time"),
+    "Integrate": lambda x: x.integrate("time", definite=False),
+    "Whiten": lambda x: x.whiten(smooth_size=5, time=None),
+    "Roll": lambda x: x.roll(time=5, samples=True),
+    "SlopeFilter": lambda x: x.slope_filter(filt=(2e3, 2.2e3, 8e3, 2e4)),
+    "Kurtosis": lambda x: x.kurtosis(time=0.1),
+    "VelocityToStrainRate": lambda x: x.velocity_to_strain_rate(),
+    "RadiansToStrain": lambda x: x.radians_to_strain(gauge_length=10),
+    "Where": lambda x: x.where(np.True_),
+    "Flip": lambda x: x.flip("time", flip_coords=False),
+    "AdaptiveSpectralFilter": lambda x: x.adaptive_spectral_filter(time=0.05),
+    # These three say so only for values measured from a coordinate's start.
+    "LineMute": lambda x: x.line_mute(time=(0.1, 0.2)),
+    "TaperRange": lambda x: x.taper_range(time=(0.01, 0.02, 0.1, 0.2), relative=True),
+    "PowCoord": lambda x: x.pow_coord(distance=1),
 }
 # Declared although a length found against a float coordinate can round a
 # sample either way between windows: one plan for every window is the point.
-ROUNDED = {"Taper"}
+ROUNDED = {"Taper", "TaperRange"}
 
 
 class _Sized(dc.PatchProcessor):
@@ -1050,8 +945,41 @@ class _Sized(dc.PatchProcessor):
         return data / length
 
 
+class _Captures:
+    """Stands in for a patch, and gives back the operation a method builds."""
+
+    def __init__(self, patch):
+        self._patch = patch
+
+    def __getattr__(self, name):
+        method = getattr(type(self._patch), name)
+        return lambda *args, **kwargs: captured_operation(
+            method, self._patch, *args, **kwargs
+        )
+
+
+def _for_operation(patch, name: str):
+    """The patch with the attrs a declared operation asks for."""
+    if name == "RadiansToStrain":
+        return patch.update_attrs(data_units="radians")
+    return patch.update_attrs(data_type="velocity")
+
+
+def _same_plan(one, other) -> bool:
+    """Whether two plans hold the same values, exactly, arrays included."""
+    if isinstance(one, dict) and isinstance(other, dict):
+        same = all(_same_plan(one[x], other[x]) for x in one if x in other)
+        return one.keys() == other.keys() and same
+    if isinstance(one, list | tuple) and isinstance(other, list | tuple):
+        return len(one) == len(other) and all(map(_same_plan, one, other))
+    if isinstance(one, np.ndarray) or isinstance(other, np.ndarray):
+        nullable = np.asarray(one).dtype.kind in "fcmM"
+        return np.array_equal(one, other, equal_nan=nullable)
+    return type(one) is type(other) and (one == other or one != one)
+
+
 class TestPositionFree:
-    """An operation which says its plan ignores position is not checked."""
+    """Only an operation which says its plan ignores position runs in a window."""
 
     def test_the_declared_are_called(self):
         """Every operation which says so has a call here to hold it to it."""
@@ -1059,17 +987,34 @@ class TestPositionFree:
 
     @pytest.mark.parametrize("name", FREE_CALLS)
     @pytest.mark.parametrize("time", ("datetime", "float"))
-    def test_declaration_holds(self, patch, monkeypatch, name, time):
-        """Checked in every window all the same, each declared plan is one plan."""
+    def test_declaration_holds(self, patch, name, time):
+        """Asked for its plan in many windows, a declared operation gives one."""
         if time == "float" and name in ROUNDED:
             pytest.skip("a length rounded against floats may differ by a sample")
         if time == "float":
             # Steps which no float holds exactly, so rounding has its say.
             floats = np.arange(patch.shape[1]) * 0.004 + 1e6 / 3
             patch = patch.update_coords(time=floats)
-        monkeypatch.setattr(PatchProcessor, "_is_position_free", lambda: False)
-        out = FREE_CALLS[name](patch.window(time=100, step=60, samples=True))
+        patch = _for_operation(patch, name)
+        operation = FREE_CALLS[name](_Captures(patch))
+        assert operation._is_position_free(("time",))
+        meta = patch.drop_data()
+        plans = []
+        for start in (0, 37, 250, 251, 999, 1400, 1899):
+            coords, _ = meta.coords.isel(time=slice(start, start + 100))
+            plans.append(operation.get_metadata(meta.new(coords=coords))[1])
+        assert all(_same_plan(plans[0], x) for x in plans)
+
+    @pytest.mark.parametrize("name", FREE_CALLS)
+    def test_declared_runs_in_a_window(self, patch, name):
+        """Each declared operation is run in windows and gives a patch back."""
+        patch = _for_operation(patch, name)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = FREE_CALLS[name](patch.window(time=100, samples=True))
         assert out.shape == patch.shape
+        # Blended, and not a window of nothing: a value for every sample.
+        assert not np.isnan(np.abs(out.data)).any()
 
     def test_who_is_free(self):
         """One which plans nothing is; one which overrides the plan says again."""
@@ -1088,20 +1033,119 @@ class TestPositionFree:
                 """Return the parent's plan."""
                 return super().get_metadata(meta)
 
-        assert Planless._is_position_free()
-        assert dc.proc.Detrend._is_position_free()
-        assert Envelope._is_position_free()
-        assert not Overridden._is_position_free()
-        assert not _Sized._is_position_free()
+        class Mistaken(_Sized):
+            """An operation whose declaration is no plain method."""
 
-    def test_many_windows(self):
-        """Declared, an operation runs in more windows than are ever checked."""
+            name = None
+
+            @property
+            def position_free(self):
+                """Return False, which a property is not asked for."""
+                return False
+
+            def get_metadata(self, meta):
+                """Return the parent's plan."""
+                return super().get_metadata(meta)
+
+        class Unsaid(dc.proc.Detrend):
+            """A detrend which takes back what its parent says."""
+
+            name = None
+            position_free = False
+
+        class Heir(Unsaid):
+            """A class which says nothing, below one which says no."""
+
+            name = None
+
+        class Below(_Sized):
+            """A class which says nothing, below one whose plan says nothing."""
+
+            name = None
+
+        dims = ("time",)
+        assert not Unsaid(dim="time")._is_position_free(dims)
+        # The nearest class to say anything decides, not only the class itself.
+        assert not Heir(dim="time")._is_position_free(dims)
+        assert not Below()._is_position_free(dims)
+        assert Planless()._is_position_free(dims)
+        assert dc.proc.Detrend(dim="time")._is_position_free(dims)
+        assert Envelope(dim="time")._is_position_free(dims)
+        assert not Overridden(dim="time")._is_position_free(dims)
+        assert not _Sized()._is_position_free(dims)
+        assert not Mistaken()._is_position_free(dims)
+
+    def test_undeclared_is_refused(self, patch):
+        """An operation which does not say so is not run, however few windows."""
+        with pytest.raises(ParameterError, match="says by position_free"):
+            Windowed(_Sized(), time=100, samples=True)(patch)
+
+    def test_arguments_can_decide(self, patch):
+        """Values from a coordinate's start are every window's; absolute are not."""
+        window = patch.window(time=100, samples=True)
+        assert window.line_mute(time=(0.1, 0.2)).shape == patch.shape
+        with pytest.raises(ParameterError, match="has a `relative` argument"):
+            window.line_mute(time=(0.1, 0.2), relative=False)
+        # A place along a dimension which is not windowed is every window's.
+        far = patch.get_coord("distance").values[[10, 20]]
+        out = window.line_mute(distance=tuple(far), relative=False)
+        assert out.shape == patch.shape
+
+    def test_values_no_window_can_plan_for(self, patch):
+        """Absolute values the first window cannot even plan are refused the same."""
+        start = patch.get_coord("time").min()
+        edges = [start + dc.to_timedelta64(5 + x / 10) for x in range(4)]
+        window = patch.window(time=100, samples=True)
+        with pytest.raises(ParameterError, match="has a `relative` argument"):
+            window.taper_range(time=tuple(edges))
+
+    def test_ragged_arguments(self, patch):
+        """Values which make no array, as a line's ends, are not taken for one."""
+        window = patch.window(time=100, samples=True)
+        out = window.line_mute(time=(0, [0, 0.3]), distance=(None, [0, 300]))
+        assert out.shape == patch.shape
+
+    def test_frequencies_are_places(self, patch):
+        """A patch already transformed is weighted by where its frequencies are."""
+        spectrum = patch.dft(("time", "distance"))
+        window = spectrum.window(ft_time=100, samples=True)
+        with pytest.raises(ParameterError, match="says by position_free"):
+            window.slope_filter(filt=(2e3, 2.2e3, 8e3, 2e4))
+
+    def test_many_windows(self, monkeypatch):
+        """A declared operation is one plan, whatever the number of windows."""
         coords = {"distance": np.arange(2.0), "time": np.arange(30_000.0)}
         patch = dc.Patch(np.ones((2, 30_000)), coords, ("distance", "time"))
-        window = patch.window(time=10, samples=True)
-        assert window.detrend("time").shape == patch.shape
-        with pytest.raises(ParameterError, match="does not set position_free"):
-            Windowed(_Sized(), time=10, samples=True)(patch)
+        planned = []
+        original = dc.proc.Detrend.get_metadata
+        monkeypatch.setattr(
+            dc.proc.Detrend,
+            "get_metadata",
+            lambda self, meta: planned.append(1) or original(self, meta),
+        )
+        out = patch.window(time=10, samples=True).detrend("time")
+        # Planned for the first window, not for each of the six thousand.
+        assert out.shape == patch.shape and len(planned) < 5
+
+    @pytest.mark.parametrize(
+        "operation, dims, free",
+        (
+            (TaperRange(time=(1, 2, 3, 4), relative=True), ("time",), True),
+            (TaperRange(time=(1, 2, 3, 4)), ("time",), False),
+            (TaperRange(time=(1, 2, 3, 4), samples=True), ("time",), True),
+            (TaperRange(time=(1, 2, 3, 4)), ("distance",), True),
+            (PowCoord(distance=1), ("distance",), True),
+            (PowCoord(distance=1, relative=False), ("distance",), False),
+            (PowCoord(distance=1, relative=False), ("time",), True),
+            (Whiten(time=None), ("time",), True),
+            (Whiten(ft_time=None), ("ft_time",), False),
+            (Whiten(time=None), ("time", "ft_distance"), False),
+            (SlopeFilter(filt=(1, 2, 3, 4)), ("time", "distance"), True),
+        ),
+    )
+    def test_what_decides(self, operation, dims, free):
+        """The arguments and the windowed dimensions decide, as each says."""
+        assert operation._is_position_free(dims) is free
 
     def test_taper_is_one_taper_in_every_window(self):
         """Every window gets the first one's ramps, whatever floats would round to."""
@@ -1116,7 +1160,349 @@ class TestPositionFree:
         np.testing.assert_array_equal(out, np.broadcast_to(out[0], out.shape))
         assert out[0, 0] == 0 and out[0, 80] == 1
 
-    def test_undeclared_is_checked_when_few(self, patch):
-        """Undeclared, it still runs where every window can be asked."""
-        out = Windowed(_Sized(), time=100, samples=True)(patch)
-        np.testing.assert_allclose(out.data, patch.data / 100)
+
+class _NumpyAnswer(dc.PatchProcessor):
+    """An operation whose kernel answers in NumPy whatever it is given."""
+
+    name = None
+
+    def kernel(self, data):
+        """Return the magnitudes, as a NumPy array."""
+        return np.abs(to_numpy(data))
+
+
+def _on(patch, library: str):
+    """The patch with its data on another array library, if it is installed."""
+    if library == "dask":
+        dask_array = pytest.importorskip("dask.array")
+        return patch.new(data=dask_array.from_array(patch.data, chunks=(100, 500)))
+    strict = pytest.importorskip("array_api_strict")
+    return patch.new(data=strict.asarray(patch.data))
+
+
+def _values(patch) -> np.ndarray:
+    """The patch's data as a NumPy array, computed and brought to this device."""
+    return to_numpy(patch.data)
+
+
+@pytest.mark.parametrize("library", ("array_api_strict", "dask"))
+class TestOtherBackends:
+    """Windows are cut, run and blended on the array library the data are on."""
+
+    # Each takes a mean out of its windows, so every sample of a window,
+    # the fill among them, shows in every sample of the result.
+    CASES: ClassVar = {
+        "one_dim": lambda x: x.window(time=100, samples=True).demean("time"),
+        "two_dims": lambda x: x.window(time=100, distance=30, samples=True).demean(
+            "time"
+        ),
+        "step": lambda x: x.window(time=50, step=37, samples=True).demean("time"),
+        "triang": lambda x: x.window(time=100, samples=True, taper="triang").demean(
+            "time"
+        ),
+        "analysis": lambda x: x.window(
+            time=64, overlap=48, samples=True, analysis="hann"
+        ).demean("time"),
+        "fill": lambda x: x.window(time=100, samples=True, fill=2.5).demean("time"),
+    }
+
+    @staticmethod
+    def _refuse_numpy(monkeypatch):
+        """Fail the test if anything turns the data into a NumPy array."""
+
+        def refuse(*args, **kwargs):
+            """Raise: nothing should be converted."""
+            raise AssertionError("the data were converted to NumPy")
+
+        # DASCore's way of taking an array through NumPy, where it is
+        # written and where an operation with no implementation for the
+        # library reaches it.
+        monkeypatch.setattr(array_api_module, "to_numpy", refuse)
+        monkeypatch.setattr(processor_module, "to_numpy", refuse)
+
+    @pytest.mark.parametrize("name", CASES)
+    def test_stays_on_the_library(self, patch, library, name, monkeypatch):
+        """Nothing is converted or computed, and the values are NumPy's."""
+        expected = self.CASES[name](patch)
+        there = _on(patch, library)
+        computed = []
+        with monkeypatch.context() as patched, warnings.catch_warnings():
+            self._refuse_numpy(patched)
+            # A conversion through NumPy would warn, and so fail here.
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            if library == "dask":
+                callbacks = pytest.importorskip("dask.callbacks")
+                counter = callbacks.Callback(posttask=lambda *x: computed.append(1))
+                with counter:
+                    out = self.CASES[name](there)
+            else:
+                out = self.CASES[name](there)
+        # On dask the windows are a graph still: no block was computed.
+        assert out.backend == library and not computed
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
+        assert out.attrs.data_id != patch.attrs.data_id
+
+    @pytest.mark.parametrize("dtype", ("float32", "complex64"))
+    def test_keeps_single_precision(self, patch, library, dtype):
+        """Single precision data are blended in single precision, as on NumPy."""
+        single = patch.new(data=patch.data.astype(dtype))
+        expected = single.window(time=100, samples=True).demean("time")
+        out = _on(single, library).window(time=100, samples=True).demean("time")
+        assert _values(out).dtype == expected.dtype == np.dtype(dtype)
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
+
+    def test_integers(self, patch, library):
+        """Integers are blended to floats without the library mixing kinds."""
+        ints = patch.new(data=(patch.data * 100).astype(np.int16))
+        with pytest.warns(UserWarning, match="Blending windows of int16"):
+            expected = ints.window(time=100, samples=True).abs()
+        with pytest.warns(UserWarning, match="Blending windows of int16"):
+            out = _on(ints, library).window(time=100, samples=True).abs()
+        with warnings.catch_warnings():
+            # Said once, at the call: not again as each piece is computed.
+            warnings.simplefilter("error")
+            values = _values(out)
+        assert out.backend == library and values.dtype == expected.dtype
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
+
+    def test_operation_without_the_library(self, patch, library, monkeypatch):
+        """
+        An operation with no implementation for the library still runs.
+
+        On dask each chunk is blended with NumPy when it is computed, so
+        nothing is converted or said. On another library the array is
+        converted once, for the whole of it, and the warning names the
+        operation.
+        """
+        calls = []
+        original = processor_module.to_numpy
+        monkeypatch.setattr(
+            processor_module, "to_numpy", lambda x: calls.append(1) or original(x)
+        )
+        expected = patch.window(time=100, samples=True).detrend("time")
+        there = _on(patch, library)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = there.window(time=100, samples=True).detrend("time")
+        said = [str(x.message) for x in caught if x.category is NumpyFallbackWarning]
+        if library == "dask":
+            assert not calls and not said
+        else:
+            # Once, not once for each of the 39 windows.
+            assert len(calls) == 1 and len(said) == 1 and "detrend has no" in said[0]
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
+
+    def test_dask_keeps_its_chunks(self, patch, library):
+        """The result is chunked as the data were, not once for each window."""
+        if library != "dask":
+            pytest.skip("only dask has chunks")
+        there = _on(patch, library)
+        out = there.window(time=100, distance=30, samples=True).abs()
+        assert out.data.chunks == there.data.chunks
+        # And along a dimension the operation needs whole, which is
+        # computed in one piece and cut back.
+        out = there.window(time=100, samples=True).detrend("distance")
+        assert out.data.chunks == there.data.chunks
+        expected = patch.window(time=100, samples=True).detrend("distance")
+        np.testing.assert_array_equal(_values(out), expected.data)
+
+    def test_dask_pieces(self, patch, library, monkeypatch):
+        """Short chunks are joined along a windowed axis; tasks take turns."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        dask_array = pytest.importorskip("dask.array")
+        there = patch.new(data=dask_array.from_array(patch.data, chunks=(300, 50)))
+        turns = []
+        original = Windowed._blend
+
+        def watched(self, *args, **kwargs):
+            """Note whether the turn is held, and blend."""
+            turns.append(window_module._DASK_TURN.locked())
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(Windowed, "_blend", watched)
+        out = there.window(time=100, samples=True).demean("time")
+        expected = patch.window(time=100, samples=True).demean("time")
+        np.testing.assert_array_equal(_values(out), expected.data)
+        # Forty chunks of 50 samples, computed as two pieces of 800 and more.
+        assert out.data.chunks == there.data.chunks
+        # Blends outside a dask task, as the dtype is found by, hold no turn.
+        assert sum(turns) == 2
+        # A dimension the operation needs whole is one piece, not its chunks.
+        turns.clear()
+        chunked = patch.new(data=dask_array.from_array(patch.data, chunks=(100, 500)))
+        out = chunked.window(time=100, samples=True).detrend("distance")
+        expected = patch.window(time=100, samples=True).detrend("distance")
+        np.testing.assert_array_equal(_values(out), expected.data)
+        assert sum(turns) == 2
+
+    def test_dask_pieces_agree_on_a_dtype(self, library):
+        """Every piece has the dtype stated, whatever its own values made."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        dask_array = pytest.importorskip("dask.array")
+        data = np.ones((12, 400), np.uint8)
+        coords = {"distance": np.arange(12.0), "time": np.arange(400.0)}
+        patch = dc.Patch(data, coords, ("distance", "time"))
+        there = patch.new(data=dask_array.from_array(data, chunks=(12, 100)))
+        # Half precision windows, which a detrend widens only where one holds NaN.
+        out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
+        blocks = [x.compute().dtype for x in out.data.blocks]
+        # What a window of zeros gives, which is what the result states.
+        assert set(blocks) == {np.dtype(out.dtype)} == {np.dtype(np.float64)}
+
+    def test_dask_dtype_is_found_from_a_short_window(self, library):
+        """An operation which needs more than 64 samples is tried on 4096."""
+        if library != "dask":
+            pytest.skip("only a dask patch is planned before it is computed")
+        dask_array = pytest.importorskip("dask.array")
+        shape = (8, 2_000_000)
+        coords = {"distance": np.arange(8.0), "time": np.arange(shape[1])}
+        data = dask_array.zeros(shape, chunks=(8, 100_000))
+        patch = dc.Patch(data, coords, ("distance", "time"))
+        tracemalloc.start()
+        try:
+            # A fit to 201 samples of time, in windows of four distances.
+            out = patch.window(distance=4, samples=True).savgol_filter(
+                polyorder=2, time=201, samples=True
+            )
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        # One window whole is 4 by two million samples: 64 MB.
+        assert out.dtype == np.float64 and peak < 40e6
+
+    def test_dask_piece_of_another_library(self, patch, library):
+        """A piece whose chunk is another library's goes back to it, blended."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        strict = pytest.importorskip("array_api_strict")
+        operation = Windowed(dc.proc.Abs(), time=64, samples=True)
+        _, plan = operation.get_metadata(patch.drop_data())
+        contract = operation.chunk_contract(patch.dtype, plan)
+        run = functools.partial(operation.numpy_kernel, **plan)
+        box = (slice(0, 300), slice(320, 384))
+        needed = contract.needs(box, patch.shape)
+        shared = (contract, run, np.dtype(np.float64))
+        piece = strict.asarray(patch.data[needed])
+        out = window_module._blended_piece(shared, piece, box, needed)
+        whole = operation.numpy_kernel(patch.data, **plan)
+        assert type(out) is type(piece)
+        np.testing.assert_array_equal(np.asarray(out), whole[box])
+
+    def test_dask_result_pickles(self, patch, library):
+        """A windowed result on dask can be pickled, tasks and all."""
+        if library != "dask":
+            pytest.skip("only dask holds tasks")
+        out = _on(patch, library).window(time=100, samples=True).demean("time")
+        back = pickle.loads(pickle.dumps(out))
+        np.testing.assert_array_equal(_values(back), _values(out))
+
+    def test_integers_through_numpy_warn_too(self, patch, library):
+        """Integers blended for an operation with no implementation still warn."""
+        ints = _on(patch.new(data=(patch.data * 100).astype(np.int16)), library)
+        with pytest.warns(UserWarning, match="Blending windows of int16"):
+            out = ints.window(time=100, samples=True).median_filter(
+                time=3, samples=True
+            )
+        assert _values(out).dtype == np.float32
+
+    def test_operation_which_needs_its_axis_whole(self, patch, library):
+        """A transform, which needs its axis in one piece, runs in a window."""
+        expected = patch.window(time=100, samples=True).whiten(time=None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = _on(patch, library).window(time=100, samples=True).whiten(time=None)
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
+
+    @pytest.mark.parametrize("fill", (2.5, np.float32(2.5)), ids=("plain", "numpy"))
+    @pytest.mark.parametrize("dtype", ("int8", "uint8", "bool"))
+    def test_fill_on_small_integers(self, patch, library, fill, dtype):
+        """A fill the data cannot hold widens them on any library."""
+        small = patch.new(data=(patch.data > 0).astype(dtype))
+        window = {"time": 100, "samples": True, "fill": fill}
+        # A mean, so the fill a window holds shows in what it gives back.
+        expected = small.window(**window).demean("time")
+        plain = small.window(time=100, samples=True).demean("time")
+        out = _on(small, library).window(**window).demean("time")
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-3)
+        assert not np.allclose(_values(out), plain.data, atol=1e-3)
+
+    def test_kernel_which_answers_in_numpy(self, patch, library):
+        """An operation whose kernel hands back NumPy is put back on the library."""
+        expected = patch.window(time=100, samples=True).abs()
+        there = _on(patch, library)
+        out = Windowed(_NumpyAnswer(), time=100, samples=True)(there)
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
+
+    def test_numpy_only_operation_is_converted_for(self, patch, library):
+        """An operation which says it is NumPy's own is converted for, and says so."""
+        window = {"time": 100, "samples": True}
+        expected = patch.window(**window).adaptive_spectral_filter(time=0.05)
+        there = _on(patch, library)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = there.window(**window).adaptive_spectral_filter(time=0.05)
+        said = [x for x in caught if x.category is NumpyFallbackWarning]
+        # On dask each piece is NumPy when it is blended, with nothing to say.
+        assert len(said) == (0 if library == "dask" else 1)
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
+
+    @pytest.mark.parametrize(
+        "window",
+        (
+            {"time": 50, "step": 37, "fill": 2.5},
+            {"time": 64, "overlap": 48, "analysis": "hann"},
+        ),
+        ids=("fill", "analysis"),
+    )
+    def test_another_device(self, patch, library, window):
+        """
+        On a device NumPy cannot read, the windows are still cut and blended.
+
+        Nothing on that device can be made a NumPy array, so a result at
+        all says nothing was converted; the fill and the gaps between
+        windows are made where the data are. A roll moves samples within a
+        window, so the fill and the analysis window show in the result.
+        """
+        if library == "dask":
+            pytest.skip("dask has one device")
+        strict = pytest.importorskip("array_api_strict")
+        elsewhere = strict.asarray(patch.data, device=strict.Device("device1"))
+        with pytest.raises(RuntimeError, match="Can't convert"):
+            np.asarray(elsewhere)
+        there = patch.new(data=elsewhere).window(samples=True, **window)
+        out = there.roll(time=7, samples=True)
+        expected = patch.window(samples=True, **window).roll(time=7, samples=True)
+        plain = patch.window(time=window["time"], samples=True)
+        assert out.data.device == elsewhere.device
+        home = np.asarray(out.data.to_device(strict.Device("CPU_DEVICE")))
+        np.testing.assert_allclose(home, expected.data, rtol=0, atol=1e-12)
+        assert not np.allclose(home, plain.roll(time=7, samples=True).data)
+
+    def test_kernel_which_changes_the_shape(self, patch, library):
+        """A kernel which does not keep the shape it stated is caught here too."""
+        with pytest.raises(PatchError, match="computed a window of shape"):
+            Windowed(_Shrinks(), time=100, samples=True)(_on(patch, library))
+
+    def test_metadata_only_operation(self, patch, library):
+        """An operation which computes nothing leaves the array where it is."""
+        there = _on(patch, library)
+        out = there.window(time=100, samples=True).set_units("m/s")
+        assert out.data is there.data
+
+    def test_a_box_of_windows(self, patch, library):
+        """Given only some windows, as a lazy chunk gives, the result is the same."""
+        operation = Windowed(dc.proc.Abs(), time=64, samples=True)
+        _, plan = operation.get_metadata(patch.drop_data())
+        whole = operation.numpy_kernel(patch.data, **plan)
+        # Windows 10 to 13 of 64 samples every 32, the first starting at -32.
+        box = _on(patch, library).data[:, 288:416]
+        out = operation.kernel(box, **plan, tiles=((10, 13),))
+        # Samples under every one of their windows: all but the outer halves.
+        inner = np.asarray(out.compute() if hasattr(out, "compute") else out)
+        np.testing.assert_allclose(inner[:, 32:96], whole[:, 320:384], atol=1e-13)

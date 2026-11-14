@@ -5,7 +5,7 @@ import pytest
 
 import dascore as dc
 from dascore import get_example_patch
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, PatchCoordinateError
 from dascore.transform import dispersion_phase_shift
 from dascore.transform.dispersion import DispersionPhaseShift
 from dascore.utils.misc import suppress_warnings
@@ -177,3 +177,120 @@ class TestDispersionMetadata:
         assert out.dims == ("velocity", "frequency")
         assert out.shape == (14, 520)
         assert out.dtype == shift(random_patch).dtype == np.float64
+
+
+class TestDispersionOptions:
+    """Tests for dimension names, source offsets, normalization and N-D input."""
+
+    vels = np.arange(400.0, 600.0, 5.0)
+
+    @pytest.fixture()
+    def plane_wave(self):
+        """Return a small right-going plane wave."""
+        return _plane_wave_patch(nt=100, nchan=10).set_units("m/s")
+
+    def test_chains_correlate(self, plane_wave):
+        """The lag_time output of correlate is imaged without renaming."""
+        cc = plane_wave.correlate(distance=0, samples=True).squeeze()
+        cc = cc.select(lag_time=(0, None))
+        out = cc.dispersion_phase_shift(self.vels)
+        expected = cc.rename_coords(lag_time="time").dispersion_phase_shift(self.vels)
+        assert out == expected
+
+    def test_named_dims(self, plane_wave):
+        """time_dim and distance_dim name the dimensions to image."""
+        renamed = plane_wave.rename_coords(time="t", distance="offset")
+        out = renamed.dispersion_phase_shift(
+            self.vels, time_dim="t", distance_dim="offset"
+        )
+        expected = plane_wave.dispersion_phase_shift(self.vels)
+        assert np.array_equal(out.data, expected.data)
+
+    def test_missing_time_raises(self, plane_wave):
+        """A patch with neither time nor lag_time names both in the error."""
+        patch = plane_wave.rename_coords(time="t")
+        with pytest.raises(PatchCoordinateError, match="'time' or 'lag_time'"):
+            patch.dispersion_phase_shift(self.vels)
+
+    def test_source_distance(self):
+        """A two-sided gather images as its absolute offsets from the source."""
+        time = np.arange(200) / 500.0
+        dist = np.arange(-20, 21) * 2.0
+        offset = np.abs(dist - 4.0)
+        data = np.cos(2 * np.pi * 50.0 * (time[None, :] - offset[:, None] / 500.0))
+        coords = {"distance": dist, "time": dc.to_timedelta64(time)}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        patch = patch.set_units(distance="m")
+        out = patch.dispersion_phase_shift(self.vels, source_distance=4.0)
+        hand = patch.update_coords(distance=offset).set_units(distance="m")
+        assert np.array_equal(out.data, hand.dispersion_phase_shift(self.vels).data)
+        column = out.select(frequency=(49.9, 50.1)).squeeze()
+        assert column.get_array("velocity")[np.argmax(column.data)] == 500.0
+        # A float is in the coordinate's units; a quantity is converted.
+        feet = patch.convert_units(distance="ft")
+        out_ft = feet.dispersion_phase_shift(self.vels, source_distance=4.0 / 0.3048)
+        out_q = feet.dispersion_phase_shift(
+            self.vels, source_distance=4.0 * dc.get_unit("m")
+        )
+        np.testing.assert_allclose(out_ft.data, out.data)
+        np.testing.assert_allclose(out_q.data, out.data)
+
+    def test_normalize_none(self, plane_wave):
+        """Without normalization the output is a slant stack in data units."""
+        patch = plane_wave.select(distance=(0, 3), time=(0, 20), samples=True)
+        out = patch.dispersion_phase_shift(self.vels, normalize=None)
+        assert out.attrs.data_units == dc.get_quantity("m/s")
+        spec = np.fft.fft(patch.data, axis=1)
+        freqs = out.get_array("frequency")
+        x, w = patch.get_array("distance"), 2 * np.pi * freqs
+        expected = [
+            np.abs(np.sum(np.exp(1j * np.outer(x, w) / v) * spec[:, : w.size], axis=0))
+            for v in self.vels
+        ]
+        np.testing.assert_allclose(out.data, np.array(expected) / x.size)
+        phase = patch.dispersion_phase_shift(self.vels)
+        assert not np.allclose(out.data, phase.data)
+
+    def test_phase_dimensionless(self, plane_wave):
+        """The phase-normalized image is dimensionless."""
+        out = plane_wave.dispersion_phase_shift(self.vels)
+        assert out.attrs.data_units == dc.get_quantity("dimensionless")
+
+    def test_nd_patch(self, plane_wave):
+        """Each slice along an extra dimension is imaged independently."""
+        data = np.stack([plane_wave.data, 2 * plane_wave.data[:, ::-1]])
+        coords = {"shot": [0, 1], **plane_wave.coords.coord_map}
+        patch = plane_wave.new(
+            data=data, coords=coords, dims=("shot", *plane_wave.dims)
+        )
+        out = patch.transpose("distance", "shot", "time").dispersion_phase_shift(
+            self.vels
+        )
+        assert out.dims == ("shot", "velocity", "frequency")
+        for i in range(2):
+            expected = patch.select(shot=i, samples=True).squeeze()
+            expected = expected.dispersion_phase_shift(self.vels)
+            np.testing.assert_allclose(out.data[i], expected.data)
+
+    def test_nd_keeps_extra_coords(self, plane_wave):
+        """Coordinates along only the extra dimensions survive."""
+        data = np.stack([plane_wave.data, plane_wave.data])
+        coords = {
+            "shot": [0, 1],
+            "source_x": ("shot", [10.0, 20.0]),
+            **plane_wave.coords.coord_map,
+        }
+        dims = ("shot", *plane_wave.dims)
+        patch = plane_wave.new(data=data, coords=coords, dims=dims)
+        out = patch.dispersion_phase_shift(self.vels)
+        assert np.array_equal(out.get_array("source_x"), [10.0, 20.0])
+        assert out.coords.dim_map["source_x"] == ("shot",)
+
+    def test_extra_dim_named_like_output_raises(self, plane_wave):
+        """An extra dimension named velocity or frequency is refused."""
+        data = np.stack([plane_wave.data, plane_wave.data])
+        coords = {"frequency": [1.0, 2.0], **plane_wave.coords.coord_map}
+        dims = ("frequency", *plane_wave.dims)
+        patch = plane_wave.new(data=data, coords=coords, dims=dims)
+        with pytest.raises(ParameterError, match=r"frequency.*rename_coords"):
+            patch.dispersion_phase_shift(self.vels)
