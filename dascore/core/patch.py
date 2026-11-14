@@ -944,11 +944,16 @@ class Patch(NamespaceOwner, PatchMeta):
         ends
             For a reduction: what becomes of a window which reaches past
             either end of the data. ``"pad"`` keeps it, with a value of
-            NaN unless a `fill` is given; ``"drop"`` leaves it out.
+            NaN unless a `fill` is given; ``"drop"`` leaves it out;
+            ``"partial"`` keeps it, reduced over the samples it has, under
+            the label the whole window would have.
         align
             For a reduction: which sample of a window labels it:
             ``"center"``, the middle one (the later of two for an even
             window); ``"right"``, the last; ``"left"``, the first.
+            ``"middle"`` places windows as ``"left"`` does and labels each
+            halfway between its first and last sample, between two samples
+            for an even window.
         fill
             The value a window holds where it reaches beyond the data. For
             windows which are blended, zero when not given. For a
@@ -971,6 +976,10 @@ class Patch(NamespaceOwner, PatchMeta):
         >>>
         >>> # One mean each quarter second, labelled where each window ends.
         >>> means = patch.window(time=0.5, step=0.25, align="right").mean()
+        >>>
+        >>> # Means of pairs of channels, each labelled between its two.
+        >>> pairs = patch.window(distance=2, step=2, samples=True, align="middle")
+        >>> stacked = pairs.mean()
         >>>
         >>> # Windows overlapping by a quarter, blended linearly.
         >>> window = patch.window(time=0.5, overlap=25 * percent, taper="triang")
