@@ -23,7 +23,11 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import get_coord
-from dascore.core.processor import PatchProcessor, register_kernel
+from dascore.core.processor import (
+    PatchProcessor,
+    _position_free_if_relative,
+    register_kernel,
+)
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.lazy.contract import Pointwise, Unchanged
@@ -902,6 +906,9 @@ class PowCoord(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
+    # Where its values are measured from decides; see the function.
+    position_free = _position_free_if_relative
+
     def get_metadata(self, meta):
         """Return metadata with the gained units, and each dimension's curve."""
         extras = self.model_extra or {}
@@ -1419,6 +1426,9 @@ class Roll(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return the rolled metadata and the shift in samples."""
         dim, axis, value = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]
@@ -1475,6 +1485,9 @@ class Where(PatchProcessor):
 
     cond: Any
     other: Any = np.nan
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the metadata aligned with any patch given, and how each aligns."""
@@ -1563,6 +1576,9 @@ class Flip(PatchProcessor):
 
     dims: tuple[Any, ...] = ()
     flip_coords: bool = True
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the flipped metadata and the axes to mirror."""

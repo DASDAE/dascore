@@ -43,6 +43,7 @@ import numbers
 import sys
 import textwrap
 import warnings
+from collections.abc import Sequence
 from contextvars import ContextVar
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -135,10 +136,12 @@ class PatchProcessor(DascoreBaseModel):
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
-    method. It then runs in any number of windows of
-    [`Patch.window`](`dascore.Patch.window`) at once; without it each
-    window's plan is worked out to check, and beyond 1000 windows the
-    operation is refused.
+    method. Where its arguments decide, it writes a method instead,
+    `position_free(self, dims)`, given the dimensions whose start may move.
+    A class which writes `get_metadata` runs in the windows of
+    [`Patch.window`](`dascore.Patch.window`), where one plan is worked out
+    and run in every window, only if it says so; one which plans nothing
+    need not.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that
@@ -175,10 +178,13 @@ class PatchProcessor(DascoreBaseModel):
     data_type: ClassVar[str | None] = None
     # Whether `get_metadata` returns the same plan wherever the patch's
     # coordinates start, as one which reads only axes, lengths, steps and
-    # units does. It lets the operation run in the windows of `Patch.window`
-    # without each window's plan being worked out to check. Read from the
+    # units does. A class which writes `get_metadata` runs in the windows
+    # of `Patch.window`, where one plan is run in every window, only if it
+    # says so. Read from the
     # class which writes `get_metadata`, so a subclass which overrides the
-    # method says so again.
+    # method says so again. An operation whose arguments decide it writes
+    # a method of this name instead, `position_free(self, dims)`, given the
+    # dimensions whose start may move.
     position_free: ClassVar[bool] = False
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
@@ -244,12 +250,28 @@ class PatchProcessor(DascoreBaseModel):
             kwargs = {**given, **kwargs}
         super().__init__(**kwargs)
 
-    @classmethod
-    def _is_position_free(cls) -> bool:
-        """Whether the plan is known not to depend on where coordinates start."""
-        owner = next(x for x in cls.__mro__ if "get_metadata" in x.__dict__)
-        # The base plans nothing, which no position can change.
-        return owner is PatchProcessor or bool(owner.__dict__.get("position_free"))
+    def _is_position_free(self, dims: Sequence[str]) -> bool:
+        """
+        Whether the plan is known not to depend on where `dims` start.
+
+        The nearest class to say anything decides, and only True itself, or
+        a plain method which answers True, says yes. A class which writes
+        `get_metadata` and says nothing has not said so, whatever its
+        parents say of the plan they wrote; one with no plan of its own
+        anywhere has none which a position could change.
+        """
+        for klass in type(self).__mro__:
+            if klass is PatchProcessor:
+                break
+            contents = klass.__dict__
+            if "position_free" in contents:
+                declared = contents["position_free"]
+                if isinstance(declared, FunctionType):
+                    return declared(self, tuple(dims)) is True
+                return declared is True
+            if "get_metadata" in contents:
+                return False
+        return True
 
     @property
     def kwargs(self) -> dict[str, Any]:
@@ -598,6 +620,32 @@ _MODULE_SPELLINGS = frozenset({"dascore.proc.aggregate"})
 _UNCHECKED: list[type[PatchProcessor]] = []
 # `[Patch, PatchMeta]`, once there are such classes to check against.
 _HOSTS: list[type] = []
+
+
+def _position_free_if_relative(self, dims) -> bool:
+    """
+    Say an operation given coordinate values ignores where `dims` start.
+
+    A `position_free` for a class which takes values along dimensions as
+    keywords, and a `relative` field. Values measured from the start of a
+    coordinate, or counted in samples, are the same wherever it starts;
+    absolute ones name a place, which matters only along a dimension they
+    are given for.
+    """
+    relative = self.relative or getattr(self, "samples", False)
+    return bool(relative or not set(dims) & set(self.model_extra or {}))
+
+
+def _position_free_off_frequencies(self, dims) -> bool:
+    """
+    Say an operation which works on a spectrum ignores where `dims` start.
+
+    A `position_free` for a class which transforms a patch itself, when
+    its plan is made of steps and lengths. Given a
+    patch already transformed it weights by the frequencies themselves,
+    which a window along a frequency dimension does not all hold.
+    """
+    return not any(x.startswith("ft_") for x in dims)
 
 
 def captured_operation(method, patch, /, *args, **kwargs) -> PatchProcessor:
@@ -1121,7 +1169,12 @@ def _via_numpy(numpy_kernel, name: str):
         # Handed back unchanged is still "nothing to do".
         return data if result is numpy_data else _back_to(result, data)
 
-    return run_on_numpy
+    # Says that this is a conversion and not the backend's own kernel, and
+    # under what name the conversion is warned of. `Any`, because the
+    # attribute is one a plain function lacks.
+    out: Any = run_on_numpy
+    out._converts = name
+    return out
 
 
 def _back_to(result, like):

@@ -113,6 +113,9 @@ class VelocityToStrainRate(_Derivative):
     required_dims = ("distance",)
     required_attrs: ClassVar[dict[str, str]] = {"data_type": "velocity"}
 
+    # The plan never reads where the coordinates start.
+    position_free = True
+
     def get_metadata(self, meta):
         """Return strain rate metadata, and the spacing to differentiate by."""
         _check_step_multiple(self.step_multiple)
@@ -320,6 +323,9 @@ class RadiansToStrain(PatchProcessor):
     wave_length: float | None = None
     stress_constant: float = 0.79
     refractive_index: float | None = None
+
+    # The plan never reads where the coordinates start.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return strain metadata and the factor for phase units."""

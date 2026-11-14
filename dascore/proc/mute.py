@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
+from dascore.core.processor import _position_free_if_relative
 from dascore.exceptions import ParameterError
 from dascore.models import sensible_model_equals, sensible_model_hash
 from dascore.proc.taper import _Envelope
@@ -500,6 +501,9 @@ class LineMute(_Envelope):
 
     model_config = ConfigDict(extra="allow")
     _positional_fields = ()
+
+    # Where its values are measured from decides; see the function.
+    position_free = _position_free_if_relative
 
     def get_metadata(self, meta):
         """Return the envelope of the region the lines bound."""
