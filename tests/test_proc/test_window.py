@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import pickle
+import sys
 import tracemalloc
 import warnings
 from typing import ClassVar
@@ -567,9 +568,9 @@ class _Lags(dc.PatchProcessor):
         return xp.moveaxis(out, -1, axis)
 
 
-def _lagged(data: np.ndarray, lag: int, every: int = 1, fill=0.0) -> np.ndarray:
-    """What `_Lags` makes of data which hold `fill` before their first sample."""
-    before = np.full((*data.shape[:-1], lag), fill)
+def _lagged(data: np.ndarray, lag: int, every: int = 1) -> np.ndarray:
+    """What `_Lags` makes of the whole of some data: NaN for its first samples."""
+    before = np.full((*data.shape[:-1], lag), np.nan)
     return (data - np.concatenate([before, data], axis=-1)[..., :-lag])[..., ::every]
 
 
@@ -802,11 +803,12 @@ class TestEmptyEnds:
 
         A difference is the same in whichever window it is taken, so the
         windows agree wherever they overlap, and blending them gives it
-        back. Before the patch a window holds the fill.
+        back. The patch's own first samples have nothing before them but
+        the fill a window holds there, and stay empty.
         """
-        window = self.WINDOWS[name]
-        out = Windowed(_Lags(lag=7), samples=True, **window)(patch)
-        expected = _lagged(patch.data, 7, fill=window.get("fill", 0.0))
+        out = Windowed(_Lags(lag=7), samples=True, **self.WINDOWS[name])(patch)
+        expected = _lagged(patch.data, 7)
+        assert np.isnan(expected[:, :7]).all() and not np.isnan(expected[:, 7:]).any()
         np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
 
     def test_unsaid_empty_ends_are_blended(self, patch):
@@ -821,7 +823,9 @@ class TestEmptyEnds:
         data[:, 1000] = np.nan
         out = Windowed(_Lags(lag=7), time=100, samples=True)(patch.new(data=data))
         where = np.flatnonzero(np.isnan(out.data).any(axis=0))
-        assert where.tolist() == [1000, 1007]
+        # The patch's own first samples, the NaN, and the sample it is
+        # taken from: no more, though every window holds NaN somewhere.
+        assert where.tolist() == [*range(7), 1000, 1007]
 
     @pytest.mark.parametrize("step", (None, 0.02), ids=("every", "stepped"))
     @pytest.mark.parametrize("db", (True, False))
@@ -845,7 +849,8 @@ class TestEmptyEnds:
         assert out.coords == whole.coords
         assert out.attrs.data_units == whole.attrs.data_units
         assert out.attrs.data_type == "frequency_band_energy"
-        assert not np.isnan(out.data).any()
+        # Empty where the plain energy is, at the start of the patch alone.
+        assert np.array_equal(np.isnan(out.data), np.isnan(whole.data))
         stride = 200 - overlap
         every, empty = (1, 24) if step is None else (5, 5)
         # The first window starts one stride before the patch.
@@ -873,7 +878,46 @@ class TestEmptyEnds:
             warnings.simplefilter("ignore")
             window = there.window(time=200, overlap=50, samples=True)
             out = to_numpy(window.fbe(time=(10, 50), window=0.1).data)
+        # But for the first samples, which no window has an energy for.
+        out = out[:, 24:]
         assert np.isneginf(out[5]).all() and np.isfinite(np.delete(out, 5, 0)).all()
+
+    @pytest.mark.parametrize("library", ("numpy", "array_api_strict", "dask"))
+    def test_no_weight_adds_nothing_on_any_library(self, patch, library):
+        """An infinity where a window has no weight stays out of the blend."""
+
+        class Logs(dc.PatchProcessor):
+            """The logarithm of the magnitudes, on any array library."""
+
+            name = None
+
+            def kernel(self, data):
+                """Return the logarithms, minus infinity for a zero."""
+                xp = array_namespace(data)
+                return xp.log(xp.abs(data))
+
+        data = patch.data.copy()
+        data[5] = 0
+        dead = patch.new(data=data)
+        there = dead if library == "numpy" else _on(dead, library)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = to_numpy(Windowed(Logs(), time=100, samples=True)(there).data)
+        assert np.isneginf(out[5]).all() and np.isfinite(np.delete(out, 5, 0)).all()
+
+    def test_only_the_fill_is_quiet(self, patch):
+        """NumPy is heard about the data, and not about a window's fill."""
+        window = patch.window(time=200, samples=True)
+        with warnings.catch_warnings():
+            # A window reaching before the patch divides zeros by zeros.
+            warnings.simplefilter("error")
+            window.stalta(time=(5, 40), samples=True)
+        data = patch.data.copy()
+        data[5, 600:1400] = 0
+        silent = patch.new(data=data).window(time=200, samples=True)
+        # A silent stretch well inside the patch is the data's own.
+        with pytest.warns(RuntimeWarning, match="invalid value"):
+            silent.stalta(time=(5, 40), samples=True)
 
     @pytest.mark.parametrize("step", (None, 0.04), ids=("every", "stepped"))
     def test_fbe_is_close_to_the_plain_one(self, step):
@@ -892,9 +936,60 @@ class TestEmptyEnds:
         """The ratio in windows has a value wherever the plain one has."""
         out = patch.window(time=200, samples=True).stalta(time=(5, 40), samples=True)
         whole = patch.stalta(time=(5, 40), samples=True)
-        assert out.coords == whole.coords and not np.isnan(out.data).any()
-        # Rolling means reach no further back than a window's own samples.
-        np.testing.assert_allclose(out.data[:, 200:], whole.data[:, 200:], rtol=1e-9)
+        assert out.coords == whole.coords
+        # Rolling means reach no further back than a window's own samples,
+        # so the ratio is the plain one everywhere: empty until the long
+        # window is behind a sample, and never taken from a window's fill.
+        assert np.isnan(whole.data[:, :39]).all()
+        np.testing.assert_allclose(out.data, whole.data, rtol=1e-9, equal_nan=True)
+
+    def test_start_of_the_patch_is_not_taken_from_the_fill(self):
+        """
+        A steady record has a steady ratio from its first whole window on.
+
+        A window which reaches before the patch holds zeros there, and a
+        long-term mean of them with the data would be low, so the ratio
+        high: a detector would fire at the start of every patch.
+        """
+        data = np.abs(np.random.default_rng(0).standard_normal((2, 2000))) + 1.0
+        coords = {"distance": np.arange(2.0), "time": np.arange(2000) * 0.004}
+        steady = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        window = steady.window(time=200, samples=True)
+        out = window.stalta(time=(5, 40), samples=True).data
+        assert np.isnan(out[:, :39]).all() and np.nanmax(out) < 2
+
+    def test_trailing_ends_are_empty_too(self, patch):
+        """What is empty at the end of a window is at the end of the patch."""
+
+        class Leads(_Lags):
+            """Each sample less the one `lag` after it."""
+
+            name = None
+
+            def halo(self, plan):
+                """Return the samples with nothing `lag` after them."""
+                return {plan["axis"]: (0, self.lag)}
+
+            def kernel(self, data, *, axis):
+                """Return the differences, NaN where there is nothing to take."""
+                flipped = np.flip(data, axis=axis)
+                return np.flip(super().kernel(flipped, axis=axis), axis=axis)
+
+        out = Windowed(Leads(lag=7), time=100, samples=True)(patch)
+        expected = np.flip(_lagged(np.flip(patch.data, -1), 7), -1)
+        assert np.isnan(expected[:, -7:]).all()
+        np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
+
+    def test_bounds_dropped_beside_the_window(self, patch):
+        """Cell bounds an operation drops go, whichever dimension is windowed."""
+        time = patch.get_coord("time").values
+        step = patch.get_coord("time").step
+        edges = {"time_start": ("time", time), "time_stop": ("time", time + step)}
+        bounded = patch.update_coords(**edges)
+        whole = bounded.fbe(time=(10, 50), window=0.1)
+        out = bounded.window(distance=30, samples=True).fbe(time=(10, 50), window=0.1)
+        assert out.coords == whole.coords
+        assert set(out.coords.coord_map) == set(whole.coords.coord_map)
 
     def test_history_names_the_window_and_the_step(self, patch):
         """The call is recorded as it was written, the step with it."""
@@ -924,6 +1019,8 @@ class TestEveryNthSample:
         assert out.shape == (300, 500)
         assert out.coords == operation(patch).coords
         expected = _lagged(patch.data, 10, every=4)
+        # Samples 0, 4 and 8 have nothing ten samples before them.
+        assert np.isnan(expected[:, :3]).all() and not np.isnan(expected[:, 3:]).any()
         np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
 
     def test_decimate(self, patch):
@@ -1270,8 +1367,9 @@ class TestPositionFree:
             out = FREE_CALLS[name](patch.window(time=100, samples=True))
             plain = FREE_CALLS[name](patch)
         assert out.shape == plain.shape and out.coords == plain.coords
-        # Blended, and not a window of nothing: a value for every sample.
-        assert not np.isnan(np.abs(out.data)).any()
+        # Blended, and not a window of nothing: a value for every sample
+        # the operation alone has one for.
+        assert np.array_equal(np.isnan(out.data), np.isnan(plain.data))
 
     def test_who_is_free(self):
         """One which plans nothing is; one which overrides the plan says again."""
@@ -1483,11 +1581,14 @@ class TestOtherBackends:
             """Raise: nothing should be converted."""
             raise AssertionError("the data were converted to NumPy")
 
-        # DASCore's way of taking an array through NumPy, where it is
-        # written and where an operation with no implementation for the
-        # library reaches it.
-        monkeypatch.setattr(array_api_module, "to_numpy", refuse)
-        monkeypatch.setattr(processor_module, "to_numpy", refuse)
+        # DASCore's way of taking an array through NumPy, under every name
+        # a module of DASCore's has imported it by.
+        assert array_api_module.to_numpy is to_numpy
+        for name, module in list(sys.modules.items()):
+            held = getattr(module, "to_numpy", None)
+            if name.startswith("dascore") and held is to_numpy:
+                monkeypatch.setattr(module, "to_numpy", refuse)
+        assert processor_module.to_numpy is refuse
 
     @pytest.mark.parametrize("name", CASES)
     def test_stays_on_the_library(self, patch, library, name, monkeypatch):
@@ -1585,6 +1686,20 @@ class TestOtherBackends:
         values = _values(out)
         assert values.dtype == expected.dtype
         np.testing.assert_allclose(values, expected.data, rtol=0, atol=1e-10)
+
+    @pytest.mark.parametrize("length", (1999, 1998, 1997))
+    def test_ragged_length_of_every_nth_sample(self, patch, library, length):
+        """A patch whose length is no multiple of four keeps a last short step."""
+        ragged = patch.select(time=(0, length), samples=True)
+        window = {"time": 100, "overlap": 20, "samples": True}
+        operation = _Lags(lag=10, every=4)
+        expected = _lagged(ragged.data, 10, every=4)
+        assert expected.shape == (300, 500)
+        out = Windowed(operation, **window)(ragged)
+        np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
+        there = Windowed(operation, **window)(_on(ragged, library))
+        assert there.shape == (300, 500) and there.coords == out.coords
+        np.testing.assert_allclose(_values(there), expected, rtol=0, atol=1e-12)
 
     def test_dask_chunks_of_every_nth_sample(self, patch, library):
         """Where every n-th sample is kept, each chunk holds its own of them."""
@@ -1698,13 +1813,56 @@ class TestOtherBackends:
         """A piece whose chunk is another library's is blended there."""
         if library != "dask":
             pytest.skip("only dask computes in pieces")
-        given, expected = self._piece(patch, dc.proc.Abs())
+        handed = []
+
+        class Magnitudes(dc.proc.Abs):
+            """Abs, which notes the kind of array each window is."""
+
+            name = None
+
+            def kernel(self, data):
+                """Return the magnitudes, on the library the data are on."""
+                handed.append(type(data))
+                return super().kernel(data)
+
+        given, expected = self._piece(patch, Magnitudes())
+        handed.clear()
         with warnings.catch_warnings():
             self._refuse_numpy(monkeypatch)
             warnings.simplefilter("error", NumpyFallbackWarning)
             out = window_module._blended_piece(*given)
+        # Every window was handed to the kernel as the piece's own kind.
+        assert handed and set(handed) == {type(given[1])}
         assert type(out) is type(given[1])
         np.testing.assert_allclose(np.asarray(out), expected, rtol=0, atol=1e-12)
+
+    def test_dask_piece_is_cast_to_the_dtype_stated(self, patch, library):
+        """A piece on another library comes back in the dtype the result states."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        (shared, *rest), _ = self._piece(patch, dc.proc.Abs())
+        single = (*shared[:3], np.dtype(np.float32))
+        out = window_module._blended_piece(single, *rest)
+        assert type(out) is type(rest[0]) and to_numpy(out).dtype == np.float32
+
+    def test_dask_with_chunks_of_another_library(self, patch, library, monkeypatch):
+        """A dask array whose chunk is another library's runs from end to end."""
+        if library != "dask":
+            pytest.skip("only dask holds chunks")
+        strict = pytest.importorskip("array_api_strict")
+        dask_array = pytest.importorskip("dask.array")
+        # One chunk: dask itself cannot join chunks of this library.
+        plain = dask_array.from_array(patch.data, chunks=patch.shape)
+        meta = strict.asarray(np.empty((0, 0)))
+        there = patch.new(data=plain.map_blocks(strict.asarray, meta=meta))
+        expected = Windowed(_Lags(lag=7), time=100, samples=True)(patch)
+        with warnings.catch_warnings():
+            self._refuse_numpy(monkeypatch)
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = Windowed(_Lags(lag=7), time=100, samples=True)(there)
+            made = out.data.compute()
+        assert type(made) is type(meta)
+        np.testing.assert_allclose(to_numpy(made), expected.data, rtol=0, atol=1e-12)
 
     def test_dask_piece_runs_a_registered_kernel(self, patch, library, monkeypatch):
         """A kernel registered for the chunk's library is the one a piece runs."""

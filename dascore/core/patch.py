@@ -1001,7 +1001,8 @@ class Patch(NamespaceOwner, PatchMeta):
           shorter. What an operation leaves empty at the start of each
           window, as ``fbe`` and ``stalta`` do until a whole rolling
           window is behind a sample, is discarded and the rest blended, so
-          the windows must overlap by at least as much.
+          the windows must overlap by at least as much; the first samples
+          of the patch stay empty, as they are without a window.
         - For a patch operation, data on an array backend other than NumPy
           stay where they are: a dask array is computed a piece at a time
           when it is asked for, and on any other the windows are run and

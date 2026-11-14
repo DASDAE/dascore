@@ -462,7 +462,7 @@ class PatchProcessor(DascoreBaseModel):
 
         [`Patch.window`](`dascore.Patch.window`) discards them from every
         window and blends what is left, so the windows must overlap by at
-        least as much.
+        least as much; the ends of the patch itself are left NaN.
         """
         return {}
 

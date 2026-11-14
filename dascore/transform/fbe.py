@@ -86,7 +86,8 @@ class Fbe(PatchProcessor):
     -----
     - The first samples have no whole window behind them and are NaN.
     - In a window of [`Patch.window`](`dascore.Patch.window`) those samples
-      are discarded from each window and the rest blended. Decibels are
+      are discarded from each window and the rest blended, and the first
+      samples of the patch are NaN as they are here. Decibels are
       blended as they are, so where two windows meet the result lies
       between theirs in decibels.
     """

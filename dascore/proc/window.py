@@ -289,6 +289,8 @@ class _Made:
     # and how many after them are blended.
     lead: tuple[int, ...]
     kept: tuple[int, ...]
+    # How many samples at each end of a result the operation leaves empty.
+    empty: tuple[tuple[int, int], ...]
 
     @classmethod
     def of(cls, size, stride, length, factor, trim) -> _Made:
@@ -300,6 +302,7 @@ class _Made:
             length=tuple(-(-n // q) for n, q in zip(length, factor, strict=True)),
             lead=tuple(before for before, _ in trim),
             kept=tuple(z - sum(ends) for z, ends in zip(made, trim, strict=True)),
+            empty=tuple(trim),
         )
 
     @property
@@ -323,6 +326,24 @@ class _Made:
             extent.append(high - low)
             inside.append(slice(max(low, 0) - low, min(high, n) - low))
         return extent, inside
+
+    def unfilled(self, tiles) -> list[tuple[int, int]]:
+        """
+        Return how many samples at each end of the given windows' part are empty.
+
+        The whole result's own ends are as empty as a window's: nothing
+        lies before the first samples of the patch for the operation to
+        have filled them from, and a window which reaches there holds
+        only fill. They are left as the operation alone leaves them.
+        """
+        out = []
+        spans = zip(tiles, self.size, self.stride, self.length, self.empty)
+        for (first, last), z, step, n, (before, after) in spans:
+            low = first * step - _margin(z, step)
+            start, stop = max(low, 0), min(low + (last - 1 - first) * step + z, n)
+            head = max(min(before, stop) - start, 0)
+            out.append((head, max(stop - max(n - after, start), 0)))
+        return out
 
 
 class Windowed(PatchProcessor):
@@ -372,9 +393,8 @@ class Windowed(PatchProcessor):
       says how many by its `halo`: `fbe` and `stalta` leave NaN until a
       whole rolling window is behind a sample. Those are discarded from
       every window and what is left is blended, so the windows must overlap
-      by at least as much. At the start of the patch a window reaches
-      before the data and holds the fill there, so the first samples are
-      computed from the fill and the data together, not left empty.
+      by at least as much. The patch's own first samples have nothing
+      before them, and are left NaN as the operation alone leaves them.
     - On an array backend other than NumPy the data stay where they are.
       A dask array is computed a piece at a time, each from the windows
       which overlap it, so nothing is computed when the operation is
@@ -546,10 +566,10 @@ class Windowed(PatchProcessor):
             if every != 1:
                 strides[dim] = slice(None, None, every)
         coords = tile.coords.isel(**strides)[0] if strides else tile.coords
-        # The bounds of a windowed dimension's cells may go: a sample which
+        # The bounds of a dimension's cells may go: a sample which
         # summarizes a rolling window is no longer its input's cell.
         edges = {
-            x for dim in window.dims for x in _cell_edge_names(dim, coords.coord_map)
+            x for dim in tile.dims for x in _cell_edge_names(dim, coords.coord_map)
         }
         gone = (set(coords.coord_map) - set(made.coords.coord_map)) & edges
         if gone:
@@ -866,7 +886,19 @@ class Windowed(PatchProcessor):
         assert total is not None and dtype is not None  # an axis has a window
         if not quiet:
             _warn_if_integers(dtype, _as_numpy_dtype(total.dtype))
-        return xp.moveaxis(total[(..., *within)], tail, axes)
+        total = total[(..., *within)]
+        for axis, (head, end) in enumerate(landed.unfilled(tiles), start=-ndim):
+            if not (head or end):
+                continue
+            index = [slice(None)] * ndim
+            index[axis] = slice(head, total.shape[axis] - end)
+            parts = [
+                _block(xp, total, axis, head, xp.nan),
+                total[(..., *index)],
+                _block(xp, total, axis, end, xp.nan),
+            ]
+            total = xp.concat([x for x in parts if x is not None], axis=axis)
+        return xp.moveaxis(total, tail, axes)
 
     def _by_dask_chunk(
         self, data, *, like, axes, size, stride, length, factor, trim, others, inner
@@ -999,7 +1031,14 @@ class Windowed(PatchProcessor):
                 out = np.zeros(shape, dtype=np.result_type(made, weights))
             out[(..., *[x[k] for x, k in zip(put, index)])] += made * weights
         assert out is not None  # an axis with a sample has a window
-        return np.moveaxis(out[(..., *within)], tail, axes), made.dtype
+        out = out[(..., *within)]
+        for axis, (head, end) in enumerate(landed.unfilled(tiles), start=-ndim):
+            ends = [slice(0, head), slice(out.shape[axis] - end, None)]
+            for part in ends:
+                index = [slice(None)] * ndim
+                index[axis] = part
+                out[(..., *index)] = np.nan
+        return np.moveaxis(out, tail, axes), made.dtype
 
 
 def _blended_piece(shared, piece, box, needed):

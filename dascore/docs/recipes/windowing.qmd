@@ -66,11 +66,11 @@ An operation may keep every n-th sample of a windowed dimension, as `decimate` a
 # window is 2 ms, so the windows overlap by more than that.
 options = {"time": (500, 2000), "window": 0.002, "step": 0.0005}
 energy = patch.window(time=0.02, overlap=0.005).fbe(**options)
-assert energy.coords == patch.fbe(**options).coords
-assert not np.isnan(energy.data).any()
+whole = patch.fbe(**options)
+assert energy.coords == whole.coords
+# Empty only where the plain energy is: the first samples of the patch.
+assert np.array_equal(np.isnan(energy.data), np.isnan(whole.data))
 ```
-
-A window which reaches before the patch holds the fill there, so the first samples are computed from the fill and the data together, where `fbe` on the whole patch leaves them NaN.
 
 For a patch operation, data on an array backend other than NumPy stay where they are. A dask array is computed a piece at a time, each from the windows which overlap it, so nothing is computed when the operation is called. On any other backend the windows are cut, run and blended there, which is several array operations for each window and so slower than NumPy; an operation with no implementation for the backend is converted through NumPy as it is outside a window.
 
