@@ -158,6 +158,33 @@ class TestChunkPlanContract:
         assert time.min() == min(mins)
         assert time.max() == max(maxs)
 
+    @pytest.fixture(scope="class")
+    def numbered(self):
+        """Two contiguous 4x8 patches whose values are their sample numbers."""
+        base = dc.get_example_patch().select(distance=(0, 4), time=(0, 8), samples=True)
+        first = base.new(data=np.arange(32.0).reshape(4, 8))
+        time = first.get_coord("time")
+        second = first.new(data=first.data + 100)
+        return [first, second.update_coords(time_min=time.max() + time.step)]
+
+    @pytest.mark.parametrize("on_disk", [True, False])
+    @pytest.mark.parametrize("kwargs", [{"distance": (1, None)}, {"time": (1, -1)}])
+    def test_replan_keeps_sample_selection(self, numbered, tmp_path, on_disk, kwargs):
+        """Re-chunking after a samples selection loads the selected samples."""
+        source = numbered
+        if on_disk:
+            directory = dc.examples.spool_to_directory(numbered, path=tmp_path)
+            source = dc.spool(directory).update(progress=None)
+        selected = dc.spool(source).select(**kwargs, samples=True)
+        expected = [p.select(**kwargs, samples=True).data for p in numbered]
+        once = selected.chunk(time=None)
+        twice = once.chunk(time=None)
+        thrice = twice.chunk(time=None)
+        for chunked in (once, twice, thrice):
+            data = np.concatenate([p.data for p in chunked], axis=1)
+            assert np.array_equal(data, np.concatenate(expected, axis=1))
+            assert [p.coords for p in chunked] == [p.coords for p in once]
+
     def test_planned_state_is_derived(self, patches):
         """A chunked spool is a fresh derived catalog, not a mode flag."""
         spool = dc.spool(patches)
