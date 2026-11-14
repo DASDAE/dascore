@@ -1,4 +1,4 @@
-"""Tests for the DASCore Arrow patch format."""
+"""Tests for the DASARROW patch format."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ BIG = np.ones((5000, 1000), dtype=np.float32)
 def _roundtrip(patch, tmp_path, **kwargs):
     """Write a patch and read it back."""
     path = tmp_path / ("p.arrows" if kwargs.get("stream") else "p.arrow")
-    dc.write(patch, path, "ARROW", **kwargs)
+    dc.write(patch, path, "DASARROW", **kwargs)
     return dc.read(path)[0]
 
 
@@ -95,8 +95,8 @@ class TestRoundTrip:
     def test_compression_applies(self, tmp_path, compression):
         """Compressed files are smaller than uncompressed ones."""
         patch = _plain(BIG)
-        dc.write(patch, tmp_path / "plain.arrow", "ARROW")
-        dc.write(patch, tmp_path / "small.arrow", "ARROW", compression=compression)
+        dc.write(patch, tmp_path / "plain.arrow", "DASARROW")
+        dc.write(patch, tmp_path / "small.arrow", "DASARROW", compression=compression)
         sizes = [(tmp_path / x).stat().st_size for x in ("small.arrow", "plain.arrow")]
         assert sizes[0] < sizes[1] / 10
 
@@ -228,7 +228,7 @@ class TestRoundTrip:
         """Reading with snap puts a jittered dimension on its grid."""
         coord = get_coord(data=np.array([0.0, 1.1, 1.95, 3.02]), step=1.0)
         path = tmp_path / "p.arrow"
-        dc.write(_with_coord(coord), path, "ARROW")
+        dc.write(_with_coord(coord), path, "DASARROW")
         assert dc.read(path, snap=True)[0].get_coord("time").evenly_sampled
         assert dc.read(path)[0].get_coord("time").jittered
 
@@ -284,7 +284,7 @@ class TestRefuses:
     def test_unsupported(self, tmp_path, patch):
         """Complex data, unsupported dtypes and unencodable attrs raise."""
         with pytest.raises(PatchError):
-            dc.write(patch, tmp_path / "p.arrow", "ARROW")
+            dc.write(patch, tmp_path / "p.arrow", "DASARROW")
 
     def test_several_patches(self, tmp_path):
         """One patch per file."""
@@ -399,7 +399,7 @@ class TestReadChecks:
     def test_truncated(self, tmp_path):
         """A file cut short is invalid."""
         path = tmp_path / "p.arrows"
-        dc.write(_plain(BIG), path, "ARROW", stream=True)
+        dc.write(_plain(BIG), path, "DASARROW", stream=True)
         path.write_bytes(path.read_bytes()[:1_000_000])
         with pytest.raises(InvalidFiberFileError):
             ArrowV1().read(path)
@@ -442,7 +442,7 @@ class TestReadChecks:
     def test_window_is_a_copy(self, tmp_path):
         """A windowed read doesn't hold the whole patch."""
         path = tmp_path / "p.arrow"
-        dc.write(_plain(BIG), path, "ARROW")
+        dc.write(_plain(BIG), path, "DASARROW")
         part = ArrowV1().read_array(path, windows=(slice(0, 2),))
         assert part.base is None or part.base.size == part.size
 
@@ -450,13 +450,19 @@ class TestReadChecks:
 class TestDetection:
     """Format detection."""
 
+    def test_registered_name(self):
+        """The format is registered as DASARROW, not ARROW."""
+        known = dc.io.FiberIO.manager.known_formats
+        assert "DASARROW" in known
+        assert "ARROW" not in known
+
     def test_detects_without_pyarrow(self, tmp_path, monkeypatch):
         """Without pyarrow, Arrow files are still claimed, so reading says why."""
         path = tmp_path / "p.arrow"
-        dc.write(dc.get_example_patch(), path, "ARROW")
+        dc.write(dc.get_example_patch(), path, "DASARROW")
 
         def missing(name, **kwargs):
             raise MissingOptionalDependencyError(f"{name} is not installed")
 
         monkeypatch.setattr(arrow_core, "optional_import", missing)
-        assert ArrowV1().get_format(path) == ("ARROW", "1")
+        assert ArrowV1().get_format(path) == ("DASARROW", "1")

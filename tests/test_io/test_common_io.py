@@ -115,7 +115,7 @@ def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
     if _ARROW_IOS:
-        dc.write(dc.get_example_patch("random_das"), _ARROW_PATH, "arrow")
+        dc.write(dc.get_example_patch("random_das"), _ARROW_PATH, "DASARROW")
     for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
         writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
         writer.write(dc.get_example_patch("random_das"), path)
@@ -232,7 +232,7 @@ SKIP_DATA_FILES = {
 # Formats which hand back the attrs stored in the file rather than mapping
 # vendor fields to attrs, so the file, not the reader, chooses the names.
 _PASS_THROUGH_FORMATS = frozenset(
-    {"ARROW", "DASDAE", "NETCDF3", "NETCDF_CF", "ZARR", "rsf"}
+    {"DASARROW", "DASDAE", "NETCDF3", "NETCDF_CF", "ZARR", "rsf"}
 )
 
 VENDOR_ATTRS = frozenset(

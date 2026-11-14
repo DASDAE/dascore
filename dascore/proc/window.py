@@ -13,6 +13,7 @@ import threading
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 from functools import partial
 from itertools import pairwise, product
 from pathlib import Path
@@ -22,6 +23,7 @@ import numpy as np
 from pydantic import ConfigDict
 
 from dascore.core.coordmanager import _cell_edge_names
+from dascore.core.coords import Grid, get_coord
 from dascore.core.processor import PatchProcessor, _via_numpy, captured_operation
 from dascore.exceptions import ParameterError, PatchError
 from dascore.lazy.contract import (
@@ -50,12 +52,14 @@ from dascore.utils.window import resolve_window
 
 __all__ = ("PatchWindow", "WindowReduce", "Windowed")
 
-_ENDS = ("pad", "drop")
+_ENDS = ("pad", "drop", "partial")
 # How many samples of a window come before the sample which labels it.
 _BEFORE: dict[str, Callable[[int], int]] = {
     "center": lambda size: size // 2,
     "right": lambda size: size - 1,
     "left": lambda size: 0,
+    # Placed as "left", and labelled half a window on; see `_middle`.
+    "middle": lambda size: 0,
 }
 # The reductions spelled by name, which a faster engine may answer for.
 _REDUCERS = {
@@ -66,6 +70,25 @@ _REDUCERS = {
     "std": np.std,
     "sum": np.sum,
 }
+
+
+def _middle(coord, size: int):
+    """Return the evenly sampled coordinate moved on half a window."""
+    run = coord.runs[0]
+    if not (isinstance(run, Grid) and run.exact):
+        return coord.update_limits(min=coord.min() + coord.step * (size - 1) / 2)
+    # An exact grid counts ticks: its ideal origin moves, so the step stays.
+    step = Fraction(run.step_num, run.step_den)
+    centre = run.ideal_origin + step * (size - 1) / 2
+    if coord.dtype.kind in "iu" and centre.denominator != 1:
+        # Integer labels cannot hold half of one; the middles are floats.
+        start, step, shape = float(centre), float(step), coord.shape
+        return get_coord(start=start, step=step, shape=shape, units=coord.units)
+    den = math.lcm(run.step_den, centre.denominator)
+    origin = math.floor(centre)
+    phase = int((centre - origin) * den)
+    grid = Grid(origin, int(step * den), den, len(coord), phase=phase)
+    return get_coord(runs=(grid,), dtype=coord.dtype, units=coord.units)
 
 
 def _check_options(ends: str, align: str) -> None:
@@ -161,6 +184,8 @@ class WindowReduce(PatchProcessor):
         if self.ends == "drop":
             kept, total = slice(first * step, (first + valid) * step, step), valid
         coords = meta.coords
+        if self.align == "middle":
+            coords = coords.update(**{dim: _middle(coords.get_coord(dim), size)})
         # A window at every sample, the usual one, keeps every label.
         if kept != slice(None, None, 1):
             coords, _ = coords.isel(**{dim: kept})
@@ -241,7 +266,10 @@ class WindowReduce(PatchProcessor):
             data = data.astype(fill_dtype(data.dtype, self.fill), copy=False)
             data = np.pad(data, width, constant_values=self.fill)
             return self._complete(data, before=0, first=0, valid=total, **where)
-        whole = self._whole(data, before=before, total=total, **where)
+        partial = self.ends == "partial"
+        whole = None
+        if not partial:  # pandas leaves the incomplete windows NaN
+            whole = self._whole(data, before=before, total=total, **where)
         if whole is not None:
             return whole
         reduced = self._complete(data, before=before, first=first, valid=valid, **where)
@@ -253,7 +281,24 @@ class WindowReduce(PatchProcessor):
         place = [slice(None)] * out.ndim
         place[axis] = slice(first, first + valid)
         out[tuple(place)] = reduced
+        if partial:
+            ends = (*range(min(first, total)), *range(first + valid, total))
+            self._partial(data, out, ends, before=before, **where)
         return out
+
+    def _partial(self, data, out, ends, *, axis, size, step, before):
+        """Reduce, in place, the windows `ends` of `out` over the samples they have."""
+        named = isinstance(self.function, str)
+        function = _REDUCERS[self.function] if named else self.function
+        kwargs = self.function_kwargs or {}
+        pick = [slice(None)] * data.ndim
+        for k in ends:
+            start = k * step - before
+            pick[axis] = slice(max(start, 0), start + size)
+            # Shaped as `_complete` hands windows over: one window at `axis`.
+            window = np.expand_dims(np.moveaxis(data[tuple(pick)], axis, -1), axis)
+            pick[axis] = slice(k, k + 1)
+            out[tuple(pick)] = function(window, *self.function_args, axis=-1, **kwargs)
 
 
 # The most samples of a dimension which is not windowed that the dtype of a
@@ -1388,7 +1433,8 @@ class PatchWindow:
             One value for each window, in float64 (complex for complex
             data), along the windowed dimension. A window is labelled by
             one of the input's samples, the one its `align` names, so with
-            a step of one sample the patch keeps its shape and coordinates.
+            a step of one sample the patch keeps its shape and coordinates;
+            ``align="middle"`` labels it halfway between its ends instead.
 
         Examples
         --------
@@ -1415,10 +1461,10 @@ class PatchWindow:
         if self.blend_taper is not None or self.analysis is not None:
             msg = "A reduction blends nothing, so it takes no taper or analysis."
             raise ParameterError(msg)
-        if self.fill is not None and self.ends == "drop":
+        if self.fill is not None and self.ends != "pad":
             msg = (
                 "fill completes the windows which reach past the data and "
-                "ends='drop' leaves them out; give one or the other."
+                f"ends={self.ends!r} does not; give one or the other."
             )
             raise ParameterError(msg)
         return WindowReduce(

@@ -8,6 +8,7 @@ import pickle
 import sys
 import tracemalloc
 import warnings
+from fractions import Fraction
 from typing import ClassVar
 
 import numpy as np
@@ -87,16 +88,19 @@ class TestDeclaration:
         with pytest.raises(ParameterError, match="single number"):
             patch.window(time=0.5, fill=fill)
 
-    @pytest.mark.parametrize("option", ({"ends": "shift"}, {"align": "middle"}))
-    def test_unknown_option_refused(self, patch, option):
-        """A misspelt option is refused when the window is declared."""
-        with pytest.raises(ParameterError, match="must be one of"):
+    @pytest.mark.parametrize(
+        "option, choice",
+        (({"ends": "shift"}, "'partial'"), ({"align": "centre"}, "'middle'")),
+    )
+    def test_unknown_option_refused(self, patch, option, choice):
+        """A misspelt option is refused when declared, naming every choice."""
+        with pytest.raises(ParameterError, match=f"must be one of .*{choice}"):
             patch.window(time=0.5, **option)
 
     def test_the_operation_checks_too(self, patch):
         """The operation behind a reduction refuses the same misspellings."""
         with pytest.raises(ParameterError, match="must be one of"):
-            WindowReduce("mean", time=3, samples=True, align="middle")(patch)
+            WindowReduce("mean", time=3, samples=True, align="centre")(patch)
 
     def test_unknown_dimension_refused(self, patch):
         """A dimension the patch lacks is refused by the operation."""
@@ -346,6 +350,134 @@ class TestReduce:
         lazy = dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
         with pytest.raises(LazyOperationError):
             lazy.window(time=3, samples=True).mean()
+
+
+class TestBlocks:
+    """align='middle' labels a window at its centre; ends='partial' keeps short ones."""
+
+    @staticmethod
+    def _ramp(coord):
+        """A patch counting up along x, labelled by `coord`."""
+        data = np.arange(float(len(coord)))
+        return dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+
+    def test_pairs(self):
+        """The issue's channel pairs: (0, 1), (2, 3), (4, 5), labelled between."""
+        patch = dc.get_example_patch().select(distance=(0, 6), samples=True)
+        patch = patch.new(data=np.arange(6.0)[:, None] * np.ones(patch.shape))
+        window = {"distance": 2, "step": 2, "samples": True, "align": "middle"}
+        out = patch.window(**window, ends="drop").mean()
+        np.testing.assert_array_equal(out.data[:, 0], [0.5, 2.5, 4.5])
+        np.testing.assert_array_equal(out.get_array("distance"), [0.5, 2.5, 4.5])
+        assert out.get_coord("distance").step == 2
+
+    @pytest.mark.parametrize(
+        "size, values, labels",
+        ((2, [0.5, 2.5, 4.5], [0.5, 2.5, 4.5]), (3, [1, 4], [1, 4])),
+    )
+    def test_odd_and_even(self, ramp, size, values, labels):
+        """Blocks start at the first sample; integer labels stay whole when they can."""
+        window = {"time": size, "step": size, "samples": True, "align": "middle"}
+        out = ramp.window(**window, ends="drop").mean()
+        np.testing.assert_array_equal(out.data, values)
+        labels_out = out.get_array("time")
+        np.testing.assert_array_equal(labels_out, labels)
+        assert labels_out.dtype.kind == ("i" if size == 3 else "f")
+
+    def test_overlapping(self, ramp):
+        """Overlapping windows are labelled at their centres too; NaN past the end."""
+        out = ramp.window(time=4, samples=True, align="middle").mean()
+        np.testing.assert_array_equal(out.data, [1.5, 2.5, 3.5, np.nan, np.nan, np.nan])
+        np.testing.assert_array_equal(out.get_array("time"), np.arange(6) + 1.5)
+
+    def test_time(self, patch):
+        """Time labels move on half a window: a window of 4 is 1.5 steps on."""
+        window = patch.window(time=4, step=4, samples=True, align="middle", ends="drop")
+        out = window.mean()
+        time = patch.get_coord("time")
+        assert out.get_coord("time").min() == time.min() + 1.5 * time.step
+        assert out.get_coord("time").step == 4 * time.step
+
+    @pytest.mark.parametrize(
+        "start, step, labels",
+        ((10, -1, [9.5, 7.5, 5.5]), (6.0, -0.5, [5.75, 4.75, 3.75])),
+    )
+    def test_descending(self, start, step, labels):
+        """A descending coordinate is labelled between each pair, downwards."""
+        patch = self._ramp(dc.get_coord(start=start, step=step, shape=(6,)))
+        out = patch.window(x=2, step=2, samples=True, align="middle").mean()
+        np.testing.assert_array_equal(out.data, [0.5, 2.5, 4.5])
+        np.testing.assert_array_equal(out.get_array("x"), labels)
+
+    def test_exact_fractional_step(self):
+        """A 3 Hz time grid stays exact, its centres a sixth of a second on."""
+        start = np.datetime64("2020-01-01")
+        coord = dc.get_coord(start=start, step=Fraction(1, 3), shape=(6,))
+        out = self._ramp(coord).window(x=2, step=2, samples=True, align="middle").mean()
+        got = out.get_coord("x")
+        assert got.step_exact == Fraction(2, 3)
+        expected = dc.get_coord(start=start, step=Fraction(1, 6), shape=(12,))
+        np.testing.assert_array_equal(got.values, expected.values[1::4][:3])
+
+    @pytest.mark.parametrize(
+        "align, labels, means, maxes",
+        (
+            ("left", [0, 2, 4], [0.5, 2.5, 4], [1, 3, 4]),
+            ("middle", [0.5, 2.5, 4.5], [0.5, 2.5, 4], [1, 3, 4]),
+            ("center", [0, 2, 4], [0, 1.5, 3.5], [0, 2, 4]),
+            ("right", [0, 2, 4], [0, 1.5, 3.5], [0, 2, 4]),
+        ),
+    )
+    def test_partial(self, align, labels, means, maxes):
+        """Five samples in pairs: a short window is reduced over what it has."""
+        patch = self._ramp(dc.get_coord(start=0, step=1, shape=(5,)))
+        window = patch.window(x=2, step=2, samples=True, align=align, ends="partial")
+        np.testing.assert_array_equal(window.mean().data, means)
+        np.testing.assert_array_equal(window.max().data, maxes)
+        np.testing.assert_array_equal(window.mean().get_array("x"), labels)
+
+    def test_labels_run(self):
+        """Evenly sampled labels stored as they are move on half a window too."""
+        values = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+        coord = dc.get_coord(data=values, step=0.1, snap=False)
+        out = self._ramp(coord).window(x=2, step=2, samples=True, align="middle").mean()
+        np.testing.assert_array_equal(out.data, [0.5, 2.5, 4.5])
+        np.testing.assert_allclose(out.get_array("x"), [0.05, 0.25, 0.45])
+
+    def test_partial_windows_are_shaped_as_complete(self):
+        """A short window reaches the function with the same axes as a whole one."""
+        coords = {"x": np.arange(3), "time": np.arange(5)}
+        patch = dc.Patch(data=np.ones((3, 5)), coords=coords, dims=("x", "time"))
+        weights = np.arange(1.0, 4.0)
+
+        def weighted(windows, axis):
+            return np.mean(windows * weights[:, None, None], axis=axis)
+
+        window = patch.window(time=2, step=2, samples=True, ends="partial")
+        out = window.reduce(weighted)
+        np.testing.assert_array_equal(out.data, np.repeat(weights[:, None], 3, 1))
+
+    @pytest.mark.parametrize("size", (5, 401))
+    def test_partial_keeps_the_shape(self, patch, size):
+        """With a step of one, partial fills the ends pad leaves NaN."""
+        padded = patch.window(time=size, samples=True).reduce(np.mean)
+        partial = patch.window(time=size, samples=True, ends="partial").mean()
+        assert not np.isnan(partial.data).any()
+        inside = ~np.isnan(padded.data)
+        np.testing.assert_allclose(partial.data[inside], padded.data[inside])
+        first = patch.data[:, : size // 2 + 1].mean(axis=1)
+        np.testing.assert_allclose(partial.data[:, 0], first)
+
+    @pytest.mark.parametrize("option", ({"ends": "partial"}, {"align": "middle"}))
+    def test_blended_refuse_them(self, patch, option):
+        """Blended windows have no label to place and are always padded."""
+        with pytest.raises(ParameterError, match="apply to reductions"):
+            patch.window(time=0.5, **option).detrend("time")
+
+    def test_fill_with_partial_refused(self, ramp):
+        """A fill completes the windows which partial reduces as they are."""
+        with pytest.raises(ParameterError, match="one or the other"):
+            ramp.window(time=3, samples=True, ends="partial", fill=9.0).mean()
 
 
 class TestRollingParity:
