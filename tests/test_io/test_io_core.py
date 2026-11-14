@@ -859,6 +859,24 @@ class TestFiberIOOrder:
 
         assert self._names(manager) == ["_d", "_b", "_c", "_a"]
 
+    def test_after_moves_its_declarer(self, manager):
+        """`after` moves its reader back; one before it jumps no reader between."""
+        for name, extra in [("_a", {"after": ("_c",)}), ("_b", {}), ("_c", {})]:
+            type(name, (FiberIO,), {"name": name, "version": "1", **extra})
+        type("_d", (FiberIO,), {"name": "_d", "version": "1", "before": ("_a",)})
+        assert self._names(manager) == ["_b", "_c", "_d", "_a"]
+
+    def test_older_versions_after_every_format(self, manager):
+        """Each format's highest version is tried before any older version."""
+        for name, version in [("_a", "1"), ("_a", "2"), ("_b", "1")]:
+            type(name, (FiberIO,), {"name": name, "version": version})
+        ios = manager._get_prioritized_list(None)
+        assert [(x.name, x.version) for x in ios] == [
+            ("_a", "2"),
+            ("_b", "1"),
+            ("_a", "1"),
+        ]
+
     def test_before_beats_extension(self, manager):
         """A reader stating `before` precedes one preferring the extension."""
 
@@ -871,11 +889,16 @@ class TestFiberIOOrder:
         class _Other(FiberIO):
             name, version = "_other", "1"
 
+        class _Catch(FiberIO):  # a catch-all preferring the extension
+            name, version, fallback = "_catch", "1", True
+            preferred_extensions = ("zarr",)
+
         names = self._names(manager, extension="zarr")
-        assert names == ["_plugin", "_zarr", "_other"]
+        assert names == ["_plugin", "_zarr", "_catch", "_other"]
         # extensions no reader prefers share one cached order
         for ext in ("0001", "0002"):
-            assert self._names(manager, extension=ext) == ["_other", "_plugin", "_zarr"]
+            expected = ["_other", "_plugin", "_zarr", "_catch"]
+            assert self._names(manager, extension=ext) == expected
         assert set(manager._prioritized_cache) == {(None, "zarr"), (None, None)}
 
     def test_chain_and_ties(self, manager):
