@@ -145,7 +145,7 @@ class DASDAEV1(FiberIO):
         return patches, load
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type | None = None
     ) -> list[dc.PatchMeta]:
         """
         Get patch info by iterating waveform groups in the file.
@@ -154,6 +154,9 @@ class DASDAEV1(FiberIO):
         ----------
         resource
             A path to the file.
+        snap
+            None (default) snaps one list of labels only where every label is
+            within `max_shift` of a grid, keeping others silently.
         """
         return _get_contents_from_patch_groups_generic(resource, snap=snap)
 

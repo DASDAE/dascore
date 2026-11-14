@@ -279,14 +279,6 @@ class RunRecord:
     step: Any = None
 
 
-def contiguous_windows(coord) -> list[tuple[int, int]]:
-    """The positional ``(start, stop)`` window of each of a coordinate's segments."""
-    if not hasattr(type(coord), "_run_records") or coord.evenly_sampled:
-        return [(0, len(coord))]
-    stops = np.cumsum([x.count for x in coord._run_records()]).tolist()
-    return list(zip([0, *stops[:-1]], stops, strict=True))
-
-
 # --- mesh edges for plotting
 
 

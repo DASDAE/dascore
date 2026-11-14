@@ -1236,7 +1236,7 @@ def _resolve_snap(fiber_io: FiberIO, snap, snap_dims=None) -> snap_type:
 
 def _check_snap_names(patches, snap: snap_type, fiber_io: FiberIO) -> None:
     """Raise if `snap` names what a patch has no snappable dimension of."""
-    if isinstance(snap, bool):
+    if snap is None or isinstance(snap, bool):
         return
     for patch in patches:
         for name in iterate(snap):

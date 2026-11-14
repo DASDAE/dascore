@@ -185,6 +185,20 @@ class TestWriterCoordinates:
             with pytest.raises(CoordError, match=r"2 segments.*split_gaps"):
                 dc.write(patch, path, fio.name, fio.version)
 
+    @pytest.mark.parametrize("second_start", [6.5, 5.3])
+    @pytest.mark.parametrize("fio", [NetCDFCFV18(), ZarrV3()], ids=_label)
+    def test_seam_off_the_grid_refused(self, fio, second_start, tmp_path):
+        """Segments on one step whose seam misses its grid have none to store."""
+        first = dc.get_coord(start=0.0, step=1.0, shape=(5,))
+        second = dc.get_coord(start=second_start, step=1.0, shape=(5,))
+        coord = dc.core.coords.concat_coords(first, second)
+        data = np.zeros(len(coord))
+        patch = dc.Patch(data=data, coords={"distance": coord}, dims=("distance",))
+        path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
+        with _skip_without_dependency(fio):
+            with pytest.raises(CoordError, match=r"2 segments.*split_gaps"):
+                dc.write(patch, path, fio.name, fio.version)
+
 
 class TestDASDAESegments:
     """DASDAE keeps a coordinate's segments and their steps."""

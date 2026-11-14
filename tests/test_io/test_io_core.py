@@ -22,7 +22,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.core.coords import get_coord
+from dascore.core.coords import Grid, _float_allowance, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     DependencyError,
@@ -456,13 +456,16 @@ class TestStoredCoord:
 
     @pytest.mark.parametrize("snap", [("time",), False])
     def test_unnamed_rounded_labels_are_their_grid(self, snap):
-        """Float labels within their stored precision of a grid are it, unnamed."""
+        """
+        Float labels within the float allowance of a grid are held as that
+        grid, on the step spanning them, even where snap does not name them.
+        """
         labels = np.linspace(4000, 4009.9, 100, dtype=np.float32)
         out = stored_coord(labels, snap, name="distance")
-        assert out.evenly_sampled
-        assert out.step == pytest.approx((labels[-1] - labels[0]) / 99)
-        ulps = 4 * np.spacing(labels.max())
-        np.testing.assert_allclose(out.values, labels, rtol=0, atol=ulps)
+        assert isinstance(out.runs[0], Grid) and out.runs_count == 1
+        assert out.step == (labels[-1] - labels[0]) / np.float32(99)
+        moved = np.abs(out.values - labels).max()
+        assert moved <= 2 * _float_allowance(labels, out.step)
 
     def test_named_labels_are_gridded(self, jittered_times):
         """A named coordinate spans its first and last labels evenly."""

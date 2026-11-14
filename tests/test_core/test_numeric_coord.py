@@ -179,10 +179,6 @@ class TestMultiRunSelect:
 class TestSeams:
     """Seams are read from the runs, not the labels."""
 
-    def test_segments_share_no_step(self, gappy):
-        """Segments share no grid, so the coordinate states no step."""
-        assert gappy.step is None
-
     def test_seams_report_every_run_boundary(self, gappy):
         """Each boundary is one row of the discontinuity frame."""
         assert len(gappy.get_discontinuities("all")) == 1

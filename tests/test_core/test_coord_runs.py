@@ -136,7 +136,21 @@ class TestDeclaredStep:
             coord = get_coord(data=kept, step=step)
         assert coord.runs_count == 1 and coord.step is None
         np.testing.assert_array_equal(coord.values, kept)
-        assert get_coord(data=kept[: 256 * 3], step=step).runs_count == 256
+
+    def test_integers_on_a_fractional_step_are_one_list(self):
+        """Integer labels on a non-integer stated step stay one int64 list."""
+        coord = get_coord(data=np.array([0, 1, 3], dtype=np.int64), step=0.5)
+        assert coord.runs_count == 1 and coord.step is None
+        assert coord.dtype == np.int64
+
+    @pytest.mark.parametrize("count", [1, 255, 256])
+    def test_at_or_under_the_limit_is_silent(self, count):
+        """Up to max_index_runs stretches a stated step makes segments, silently."""
+        kept = np.arange(4 * count, dtype=np.int64)
+        kept = kept[np.arange(4 * count) % 4 != 3]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert get_coord(data=kept, step=1).runs_count == count
 
     def test_stored_labels_state_no_step(self):
         """A step stated beside stored labels is no claim; labels state none."""
@@ -476,6 +490,15 @@ class TestReviewFindings:
         match = r"2 segments\. Use Patch\.snap_coords.*Patch\.split_gaps"
         with pytest.raises(CoordError, match=match) as error:
             patch.taper(time=0.1)
+        assert "fill_gaps" not in str(error.value)
+
+    def test_one_list_names_only_snap_coords(self):
+        """One list of labels has no gaps to fill, so only snap_coords is named."""
+        time = NumericCoord.from_labels(np.array([0.0, 1.1, 1.9, 3.0]))
+        patch = dc.Patch(data=np.zeros(4), coords={"time": time}, dims=("time",))
+        match = r"no step\. Use Patch\.snap_coords"
+        with pytest.raises(CoordError, match=match) as error:
+            patch.pass_filter(time=(None, 0.1))
         assert "fill_gaps" not in str(error.value)
 
     def test_median_spacing_ignores_orientation(self):

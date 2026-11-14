@@ -53,7 +53,7 @@ from dascore.utils.array import (
 from dascore.utils.hdf5 import create_dataset, staged_group
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import _uneven_message
-from dascore.utils.time import to_float, to_int
+from dascore.utils.time import to_int
 
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
@@ -415,29 +415,26 @@ def _node_step(attrs):
 
 def _read_coord(node, name, attrs2, snap):
     """
-    Rebuild one coordinate from its node, snapping it if `snap` and it is
-    one list of labels within half a step of a grid, and say whether
-    snapping moved its labels.
+    Rebuild one coordinate from its node, and say whether snapping moved it.
 
-    Segments and irregular labels are what was written, not a grid's noise,
-    so they read back as stored, without a warning; labels near a grid are
-    checked as every reader checks them (`stored_coord`).
+    Under the default `snap` (None) one list of labels is the grid its ends
+    fit where every label is within `max_shift` of it, else as stored,
+    silently; a `snap` naming it checks it as every reader does (rule 3).
     """
     coord = _read_stored_coord(node, name, attrs2)
-    if not (snap and isinstance(coord, NumericCoord) and coord.ndim == 1):
-        return coord, False
-    if coord.runs_count > 1 or len(coord) < 2:
+    plain = not isinstance(coord, NumericCoord) or coord.ndim != 1 or len(coord) < 2
+    if snap is False or plain or coord.evenly_sampled or coord.runs_count > 1:
         return coord, False
     values = np.asarray(coord.values)
-    if values.dtype.kind in "mM":
-        rel = to_float(values - values[0])
-    else:
-        rel = values.astype(np.float64) - float(values[0])
-    fit = rel[-1] / (len(rel) - 1)
-    # NaN and NaT are no grid's noise, so they fail this too
-    near = np.abs(rel / fit - np.arange(len(rel))) < 0.5
-    if coord.evenly_sampled or not np.all(near):
-        return coord, False
+    if snap is None and values.dtype.kind in "iufmM":
+        # in the labels' own ticks, from the origin, before any float
+        ticks = values.astype(np.int64) if values.dtype.kind in "umM" else values
+        with np.errstate(all="ignore"):
+            rel = np.asarray(ticks - ticks[0]).astype(np.float64)
+            fit = rel[-1] / (len(rel) - 1) * np.arange(len(rel))
+            off = np.abs(rel - fit) <= dc.get_config().max_shift * abs(fit[1])
+        if not (fit[1] and np.all(off)):  # NaN and NaT are near no grid
+            return coord, False
     out = stored_coord(values, True, name=name, where=node.file, units=coord.units)
     return out, not np.array_equal(out.values, values)
 
@@ -495,7 +492,7 @@ def _read_stored_coord(node, name, attrs2):
     return get_coord(data=array, units=units, step=step, snap=False)
 
 
-def _get_coords(patch_group, dims, attrs2, snap=True):
+def _get_coords(patch_group, dims, attrs2, snap=None):
     """
     Get the coordinates from a patch group.
 
@@ -510,7 +507,8 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
-        named = name in dims and should_snap(snap, name)
+        named = None if snap is None else should_snap(snap, name)
+        named = named if name in dims else False
         coord_dict[name], moved = _read_coord(node, name, attrs2, named)
         if moved:
             snapped.append(name)
@@ -553,7 +551,7 @@ def _get_patch_group(h5, source_patch_key=""):
     return resolve_keyed_source(waveforms, key, where=str(h5.filename))
 
 
-def _get_metadata_from_group(group, legacy: bool = True, snap=True):
+def _get_metadata_from_group(group, legacy: bool = True, snap=None):
     """Build one data-less patch from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
@@ -699,7 +697,7 @@ def _get_file_version(h5):
     return unbyte(h5.attrs.get("__DASDAE_version__", ""))
 
 
-def _get_contents_from_patch_groups_generic(h5, snap=True, keys=frozenset()):
+def _get_contents_from_patch_groups_generic(h5, snap=None, keys=frozenset()):
     """Get DASDAE scan summaries from a generic HDF5 handle, of `keys` if given."""
     waveforms = h5.get("waveforms")
     if waveforms is None:

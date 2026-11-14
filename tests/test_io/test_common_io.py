@@ -1114,13 +1114,17 @@ class TestSnapConformance:
     """
 
     def test_default_is_in_the_signature(self, io_path_tuple):
-        """snap=None reads what the default the reader states reads."""
+        """
+        snap=None reads what the default the reader states reads; a default of
+        None (DASDAE's) decodes as True does, without the reader warning.
+        """
         io, path = io_path_tuple
         default = _default_snap(type(io))
-        assert isinstance(default, bool) or all(isinstance(x, str) for x in default)
+        names = default is None or isinstance(default, bool)
+        assert names or all(isinstance(x, str) for x in default)
         with skip_missing():
             implicit = dc.read(path)
-        explicit = dc.read(path, snap=default)
+        explicit = dc.read(path, snap=True if default is None else default)
         assert [x.coords for x in implicit] == [x.coords for x in explicit]
 
     def test_coordinates_are_one_segment(self, io_path_tuple):

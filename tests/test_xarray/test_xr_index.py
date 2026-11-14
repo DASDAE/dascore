@@ -13,6 +13,7 @@ from dascore.core.coords import (
     Grid,
     Labels,
     NumericCoord,
+    _float_allowance,
     concat_coords,
     get_coord,
 )
@@ -685,8 +686,9 @@ class TestFromVariables:
 
     def test_rounded_labels_keep_their_step(self):
         """
-        Float labels within rounding of a grid keep its step through the
-        index, and join a patch built by default from the same labels.
+        Float labels within the float allowance of a grid are held as that
+        grid through the index, on its exact step, and join a patch built by
+        default from the same labels.
         """
         dist = np.arange(300) * 0.1
         time = np.datetime64("2024-01-01") + np.arange(50) * np.timedelta64(10, "ms")
@@ -695,7 +697,10 @@ class TestFromVariables:
         array = xr.DataArray(data, coords={"distance": dist, "time": time}, dims=dims)
         indexed = array.drop_indexes("distance").set_xindex("distance", CoordIndex)
         patch = xarray_to_patch(indexed)
-        assert patch.get_coord("distance").step == pytest.approx(0.1)
+        coord = patch.get_coord("distance")
+        assert isinstance(coord.runs[0], Grid) and coord.step == 0.1
+        moved = np.abs(coord.values - dist).max()
+        assert moved <= 2 * _float_allowance(dist, 0.1)
         assert patch.pass_filter(distance=(None, 1)).shape == patch.shape
         later = {"distance": dist, "time": time + np.timedelta64(500, "ms")}
         built = dc.Patch(data=data, coords=later, dims=dims)

@@ -1591,11 +1591,8 @@ def _get_coord_dim_map(coords, dims):
             return coord
         stored = isinstance(coord, NumericCoord) and coord.runs_count == 1
         if stored and isinstance(coord.runs[0], Labels):
-            # Rebuilding from the run would hand back the same labels, so
-            # the values are read again for the inference to see them,
-            # exactly: they were stored as they are, and a scalar stays one.
-            snap = False if coord.ndim else None
-            out = get_coord(data=coord.values, units=coord.units, snap=snap)
+            # the run would rebuild as itself; the inference reads its labels
+            out = get_coord(data=coord.values, units=coord.units)
         else:
             if hasattr(coord, "model_dump"):
                 coord = coord.model_dump(exclude_defaults=True)

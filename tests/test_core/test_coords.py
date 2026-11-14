@@ -3631,11 +3631,18 @@ class TestDeclaredStepSnap:
         np.testing.assert_allclose(out.values, values, rtol=0, atol=ulps)
 
     def test_labels_off_the_grid_are_labels(self):
-        """Labels further off the declared grid than rounding state no step."""
+        """Labels further off the declared grid than its allowance state no step."""
         values = np.arange(300) * 0.1
-        values[1::2] += 0.1 * 2e-6
+        values[1::2] += 0.1 * 4e-6
         out = get_coord(data=values, step=0.1)
         assert out.step is None and np.array_equal(out.values, values)
+
+    @pytest.mark.parametrize(("offset", "grid"), [(1.9e-6, True), (2.1e-6, False)])
+    def test_allowance_boundary(self, offset, grid):
+        """Labels move onto the grid by up to two millionths of a step, no more."""
+        values = np.arange(300) * 0.1
+        values[1::2] += 0.1 * offset
+        assert get_coord(data=values, step=0.1).evenly_sampled is grid
 
     def test_labels_half_a_step_off_are_labels(self):
         """Labels half a step off the declared grid state no step."""
@@ -3652,6 +3659,51 @@ class TestDeclaredStepSnap:
         assert out.evenly_sampled and out.step == 0.1
         ulps = 8 * np.spacing(values.max())
         np.testing.assert_allclose(out.values, np.arange(300) * 0.1, atol=ulps, rtol=0)
+
+
+class TestLookupOnRoundedGrid:
+    """The labels a float grid was built from find their samples on it."""
+
+    @pytest.fixture(params=["linspace", "arange", "cumsum", "float32", "stated"])
+    def built(self, request):
+        """Labels and the grid built from them, which moves some of them."""
+        if request.param == "stated":
+            values = np.array([0.0, 1.0, 2.0, 3.0000015])
+            return values, get_coord(data=values, step=1.0)
+        values = {
+            "linspace": np.linspace(0, 1, 1001),
+            "arange": np.arange(300) * 0.1,
+            "cumsum": np.cumsum(np.full(1000, 0.1)),
+            "float32": (np.float32(-365.64) + np.arange(2268) * 4.0838).astype(
+                np.float32
+            ),
+        }[request.param]
+        return values, get_coord(data=values)
+
+    def test_moved(self, built):
+        """Each grid is evenly sampled and does not hold every label exactly."""
+        values, coord = built
+        assert coord.evenly_sampled
+        assert not np.array_equal(coord.values, values)
+
+    def test_lookups(self, built):
+        """
+        Each label finds its own sample: by array select, by order (in the
+        order asked), by next index, and as the end of a range.
+        """
+        values, coord = built
+        asked = np.array([1, len(values) // 2, len(values) - 1], dtype=np.int64)
+        _, mask = coord.select(values[asked])
+        assert np.array_equal(np.flatnonzero(mask), asked)
+        for one in asked:  # one label alone takes the scalar path
+            _, mask = coord.select(values[[one]])
+            assert np.array_equal(np.flatnonzero(mask), [one])
+        _, inds = coord.order(values[asked[::-1]])
+        assert np.array_equal(np.arange(len(values))[inds], asked[::-1])
+        out = coord.get_next_index(values)
+        assert np.array_equal(out, np.arange(len(values)))
+        assert len(coord.select((values[-2], values[-1]))[0]) == 2
+        assert len(coord.select((values[-1], values[-1]))[0]) == 1
 
 
 class TestSnapTimeUnits:

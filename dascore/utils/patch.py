@@ -1121,11 +1121,11 @@ def _uneven_message(name: str, coord, caller: str) -> str:
     """Why a coordinate is not evenly sampled for caller, and what fixes it."""
     count = getattr(coord, "runs_count", 1)
     why = f"it has {count} segments" if count > 1 else "it has no step"
-    split = ", Patch.split_gaps to split at them" if count > 1 else ""
-    snap = "Patch.snap_coords to put the labels on a grid"
-    fix = f"Patch.fill_gaps to fill gaps{split}, or {snap}"
-    if count > 1 and any(x.step is None for x in coord.segments):
-        # fill_gaps needs every segment on a grid, so snapping comes first
+    split = ", Patch.split_gaps to split at them"
+    fix = snap = "Patch.snap_coords to put the labels on a grid"
+    if count > 1 and all(x.step is not None for x in coord.segments):
+        fix = f"Patch.fill_gaps to fill gaps{split}, or {snap}"
+    elif count > 1:  # fill_gaps needs every segment on a grid; snap first
         fix = f"{snap}{split}"
     return (
         f"Coordinate {name} is not evenly sampled as required by {caller}: "

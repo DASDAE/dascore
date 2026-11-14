@@ -19,7 +19,7 @@ from dascore.core.coords import (
 from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae.utils import _read_stored_coord, _save_coord
 from dascore.warnings import SnapWarning
-from tests.conftest import join_patches
+from tests.conftest import join_patches, segment_layout
 
 T0 = np.datetime64("2020-01-01T00:00:00")
 MS = np.timedelta64(1, "ms")
@@ -349,14 +349,98 @@ class TestFilesWithAStepBesideLabels:
         assert exact.step is None and np.array_equal(exact.values, labels)
 
     def test_labels_off_their_step_read_as_stored(self, tmp_path):
-        """Labels past max_shift of a grid read back as stored, with a warning."""
+        """
+        Labels past max_shift of a grid read back as stored, silently and
+        unmarked by default, and with the reader warning under snap=True.
+        """
         jitter = np.tile([0, 300_000], 50).astype("m8[ns]")
         labels = T0.astype("M8[ns]") + np.arange(100) * MS + jitter
         path = self._old_file(tmp_path / "off.h5", labels, MS)
-        with pytest.warns(SnapWarning, match="stored time labels"):
-            time = dc.read(path)[0].get_coord("time")
+        exact = dc.read(path, snap=False)[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = dc.read(path)[0]
+        time = out.get_coord("time")
         assert time.step is None and time.runs_count == 1
         assert np.array_equal(time.values, labels)
+        assert out.attrs.data_id == exact.attrs.data_id
+        assert "_snapped_dims" not in dict(out.attrs)
+        with pytest.warns(SnapWarning, match="stored time labels"):
+            dc.read(path, snap=True)
+
+    def test_step_places_segments(self, tmp_path):
+        """Labels on the stored step skipping positions are its segments."""
+        labels = T0.astype("M8[ns]") + np.r_[np.arange(10), np.arange(15, 25)] * MS
+        path = self._old_file(tmp_path / "segments.h5", labels, MS)
+        time = dc.read(path)[0].get_coord("time")
+        assert [(len(x), x.step) for x in time.segments] == [(10, MS), (10, MS)]
+
+
+class TestDefaultSnap:
+    """
+    By default one stored list of labels is a grid where every label is within
+    max_shift of the grid its ends fit, and otherwise reads as stored, silently.
+    """
+
+    @staticmethod
+    def _write(path, labels):
+        """Write labels as the time coordinate of a small patch."""
+        coord = NumericCoord.from_labels(labels)
+        data = np.arange(len(labels), dtype=np.float64)
+        patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
+        return dc.write(patch, path, "DASDAE")
+
+    def test_grid_labels_are_not_expanded(self, tmp_path, monkeypatch):
+        """Scanning a grid reads none of its labels."""
+        path = dc.write(dc.get_example_patch(), tmp_path / "grid.h5", "DASDAE")
+        expanded = []
+        values = NumericCoord.values
+
+        def spy(coord):
+            expanded.append(coord.evenly_sampled)
+            return values.__get__(coord)
+
+        monkeypatch.setattr(NumericCoord, "values", property(spy))
+        dc.scan(path)
+        assert not any(expanded)
+
+    @pytest.mark.parametrize("snap", [None, True])
+    def test_large_integers_snap(self, tmp_path, snap):
+        """Integer labels near 1e18 a hundredth of a step off are their grid."""
+        labels = 10**18 + np.array([0, 100, 199, 300], dtype=np.int64)
+        path = self._write(tmp_path / "big.h5", labels)
+        time = dc.read(path, snap=snap)[0].get_coord("time")
+        assert time.evenly_sampled and time.step == 100
+
+    @pytest.mark.parametrize(
+        "labels",
+        [
+            T0.astype("M8[ns]") + np.delete(np.arange(21), 10) * MS,
+            np.arange(20) + np.tile([0.0, 0.25, -0.25, 0.0], 5),
+        ],
+        ids=["missing_sample", "quarter_step_off"],
+    )
+    def test_labels_off_a_grid_warn_only_when_named(self, tmp_path, labels):
+        """Labels past max_shift read silently by default, warning when named."""
+        path = self._write(tmp_path / "off.h5", labels)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            time = dc.read(path)[0].get_coord("time")
+        assert time.step is None
+        np.testing.assert_array_equal(time.values, labels)
+        for snap in (True, ("time",)):
+            with pytest.warns(SnapWarning, match="stored time labels"):
+                dc.read(path, snap=snap)
+
+    def test_dense_holes(self, tmp_path):
+        """A list holding many missing samples reads as stored, silently."""
+        kept = np.arange(1500)[np.arange(1500) % 3 != 1]
+        labels = T0.astype("M8[ns]") + kept * MS
+        path = self._write(tmp_path / "holes.h5", labels)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            time = dc.read(path)[0].get_coord("time")
+        assert time.step is None and np.array_equal(time.values, labels)
 
 
 class TestIrregularLabelsReadSilently:
@@ -369,6 +453,8 @@ class TestIrregularLabelsReadSilently:
             np.array([0.0, 1.0, np.nan, 3.0, 4.0]),
             np.array([0.0, 1.0, 2.0, 3.0, np.nan]),
             np.array(["2020-01-01", "2020-01-02", "NaT", "2020-01-04"], "M8[ns]"),
+            np.array([0.0, 1.0, 0.0]),
+            np.array([True, False, True]),
         ],
     )
     def test_read_silently(self, tmp_path, labels):
@@ -378,9 +464,19 @@ class TestIrregularLabelsReadSilently:
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
         path = dc.write(patch, tmp_path / "labels.h5", "DASDAE")
         with warnings.catch_warnings():
-            warnings.simplefilter("error", SnapWarning)
+            warnings.simplefilter("error")
             time = dc.read(path)[0].get_coord("time")
         assert time.step is None
+        np.testing.assert_array_equal(time.values, labels)
+
+    def test_named_irregular_labels_warn(self, tmp_path):
+        """Under snap=True irregular labels are checked, and warn, as in any reader."""
+        labels = T0.astype("M8[ns]") + np.array([0, 1, 3, 4, 9]) * MS
+        coord = NumericCoord.from_labels(labels)
+        patch = dc.Patch(data=np.zeros(5), coords={"time": coord}, dims=("time",))
+        path = dc.write(patch, tmp_path / "labels.h5", "DASDAE")
+        with pytest.warns(SnapWarning, match="stored time labels"):
+            time = dc.read(path, snap=True)[0].get_coord("time")
         np.testing.assert_array_equal(time.values, labels)
 
 
@@ -405,6 +501,7 @@ class TestMultiRunRoundTrip:
         (read,) = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
         out = read.get_coord("time")
         assert out == coord and out.step_exact == coord.step_exact
+        assert segment_layout(out) == segment_layout(coord)
         np.testing.assert_array_equal(read.data, patch.data)
 
 

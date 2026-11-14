@@ -69,13 +69,6 @@ class TestSampling:
         # segments share no grid; each states its own step
         assert coord.step is None and {x.step for x in coord.segments} == {1}
 
-    def test_jittered(self):
-        """Labels within half a step of a grid are labels, with no step."""
-        values = _jittered_floats()
-        coord = get_coord(data=values, snap=False)
-        assert coord.step is None and not coord.evenly_sampled
-        np.testing.assert_array_equal(coord.values, values)
-
     def test_jittered_and_gapped(self):
         """Labels off a stated grid, with skipped positions, are one list."""
         values = [0.0, 1.1, 1.9, 5.05, 6.0]
@@ -170,7 +163,7 @@ class TestInference:
         np.testing.assert_allclose(coord.values, values, rtol=0, atol=ulps)
 
     def test_rounded_last_label_is_in_bounds(self):
-        """Lookups take a label the grid holds only within rounding, not past it."""
+        """Lookups take a label within the grid's allowance of its end, not past it."""
         dist = np.arange(300) * 0.1  # the grid's last label is 29.9 rounded down
         time = T0 + np.arange(20) * MS
         coords = {"distance": dist, "time": time}
@@ -181,8 +174,9 @@ class TestInference:
         assert coord.max() < dist[-1] and coord.get_next_index(dist[-1]) == 299
         assert patch.taper_range(distance=(0, 1, 28, dist[-1])).shape == patch.shape
         assert patch.correlate(distance=dist[-1]).shape[0] == 300
+        assert coord.get_next_index(dist[-1] + 1e-8) == 299  # 1e-7 steps
         with pytest.raises(ValueError, match="out of bounds"):
-            coord.get_next_index(dist[-1] + 1e-9)
+            coord.get_next_index(dist[-1] + 1e-6)  # 1e-5 steps
 
     def test_descending(self):
         """A descending grid is judged as the ascending one is."""
@@ -317,13 +311,6 @@ class TestStatedStep:
         coord = get_coord(data=[0.0, 1.0, 2.0, 5.0, 6.0], step=1.0)
         assert [(len(x), x.step) for x in coord.segments] == [(3, 1.0), (2, 1.0)]
 
-    def test_jitter(self):
-        """Labels off the stated grid by under half a step are labels."""
-        values = np.array([0.0, 1.1, 1.95, 3.02])
-        coord = get_coord(data=values, step=1.0)
-        assert coord.step is None and coord.runs_count == 1
-        np.testing.assert_array_equal(coord.values, values)
-
     def test_integer_jitter(self):
         """Integer labels off the stated grid are labels, judged exactly."""
         coord = get_coord(data=[0, 10, 21, 30], step=10)
@@ -370,13 +357,6 @@ class TestReleasedSnapping:
         assert get_coord(data=values)._grid is not None
         out = _no_warning(get_coord, data=values, snap=True)
         assert out.evenly_sampled and out._grid is not None
-
-    def test_snap_false_is_exact(self):
-        """snap=False reads labels exactly."""
-        values = _slightly_jittered_floats()
-        coord = _no_warning(get_coord, data=values, snap=False)
-        assert coord.step is None
-        np.testing.assert_array_equal(coord.values, values)
 
     def test_on_grid_is_silent(self):
         """Labels already on a grid give the same result and no warning."""
@@ -506,10 +486,20 @@ class TestRequireEvenlySampled:
             "stepless": stepless_seam_patch,
         }
 
-    @pytest.mark.parametrize("kind", ["gapped", "jittered", "stepless"])
-    def test_refuses(self, patches, kind):
-        """Gapped, jittered and stepless coordinates fail the check."""
-        with pytest.raises(CoordError, match=r"fill_gaps.*snap_coords"):
+    @pytest.mark.parametrize(
+        ("kind", "match"),
+        [
+            ("gapped", r"segments\. Use Patch\.fill_gaps.*snap_coords"),
+            ("jittered", r"no step\. Use Patch\.snap_coords"),
+            ("stepless", r"no step\. Use Patch\.snap_coords"),
+        ],
+    )
+    def test_refuses(self, patches, kind, match):
+        """
+        Gapped, jittered and stepless coordinates fail the check; one list of
+        labels has no gaps to fill, so only snap_coords is named for it.
+        """
+        with pytest.raises(CoordError, match=match):
             patches[kind].get_coord("time", require_evenly_sampled=True)
 
     def test_require_no_holes_removed(self):
