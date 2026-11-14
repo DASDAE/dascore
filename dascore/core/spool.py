@@ -2228,8 +2228,8 @@ class Spool(NodeRepr, NamespaceOwner):
         boundaries, so it plans over the current output rows themselves
         (loaded through the plan resolver). Patch-local sample and relative
         residuals adjust the working envelopes so plans reflect the
-        loading truth. Rows are cut at their holes along `dim` and
-        `cut_dims`, unless not `runs`.
+        loading truth. Rows are cut between their segments along `dim`
+        and `cut_dims`, unless not `runs`.
         """
         from dascore.io.index.planned import (  # noqa: PLC0415
             PlanResolver,
@@ -2244,7 +2244,7 @@ class Spool(NodeRepr, NamespaceOwner):
             same_dim = False
         base = collapse_working_df(self._catalog) if same_dim else None
         # a collapsed member is cut where its output's runs say (eg the
-        # segments a concatenation kept), else each row at its own holes
+        # segments a concatenation kept), else each row at its own seams
         cut = runs
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
@@ -2265,7 +2265,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _with_runs(self, df: pd.DataFrame, dim: str, modified=False) -> pd.DataFrame:
         """
-        The relation with each patch cut at the holes its coordinate holds.
+        The relation with each patch cut at the gaps between its segments.
 
         The index states a coordinate's runs (see
         [`with_runs`](`dascore.utils.chunk_plan.with_runs`)); one stored
@@ -2280,13 +2280,16 @@ class Spool(NodeRepr, NamespaceOwner):
         if any(samples or relative for _, samples, relative in residuals):
             # a sample or relative selection resolves against the loaded
             # coordinate, which the stored runs do not know, so it is read
-            indexed = {k: v._replace(records=None) for k, v in indexed.items()}
+            indexed = dict.fromkeys(indexed)
 
         def read(row):
             """The row's coordinate, read from its source and selected as it loads."""
             rows = catalog.to_df()
             (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
-            coords = _source_manager(catalog.resolver, source, files, projection=dim)
+            # a selection on another coordinate needs that one to replay
+            whole = any(set(x) - {dim} for x, _, _ in residuals)
+            projection = None if whole else dim
+            coords = _source_manager(catalog.resolver, source, files, projection)
             if coords is None:
                 return None
             return _select_manager(coords, residuals).coord_map.get(dim)

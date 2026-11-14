@@ -54,25 +54,22 @@ def _time_record(patch):
 
 
 class TestCoordinateRecords:
-    """A coordinate record states the step, flags, offsets and runs."""
+    """A coordinate record states the step of a grid and the segments as runs."""
 
     def test_gapped(self, gapped_patch):
         """Segments state no shared step; each run states its own."""
         time = _time_record(gapped_patch)
         assert time.step_int is None and not time.is_exact
-        assert not time.gapped and not time.jittered
         assert time.run_count == len(time.runs) == 2
-        # (count, position, ..., step in ns): no position, each its step
-        assert [(x[1], x[-1]) for x in time.runs] == [(None, 4_000_000)] * 2
+        # (count, ..., step in ns): each run states its own step
+        assert [x[-1] for x in time.runs] == [4_000_000] * 2
 
     def test_jittered(self):
-        """A jittered coordinate keeps its step and its offset bounds."""
+        """Labels off the grid of a stated step are one run, with no step."""
         coord = get_coord(data=[0.0, 1.1, 1.95, 3.02], step=1.0)
         patch = dc.Patch(data=np.zeros(4), coords={"time": coord}, dims=("time",))
         time = _time_record(patch)
-        assert time.step_float == 1.0 and time.jittered and not time.gapped
-        assert time.offset_min == pytest.approx(-0.05)
-        assert time.offset_max == pytest.approx(0.1)
+        assert time.step_float is None and not time.is_exact
         assert time.run_count == 1 and time.runs == ()
 
     def test_contiguous_rows_store_no_runs(self):
@@ -113,12 +110,12 @@ class TestStoredRuns:
         backend.write_sources(_records(gapped_patch))
         runs = backend._fetch_df("SELECT * FROM coord_runs ORDER BY run")
         assert runs["run"].tolist() == [0, 1]
-        assert runs["position"].isna().all()  # segments have no positions
+        assert "position" not in runs.columns  # segments share no grid
         defs = backend._fetch_df("SELECT * FROM coord_defs WHERE run_count = 2")
-        assert defs["gapped"].tolist() == [0]
+        assert len(defs) == 1
 
     def test_export_keeps_runs(self, gapped_patch):
-        """Records exported for a union carry the runs and flags."""
+        """Records exported for a union carry the runs."""
         backend = get_backend(":memory:")
         backend.write_sources(_records(gapped_patch))
         (source,) = backend.export_records()
@@ -251,7 +248,7 @@ class TestPlans:
         """Chunk splits at the hole, and its outputs report it as a gap."""
         chunked = gapped_directory.chunk(time=None)
         assert len(chunked) == 3
-        assert not any(x.get_coord("time").gapped for x in chunked)
+        assert all(x.get_coord("time").runs_count == 1 for x in chunked)
         assert chunked.get_gaps().sort_values("time_min")["gap_size"].iloc[0] == HOLE
         joined = gapped_directory.fill_gaps("time")
         assert joined.get_gaps().empty
@@ -312,7 +309,7 @@ class TestReviewFindings:
         patch = dc.Patch(data=np.zeros(6), coords={"time": time}, dims=("time",))
         view = dc.spool([patch]).select(time=(3, 6), samples=True)
         (loaded,) = view
-        assert not loaded.get_coord("time").gapped
+        assert loaded.get_coord("time").runs_count == 1
         assert view.get_gaps().empty
 
     def test_replanning_keeps_runs_of_another_dim(self, gapped_patch):
@@ -392,4 +389,4 @@ class TestReviewFindings:
         chunked = gapped_directory.chunk(time=None)
         backend = chunked._catalog.backend
         assert backend._fetch_df("SELECT * FROM coord_runs").empty
-        assert backend._fetch_df("SELECT * FROM coord_defs WHERE gapped = 1").empty
+        assert backend._fetch_df("SELECT * FROM coord_defs WHERE run_count > 1").empty

@@ -62,7 +62,6 @@ from dascore.utils.gaps import (
     DEFAULT_TOLERANCE,
     GapTolerance,
     _quantity_to_dim_value,
-    contiguous_runs,
 )
 from dascore.utils.misc import (
     _CanonicalRange,
@@ -153,11 +152,11 @@ class ChunkPlan:
 
 def _stretches(df: pd.DataFrame, dim: str, indexed, read, key="_patch_row"):
     """
-    The rows cut at their holes, and each stretch clipped to its row.
+    The rows cut between their segments, and each segment clipped to its row.
 
     Returns the positions of the rows cut, and ``(position, low, high,
-    step, first)`` for each stretch which survives its row's envelope,
-    ``first`` being the stretch's first label, or None where its stated
+    step, first)`` for each segment which survives its row's envelope,
+    ``first`` being the segment's first label, or None where its stated
     step is rounded off its true spacing, so no lattice counts from it.
     """
     lo, hi = f"{dim}_min", f"{dim}_max"
@@ -167,12 +166,10 @@ def _stretches(df: pd.DataFrame, dim: str, indexed, read, key="_patch_row"):
     candidates = df[key].isin(list(indexed)) & df[lo].notna()
     for index in np.flatnonzero(candidates.to_numpy()):
         row = df.iloc[index]
-        runs = indexed[row[key]]
-        records = runs.records
-        if records is None and (coord := read(row)) is not None:
-            records = coord._run_records()
-        stretches = contiguous_runs(records or (), runs.step, runs.jittered)
-        if len(stretches) < 2:
+        stretches = indexed[row[key]]
+        if stretches is None and (coord := read(row)) is not None:
+            stretches = coord._run_records()
+        if len(stretches or ()) < 2:
             continue
         cut.append(index)
         for stretch in stretches:
@@ -187,15 +184,14 @@ def _stretches(df: pd.DataFrame, dim: str, indexed, read, key="_patch_row"):
 
 def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
     """
-    The relation with each row cut into the stretches its coordinate's runs leave.
+    The relation with each row cut into its coordinate's segments.
 
-    ``indexed`` maps a ``_patch_row`` to the runs its index states (an
-    `IndexedRuns`), and ``read`` returns a row's coordinate where the index
-    stored it without them. Each stretch
-    [`contiguous_runs`](`dascore.utils.gaps.contiguous_runs`) joins is the
-    row with the stretch's envelope and step, clipped to the row's own
-    envelope, so a selection trims it; a row none of whose stretches
-    survive the clip lies in a hole and is dropped. ``modified`` marks the
+    ``indexed`` maps a ``_patch_row`` to the run records its index states
+    (None where it stored the coordinate without them), and ``read``
+    returns a row's coordinate in that case. Each segment is the row with
+    the segment's envelope and step, clipped to the row's own envelope, so
+    a selection trims it; a row none of whose segments survive the clip
+    lies in a gap and is dropped. ``modified`` marks the
     stretches to load as selections of their patch, and `coalesce_runs`
     reads the stretches landing in one output back as one member. ``key``
     names the column ``indexed`` is keyed by.
@@ -209,7 +205,9 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
         _set_column(split, col, [x[num] for x in stretches], df)
     # each stretch's samples count from its own first label
     split[f"_{dim}_source_envelope"] = [{names[0]: x[4]} for x in stretches]
-    split = split.drop(columns=f"_{dim}_src_low", errors="ignore")
+    # a segment is no longer its source's whole range
+    ends = [f"_{dim}_src_{x}" for x in ("low", "high", "step")]
+    split = split.drop(columns=ends, errors="ignore")
     if modified:
         split["_modified"] = True
     kept = df.drop(index=df.index[cut])

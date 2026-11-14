@@ -17,7 +17,6 @@ import warnings
 import weakref
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -71,7 +70,6 @@ from dascore.io.index.schema import (
     quote,
 )
 from dascore.units import convert_units
-from dascore.utils.gaps import RunRecord
 
 # Structural columns whose ns-integer storage maps to pandas time types.
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
@@ -1321,8 +1319,7 @@ class SQLiteIndexBackend:
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
-        # the relation states the step of a range only; a jittered or
-        # gapped coordinate's step is the index's (see coord_runs)
+        # the relation states the step of a range only
         coords.loc[coords["is_exact"] == 0, "_env_step"] = None
         # the exact grid where the envelope cannot restate it (None
         # elsewhere), so a row rebuilds the coordinate the file holds
@@ -1510,7 +1507,7 @@ class SQLiteIndexBackend:
         """Whether any coordinate the index holds is several runs."""
         return not self._fetch_df(_SEVERAL_RUNS + " LIMIT 1").empty
 
-    def coord_runs(self, name: str, patch_rows) -> dict[int, IndexedRuns]:
+    def coord_runs(self, name: str, patch_rows) -> dict[int, tuple | None]:
         """
         The runs of coordinate ``name``, by patch row, where it holds several.
 
@@ -1523,8 +1520,7 @@ class SQLiteIndexBackend:
             return {}
         ids = [int(x) for x in patch_rows]
         sql = (
-            "SELECT pc.patch_row, cd.value_kind, cd.is_relative, cd.jittered, "
-            "cd.step_float AS coord_step_float, cd.step_int AS coord_step_int, "
+            "SELECT pc.patch_row, cd.value_kind, cd.is_relative, "
             f"cr.{', cr.'.join(CoordRunRow._fields[2:])} "
             "FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
@@ -1542,14 +1538,9 @@ class SQLiteIndexBackend:
             grouped.setdefault(row[0], []).append(row)
         out = {}
         for patch_row, group in grouped.items():
-            _, kind, relative, jittered, step_float, step_int = group[0][:6]
-            if kind == "time":
-                step = None if step_int is None else np.timedelta64(step_int, "ns")
-            else:
-                step = step_float
-            stored = [x[6:] for x in group if x[6] is not None]
-            records = index_runs(stored, kind, not relative) if stored else None
-            out[patch_row] = IndexedRuns(records, step, bool(jittered))
+            _, kind, relative = group[0][:3]
+            stored = [x[3:] for x in group if x[3] is not None]
+            out[patch_row] = index_runs(stored, kind, not relative) if stored else None
         return out
 
     def patch_runs(self, patch_rows) -> dict[int, dict[str, CoordRecord]]:
@@ -1595,15 +1586,6 @@ class SQLiteIndexBackend:
 
 # The definitions holding several runs, which a partial index lists.
 _SEVERAL_RUNS = "SELECT 1 FROM coord_defs WHERE run_count > 1"
-
-
-class IndexedRuns(NamedTuple):
-    """A coordinate's runs as an index states them, with its step and jitter."""
-
-    # None where the coordinate was stored without them
-    records: tuple[RunRecord, ...] | None
-    step: Any
-    jittered: bool
 
 
 def get_backend(path: str | Path, read_only: bool = False) -> SQLiteIndexBackend:

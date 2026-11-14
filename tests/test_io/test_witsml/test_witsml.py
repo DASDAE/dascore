@@ -250,10 +250,13 @@ class TestDistance:
         ],
     )
     def test_snap_false(self, name, expected, request):
-        """The stored index labels are kept exactly."""
+        """The stored labels are kept, as a grid where within rounding of one."""
         path = request.getfixturevalue(name)
         coord = dc.read(path, snap=False)[0].get_coord("distance")
-        assert coord.values.tolist() == expected
+        # brady's labels are a grid within float rounding; cranfield's are not
+        assert coord.evenly_sampled == (name == "brady_path")
+        ulps = 4 * np.spacing(np.abs(expected).max())
+        np.testing.assert_allclose(coord.values, expected, rtol=0, atol=ulps)
 
     def test_stored_ends(self, tmp_path):
         """Without a stated start and end index, the grid spans the stored ends."""

@@ -124,7 +124,7 @@ class TestStoredLayout:
         stored_ends = np.array([stored.coords.min("time"), stored.coords.max("time")])
         assert np.all(np.abs(ends - stored_ends) <= np.timedelta64(15_625, "us"))
         assert distance == stored.get_coord("distance")
-        assert distance.jittered
+        assert distance.step is None  # sensor positions, as labels
 
     def test_real_file_signal_boundary(self):
         """The real recording has exactly the declared payload after both arrays."""

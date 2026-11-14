@@ -148,9 +148,10 @@ class TestPassFilter:
 
     def test_uneven_sampling_raises(self, wacky_dim_patch):
         """A nice error message should be raised if the samples aren't even."""
-        match = r"is not evenly sampled.*fill_gaps.*snap_coords"
-        with pytest.raises(CoordDataError, match=match):
+        match = r"is not evenly sampled.*no step\. Use Patch\.snap_coords"
+        with pytest.raises(CoordDataError, match=match) as error:
             wacky_dim_patch.pass_filter(time=(10, 100))
+        assert "fill_gaps" not in str(error.value)  # one list has no gaps
 
     def test_specify_units_simple(self, random_patch):
         """Ensure units can be specified in patch arguments."""
@@ -308,11 +309,12 @@ class TestSobelFilter:
         with pytest.raises(CoordError, match="segments"):
             holed_patch.sobel_filter("distance")
 
-    def test_jitter_filters(self, jittered_patch, jittered_forms):
+    def test_jitter_filters(self, jittered_patch):
         """One list of jittered labels is filtered, not refused, as labels are."""
-        labels, _ = jittered_forms
         out = jittered_patch.sobel_filter("time")
-        assert np.allclose(out.data, labels.sobel_filter("time").data)
+        assert out.get_coord("time") == jittered_patch.get_coord("time")
+        expected = ndimage.sobel(jittered_patch.data, axis=1, mode="reflect")
+        np.testing.assert_allclose(out.data, expected)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still filters."""

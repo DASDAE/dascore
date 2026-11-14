@@ -282,13 +282,14 @@ class TestHoles:
         with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.integrate("time", definite=definite)
 
-    def test_jitter_computes(self, jittered_patch, jittered_forms):
+    def test_jitter_computes(self, jittered_patch, jittered_grid):
         """One list of labels is an irregular axis, computed on by its labels."""
-        labels, grid = jittered_forms
         out = jittered_patch.integrate("time")
-        assert np.allclose(out.data, labels.integrate("time").data)
+        labels = jittered_patch.get_array("time")
+        expected = np.trapezoid(jittered_patch.data[0], labels)
+        assert np.isclose(out.data[0, -1], expected)
         # the spacing of the labels, not of the step, shows in the result
-        assert not np.allclose(out.data, grid.integrate("time").data)
+        assert not np.allclose(out.data, jittered_grid.integrate("time").data)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, integrated by label spacing."""

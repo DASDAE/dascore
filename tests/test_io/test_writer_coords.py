@@ -1,15 +1,15 @@
 """
-Every writer keeps a coordinate's step, flags and holes, or refuses.
+Every writer keeps a coordinate's step and segments, or refuses.
 
 Rule 13 of the coordinate guidelines (`notes/coordinates.qmd`): a writer
 never silently splits, stretches, fills or drops a step; a format which
-cannot store holes or jitter raises, saying to regularize or split first.
+cannot store segments or labels raises, saying to regularize or split first.
 """
 
 from __future__ import annotations
 
 import pickle
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 import numpy as np
 import pytest
@@ -27,6 +27,7 @@ from dascore.io.segy.core import SegyV0_0, SegyV0_100, SegyV1_0, SegyV2_0, SegyV
 from dascore.io.wav import WavIO
 from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 from tests.conftest import segment_layout
 
 # Every writer DASCore ships, checked against the plugin manager below.
@@ -97,7 +98,7 @@ def _stored(fio, path):
 
 
 class TestWriterCoordinates:
-    """Each writer keeps a coordinate's step, flags and holes, or refuses."""
+    """Each writer keeps a coordinate's step and segments, or refuses."""
 
     def test_every_writer_listed(self):
         """The list covers every writer DASCore registers."""
@@ -126,7 +127,8 @@ class TestWriterCoordinates:
         keeps = (
             case in {"even", "one channel"}
             or _label(fio) in EXACT
-            or (_label(fio) == "DASDAE 1" and case == "stepless")
+            # jittered labels state no step, as stepless ones do
+            or (_label(fio) == "DASDAE 1" and case in {"stepless", "jittered"})
             or (time_only and case == "distance gaps")
         )
         args = (patch, path, fio.name, fio.version)
@@ -143,7 +145,7 @@ class TestWriterCoordinates:
         for dim in ["time"] if time_only else patch.dims:
             expected, got = patch.get_coord(dim), meta.get_coord(dim)
             assert got.step == expected.step
-            assert (got.jittered, got.gapped) == (expected.jittered, expected.gapped)
+            assert segment_layout(got) == segment_layout(expected)
             assert np.array_equal(got.values, expected.values)
 
     @pytest.mark.parametrize("fio", WRITERS, ids=_label)
@@ -175,6 +177,20 @@ class TestWriterCoordinates:
         """Segments sharing no step have none to store beside their labels."""
         first = dc.get_coord(start=0.0, step=1.0, shape=(4,))
         second = dc.get_coord(start=10.0, step=2.0, shape=(3,))
+        coord = dc.core.coords.concat_coords(first, second)
+        data = np.zeros(len(coord))
+        patch = dc.Patch(data=data, coords={"distance": coord}, dims=("distance",))
+        path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
+        with _skip_without_dependency(fio):
+            with pytest.raises(CoordError, match=r"2 segments.*split_gaps"):
+                dc.write(patch, path, fio.name, fio.version)
+
+    @pytest.mark.parametrize("second_start", [6.5, 5.3])
+    @pytest.mark.parametrize("fio", [NetCDFCFV18(), ZarrV3()], ids=_label)
+    def test_seam_off_the_grid_refused(self, fio, second_start, tmp_path):
+        """Segments on one step whose seam misses its grid have none to store."""
+        first = dc.get_coord(start=0.0, step=1.0, shape=(5,))
+        second = dc.get_coord(start=second_start, step=1.0, shape=(5,))
         coord = dc.core.coords.concat_coords(first, second)
         data = np.zeros(len(coord))
         patch = dc.Patch(data=data, coords={"distance": coord}, dims=("distance",))
@@ -251,14 +267,24 @@ class TestManySegments:
 
     @pytest.mark.parametrize("name", list(LIST_FORMATS))
     def test_concatenated_segments_round_trip(self, name, tmp_path):
-        """1,500 segments on one step read back as the same segments."""
+        """
+        1,500 segments on one step write; they read back as the same
+        segments up to max_index_runs, else as one list of the same labels.
+        """
         file_name, module = LIST_FORMATS[name]
         pytest.importorskip(module)
         with dc.config_context(max_index_runs=2_000):
             patch = self._patch(1_500, keep=10, period=13)
         patch.io.write(tmp_path / file_name, name)
-        back = dc.read(tmp_path / file_name)[0].get_coord("time")
         coord = patch.get_coord("time")
+        # DASDAE stores the segments; the others state one step beside labels
+        dasdae = name == "DASDAE"
+        warns = pytest.warns(DASCoreWarning, match="1500 segments")
+        with nullcontext() if dasdae else warns:
+            back = dc.read(tmp_path / file_name)[0].get_coord("time")
+        assert back.runs_count == (1_500 if dasdae else 1) and back == coord
+        with dc.config_context(max_index_runs=2_000):
+            back = dc.read(tmp_path / file_name)[0].get_coord("time")
         assert back.runs_count == 1_500 and back == coord
         assert segment_layout(back) == segment_layout(coord)
         assert {x.step for x in back.segments} == {coord.segments[0].step}

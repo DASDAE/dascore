@@ -7,6 +7,7 @@ coord serialization and string-serialization design notes used here.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 
 import numpy as np
 
@@ -38,6 +39,8 @@ from dascore.io.dasdae._compat import (
     translate_legacy_attrs,
 )
 from dascore.io.utils import (
+    _off_grid_reason,
+    _warn_snap,
     resolve_keyed_source,
     should_snap,
     stored_coord,
@@ -51,9 +54,10 @@ from dascore.utils.array import (
     is_string_byte_serializable_array,
 )
 from dascore.utils.hdf5 import create_dataset, staged_group
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import suppress_warnings, unbyte
 from dascore.utils.patch import _uneven_message
 from dascore.utils.time import to_int
+from dascore.warnings import SnapWarning
 
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
@@ -415,20 +419,36 @@ def _node_step(attrs):
 
 def _read_coord(node, name, attrs2, snap):
     """
-    Rebuild one coordinate from its node, on a grid if `snap` and jittered,
-    and say whether snapping moved its labels.
+    Rebuild one coordinate from its node, and say whether snapping moved it.
 
-    Only labels written jittered snap: holes and irregular labels are what
-    was written, not a grid's noise.
+    One list of labels is the grid `stored_coord` builds where every label is
+    within `max_shift` of it, else as stored: silently under the default
+    `snap` (None), and with the shared `SnapWarning` under a `snap` naming it.
     """
     coord = _read_stored_coord(node, name, attrs2)
-    if not (snap and coord.jittered) or coord.gapped:
+    plain = not isinstance(coord, NumericCoord) or coord.ndim != 1 or len(coord) < 2
+    if snap is False or plain or coord.evenly_sampled or coord.runs_count > 1:
         return coord, False
-    units = coord.units
-    out = stored_coord(coord.values, True, name=name, where=node.file, units=units)
-    # The helper keeps the stored labels when its check fails, in which
-    # case nothing moved.
-    return out, not np.array_equal(out.values, coord.values)
+    values, where = np.asarray(coord.values), node.file
+    with suppress_warnings(SnapWarning) if snap is None else nullcontext():
+        out = stored_coord(values, True, name=name, where=where, units=coord.units)
+    if not out.evenly_sampled:
+        return coord, False
+    # every label against the grid built, in its own ticks, before any float
+    ticks, grid = values, np.asarray(out.values)
+    if values.dtype.kind in "umM":
+        ticks = values.astype(np.int64)
+        grid = grid.astype(values.dtype).astype(np.int64)
+    with np.errstate(all="ignore"):
+        rel = np.asarray(ticks - grid).astype(np.float64)
+        step = float(ticks[-1] - ticks[0]) / (len(ticks) - 1)
+        shift = np.max(np.abs(rel)) / abs(step)  # in steps
+    if not shift <= dc.get_config().max_shift:  # NaN fails
+        if snap is not None:
+            reason = _off_grid_reason(float(shift), "first and last labels")
+            _warn_snap(f"the stored {name} labels {reason}", where)
+        return coord, False
+    return out, not np.array_equal(out.values, values)
 
 
 def _read_stored_coord(node, name, attrs2):
@@ -478,14 +498,13 @@ def _read_stored_coord(node, name, attrs2):
     array = _read_array(node)
     if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate
         return get_coord(data=array, units=units, snap=True)
-    # A stored nominal step is a grid claim the values must meet, which a
-    # legacy file's jittered values need not; it names the spacing only for
-    # a single sample, where the values cannot.
+    # A stored nominal step is a grid claim the values need not meet; it
+    # names the spacing only for a single sample, where the values cannot.
     step = step if len(array) == 1 else None
     return get_coord(data=array, units=units, step=step, snap=False)
 
 
-def _get_coords(patch_group, dims, attrs2, snap=True):
+def _get_coords(patch_group, dims, attrs2, snap=None):
     """
     Get the coordinates from a patch group.
 
@@ -500,7 +519,8 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
-        named = name in dims and should_snap(snap, name)
+        named = None if snap is None else should_snap(snap, name)
+        named = named if name in dims else False
         coord_dict[name], moved = _read_coord(node, name, attrs2, named)
         if moved:
             snapped.append(name)
@@ -543,7 +563,7 @@ def _get_patch_group(h5, source_patch_key=""):
     return resolve_keyed_source(waveforms, key, where=str(h5.filename))
 
 
-def _get_metadata_from_group(group, legacy: bool = True, snap=True):
+def _get_metadata_from_group(group, legacy: bool = True, snap=None):
     """Build one data-less patch from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
@@ -689,7 +709,7 @@ def _get_file_version(h5):
     return unbyte(h5.attrs.get("__DASDAE_version__", ""))
 
 
-def _get_contents_from_patch_groups_generic(h5, snap=True, keys=frozenset()):
+def _get_contents_from_patch_groups_generic(h5, snap=None, keys=frozenset()):
     """Get DASDAE scan summaries from a generic HDF5 handle, of `keys` if given."""
     waveforms = h5.get("waveforms")
     if waveforms is None:

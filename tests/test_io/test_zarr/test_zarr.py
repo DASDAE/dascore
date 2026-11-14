@@ -34,6 +34,7 @@ from dascore.io.netcdf.utils import COORD_PREFIX, STEP_ATTR
 from dascore.io.zarr import ZarrV3
 from dascore.io.zarr import core as zarr_core
 from dascore.utils.misc import suppress_warnings
+from tests.conftest import segment_layout
 
 xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
@@ -411,7 +412,9 @@ class TestRangeAttr:
         dc.write(patch, path, "zarr")
         out = dc.read(path)[0]
         assert out == patch
-        assert out.get_array("distance").tobytes() == distance.tobytes()
+        assert (
+            out.get_array("distance").tobytes() == patch.get_array("distance").tobytes()
+        )
 
     def test_coord_encoding_not_described(self, zarr_patch, tmp_path):
         """A coordinate encoded to other labels reads them, as a CF tool does."""
@@ -449,7 +452,10 @@ class TestRangeAttr:
         dc.write(patch, path, "zarr")
         attrs = zarr.open_group(path, mode="r")["distance"].attrs
         assert RANGE_KEY not in attrs and STEP_ATTR in attrs
-        assert dc.read(path)[0] == patch
+        read = dc.read(path)[0]
+        assert read == patch
+        layout = segment_layout(read.get_coord("distance"))
+        assert layout == segment_layout(patch.get_coord("distance"))
 
 
 class TestRemote:

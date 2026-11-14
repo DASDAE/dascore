@@ -14,8 +14,6 @@ import dascore.proc.coords as coords_module
 from dascore.compat import is_array
 from dascore.core.coords import (
     BaseCoord,
-    NumericCoord,
-    _fill_layout,
     concat_coords,
     get_coord,
 )
@@ -2325,18 +2323,18 @@ class TestFillGaps:
         patch = _gapped_patch(jittered, dim="x")
         assert patch.fill_gaps(x=1, samples=True) == patch
 
-    def test_jittered_raises(self):
-        """Labels off their step's grid are snapped, not filled."""
+    def test_jittered_is_one_list(self):
+        """Labels off their step's grid are one list, with no gap to fill."""
         coord = get_coord(data=np.array([0.0, 1.1, 1.9, 5.05, 6.0]), step=1.0)
         patch = _gapped_patch(coord, dim="x")
-        with pytest.raises(CoordError, match="snap_coords"):
-            patch.fill_gaps("x")
+        assert coord.runs_count == 1 and patch.fill_gaps("x") is patch
 
     def test_dense_array_with_step(self):
-        """A dense array kept whole with its declared step fills too."""
+        """A dense array placed by its declared step is segments, which fill."""
         values = np.delete(np.arange(3000), np.arange(5, 3000, 7))
-        coord = get_coord(data=values, step=1)
-        assert coord.sorted and not coord.evenly_sampled and coord.runs_count == 1
+        with dc.config_context(max_index_runs=1_000):
+            coord = get_coord(data=values, step=1)
+        assert coord.sorted and not coord.evenly_sampled and coord.runs_count > 1
         out = _gapped_patch(coord, dim="channel").fill_gaps("channel")
         assert out.get_coord("channel") == get_coord(start=0, stop=3000, step=1)
         assert np.isnan(out.data[0]).sum() == 3000 - len(values)
@@ -2592,15 +2590,6 @@ class TestFillGaps:
         """An integer patch with nothing to fill ignores the default NaN."""
         patch = random_patch.new(data=random_patch.data.astype(np.int32))
         assert patch.fill_gaps("time") is patch
-
-    def test_float_array_drift_raises(self):
-        """A float array whose spacings drift off its declared step raises."""
-        values = np.arange(2_000_010) * (1 + 4e-7)
-        values = np.delete(values, [5])
-        coord = NumericCoord.from_labels(values, step=1.0)
-        assert coord.jittered  # 0.8 steps of drift: offsets of 0.4 at most
-        with pytest.raises(CoordError, match="snap_coords"):
-            _fill_layout(coord)
 
 
 class TestAddDistanceToMetadata:

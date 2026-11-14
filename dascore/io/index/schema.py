@@ -33,7 +33,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 37 identifies a coordinate
+# changes, not only when a column does.
+# Version 38 drops the jittered and gapped flags, offset bounds and run
+# positions, as segments share no grid. Version 37 identifies a coordinate
 # of several segments without a step, as segments state none. Version 36
 # leaves the SEG-Y text
 # header out of the index, so consecutive files merge. Version 35 reads a
@@ -72,7 +74,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 37
+INDEX_VERSION = 38
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -242,16 +244,7 @@ class CoordDefRow(NamedTuple):
     step_numerator: int | None
     step_denominator: int | None
     origin_offset: int | None
-    # How the labels sit on the step (the coordinate's own, stated in the
-    # step columns whether or not the row is exact): off it by under half
-    # a step, and missing positions of it.
-    jittered: bool
-    gapped: bool
-    # The furthest the labels sit below and above the grid through the
-    # first one, in steps; NULL without a step.
-    offset_min: float | None
-    offset_max: float | None
-    # Runs the coordinate is, cut at its holes; the coord_runs table holds
+    # Segments the coordinate is; the coord_runs table holds
     # them when there are several and no more than max_index_runs. NULL
     # where the summary said nothing of them.
     run_count: int | None
@@ -259,19 +252,16 @@ class CoordDefRow(NamedTuple):
 
 class CoordRunRow(NamedTuple):
     """
-    A row of the coord_runs table: one run of a coordinate, holding no hole.
+    A row of the coord_runs table: one segment of a coordinate.
 
-    The runs of a definition of several, in order, as
+    The segments of a definition of several, in order, as
     `dascore.utils.gaps.RunRecord` states them: the envelope columns are
-    named by storage type as the definition's are, and `position` is the
-    run's first sample's place on the coordinate's grid (NULL without one),
-    so the positions between two runs are holes.
+    named by storage type as the definition's are.
     """
 
     coord_row: int
     run: int
     count: int
-    position: int | None
     min_float: float | None
     max_float: float | None
     step_float: float | None
@@ -385,8 +375,6 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "CHECK (value_kind IN ('num', 'time', 'str'))",
             "CHECK (is_exact IN (0, 1))",
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
-            "CHECK (jittered IN (0, 1))",
-            "CHECK (gapped IN (0, 1))",
         ),
         "coord_runs": (
             "PRIMARY KEY (coord_row, run)",

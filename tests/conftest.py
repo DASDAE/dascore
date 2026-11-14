@@ -24,7 +24,7 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
-from dascore.core.coords import NumericCoord, concat_coords
+from dascore.core.coords import concat_coords
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -629,23 +629,21 @@ def two_run_patch():
 
 @pytest.fixture(scope="session")
 def jittered_patch():
-    """A patch whose time labels keep a step but sit off its grid."""
+    """A patch whose time labels sit off the grid of the step they state."""
     labels = np.arange(120.0)
     labels[1::7] += 0.1
-    time = NumericCoord.from_labels(labels, step=1.0)
-    assert time.jittered and not time.gapped
+    time = dc.get_coord(data=labels, step=1.0)
+    assert time.step is None and time.runs_count == 1  # labels state no step
     data = (labels**2)[None]  # spacing shows in what is computed
     coords = {"distance": np.array([0]), "time": time}
     return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
 
 @pytest.fixture(scope="session")
-def jittered_forms(jittered_patch):
-    """The jittered patch as labels with no step, and on its step's grid."""
-    time = jittered_patch.get_coord("time")
-    labels = NumericCoord.from_labels(time.values)
-    grid = dc.get_coord(start=0.0, step=1.0, shape=time.shape)
-    return tuple(jittered_patch.update_coords(time=x) for x in (labels, grid))
+def jittered_grid(jittered_patch):
+    """The jittered patch on its step's grid."""
+    grid = dc.get_coord(start=0.0, step=1.0, shape=jittered_patch.shape[-1:])
+    return jittered_patch.update_coords(time=grid)
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)

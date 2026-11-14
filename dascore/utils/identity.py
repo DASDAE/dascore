@@ -494,7 +494,7 @@ _DEFAULT_MAX_SHIFT = DascoreConfig.model_fields["max_shift"].default
 
 def _snap_names(snap) -> bool | list[str]:
     """True for every dimension, else the sorted names a snap option gives."""
-    if snap is True:
+    if snap is True or snap is None:  # DASDAE's default snaps as True does
         return True
     # No dimension named is snapping turned off, and a name given twice is
     # given once.

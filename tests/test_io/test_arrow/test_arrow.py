@@ -225,12 +225,12 @@ class TestRoundTrip:
         _assert_exact(_roundtrip(patch, tmp_path, stream=True), patch)
 
     def test_snap(self, tmp_path):
-        """Reading with snap puts a jittered dimension on its grid."""
+        """Reading with snap puts jittered labels on their grid."""
         coord = get_coord(data=np.array([0.0, 1.1, 1.95, 3.02]), step=1.0)
         path = tmp_path / "p.arrow"
         dc.write(_with_coord(coord), path, "DASARROW")
         assert dc.read(path, snap=True)[0].get_coord("time").evenly_sampled
-        assert dc.read(path)[0].get_coord("time").jittered
+        assert dc.read(path)[0].get_coord("time").step is None
 
 
 class _OddAttrs(dc.PatchAttrs):

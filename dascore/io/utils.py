@@ -17,7 +17,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import _DASCORE_DIR, INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, _stored_float_dtype, get_coord
+from dascore.core.coords import BaseCoord, _on_grid, _stored_float_dtype, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
     CoordError,
@@ -74,9 +74,9 @@ def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
     """
     Refuse dimensions a format stores only as a grid, saying how to make one.
 
-    Writers keep a coordinate's step and holes, or refuse (rule 13 of the
+    Writers keep a coordinate's step and segments, or refuse (rule 13 of the
     coordinate guidelines, `notes/coordinates.qmd`); a format which stores
-    a start and a step cannot hold holes, jitter or labels with no step.
+    a start and a step cannot hold segments or labels with no step.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)
@@ -87,7 +87,7 @@ def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
 def _layout(coord) -> tuple:
     """What a written coordinate must read back as: its steps and segments."""
     segments = tuple((len(x), x.step) for x in coord.segments)
-    return coord.step, coord.jittered, coord.gapped, segments
+    return coord.step, segments
 
 
 def written_step(name: str, coord, why: str):
@@ -97,11 +97,16 @@ def written_step(name: str, coord, why: str):
     layout = _layout(coord)
     if _layout(get_coord(data=coord.values, units=coord.units, snap=False)) == layout:
         return None
-    step, *others = {x.step for x in coord.segments}
+    # judged from the segments, which a read past max_index_runs leaves one list
+    segments = coord.segments
+    step, *others = {x.step for x in segments}
+    ends, values = coord._run_offsets()[1:], coord.values
+    seams = _on_grid(values[ends] - values[ends - 1], step) if step else None
     with suppress(CoordError):  # a long fractional grid drifts off its step
-        back = get_coord(data=coord.values, step=step, units=coord.units)
-        if not others and _layout(back) == layout:
-            return step
+        if not others and seams is not None and np.all(seams > 1):
+            back = (get_coord(data=x.values, step=step) for x in segments)
+            if all(_layout(x) == _layout(y) for x, y in zip(back, segments)):
+                return step
     raise CoordError(_uneven_message(name, coord, why))
 
 
@@ -455,15 +460,21 @@ def stored_coord(
         max_shift = dc.get_config().max_shift
         if not shift <= max_shift + resolution / abs(float(ticks)):  # NaN fails
             how = "stated start and step" if stated else "first and last labels"
-            reason = (
-                f"sit up to {shift:.2g} steps off the grid built from its {how}, "
-                f"more than dascore.config.max_shift ({max_shift}); the file may "
-                "hold a gap, or its clock may run apart from its sampling"
-            )
+            reason = _off_grid_reason(shift, how)
     if reason is None:
         return get_coord(start=start, step=step, shape=(count,), units=units)
     _warn_snap(f"the stored {name} labels {reason}", where)
     return get_coord(data=decode(labels[:count]), units=units, snap=False)
+
+
+def _off_grid_reason(shift: float, how: str) -> str:
+    """Why labels `shift` steps off the grid built from `how` stay as stored."""
+    max_shift = dc.get_config().max_shift
+    return (
+        f"sit up to {shift:.2g} steps off the grid built from its {how}, "
+        f"more than dascore.config.max_shift ({max_shift}); the file may "
+        "hold a gap, or its clock may run apart from its sampling"
+    )
 
 
 def _checked_positions(count: int, quartiles: bool) -> np.ndarray:

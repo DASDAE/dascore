@@ -89,16 +89,6 @@ class _ExactFields(TypedDict):
     origin_offset: int | None
 
 
-class _SamplingFields(TypedDict):
-    """The CoordRecord fields saying how labels sit on the step."""
-
-    jittered: bool
-    gapped: bool
-    offset_min: float | None
-    offset_max: float | None
-    run_count: int | None
-
-
 def stored_runs(records, kind: str, absolute: bool = True) -> tuple[tuple, ...]:
     """
     The coord_runs columns of run records, past the id and run number.
@@ -117,7 +107,7 @@ def stored_runs(records, kind: str, absolute: bool = True) -> tuple[tuple, ...]:
         else:
             ends = (float(record.min), float(record.max))
             ends += (None if step is None else float(step), None, None, None)
-        out.append((int(record.count), record.position, *ends))
+        out.append((int(record.count), *ends))
     return tuple(out)
 
 
@@ -130,7 +120,7 @@ def index_runs(rows, kind: str, absolute: bool = True) -> tuple[RunRecord, ...]:
     from the coordinate does.
     """
     out = []
-    for count, position, *ends in rows:
+    for count, *ends in rows:
         if kind == "time":
             ns = ends[3:]
             stamp = "M8[ns]" if absolute else "m8[ns]"
@@ -139,8 +129,7 @@ def index_runs(rows, kind: str, absolute: bool = True) -> tuple[RunRecord, ...]:
         else:
             low, high = float(ends[0]), float(ends[1])
             step = _null_or(ends[2], float)
-        position = _null_or(position, int)
-        out.append(RunRecord(int(count), low, high, step, position))
+        out.append(RunRecord(int(count), low, high, step))
     return tuple(out)
 
 
@@ -172,10 +161,6 @@ class CoordRecord:
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
-    jittered: bool = False
-    gapped: bool = False
-    offset_min: float | None = None
-    offset_max: float | None = None
     run_count: int | None = None
     data_id: str | None = None
     # the coord_runs rows of the definition, past its id and run number
@@ -540,15 +525,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         step_denominator=getattr(summary, "step_denominator", None),
         origin_offset=getattr(summary, "origin_offset", None),
     )
-    # how the labels sit on the step, which the step columns state whether
-    # or not the row rebuilds a range
-    sampling = _SamplingFields(
-        jittered=bool(getattr(summary, "jittered", False)),
-        gapped=bool(getattr(summary, "gapped", False)),
-        offset_min=getattr(summary, "offset_min", None),
-        offset_max=getattr(summary, "offset_max", None),
-        run_count=getattr(summary, "run_count", None),
-    )
+    run_count = getattr(summary, "run_count", None)
     runs = _indexed_runs(summary)
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
@@ -562,7 +539,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             step_int=None if pd.isnull(step) else _to_ns(to_timedelta64(step)),
             runs=stored_runs(runs, "time", is_datetime),
             **exact,
-            **sampling,
+            run_count=run_count,
             **common,
         )
     if np.issubdtype(dtype, np.number):
@@ -579,7 +556,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             step_float=None if pd.isnull(step) else float(step),
             runs=stored_runs(runs, "num"),
             **exact,
-            **sampling,
+            run_count=run_count,
             **common,
         )
     if dtype.kind in "USO":

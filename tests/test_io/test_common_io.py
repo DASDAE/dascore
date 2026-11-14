@@ -513,9 +513,8 @@ def _assert_coords_attrs_match(patch):
         summary_coord = summary.get_coord_summary(dim)
         assert coord.min() == summary_coord.min
         assert coord.max() == summary_coord.max
-        # a summary states the step and how the labels sit on it
-        flags = (summary_coord.jittered, summary_coord.gapped)
-        assert flags == (coord.jittered, coord.gapped)
+        # a summary states the step of a grid and how many segments there are
+        assert summary_coord.run_count == getattr(coord, "runs_count", None)
         assert summary_coord.step is None or summary_coord.step == coord.step
 
 
@@ -1115,13 +1114,17 @@ class TestSnapConformance:
     """
 
     def test_default_is_in_the_signature(self, io_path_tuple):
-        """snap=None reads what the default the reader states reads."""
+        """
+        snap=None reads what the default the reader states reads; a default of
+        None (DASDAE's) decodes as True does, without the reader warning.
+        """
         io, path = io_path_tuple
         default = _default_snap(type(io))
-        assert isinstance(default, bool) or all(isinstance(x, str) for x in default)
+        names = default is None or isinstance(default, bool)
+        assert names or all(isinstance(x, str) for x in default)
         with skip_missing():
             implicit = dc.read(path)
-        explicit = dc.read(path, snap=default)
+        explicit = dc.read(path, snap=True if default is None else default)
         assert [x.coords for x in implicit] == [x.coords for x in explicit]
 
     def test_coordinates_are_one_segment(self, io_path_tuple):

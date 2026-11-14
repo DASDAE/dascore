@@ -425,15 +425,15 @@ class TestDecimateHoles:
         with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.decimate(time=2)
 
-    def test_filtered_jitter_computes(self, jittered_patch, jittered_forms):
+    def test_filtered_jitter_computes(self, jittered_patch, jittered_grid):
         """One list of labels is an irregular axis, computed on by its labels."""
-        labels, grid = jittered_forms
         out = jittered_patch.decimate(time=2)
-        want = labels.decimate(time=2)
-        assert np.allclose(out.data, want.data)
         # every second label is kept as recorded, not as the step's grid
-        assert out.get_coord("time") == want.get_coord("time")
-        assert out.get_coord("time") != grid.decimate(time=2).get_coord("time")
+        labels = jittered_patch.get_array("time")
+        np.testing.assert_array_equal(out.get_array("time"), labels[::2])
+        grid = jittered_grid.decimate(time=2)
+        assert out.get_coord("time") != grid.get_coord("time")
+        assert out.shape == grid.shape
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still decimates."""

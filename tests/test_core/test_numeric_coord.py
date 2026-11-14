@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from dascore.core import coords as coords_module
 from dascore.core.coords import (
+    Blank,
     CoordString,
     Grid,
     Labels,
@@ -15,6 +16,7 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
+from dascore.exceptions import CoordError
 
 T0 = np.datetime64("2020-01-01T00:00:00")
 
@@ -78,7 +80,7 @@ class TestRunsHoldTheLabels:
             NumericCoord(runs=(Grid(0, 1, 1, 4),))
 
 
-class TestFuse:
+class TestRunJoining:
     """Runs which continue each other exactly become one."""
 
     def test_a_hole_keeps_the_runs_apart(self, gappy):
@@ -91,25 +93,6 @@ class TestFuse:
         first = NumericCoord.from_labels(np.array([0.0, 1.5, 3.0]))
         second = NumericCoord.from_labels(np.array([4.0, 5.5, 7.0]))
         assert concat_coords(first, second).runs_count == 2
-
-    def test_fuse_absorbs_a_hole_within_tolerance(self, gappy):
-        """A wide enough tolerance refits the runs as one grid."""
-        out = gappy.fuse(10.0)
-        assert out.runs_count == 1 and out.evenly_sampled
-        assert out.min() == gappy.min() and out.max() == gappy.max()
-
-    def test_fuse_keeps_a_hole_its_tolerance_cannot_reach(self, gappy):
-        """No label may move further than the tolerance allows."""
-        assert gappy.fuse(0.1).runs_count == 2
-
-    def test_fuse_with_keep_step_keeps_missing_samples_missing(self, gappy):
-        """A hole is data that is absent, not a slower sampling rate."""
-        assert gappy.fuse(10.0, keep_step=True).runs_count == 2
-
-    def test_fuse_leaves_an_evenly_sampled_coord_alone(self):
-        """There is nothing simpler than one grid."""
-        coord = get_coord(start=0.0, step=1.0, shape=(5,))
-        assert coord.fuse(1.0) is coord
 
     def test_a_slice_landing_on_a_grid_becomes_one(self, gappy):
         """Trimming away the seam leaves an evenly sampled coordinate."""
@@ -193,25 +176,8 @@ class TestMultiRunSelect:
         assert coord._get_index(5.0, forward=True) == 2
 
 
-class TestHoles:
-    """Missing grid positions are read from the runs, not the labels."""
-
-    def test_holes_between_runs(self, gappy):
-        """Segments share no grid, so none is missing between them."""
-        assert gappy.missing().complete and gappy.step is None
-
-    def test_an_evenly_sampled_coord_is_complete(self):
-        """One grid skips nothing."""
-        assert get_coord(start=0, stop=10, step=1).missing().complete
-
-    def test_holes_inside_a_stored_run(self):
-        """Labels on a declared grid state the positions they skip."""
-        coord = NumericCoord.from_labels(np.array([1, 3, 4]), step=1)
-        assert coord.missing().count == 1
-
-    def test_a_coordinate_without_a_step_misses_nothing(self, jittered):
-        """Missing is relative to a grid, and these labels state none."""
-        assert jittered.step is None and jittered.missing().complete
+class TestSeams:
+    """Seams are read from the runs, not the labels."""
 
     def test_seams_report_every_run_boundary(self, gappy):
         """Each boundary is one row of the discontinuity frame."""
@@ -279,12 +245,12 @@ class TestLabelsAreHeldOnce:
         assert gappy[5:].runs_count == 1
 
     def test_moving_between_coordinates_never_hashes(self, stored, monkeypatch):
-        """Concatenation, fusion and metadata leave the store alone."""
+        """Concatenation, slicing and metadata leave the store alone."""
         second = NumericCoord.from_labels(np.array([30.0, 31.5, 33.0]))
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
         joined = concat_coords(stored, second)
         assert joined.runs_count == 2 and len(joined.sources) == 2
-        assert joined.fuse(0.0).runs_count == 2
+        assert joined[1:-1].runs_count == 2
         assert joined.set_units("m").units is not None
 
     def test_abutting_windows_fuse(self, stored, monkeypatch):
@@ -344,24 +310,19 @@ class TestBaseCoordFallbacks:
         """There are no values to move onto a grid."""
         assert partial.snap() is partial
 
-    def test_fuse_returns_itself(self, partial):
-        """There are no runs to refit."""
-        assert partial.fuse(1.0) is partial
-
     def test_no_discontinuities(self, partial):
         """A coordinate which states no values states no seams."""
         assert not len(partial.get_discontinuities("all"))
 
-    def test_nothing_is_missing(self, partial):
-        """A declared step with no values skips no position."""
-        assert partial.missing().complete
+    def test_a_float_blank_stating_its_range_is_it(self):
+        """A blank whose float ends and step span its length is that range."""
+        out = get_coord(runs=(Blank((3,), 0.0, 0.30000000000000004),), step=0.1)
+        assert out.evenly_sampled and np.allclose(out.values, [0.0, 0.1, 0.2])
 
     def test_string_coords_keep_base_fallbacks(self):
-        """Text has no grid to snap to, runs to fuse, or holes."""
+        """Text has no grid to snap to."""
         coord = get_coord(data=np.array(["a", "b", "c"]))
         assert coord.snap() is coord
-        assert coord.fuse(1.0) is coord
-        assert coord._holes() == []
 
     def test_string_coords_state_no_seams(self):
         """Text has no spacing to be discontinuous in."""
@@ -409,8 +370,8 @@ class TestUpdates:
 
     def test_declared_step_needs_monotonic_labels(self):
         """A step is the grid the labels sit on, so they must climb it."""
-        with pytest.raises(ValidationError, match="monotonic values"):
-            NumericCoord.from_labels(np.array([3.0, 1.0, 2.0]), step=1.0)
+        with pytest.raises(CoordError, match="monotonic values"):
+            get_coord(data=np.array([3.0, 1.0, 2.0]), step=1.0)
 
     def test_a_dumped_coordinate_round_trips(self, gappy):
         """A coordinate rebuilt from its own dump is the same coordinate."""

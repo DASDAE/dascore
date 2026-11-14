@@ -27,7 +27,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import Grid, NumericCoord, get_coord
+from dascore.core.coords import NumericCoord, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     ChunkError,
@@ -48,7 +48,6 @@ from dascore.utils.chunk_plan import (
 )
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import suppress_warnings
-from dascore.utils.patch import _get_merged_coord
 from dascore.utils.patch_assembly import (
     PatchAssembler,
     _cast_via,
@@ -483,32 +482,6 @@ class TestChunkMerge:
         new_df = sp.get_contents()
         assert old_df["distance_min"].min() == new_df["distance_min"].min()
         assert old_df["distance_max"].max() == new_df["distance_max"].max()
-
-    def test_non_si_merge_tolerance_uses_coord_units(self, random_patch):
-        """Canonical index steps are not interpreted in native coord units."""
-        size = len(random_patch.get_coord("distance"))
-        first = dc.get_coord(data=np.arange(size, dtype=float), units="km")
-        second = dc.get_coord(
-            data=np.arange(size, dtype=float) + size + 8,
-            units="km",
-        )
-        patches = [
-            random_patch.update_coords(distance=first),
-            random_patch.update_coords(distance=second),
-        ]
-        # Index summaries store numeric dimension steps in canonical SI.
-        summaries = pd.DataFrame({"distance_step": [1000.0, 1000.0]})
-        manager = _get_merged_coord(
-            summaries,
-            "distance",
-            [patch.coords for patch in patches],
-            tolerance=1.5,
-        )
-        merged = manager.coord_map["distance"]
-        assert not merged.evenly_sampled
-        assert np.array_equal(
-            merged.values, np.concatenate([first.values, second.values])
-        )
 
     def test_merge_distance_no_order(self, distance_adjacent_no_order):
         """Ensure distance can be merged with unsorted coords."""
@@ -5400,14 +5373,6 @@ class TestChunkMergeRegressions:
         chunked = merge_spool(patches).chunk(time=None, conflict="keep_first")
         stated = chunked.get_contents()["data_units"].iloc[0]
         assert chunked[0].attrs.data_units == get_quantity(stated)
-
-    def test_zero_shared_step_is_not_kept(self):
-        """One-sample grids declaring no spacing fuse on their span."""
-        runs = (Grid(0.0, 0.0, 0, 1), Grid(1.0, 0.0, 0, 1))
-        coord = NumericCoord(runs=runs, dtype="float64")
-        with np.errstate(all="ignore"):
-            out = coord.fuse(1.0, keep_step=True)
-        np.testing.assert_array_equal(out.values, [0.0, 1.0])
 
     def test_ulp_different_float_steps(self):
         """Float steps one ulp apart still merge on the shared step."""

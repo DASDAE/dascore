@@ -250,14 +250,7 @@ def _planned_manager(plan, row, files=None, projection=None):
         merge_dim = recovered[0].dim_map[plan.dim][0]
         _, kwargs = _split_coord_merge_kwargs(plan.merge_kwargs)
         # the merge which loads the output says what its policy settled
-        coords = _get_merged_coord(
-            pd.DataFrame(),
-            merge_dim,
-            recovered,
-            fuse=pa._fuses(rows, plan.dim),
-            warn=False,
-            **kwargs,
-        )
+        coords = _get_merged_coord(merge_dim, recovered, warn=False, **kwargs)
     coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
     if (snap := plan.merge_kwargs.get("snap")) is not None:  # as the patch loads
         names = [x for x in snap[0] or coords.dims if x in coords.dims]

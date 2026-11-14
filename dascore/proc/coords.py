@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, _fill_layout
+from dascore.core.coords import BaseCoord, NumericCoord, _fill_layout
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -26,7 +26,6 @@ from dascore.exceptions import (
 from dascore.lazy.contract import Unchanged, Window
 from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
-from dascore.utils.gaps import contiguous_windows
 from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -131,7 +130,8 @@ class SnapCoords(_Reorder):
     step
         If given, move each label to the nearest position of this step's
         grid through the first label instead, so labels skipping positions
-        become segments. Time steps may be given in seconds.
+        become segments (past `dascore.config.max_index_runs`, one list with
+        no step, with a warning). Time steps may be given in seconds.
     max_shift
         If given, raise rather than move any label further than this many
         steps.
@@ -207,9 +207,8 @@ def get_coord(
     require_sorted
         If True, require the coordinate to be sorted or raise Error.
     require_evenly_sampled
-        If True, require the coordinate to be evenly sampled or raise Error:
-        it must have a step and be neither jittered nor gapped (see
-        [`NumericCoord`](`dascore.core.coords.NumericCoord`)).
+        If True, require the coordinate to be evenly sampled, one grid (see
+        [`NumericCoord`](`dascore.core.coords.NumericCoord`)), or raise Error.
 
     Raises
     ------
@@ -1477,13 +1476,11 @@ def split_gaps(self: PatchType) -> dc.Spool:
     """
     Split the patch into contiguous patches.
 
-    The patch splits at every hole
-    [missing](`dascore.core.coords.BaseCoord.missing`) reports and where
-    runs sharing no step change step or leave a gap; irregular labels
-    sharing no step stay one piece. Two gapped dimensions give one piece
-    per pair of stretches. Each output is a view of the patch's data; a
-    patch without holes comes back unchanged. A spool holds a patch with
-    holes whole, so this is the one way to split it.
+    The patch splits between its coordinates' segments; one list of
+    irregular labels stays one piece. Two dimensions of several segments
+    give one piece per pair of segments. Each output is a view of the
+    patch's data; a patch without gaps comes back unchanged. A spool holds
+    a patch with gaps whole, so this is the one way to split it.
 
     Parameters
     ----------
@@ -1509,7 +1506,11 @@ def split_gaps(self: PatchType) -> dc.Spool:
     >>> spool = patch.split_gaps()
     >>> assert len(spool) == 2
     """
-    windows = [contiguous_windows(self.get_coord(x)) for x in self.dims]
+    windows = []  # each dimension's (start, stop) per segment
+    for coord in (self.get_coord(x) for x in self.dims):
+        runs = isinstance(coord, NumericCoord)
+        starts = coord._run_offsets().tolist() if runs else [0]
+        windows.append(list(zip(starts, [*starts[1:], coord.shape[0]], strict=True)))
     if all(len(x) == 1 for x in windows):
         return dc.spool([self])
     pieces = [

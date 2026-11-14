@@ -1,4 +1,4 @@
-"""Tests for a coordinate's step, its jittered and gapped flags, and inference."""
+"""Tests for a coordinate's step, its segments, and inference."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from fractions import Fraction
 import h5py
 import numpy as np
 import pytest
-from pydantic import ValidationError
 
 import dascore as dc
 import dascore.utils.patch
@@ -55,54 +54,43 @@ def _no_warning(func, *args, **kwargs):
         return func(*args, **kwargs)
 
 
-class TestFlags:
-    """A step and two independent flags describe how a coordinate is sampled."""
+class TestSampling:
+    """Only one grid has a step; segments and labels state none."""
 
     def test_range(self):
-        """A range is evenly sampled, neither jittered nor gapped."""
+        """A range is one grid, evenly sampled on its step."""
         coord = get_coord(start=0, stop=10, step=1)
-        assert coord.evenly_sampled
-        assert not coord.jittered and not coord.gapped
+        assert coord.evenly_sampled and coord.runs_count == 1 and coord.step == 1
 
     def test_gapped(self):
         """Labels on a stated grid with skipped positions are segments."""
         coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-        assert coord.runs_count == 3 and not coord.jittered
-        assert not coord.evenly_sampled and not coord.gapped
+        assert coord.runs_count == 3 and not coord.evenly_sampled
         # segments share no grid; each states its own step
         assert coord.step is None and {x.step for x in coord.segments} == {1}
 
-    def test_jittered(self):
-        """Labels within half a step of a grid keep it and are jittered."""
-        values = _jittered_floats()
-        coord = get_coord(data=values, snap=False)
-        assert coord.jittered and not coord.gapped
-        assert not coord.evenly_sampled
-        assert coord.step == pytest.approx(1.0, rel=0.05)
+    def test_jittered_and_gapped(self):
+        """Labels off a stated grid, with skipped positions, are one list."""
+        values = [0.0, 1.1, 1.9, 5.05, 6.0]
+        coord = get_coord(data=values, step=1.0)
+        assert coord.runs_count == 1 and coord.step is None
         np.testing.assert_array_equal(coord.values, values)
 
-    def test_jittered_and_gapped(self):
-        """Jitter and holes are independent; a coordinate can have both."""
-        coord = get_coord(data=[0.0, 1.1, 1.9, 5.05, 6.0], step=1.0)
-        assert coord.jittered and coord.gapped
-        assert coord.missing().count == 2
-
     def test_irregular(self):
-        """A coordinate with no step is neither jittered nor gapped."""
+        """A coordinate of irregular labels has no step."""
         coord = get_coord(data=[0.0, 1.0, 5.0, 6.0])
         assert coord.step is None
-        assert not coord.jittered and not coord.gapped
         assert not coord.evenly_sampled
 
     def test_string_coord(self):
-        """Coordinates outside the sampling rules have neither flag."""
+        """Coordinates outside the sampling rules have no step."""
         coord = get_coord(data=np.array(["a", "b"]))
-        assert not coord.jittered and not coord.gapped
+        assert coord.step is None and not coord.evenly_sampled
 
-    def test_stored_labels_on_their_step(self):
-        """Stored labels sitting exactly on their step are evenly sampled."""
-        coord = NumericCoord.from_labels(np.arange(10), step=1)
-        assert coord.evenly_sampled
+    def test_labels_on_their_step(self):
+        """Labels sitting exactly on a stated step are its grid."""
+        coord = get_coord(data=np.arange(10), step=1)
+        assert coord.evenly_sampled and coord._grid is not None
 
 
 class TestInference:
@@ -126,18 +114,18 @@ class TestInference:
         assert get_coord(data=values, snap=snap).step is None
 
     def test_jittered_floats(self):
-        """Labels too jittered for the released snap get a step and the flag."""
+        """Labels too jittered for the released snap are labels, with no step."""
         values = _jittered_floats()
         coord = _no_warning(get_coord, data=values)
-        assert coord.jittered and coord.step is not None
+        assert coord.step is None
         np.testing.assert_array_equal(coord.values, values)
 
     def test_jittered_times(self):
-        """Time labels a nanosecond off their grid are jittered, judged exactly."""
+        """Time labels a nanosecond off their grid are labels, judged exactly."""
         jitter = np.tile([0, 1, -1], 10)[:30].astype("timedelta64[ns]")
         values = T0 + np.arange(30) * MS + jitter
         coord = get_coord(data=values, snap=False)
-        assert coord.jittered and coord.step == MS
+        assert coord.step is None and not coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, values)
 
     @pytest.mark.parametrize("snap", [None, False])
@@ -154,24 +142,46 @@ class TestInference:
         coord = get_coord(data=_drifting_floats(), snap=False)
         assert coord.step is None
 
-    def test_far_from_zero(self):
-        """Floats far from zero are on their grid within a few ulps."""
+    @pytest.mark.parametrize("snap", [None, True, False])
+    def test_far_from_zero(self, snap):
+        """Floats far from zero are their grid within a few ulps, in every mode."""
         values = 1.6e9 + np.arange(1000) * 1e-3
-        coord = get_coord(data=values, snap=False)
-        assert coord.evenly_sampled
-        np.testing.assert_array_equal(coord.values, values)
+        coord = get_coord(data=values, snap=snap)
+        span = (values[-1] - values[0]) / (len(values) - 1)
+        assert coord.evenly_sampled and coord.step == pytest.approx(span)
+        ulps = 8 * np.spacing(values.max())
+        np.testing.assert_allclose(coord.values, values, rtol=0, atol=ulps)
 
-    def test_float32_held_in_float64(self):
+    @pytest.mark.parametrize("snap", [None, True, False])
+    def test_float32_held_in_float64(self, snap):
         """float64 labels holding float32 values are judged as float32."""
         values = np.linspace(0, 100, 1001, dtype=np.float32).astype(np.float64)
-        coord = get_coord(data=values, snap=False)
-        assert coord.evenly_sampled
-        np.testing.assert_array_equal(coord.values, values)
+        coord = get_coord(data=values, snap=snap)
+        span = (values[-1] - values[0]) / (len(values) - 1)
+        assert coord.evenly_sampled and coord.step == pytest.approx(span)
+        ulps = 8 * float(np.spacing(np.float32(100)))
+        np.testing.assert_allclose(coord.values, values, rtol=0, atol=ulps)
+
+    def test_rounded_last_label_is_in_bounds(self):
+        """Lookups take a label within the grid's allowance of its end, not past it."""
+        dist = np.arange(300) * 0.1  # the grid's last label is 29.9 rounded down
+        time = T0 + np.arange(20) * MS
+        coords = {"distance": dist, "time": time}
+        patch = dc.Patch(
+            data=np.ones((300, 20)), coords=coords, dims=("distance", "time")
+        )
+        coord = patch.get_coord("distance")
+        assert coord.max() < dist[-1] and coord.get_next_index(dist[-1]) == 299
+        assert patch.taper_range(distance=(0, 1, 28, dist[-1])).shape == patch.shape
+        assert patch.correlate(distance=dist[-1]).shape[0] == 300
+        assert coord.get_next_index(dist[-1] + 1e-8) == 299  # 1e-7 steps
+        with pytest.raises(ValueError, match="out of bounds"):
+            coord.get_next_index(dist[-1] + 1e-6)  # 1e-5 steps
 
     def test_descending(self):
         """A descending grid is judged as the ascending one is."""
         values = (1.6e9 + np.arange(1000) * 1e-3)[::-1]
-        coord = get_coord(data=values, snap=False)
+        coord = get_coord(data=values)
         assert coord.evenly_sampled and coord.step < 0
 
     def test_1024_hz_nanoseconds(self):
@@ -237,7 +247,7 @@ class TestMicrosecondGrid:
         with h5py.File(tmp_path / "holed.h5", "w") as h5:
             _save_coord(holed, "_coord_time", h5, compact=True)
             back = _read_stored_coord(h5["_coord_time"], "time", {})
-        assert back.runs_count == 2 and not back.jittered
+        assert back.runs_count == 2
         assert {x.step_exact for x in back.segments} == {Fraction(1, 1024)}
         assert np.array_equal(back.values, holed.values)
 
@@ -246,7 +256,7 @@ class TestMicrosecondGrid:
         Labels one stride apart, a segment of labels once concatenated, which
         states no step, read back as the grid inference finds in them.
         """
-        sparse = get_coord(data=np.arange(0, 2000, 2), step=1)
+        sparse = NumericCoord.from_labels(np.arange(0, 2000, 2))
         dense = get_coord(start=3000, stop=3010, step=1)
         coord = dc.core.coords.concat_coords(sparse, dense)
         assert segment_layout(coord) == [("Labels", None, 1000), ("Grid", 1, 10)]
@@ -301,48 +311,23 @@ class TestStatedStep:
         coord = get_coord(data=[0.0, 1.0, 2.0, 5.0, 6.0], step=1.0)
         assert [(len(x), x.step) for x in coord.segments] == [(3, 1.0), (2, 1.0)]
 
-    def test_jitter(self):
-        """Labels off the stated grid by under half a step are kept, jittered."""
-        values = np.array([0.0, 1.1, 1.95, 3.02])
-        coord = get_coord(data=values, step=1.0)
-        assert coord.jittered and not coord.gapped
-        assert coord.step == 1.0
-        np.testing.assert_array_equal(coord.values, values)
-
     def test_integer_jitter(self):
-        """Integer labels off the stated grid are jittered, judged exactly."""
+        """Integer labels off the stated grid are labels, judged exactly."""
         coord = get_coord(data=[0, 10, 21, 30], step=10)
-        assert coord.jittered and coord.step == 10
+        assert coord.step is None and not coord.evenly_sampled
 
-    def test_one_position_raises(self):
-        """Two labels on one grid position raise."""
-        with pytest.raises(CoordError, match="one position"):
-            get_coord(data=[0.0, 1.0, 1.3, 2.0], step=1.0)
-
-    def test_drift_raises(self):
-        """Labels drifting half a step or more from the stated grid raise."""
-        with pytest.raises(CoordError, match="half a step"):
-            get_coord(data=np.arange(100) * 1.02, step=1.0)
+    def test_one_position(self):
+        """Two labels on one grid position are labels the step does not place."""
+        values = [0.0, 1.0, 1.3, 2.0]
+        coord = get_coord(data=values, step=1.0)
+        assert coord.step is None
+        np.testing.assert_array_equal(coord.values, values)
 
     def test_unsigned_past_int64(self):
         """Unsigned labels past the int64 range are kept, with no step."""
         values = np.array([0, 2**64 - 1], dtype=np.uint64)
         coord = get_coord(data=values, snap=False)
         np.testing.assert_array_equal(coord.values, values)
-
-    def test_drift_across_runs_drops_the_step(self):
-        """Offsets accumulating over many joined runs leave no common grid."""
-        pieces = [
-            NumericCoord.from_labels(np.array([1.8 * k, 1.8 * k + 0.9]), step=1.0)
-            for k in range(6)
-        ]
-        assert all(x.step == 1.0 for x in pieces)
-        assert dc.core.coords.concat_coords(*pieces).step is None
-
-    def test_stored_drift_raises(self):
-        """Stored labels drifting from their step are refused when built too."""
-        with pytest.raises(ValidationError, match="half a step"):
-            NumericCoord.from_labels(np.arange(100) * 1.02, step=1.0)
 
 
 class TestReleasedSnapping:
@@ -352,7 +337,7 @@ class TestReleasedSnapping:
         """The default reads labels exactly, as snap=False does, silently."""
         values = _slightly_jittered_floats()
         coord = _no_warning(get_coord, data=values)
-        assert coord.jittered
+        assert coord.step is None
         np.testing.assert_array_equal(coord.values, values)
 
     def test_snap_true_is_silent(self):
@@ -367,18 +352,11 @@ class TestReleasedSnapping:
         assert out == coord
 
     def test_snap_true_puts_stored_labels_on_a_grid(self):
-        """Labels on their step within rounding become a grid under snap=True."""
+        """Labels on their step within rounding are a grid, snapped or not."""
         values = np.linspace(0, 100, 1001, dtype=np.float32)[:100]
-        assert get_coord(data=values)._grid is None
+        assert get_coord(data=values)._grid is not None
         out = _no_warning(get_coord, data=values, snap=True)
         assert out.evenly_sampled and out._grid is not None
-
-    def test_snap_false_is_exact(self):
-        """snap=False reads labels exactly."""
-        values = _slightly_jittered_floats()
-        coord = _no_warning(get_coord, data=values, snap=False)
-        assert coord.jittered
-        np.testing.assert_array_equal(coord.values, values)
 
     def test_on_grid_is_silent(self):
         """Labels already on a grid give the same result and no warning."""
@@ -429,14 +407,6 @@ class TestSelectionKeepsStep:
         out = coord[::2]
         assert out.step == 2 and out.evenly_sampled
 
-    def test_jittered_holes_keep_their_positions(self):
-        """A hole in jittered labels counts the samples removed, or states no step."""
-        jittered = get_coord(data=[0.0, 1.1, 1.9, 3.05, 4.0], step=1.0)
-        out = jittered[np.array([0, 3, 4])]
-        # each stretch is its own segment, keeping its labels; none is moved
-        assert out.runs_count == 2 and out.step is None
-        np.testing.assert_array_equal(out.values, [0.0, 3.05, 4.0])
-
     def test_stepless_take_stays_stepless(self):
         """Removing samples from labels with no step invents no grid."""
         coord = get_coord(data=[0, 1, 3, 4, 5], snap=False)
@@ -454,10 +424,10 @@ class TestSelectionKeepsStep:
             coord[np.array([0, 50])]
 
     def test_stored_grid_stacks(self):
-        """Tiles of labels on their step within rounding are placed by that step."""
+        """Tiles of labels on their step within rounding, a grid, take its step."""
         values = np.linspace(0, 100, 1001, dtype=np.float32)[:100]
-        distance = get_coord(data=values, snap=False)
-        assert distance.evenly_sampled and distance._grid is None
+        distance = get_coord(data=values)
+        assert distance.evenly_sampled and distance._grid is not None
         patch = dc.get_example_patch().select(distance=(0, 100), samples=True)
         patch = patch.update_coords(distance=distance)
         out = patch.window(distance=10, samples=True).apply(lambda x: x, mode="stack")
@@ -516,10 +486,20 @@ class TestRequireEvenlySampled:
             "stepless": stepless_seam_patch,
         }
 
-    @pytest.mark.parametrize("kind", ["gapped", "jittered", "stepless"])
-    def test_refuses(self, patches, kind):
-        """Gapped, jittered and stepless coordinates fail the check."""
-        with pytest.raises(CoordError, match=r"fill_gaps.*snap_coords"):
+    @pytest.mark.parametrize(
+        ("kind", "match"),
+        [
+            ("gapped", r"segments\. Use Patch\.fill_gaps.*snap_coords"),
+            ("jittered", r"no step\. Use Patch\.snap_coords"),
+            ("stepless", r"no step\. Use Patch\.snap_coords"),
+        ],
+    )
+    def test_refuses(self, patches, kind, match):
+        """
+        Gapped, jittered and stepless coordinates fail the check; one list of
+        labels has no gaps to fill, so only snap_coords is named for it.
+        """
+        with pytest.raises(CoordError, match=match):
             patches[kind].get_coord("time", require_evenly_sampled=True)
 
     def test_require_no_holes_removed(self):

@@ -13,6 +13,7 @@ from dascore.core.coords import (
     Grid,
     Labels,
     NumericCoord,
+    _float_allowance,
     concat_coords,
     get_coord,
 )
@@ -682,6 +683,28 @@ class TestFromVariables:
             lambda: out.sel(x=eager["x"].values[3]),
             lambda: eager.sel(x=eager["x"].values[3]),
         )
+
+    def test_rounded_labels_keep_their_step(self):
+        """
+        Float labels within the float allowance of a grid are held as that
+        grid through the index, on its exact step, and join a patch built by
+        default from the same labels.
+        """
+        dist = np.arange(300) * 0.1
+        time = np.datetime64("2024-01-01") + np.arange(50) * np.timedelta64(10, "ms")
+        data = np.random.default_rng(0).random((300, 50))
+        dims = ("distance", "time")
+        array = xr.DataArray(data, coords={"distance": dist, "time": time}, dims=dims)
+        indexed = array.drop_indexes("distance").set_xindex("distance", CoordIndex)
+        patch = xarray_to_patch(indexed)
+        coord = patch.get_coord("distance")
+        assert isinstance(coord.runs[0], Grid) and coord.step == 0.1
+        moved = np.abs(coord.values - dist).max()
+        assert moved <= 2 * _float_allowance(dist, 0.1)
+        assert patch.pass_filter(distance=(None, 1)).shape == patch.shape
+        later = {"distance": dist, "time": time + np.timedelta64(500, "ms")}
+        built = dc.Patch(data=data, coords=later, dims=dims)
+        assert len(dc.spool([patch, built]).chunk(time=None)) == 1
 
     def test_aligns_with_a_lazy_array_without_reading_it(self, monkeypatch):
         """Equal labels align without evaluating the lazy side's labels."""
