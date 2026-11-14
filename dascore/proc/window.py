@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from functools import partial
 from itertools import pairwise, product
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from pydantic import ConfigDict
@@ -108,13 +108,16 @@ class WindowReduce(PatchProcessor):
 
     _positional_fields = ("function",)
 
+    # The patch method which declares the windows, as history spells it.
+    _call: ClassVar[str] = "window"
+
     def _spelled(self, name: str) -> str:
         """Return the call as it is written: a window, then the reduction."""
         given = self._inputs()[0]
         function = given.pop("function")
         args = given.pop("function_args", None)
         kwargs = given.pop("function_kwargs", None) or {}
-        window = _call_str("window", given)
+        window = _call_str(self._call, given)
         if isinstance(function, str) and not (args or kwargs):
             return f"{window}.{function}()"
         # Written last, so a keyword of the function's cannot stand for them.
@@ -867,8 +870,38 @@ def _warn_if_integers(made, blended) -> None:
     warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
 
 
+class _Reductions:
+    """The reductions named by string, each a call to `reduce`."""
+
+    reduce: Callable[..., Any]
+
+    def mean(self):
+        """Return the mean of each window or block; see `reduce`."""
+        return self.reduce("mean")
+
+    def median(self):
+        """Return the median of each window or block; see `reduce`."""
+        return self.reduce("median")
+
+    def min(self):
+        """Return the minimum of each window or block; see `reduce`."""
+        return self.reduce("min")
+
+    def max(self):
+        """Return the maximum of each window or block; see `reduce`."""
+        return self.reduce("max")
+
+    def std(self):
+        """Return the standard deviation of each window or block; see `reduce`."""
+        return self.reduce("std")
+
+    def sum(self):
+        """Return the sum of each window or block; see `reduce`."""
+        return self.reduce("sum")
+
+
 @dataclass(frozen=True)
-class PatchWindow:
+class PatchWindow(_Reductions):
     """
     A patch and a window over it; see [`Patch.window`](`dascore.Patch.window`).
 
@@ -1102,27 +1135,3 @@ class PatchWindow:
             fill=self.fill,
             **self.dims,
         ).run(self.patch)
-
-    def mean(self):
-        """Return the mean of each window; see `reduce`."""
-        return self.reduce("mean")
-
-    def median(self):
-        """Return the median of each window; see `reduce`."""
-        return self.reduce("median")
-
-    def min(self):
-        """Return the minimum of each window; see `reduce`."""
-        return self.reduce("min")
-
-    def max(self):
-        """Return the maximum of each window; see `reduce`."""
-        return self.reduce("max")
-
-    def std(self):
-        """Return the standard deviation of each window; see `reduce`."""
-        return self.reduce("std")
-
-    def sum(self):
-        """Return the sum of each window; see `reduce`."""
-        return self.reduce("sum")

@@ -23,6 +23,7 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
+from dascore.proc.coarsen import PatchCoarsen
 from dascore.proc.window import PatchWindow
 from dascore.transform.spectral_descriptors import (
     NegativeFrequencies,
@@ -1019,6 +1020,50 @@ class Patch(NamespaceOwner, PatchMeta):
             align=align,
             fill=fill,
         )
+
+    def coarsen(
+        self, /, *, samples: bool = False, boundary: str = "trim", **kwargs
+    ) -> PatchCoarsen:
+        """
+        Declare non-overlapping blocks along one dimension, to reduce.
+
+        Nothing is computed until a reduction, such as ``mean``, ``median``,
+        ``min``, ``max``, ``std``, ``sum`` or ``reduce`` with any function,
+        is called on what this returns; it gives one value for each block.
+
+        Parameters
+        ----------
+        samples
+            If True, the block size is a sample count; otherwise it is in
+            the dimension's units.
+        boundary
+            What becomes of a last block shorter than the rest: ``"trim"``
+            drops it, ``"pad"`` keeps it, reduced over the samples present.
+        **kwargs
+            The dimension and block size, such as ``distance=2``.
+
+        Notes
+        -----
+        - Blocks start at the first sample. Each is labelled at its centre:
+          an evenly sampled dimension stays evenly sampled, its step the
+          block size times the old one, so a kept partial block is labelled
+          where a whole block would be centred; a dimension with no step is
+          labelled by the mean of each block's labels.
+        - Coordinates along the dimension, other than itself, keep the
+          value of each block's first sample, as with
+          [`decimate`](`dascore.Patch.decimate`).
+        - A block longer than the dimension is refused.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> # Average pairs of channels, labelled between each pair.
+        >>> stacked = patch.coarsen(distance=2, samples=True).mean()
+        >>> # The largest value in each tenth of a second.
+        >>> peaks = patch.coarsen(time=0.1).max()
+        """
+        return PatchCoarsen(self, kwargs, samples=samples, boundary=boundary)
 
     def pow_coord(self, relative: bool = True, **kwargs) -> Self:
         """Scale the data by coordinate values raised to a power."""

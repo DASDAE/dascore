@@ -118,6 +118,12 @@ smoothed.viz.waterfall(show=True);
 
 A window provides the reductions `mean`, `median`, `min`, `max`, `std`, and `sum`, and `reduce` for any other function. Specify a coordinate-unit window or set `samples=True` for an exact sample count.
 
+[`Patch.coarsen`](`dascore.Patch.coarsen`) offers the same reductions over non-overlapping blocks, starting at the first sample, with each block labelled at its centre. `boundary="pad"` keeps a short last block that the default drops.
+
+```{python}
+stacked = event.coarsen(distance=2, samples=True).mean()
+```
+
 # Gain
 
 ## Automatic gain control
