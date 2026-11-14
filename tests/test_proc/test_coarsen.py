@@ -76,6 +76,19 @@ class TestCoarsen:
         out = ramp.coarsen(distance=2, samples=True).reduce(np.percentile, 100)
         np.testing.assert_array_equal(out.data, [1, 3])
 
+    @pytest.mark.filterwarnings("ignore:No id could be derived")
+    def test_unhashable_function(self, ramp):
+        """A callable which cannot be hashed still reduces each block."""
+
+        class Largest:
+            __hash__ = None
+
+            def __call__(self, data, axis):
+                return data.max(axis=axis)
+
+        out = ramp.coarsen(distance=2, samples=True).reduce(Largest())
+        np.testing.assert_array_equal(out.data, [1, 3])
+
     def test_one_sample(self, ramp):
         """A block of one sample changes neither data nor labels."""
         out = ramp.coarsen(distance=1, samples=True).mean()

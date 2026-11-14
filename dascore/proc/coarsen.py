@@ -116,7 +116,8 @@ class Coarsen(PatchProcessor):
 
     def numpy_kernel(self, data, *, axis, size):
         """Return the reduction of each block; a partial last one if kept."""
-        function = _REDUCERS.get(self.function, self.function)
+        named = isinstance(self.function, str)
+        function = _REDUCERS[self.function] if named else self.function
         moved = np.moveaxis(data, axis, -1)
         full = moved.shape[-1] // size
         blocks = moved[..., : full * size].reshape(*moved.shape[:-1], full, size)
