@@ -209,13 +209,14 @@ def dataset_to_patch_meta(
         for name, coord in data_array.coords.items()
     }
     # A dimension the dataset gives no coordinate is rebuilt on its own:
-    # from XDAS tie points, else sample numbers, never built as an array
-    # (a store allocated ahead of its data can hold billions).
+    # from XDAS tie points, else sample numbers; those of two or more are a
+    # range never built as an array (a store allocated ahead of its data
+    # can hold billions), and shorter ones keep the labels they always had.
     for dim, size in zip(dims, shape, strict=True):
         if dim in coords:
             continue
         values = _get_tie_point_coord(dataset, dim, size)
-        if values is None and size:
+        if values is None and size > 1:
             coords[dim] = (dim, get_coord(start=0, stop=size, step=1))
             continue
         values = np.arange(size) if values is None else values

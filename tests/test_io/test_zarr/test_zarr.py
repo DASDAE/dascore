@@ -1014,18 +1014,59 @@ class TestAllocatedStore:
         path = _allocated(tmp_path / "spans.zarr", 100, _grid(100), spans)
         metas = {x._source.key: x for x in ZarrV3().get_metadata(path)}
         assert sorted(metas) == [
-            "1s/count[20:30]",
-            "1s/count[50:55]",
-            "1s/hi_max[20:30]",
-            "1s/hi_max[50:55]",
+            "1s/count[20:]",
+            "1s/count[50:]",
+            "1s/hi_max[20:]",
+            "1s/hi_max[50:]",
         ]
-        time = metas["1s/hi_max[50:55]"].coords.get_coord("time")
+        time = metas["1s/hi_max[50:]"].coords.get_coord("time")
         assert time.min() == np.datetime64("1970-01-01T00:00:50")
         assert len(time) == 5
-        data = ZarrV3().read_array(path, ((2, 5),), key="1s/hi_max[20:30]")
-        assert np.array_equal(data, np.arange(8, 20).reshape(3, 4))
+        data = ZarrV3().read_array(path, ((2, None),), key="1s/hi_max[20:]")
+        assert np.array_equal(data, np.arange(8, 40).reshape(8, 4))
         patch = dc.spool(path).select(tag="hi_max")[0]
         assert np.array_equal(patch.data, np.arange(40).reshape(10, 4))
+
+    def test_span_on_second_dim(self, tmp_path):
+        """Spans may be stated on any dimension; reads keep to the span."""
+        path = _allocated(tmp_path / "d.zarr", 100, distance_spans=[[1, 3]])
+        data = ZarrV3().read_array(path, ((20, 22),), key="1s/hi_max[1:]")
+        assert np.array_equal(data, [[1, 2], [5, 6]])
+
+    def test_keyless_read_keeps_to_span(self, tmp_path):
+        """A store of one span reads that span with no key."""
+        path = tmp_path / "one.zarr"
+        group = zarr.open_group(path, mode="w", zarr_format=3)
+        group.create_array("data", data=np.arange(10.0), dimension_names=["time"])
+        time = group.create_array("time", data=np.arange(10), dimension_names=["time"])
+        time.attrs[SPANS_ATTR] = [[2, 4]]
+        assert np.array_equal(dc.read_array(path), [2.0, 3.0])
+
+    def test_widened_span_keeps_key(self, tmp_path):
+        """A span a writer widens keeps its key, so indexed patches still load."""
+        path = _allocated(tmp_path / "w.zarr", 100, _grid(100), [[20, 25]])
+        patch = dc.spool(path).select(tag="hi_max")[0]  # not loaded yet
+        zarr.open_group(path)["1s/time"].attrs[SPANS_ATTR] = [[20, 30]]
+        assert np.array_equal(patch.data, np.arange(20).reshape(5, 4))
+
+    def test_span_like_name_is_a_name(self, tmp_path):
+        """A payload whose own name looks like a span key is read by that name."""
+        path = tmp_path / "named.zarr"
+        group = zarr.open_group(path, mode="w", zarr_format=3)
+        group.create_array("x[3:]", data=np.arange(5.0), dimension_names=["time"])
+        assert np.array_equal(ZarrV3().read_array(path, key="x[3:]"), np.arange(5.0))
+
+    def test_append_refused_along_spans(self, tmp_path):
+        """Extending along a dimension stating spans would hide the new samples."""
+        path = tmp_path / "grow.zarr"
+        patch = dc.get_example_patch()
+        dc.write(patch, path, "zarr")
+        zarr.open_group(path)["time"].attrs[SPANS_ATTR] = [[0, 10]]
+        later = patch.update_coords(
+            time_min=patch.get_coord("time").max() + patch.get_coord("time").step
+        )
+        with pytest.raises(NotImplementedError, match=SPANS_ATTR):
+            dc.write(later, path, "zarr", append="time")
 
     def test_no_spans_no_patches(self, tmp_path):
         """A store stating no span written yet holds no patches."""
@@ -1037,10 +1078,10 @@ class TestAllocatedStore:
 
     @pytest.mark.parametrize(
         "spans",
-        [[[5, 3]], [[0, 10], [5, 20]], [[90, 101]], [[-1, 2]], "bad", [[1]]],
+        [[[0, 10], [5, 20]], [[90, 101]], [[-1, 2]], [[3, 3]], [[0.5, 3.9]], [[1]], 5],
     )
     def test_invalid_spans(self, tmp_path, spans):
-        """Spans unsorted, overlapping, empty or out of bounds name the array."""
+        """Spans overlapping, out of bounds, empty or not integers name the array."""
         path = _allocated(tmp_path / "bad.zarr", 100, _grid(100), spans)
         with pytest.raises(InvalidFiberFileError, match="'time'"):
             ZarrV3().get_metadata(path)
@@ -1052,11 +1093,31 @@ class TestAllocatedStore:
         with pytest.raises(InvalidFiberFileError, match="only one dimension"):
             ZarrV3().get_metadata(path)
 
-    def test_unstated_span_key(self, tmp_path):
+    @pytest.mark.parametrize("spans", [[[20, 30]], None])
+    def test_unstated_span_key(self, tmp_path, spans):
         """A span key the store does not state names no patch."""
-        path = _allocated(tmp_path / "spans.zarr", 100, _grid(100), [[20, 30]])
+        path = _allocated(tmp_path / "spans.zarr", 100, _grid(100), spans)
         with pytest.raises(PatchAttributeError, match="No span"):
-            ZarrV3().read_array(path, key="1s/hi_max[0:5]")
+            ZarrV3().read_array(path, key="1s/hi_max[0:]")
+
+    def test_short_dims_unchanged(self, tmp_path):
+        """Dimensions of one sample or none keep the labels they had."""
+        path = tmp_path / "short.zarr"
+        group = zarr.open_group(path, mode="w", zarr_format=3)
+        group.create_array("data", shape=(1, 0), dtype="f4", dimension_names=["a", "b"])
+        (meta,) = ZarrV3().get_metadata(path)
+        assert meta.shape == (1, 0)
+        assert meta.coords.get_coord("a").step is None
+
+    def test_coord_attrs_units(self, tmp_path):
+        """A numeric grid's units are stated beside it."""
+        coord = get_coord(start=0.0, step=0.5, shape=(4,), units="km")
+        path = tmp_path / "km.zarr"
+        group = zarr.open_group(path, mode="w", zarr_format=3)
+        group.create_array("data", data=np.ones(4), dimension_names=["distance"])
+        group.create_array("distance", data=coord.values, dimension_names=["distance"])
+        group["distance"].attrs.update(coord_attrs(coord))
+        assert dc.read(path)[0].get_coord("distance") == coord
 
     def test_coord_attrs_refuses_labels(self):
         """Labels which are not one grid cannot be stated as one."""
