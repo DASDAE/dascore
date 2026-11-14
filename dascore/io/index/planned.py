@@ -1318,7 +1318,7 @@ def derived_catalog(
         concat=mode == "concat",
         conflict=merge_kwargs.get("conflict"),
         source_trimmed=_trimmed_dims(parent_residuals, coord_dims_map),
-        filled=_fill_held(outputs, trims, name) if fills else None,
+        filled=_fill_held(outputs, trims, name) if fills and len(trims) else None,
     )
     outputs = _with_windowed_dims(outputs, aux_info, name)
     records = _output_records(

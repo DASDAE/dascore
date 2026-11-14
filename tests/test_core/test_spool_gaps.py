@@ -548,6 +548,12 @@ class TestSpoolFillGaps:
         values = [x.data[0, 0] for x in chunked]
         np.testing.assert_array_equal(values, [0.0, 1.0, np.nan, np.nan, 4.0, 5.0])
 
+    def test_empty_spool(self, gappy_spool):
+        """Filling a spool a selection emptied gives an empty spool."""
+        empty = gappy_spool.select(time=(None, T0 - ONE_SECOND))
+        assert not len(empty.fill_gaps("time"))
+        assert not len(empty.fill_gaps("time").chunk(time=1))
+
     @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
     def test_windows_keep_the_fill_conflict_policy(self, gappy_spool, conflict):
         """Windows of a fill carry the attrs the fill settled for its stretch."""
