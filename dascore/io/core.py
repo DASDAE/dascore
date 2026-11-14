@@ -244,7 +244,9 @@ def _order_fiber_ios(fiber_ios: list[FiberIO]) -> tuple[FiberIO, ...]:
         before, after = _format_names(io.before), _format_names(io.after)
         for other in fiber_ios:
             if (name := other.name.upper()) == io.name.upper():
-                continue  # a format's versions keep their order
+                if rank[other] < rank[io]:  # a format's versions keep their order
+                    graph[io].add(other)
+                continue
             if name in before:
                 graph[other].add(io)
                 edges.append((io, other, -shift))
@@ -360,13 +362,13 @@ class _FiberIOManager:
         string) before any format's other versions, then format name. Each
         is then moved before or after the formats it names.
         """
+        # must load all plugins before reading their extensions
+        self.load_plugins()
         if extension not in self._extension_list:
             extension = None  # same order; keeps the cache to known extensions
         key = (input_type, extension)
         if (cached := self._prioritized_cache.get(key)) is not None:
             return cached
-        # must load all plugins before getting list
-        self.load_plugins()
         valid = self._get_fiber_io_by_input_type(input_type)
         preferred = set(self._extension_list.get(extension, ()))
         ranked = []

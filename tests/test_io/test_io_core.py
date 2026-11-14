@@ -877,6 +877,39 @@ class TestFiberIOOrder:
             ("_a", "1"),
         ]
 
+    def test_versions_keep_their_order(self, manager):
+        """An older version moved before a format brings the newer one too."""
+
+        class _A(FiberIO):
+            name, version = "_a", "1"
+
+        class _Z1(FiberIO):
+            name, version, before = "_z", "1", ("_a",)
+
+        class _Z2(_Z1):
+            version, before = "2", ()
+
+        ios = manager._get_prioritized_list(None)
+        assert [(x.name, x.version) for x in ios] == [
+            ("_z", "2"),
+            ("_z", "1"),
+            ("_a", "1"),
+        ]
+
+    def test_extension_on_first_lookup(self, manager):
+        """A manager's first lookup prefers an extension its plugins name."""
+
+        class _A(FiberIO):
+            name, version = "_a", "1"
+
+        class _Z(FiberIO):
+            name, version, preferred_extensions = "_z", "1", ("z",)
+
+        cold = _FiberIOManager("dascore.fiber_io")
+        eps = {"_A__1": lambda: _A, "_Z__1": lambda: _Z}
+        cold.__dict__["_eps"] = pd.Series(eps, dtype=object)
+        assert [x.name for x in cold._get_prioritized_list(None, "z")] == ["_z", "_a"]
+
     def test_before_beats_extension(self, manager):
         """A reader stating `before` precedes one preferring the extension."""
 
