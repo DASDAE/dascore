@@ -1055,7 +1055,9 @@ class PlanResolver(PatchResolver):
                 whole = not isinstance(spec, tuple) or spec[5:7] == (0, spec[3])
                 grid = None if whole and not trim else stretch_coordinate(spec, units)
                 if (window := trim.get(dim)) is not None:
-                    members = reached(members, dim, *window)
+                    # other policies settle attrs over every member
+                    if merge.get("conflict", "raise") == "raise":
+                        members = reached(members, dim, *window)
                     grid = None if grid is None else grid.select(tuple(window))[0]
             joined = members.assign(current_index=output_id)
             if fill and grid is not None and len(grid) == 1:

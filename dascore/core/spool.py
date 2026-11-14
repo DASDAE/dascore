@@ -2298,7 +2298,8 @@ class Spool(NodeRepr, NamespaceOwner):
         fill = self._catalog  # onto its files, unless the caller's seam test joins it
         own = params["tolerance"] is not None or params["max_shift"] is not None
         if isinstance(fill, _PendingFill) and fill.dim == dim and not own:
-            return fill.frames[0], fill.windows(params, dim_kwargs)
+            if fill.merge["conflict"] == "raise":  # else attrs need whole stretches
+                return fill.frames[0], fill.windows(params, dim_kwargs)
         source_rows, working = self._plan_frames(dim)
         plan = build_chunk_plan(working, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
@@ -2738,7 +2739,8 @@ class Spool(NodeRepr, NamespaceOwner):
         [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) fills; wider gaps
         stay. A later [`chunk`](`dascore.Spool.chunk`) or
         [`cut`](`dascore.Spool.cut`) joins across the filled gaps, loading
-        only the files each output reaches.
+        only the files each output reaches (every file of its stretch under
+        a `conflict` other than "raise", whose attrs depend on them all).
 
         Parameters
         ----------

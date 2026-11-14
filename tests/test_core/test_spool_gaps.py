@@ -548,6 +548,16 @@ class TestSpoolFillGaps:
         values = [x.data[0, 0] for x in chunked]
         np.testing.assert_array_equal(values, [0.0, 1.0, np.nan, np.nan, 4.0, 5.0])
 
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_windows_keep_the_fill_conflict_policy(self, gappy_spool, conflict):
+        """Windows of a fill carry the attrs the fill settled for its stretch."""
+        spool = dc.spool([x.update_attrs(gain=i) for i, x in enumerate(gappy_spool)])
+        filled = spool.fill_gaps("time", conflict=conflict)
+        (expected,) = {x.attrs.get("gain") for x in filled}
+        windows = [[spool[1].get_coord("time").min(), None]]
+        for out in (filled.chunk(time=4), filled.cut(time=windows)):
+            assert {x.attrs.get("gain") for x in out} == {expected}
+
     @pytest.mark.parametrize(
         "kwargs", [{"tolerance": 3}, {"tolerance": 3, "max_shift": 0.01}]
     )
