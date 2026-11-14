@@ -189,6 +189,33 @@ class TestIdentity:
         assert replace(source, dtype=np.dtype("int8")).data_id == source.data_id
 
 
+class TestAnchored:
+    """A source kept to read later does not depend on the working directory."""
+
+    def test_relative_path_is_made_absolute(self, tmp_path, monkeypatch):
+        """A relative local path is pinned to where the process is now."""
+        monkeypatch.chdir(tmp_path)
+        source = ArraySource(path="a.h5", format="DASDAE", origin_id="abc")
+        pinned = source.anchored()
+        assert pinned.path == str(tmp_path / "a.h5")
+        # The array is the same one: its id is its own, not its place's.
+        assert pinned.data_id == source.data_id and pinned.anchored() is pinned
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            ArraySource.full((2, 3), 1.0),
+            # Named by where it is kept, so another path is another array.
+            ArraySource(path="a.h5", format="DASDAE"),
+            ArraySource(path="s3://bucket/a.h5", format="DASDAE", origin_id="abc"),
+        ),
+        ids=("constant", "named_by_place", "remote"),
+    )
+    def test_left_as_it_is(self, source):
+        """A constant, a source its path names, and a remote one are not changed."""
+        assert source.anchored() is source
+
+
 class TestSerialize:
     """A source survives JSON and pickle."""
 

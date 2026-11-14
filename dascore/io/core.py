@@ -705,7 +705,7 @@ def _lazy_data(fiber_io, source: ArraySource, library: str) -> LazyArray | None:
     selection was not one window of it; see `ArraySource.narrow`.
     """
     if source.loadable:
-        return LazyArray(Recipe.from_source(source), backend=library)
+        return LazyArray(Recipe.from_source(source.anchored()), backend=library)
     decide_fallback(
         f"A {fiber_io.name} patch cannot be read lazily here: it selects "
         "samples which are not next to each other, or the format names no "

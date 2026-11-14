@@ -227,6 +227,20 @@ class TestPatchSetBackend:
         reads.clear()
         assert again.load().equals(patch) and len(reads) == 1
 
+    def test_relative_path_is_pinned(self, patch, tmp_path, monkeypatch):
+        """A lazy patch reads the file it was named beside, wherever it is read."""
+        dc.write(patch, tmp_path / "here.h5", "dasdae")
+        monkeypatch.chdir(tmp_path)
+        made = dc.read("here.h5")[0].set_backend("lazy")
+        with reading_lazily("numpy"):
+            read = dc.read("here.h5")[0]
+        handed = dc.spool("here.h5").set_backend("lazy")[0]
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        for lazy in (made, read, handed):
+            assert lazy.backend == "lazy" and lazy.load().equals(patch)
+
     def test_as_a_numpy_array(self, patch, strict):
         """`np.asarray` of a lazy array on another library is a NumPy array."""
         lazy = patch.set_backend(f"LazyArray[{STRICT}]")
@@ -639,14 +653,17 @@ class TestSpoolSetBackend:
         with pytest.raises(LazyOperationError, match="_Doubles has no"):
             pending.set_backend(f"LazyArray[{STRICT}]")[0]
 
+    @pytest.mark.parametrize("backend", (None, "lazy"), ids=("unset", "lazy"))
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_lazy_patches_held_merge(self, spool, policy, reads):
+    def test_lazy_patches_held_merge(self, spool, policy, backend, reads):
         """Merging patches a spool holds lazy reads them, which is said."""
         # Members the merge has to load: each is an operation on a file.
         held = dc.spool([x.abs() for x in spool.set_backend("lazy")])
         expected = dc.spool([x.abs() for x in spool]).chunk(time=None)[0]
         reads.clear()
-        merged = held.set_backend("lazy").chunk(time=None)
+        # Whatever backend the spool which holds them is on, or none.
+        held = held if backend is None else held.set_backend(backend)
+        merged = held.chunk(time=None)
         with config_context(numpy_fallback=policy):
             if policy is None:
                 with pytest.raises(LazyOperationError, match="cannot stay lazy"):
@@ -657,6 +674,31 @@ class TestSpoolSetBackend:
                 out = merged[0]
         assert out.backend == "numpy" and len(reads) == len(spool)
         np.testing.assert_array_equal(out.data, expected.data)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_lazy_patches_concatenated(self, spool, policy, reads):
+        """Joining lazy patches end to end writes their data, which is said."""
+        expected = spool.concatenate(time=None)[0]
+        reads.clear()
+        joined = spool.set_backend("lazy").concatenate(time=None)
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="concatenation cannot"):
+                    joined[0]
+                assert not reads
+                return
+            with pytest.warns(NumpyFallbackWarning, match="concatenation cannot"):
+                out = joined[0]
+        # Each member read once, and no more.
+        assert out.backend == "numpy" and len(reads) == len(spool)
+        np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_summary_of_patches_on_another_library(self, spool, strict):
+        """A spool of patches on another library can still say what it holds."""
+        there = spool.set_backend(STRICT).load()
+        contents = there.get_contents()
+        assert len(contents) == len(spool) == len(there)
+        assert set(contents["dtype"]) == {"float64"}
 
     def test_promise_of_another_kind(self):
         """A dask patch a spool holds is a promise already, and left one."""

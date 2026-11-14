@@ -492,7 +492,7 @@ class Patch(NamespaceOwner, PatchMeta):
                 "data are read from, before they are read."
             )
             raise ParameterError(msg)
-        return Recipe.from_source(source)
+        return Recipe.from_source(source.anchored())
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

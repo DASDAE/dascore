@@ -652,20 +652,23 @@ def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
 
 
 @contextmanager
-def _read_into_memory(why: str, rows: Sequence[Mapping], in_memory=None):
+def _read_into_memory(why: str, rows: Sequence[Mapping], held=None):
     """
     Have a merge which cannot stay lazy read its members into memory.
 
-    Under a lazy backend that is the `numpy_fallback` setting's to allow:
-    it is refused, said, or done silently. Inside the block reads fill
-    memory as usual, so the merge is the eager one. Members a spool
-    already holds in memory, which `in_memory` says of a row, are not read
-    at all, and need no leave; one it holds lazy is read like any other.
+    Reading lazy data which nobody asked to have read is the
+    `numpy_fallback` setting's to allow: it is refused, said, or done
+    silently. That is a member a spool holds lazy, whatever backend the
+    spool is on, and under a lazy backend a member in a file. A member
+    held in memory is not read at all, and a spool with no lazy backend
+    reads its files as it always has. `held` gives the patch a spool
+    holds for a row, or None for a member in a file. Inside the block
+    reads fill memory, so the merge is the eager one.
     """
-    if lazy_read_backend() is None:
-        yield
-        return
-    if in_memory is None or not all(in_memory(x) for x in rows):
+    patches = [held(x) if held is not None else None for x in rows]
+    lazy = any(x is not None and isinstance(x.data, LazyArray) for x in patches)
+    stored = lazy_read_backend() is not None and any(x is None for x in patches)
+    if lazy or stored:
         what = f"This merge cannot stay lazy: {why}"
         decide_fallback(what, "its members were read into memory")
     with reading_lazily(None):
@@ -707,9 +710,9 @@ class PatchAssembler:
     aux_coords: bool = False
     # Attrs the plan restates on its output, so members' values never clash.
     stamped: tuple[str, ...] = ()
-    # Whether a member is a patch the spool holds with its data in memory,
-    # so that merging it reads nothing.
-    in_memory: Callable[[Mapping], bool] | None = None
+    # The patch a spool holds for a member, or None for one in a file:
+    # merging a patch held in memory reads nothing.
+    held: Callable[[Mapping], Any] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -739,7 +742,7 @@ class PatchAssembler:
             # Members whose merged size the rows do not state are merged
             # as loaded patches, which a lazy backend has none of.
             why = "the size of what its members make is not known until they are read"
-            with _read_into_memory(why, df_dict_list, self.in_memory):
+            with _read_into_memory(why, df_dict_list, self.held):
                 out = self._loaded_members(joined, df_dict_list, merge_dim, units)
             out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
         else:
@@ -826,7 +829,7 @@ class PatchAssembler:
             "the index cannot describe every member, a member is in other "
             "data units, or a file has changed since it was indexed"
         )
-        with _read_into_memory(why, df_dict_list, self.in_memory):
+        with _read_into_memory(why, df_dict_list, self.held):
             out = self._stream(joined, df_dict_list, merge_dim, samples, units)
         return self._on_grid(out, joined, df_dict_list[0])
 
