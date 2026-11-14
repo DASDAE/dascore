@@ -453,6 +453,25 @@ class TestDefaultSnap:
             np.testing.assert_array_equal(time.values, labels)
         assert default.attrs.data_id == named.attrs.data_id
 
+    def test_labels_off_the_built_grid_read_alike(self, tmp_path):
+        """
+        Labels near the fractional grid their ends fit, but 0.24 step off
+        the whole-tick grid built from them, read as stored with the same id
+        by default and under snap=True, which alone warns.
+        """
+        labels = np.array([round(21 * k / 5) for k in range(21)], dtype=np.int64)
+        path = self._write(tmp_path / "built.h5", labels)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            default = dc.read(path)[0]
+        with pytest.warns(SnapWarning, match="sit up to 0.24 steps off"):
+            named = dc.read(path, snap=True)[0]
+        for patch in (default, named):
+            time = patch.get_coord("time")
+            assert time.step is None
+            np.testing.assert_array_equal(time.values, labels)
+        assert default.attrs.data_id == named.attrs.data_id
+
     def test_dense_holes(self, tmp_path):
         """A list holding many missing samples reads as stored, silently."""
         kept = np.arange(1500)[np.arange(1500) % 3 != 1]
