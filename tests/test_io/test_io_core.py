@@ -821,6 +821,170 @@ class TestFormatManager:
         assert isinstance(prioritized, tuple)
 
 
+class TestFiberIOOrder:
+    """The order fiber_ios are tried in, which `before` and `after` adjust."""
+
+    @pytest.fixture
+    def manager(self, monkeypatch):
+        """An empty manager the FiberIOs a test defines register on."""
+        manager = _FiberIOManager("dascore.fiber_io")
+        manager.__dict__["_eps"] = pd.Series({}, dtype=object)
+        monkeypatch.setattr(FiberIO, "manager", manager)
+        return manager
+
+    @staticmethod
+    def _names(manager, **kwargs):
+        return [x.name for x in manager._get_prioritized_list(None, **kwargs)]
+
+    def test_order_ignores_registration_order(self, manager):
+        """Formats are tried by name, whatever order they registered in."""
+        for name in ("_f", "_c", "_e", "_a", "_d", "_b"):
+            type(name, (FiberIO,), {"name": name, "version": "1"})
+        assert self._names(manager) == ["_a", "_b", "_c", "_d", "_e", "_f"]
+
+    def test_before_and_after(self, manager):
+        """A reader goes just before the formats in `before`, after those in `after`."""
+
+        class _A(FiberIO):
+            name, version, after = "_a", "1", ("_c",)
+
+        class _B(FiberIO):
+            name, version = "_b", "1"
+
+        class _C(FiberIO):
+            name, version = "_c", "1"
+
+        class _D(FiberIO):
+            name, version, before = "_d", "1", ("_B",)
+
+        assert self._names(manager) == ["_d", "_b", "_c", "_a"]
+
+    def test_after_moves_its_declarer(self, manager):
+        """`after` moves its reader back; one before it jumps no reader between."""
+        for name, extra in [("_a", {"after": ("_c",)}), ("_b", {}), ("_c", {})]:
+            type(name, (FiberIO,), {"name": name, "version": "1", **extra})
+        type("_d", (FiberIO,), {"name": "_d", "version": "1", "before": ("_a",)})
+        assert self._names(manager) == ["_b", "_c", "_d", "_a"]
+
+    def test_older_versions_after_every_format(self, manager):
+        """Each format's highest version is tried before any older version."""
+        for name, version in [("_a", "1"), ("_a", "2"), ("_b", "1")]:
+            type(name, (FiberIO,), {"name": name, "version": version})
+        ios = manager._get_prioritized_list(None)
+        assert [(x.name, x.version) for x in ios] == [
+            ("_a", "2"),
+            ("_b", "1"),
+            ("_a", "1"),
+        ]
+
+    def test_versions_keep_their_order(self, manager):
+        """An older version moved before a format brings the newer one too."""
+
+        class _A(FiberIO):
+            name, version = "_a", "1"
+
+        class _Z1(FiberIO):
+            name, version, before = "_z", "1", ("_a",)
+
+        class _Z2(_Z1):
+            version, before = "2", ()
+
+        ios = manager._get_prioritized_list(None)
+        assert [(x.name, x.version) for x in ios] == [
+            ("_z", "2"),
+            ("_z", "1"),
+            ("_a", "1"),
+        ]
+
+    def test_extension_on_first_lookup(self, manager):
+        """A manager's first lookup prefers an extension its plugins name."""
+
+        class _A(FiberIO):
+            name, version = "_a", "1"
+
+        class _Z(FiberIO):
+            name, version, preferred_extensions = "_z", "1", ("z",)
+
+        cold = _FiberIOManager("dascore.fiber_io")
+        eps = {"_A__1": lambda: _A, "_Z__1": lambda: _Z}
+        cold.__dict__["_eps"] = pd.Series(eps, dtype=object)
+        assert [x.name for x in cold._get_prioritized_list(None, "z")] == ["_z", "_a"]
+
+    def test_before_beats_extension(self, manager):
+        """A reader stating `before` precedes one preferring the extension."""
+
+        class _Zarr(FiberIO):
+            name, version, preferred_extensions = "_zarr", "1", ("zarr",)
+
+        class _Plugin(FiberIO):
+            name, version, before = "_plugin", "1", ("_zarr",)
+
+        class _Other(FiberIO):
+            name, version = "_other", "1"
+
+        class _Catch(FiberIO):  # a catch-all preferring the extension
+            name, version, fallback = "_catch", "1", True
+            preferred_extensions = ("zarr",)
+
+        names = self._names(manager, extension="zarr")
+        assert names == ["_plugin", "_zarr", "_catch", "_other"]
+        # extensions no reader prefers share one cached order
+        for ext in ("0001", "0002"):
+            expected = ["_other", "_plugin", "_zarr", "_catch"]
+            assert self._names(manager, extension=ext) == expected
+        assert set(manager._prioritized_cache) == {(None, "zarr"), (None, None)}
+
+    def test_chain_and_ties(self, manager):
+        """
+        A chain of `before` keeps readers naming nothing in place, and two
+        readers naming one format keep their order by name.
+        """
+        for name, before in [("_a", ()), ("_b", ()), ("_c", ())]:
+            type(name, (FiberIO,), {"name": name, "version": "1", "before": before})
+        for name, before in [("_d", ("_e",)), ("_e", ("_b",)), ("_f", ("_b",))]:
+            type(name, (FiberIO,), {"name": name, "version": "1", "before": before})
+        assert self._names(manager) == ["_a", "_d", "_e", "_f", "_b", "_c"]
+
+    def test_own_format_is_ignored(self, manager):
+        """A version naming its own format is not a cycle; versions keep order."""
+
+        class _A1(FiberIO):
+            name, version, after = "_a", "1", ("_a",)
+
+        class _A2(_A1):
+            version = "2"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ios = manager._get_prioritized_list(None)
+        assert [x.version for x in ios] == ["2", "1"]
+
+    def test_hint_waits_for_readers_before_it(self, manager):
+        """A directory scan's last reader is not tried ahead of one named before it."""
+
+        class _Generic(FiberIO):
+            name, version = "_generic", "1"
+
+        class _Plugin(FiberIO):
+            name, version, before = "_plugin", "1", "_generic"  # a str is a name
+
+        hint = {"file": _Generic()}
+        ios = manager.yield_fiberio(fiber_io_hint=hint, input_type="file")
+        assert [x.name for x in ios] == ["_plugin", "_generic"]
+
+    def test_cycle_warns_and_is_ignored(self, manager):
+        """Readers each asking to go before the other keep the order by name."""
+
+        class _B(FiberIO):
+            name, version, before = "_b", "1", ("_a",)
+
+        class _A(FiberIO):
+            name, version, before = "_a", "1", ("_b",)
+
+        with pytest.warns(UserWarning, match="cycle"):
+            assert self._names(manager) == ["_a", "_b"]
+
+
 class TestBrokenEntryPoint:
     """Tests for graceful handling of unloadable FiberIO entry points."""
 
@@ -896,23 +1060,23 @@ class TestGetFormatErrors:
 
         class _NeedsLocal(FiberIO):
             name = "_needs_local"
-            version = "1"
+            version = "4"
             preferred_extensions = ("rcx",)
 
             def get_version(self, resource: LocalPath, **kwargs) -> str | None:
                 return self.version
 
         class _NeedsLocalV2(_NeedsLocal):
-            version = "2"
+            version = "3"
 
         class _RefusesItself(_NeedsLocal):
-            version = "3"
+            version = "2"
 
             def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
                 raise RemoteCacheError("refused by the reader")
 
         class _ClaimsBytes(_NeedsLocal):
-            version = "4"
+            version = "1"
 
             def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
                 return self.version
