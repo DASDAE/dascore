@@ -1443,6 +1443,18 @@ class TestCompositeSourceIdentity:
         assert df["source_path"].iloc[0].startswith("s3://bucket-b")
         back.close()
 
+    def test_select_source_path_with_base(self, tmp_path):
+        """Exact, glob and regex selectors all match the shown source path."""
+        record = summaries_to_records(make_summaries()[:1])[0]
+        back = get_backend(tmp_path / "base.sqlite3")
+        back.write_sources([dataclasses.replace(record, base_uri="s3://bucket/")])
+        shown = back.query()["source_path"].iloc[0]
+        assert shown.startswith("s3://bucket/") and "//" not in shown[5:]
+        for value in (shown, "s3://bucket/*", re.compile("^s3://bucket/")):
+            df = back.query(Query(attrs={"source_path": value}))
+            assert list(df["source_path"]) == [shown]
+        back.close()
+
     def test_replacement_is_base_scoped(self, tmp_path):
         """Rewriting a source under one base leaves the other base alone."""
         base = make_summaries()[0].dump_structured()

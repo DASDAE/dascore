@@ -179,6 +179,9 @@ STORAGE_PROVENANCE_ATTRS = (
     "file_version",
 )
 
+# Index source columns a spool selects on like string attrs.
+SOURCE_ATTRS = frozenset({"source_path"})
+
 # Per-patch provenance attrs: merges never compare them and carry the first
 # patch's value, and the index does not store them.
 MERGE_EXEMPT_ATTRS = ("history", "segy_text_header")

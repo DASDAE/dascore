@@ -36,7 +36,12 @@ import pandas as pd
 import dascore as dc
 from dascore.compat import UPath
 from dascore.config import config_context, get_config
-from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
+from dascore.constants import (
+    PROGRESS_LEVELS,
+    SOURCE_ATTRS,
+    ExecutorType,
+    namespace_select_type,
+)
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import InvalidIndexError, MissingPatchError, ParameterError
 from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
@@ -1305,7 +1310,7 @@ class PatchCatalog:
         existence-only predicate excludes patches without the coordinate.
         """
         query = resolve_query(
-            self.backend.attr_names(),
+            self.backend.attr_names() | SOURCE_ATTRS,
             self.backend.coord_names(),
             _attrs=_attrs,
             _coords=_coords,
