@@ -553,16 +553,6 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
     return coords._update_grid(dim, **{dim: coord})
 
 
-def _fuses(rows: Sequence[Mapping], dim: str) -> bool:
-    """
-    Whether a merge may fuse its members' labels: as the plan judged them,
-    every member states one step and the plan keeps no stretch's labels.
-    """
-    keeps = (x.get(f"_{dim}_stretch") == "labels" for x in rows)
-    steps = {x.get(f"{dim}_step") for x in rows}
-    return not any(keeps) and len(steps) == 1 and not pd.isnull(steps.pop())
-
-
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
     """The patch with its ``dim`` labels on its stretch's grid (see above)."""
     coords = on_stretch_grid(patch.coords, dim, row)
@@ -714,8 +704,7 @@ class PatchAssembler:
             info["patch"] = patch
             out.append(info)
         if len(out) > expected_len:
-            fuse = _fuses(df_dict_list, self.plan_dim)
-            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs, fuse=fuse)
+            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
         patches = [x["patch"] for x in out]
         if len(patches) == 1 and df_dict_list:
             patches = [self._on_grid(patches[0], joined, df_dict_list[0])]
@@ -993,10 +982,7 @@ class PatchAssembler:
             )
             raise CoordMergeError(msg)
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
-        fuse = _fuses(rows, merge_dim)
-        new_coord = _get_merged_coord(
-            summary_df, merge_dim, coords, fuse=fuse, **coord_kwargs
-        )
+        new_coord = _get_merged_coord(summary_df, merge_dim, coords, **coord_kwargs)
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(
             attrs,

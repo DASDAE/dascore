@@ -85,7 +85,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-A coordinate of several segments has no `step`, though each segment keeps its own. `snap=False` keeps an array's values exactly: labels a grid reproduces exactly become that grid, and anything else is one list of labels with no step. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
+A coordinate of several segments has no `step`, though each segment keeps its own. `snap=False` keeps an array's values exactly: labels a grid reproduces exactly become that grid, and anything else is one list of labels with no step. By default, float labels within their stored precision of a grid become that grid. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
@@ -98,7 +98,7 @@ A spool keeps a patch with holes whole; [`Patch.split_gaps`](`dascore.Patch.spli
 
 ### Declaring a grid
 
-Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid but misses two positions of a step-1 grid. Passing `step` with array data declares the grid. Every value must sit on it (an off-grid value raises rather than moves), and each run of consecutive positions becomes a segment on that step.
+Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid but misses two positions of a step-1 grid. Passing `step` with array data declares the grid: each run of consecutive positions becomes a segment on that step. Values the grid does not restate are kept, not moved, as one list of labels with no step.
 
 ```{python}
 coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
@@ -106,8 +106,6 @@ assert coord.runs_count == 3 and coord.step is None
 assert [len(x) for x in coord.segments] == [1, 2, 3]
 assert {x.step for x in coord.segments} == {1}
 ```
-
-A dense array whose segments would outnumber a tenth of its samples stays one list of labels keeping the declared step. [`missing()`](`dascore.core.coords.BaseCoord.missing`) reports the empty positions of such a list's grid; a coordinate of several segments shares no grid, so nothing is missing from it.
 
 Filling holes is a patch operation. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) joins the segments onto the first one's grid and writes a fill value (NaN by default) where no sample sits. A limit such as `fill_gaps(time=10)`, in coordinate units, or a count of missing samples with `samples=True`, fills only holes up to that width (missing samples times the step) and leaves wider ones.
 
@@ -165,7 +163,7 @@ from dascore.units import ft
 selected_in_feet, _ = regular.select((3 * ft, 20 * ft))
 ```
 
-`sort` permutes existing values. [`snap()`](`dascore.core.coords.BaseCoord.snap`) replaces them with one evenly sampled grid, so it returns only a coordinate; use `CoordManager.snap` or `Patch.snap_coords` when the data must be sorted along with it. [`fuse(tolerance=...)`](`dascore.core.coords.BaseCoord.fuse`) simplifies runs only where no value moves more than `tolerance`. Prefer it when values are measurements rather than ideal labels.
+`sort` permutes existing values. [`snap()`](`dascore.core.coords.BaseCoord.snap`) replaces them with one evenly sampled grid, so it returns only a coordinate; use `CoordManager.snap` or `Patch.snap_coords` when the data must be sorted along with it.
 
 ## String coordinates
 

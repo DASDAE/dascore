@@ -254,7 +254,6 @@ def _planned_manager(plan, row, files=None, projection=None):
             pd.DataFrame(),
             merge_dim,
             recovered,
-            fuse=pa._fuses(rows, plan.dim),
             warn=False,
             **kwargs,
         )

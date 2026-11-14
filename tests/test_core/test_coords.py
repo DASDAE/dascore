@@ -1590,11 +1590,12 @@ class TestRangeCoord:
         assert out.shape == out.values.shape == (len(out),)
         assert out.step == step
 
-    def test_off_grid_values_with_step_raise(self):
-        """A declared step is a claim the values must meet."""
+    def test_off_grid_values_with_step_are_labels(self):
+        """Values a declared step does not restate keep their labels, no step."""
         # linspace's spacing is 1/999, not the 1/1000 declared
-        with pytest.raises(CoordError, match="not on a grid"):
-            get_coord(data=np.linspace(0.0, 1, 1000), step=1 / 1_000)
+        values = np.linspace(0.0, 1, 1000)
+        coord = get_coord(data=values, step=1 / 1_000)
+        assert coord.step is None and np.array_equal(coord.values, values)
 
     def test_len_one_array_like_start_no_deprecation(self):
         """Array-like scalar start should not emit numpy scalar conversion warning."""
@@ -3554,7 +3555,7 @@ class TestFractionalSnap:
         values[1:-1:7] += np.timedelta64(1, "ns")
         out = get_coord(data=values, snap=True)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
-        assert get_coord(data=values, snap=False).jittered
+        assert get_coord(data=values, snap=False).step is None
 
     def test_off_grid_label_falls_through(self):
         """Labels no fractional grid holds keep the rounded median step."""
@@ -3619,39 +3620,42 @@ class TestDeclaredStepSnap:
         with pytest.raises(CoordError, match="finite non-zero"):
             get_coord(data=np.array([0.0, 1.0, 2.0]), step=np.inf)
 
-    def test_unrepresentable_grid_is_not_snapped(self):
-        """A step floats cannot place labels on is not claimed for them."""
+    def test_grid_finer_than_float_precision(self):
+        """Labels rounded off a step finer than their precision are its grid."""
         values = 1e6 + np.arange(300) * 1.4e-10
-        with pytest.raises(CoordError):
-            get_coord(data=values, step=1.4e-10)
+        out = get_coord(data=values, step=1.4e-10)
+        assert out.evenly_sampled
+        ulps = 8 * np.spacing(values.max())
+        np.testing.assert_allclose(out.values, values, rtol=0, atol=ulps)
 
-    def test_labels_within_ulps_keep_the_step(self):
-        """Labels a few ulps off a far grid are on it, and are kept as stored."""
+    def test_labels_within_ulps_are_the_grid(self):
+        """Labels a few ulps off a far grid are on it, within those ulps."""
         values = 1e12 + np.arange(300) * 1e-3
         out = get_coord(data=values, step=1e-3)
-        assert out.evenly_sampled and np.array_equal(out.values, values)
+        assert out.evenly_sampled
+        ulps = 8 * np.spacing(values.max())
+        np.testing.assert_allclose(out.values, values, rtol=0, atol=ulps)
 
-    def test_labels_off_the_grid_are_jittered(self):
-        """Labels further off the declared grid than rounding are jittered."""
+    def test_labels_off_the_grid_are_labels(self):
+        """Labels further off the declared grid than rounding state no step."""
         values = np.arange(300) * 0.1
         values[1::2] += 0.1 * 2e-6
         out = get_coord(data=values, step=0.1)
-        assert out.jittered and out.step == 0.1
-        assert np.array_equal(out.values, values)
+        assert out.step is None and np.array_equal(out.values, values)
 
-    def test_labels_half_a_step_off_are_refused(self):
-        """Labels half a step off the declared grid raise."""
+    def test_labels_half_a_step_off_are_labels(self):
+        """Labels half a step off the declared grid state no step."""
         values = np.arange(300) * 0.1
         values[1::2] += 0.05
-        with pytest.raises(CoordError, match="not on a grid"):
-            get_coord(data=values, step=0.1)
+        out = get_coord(data=values, step=0.1)
+        assert out.step is None and np.array_equal(out.values, values)
 
     def test_exact_read_does_not_snap(self):
-        """Without snapping, rounded labels are kept exactly."""
+        """Without snapping, rounded labels are kept exactly, as labels."""
         values = np.arange(300) * 0.1
         values[1::2] += 0.1 * 5e-7
         out = get_coord(data=values, step=0.1, snap=False)
-        assert np.array_equal(out.values, values)
+        assert out.step is None and np.array_equal(out.values, values)
 
 
 class TestSnapTimeUnits:

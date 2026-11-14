@@ -76,11 +76,8 @@ def _get_null_step_value(summary: CoordSummary):
     return None
 
 
-# How a coordinate sits on its step, which the flat fields leave to the
-# index: a flat step is the step of a range, as it always has been.
-_UNFLATTENED_FIELDS = frozenset(
-    {"jittered", "gapped", "offset_min", "offset_max", "run_count", "runs"}
-)
+# A coordinate's segments, which the flat fields leave to the index.
+_UNFLATTENED_FIELDS = frozenset({"run_count", "runs"})
 
 
 def _flatten_coord_summary(

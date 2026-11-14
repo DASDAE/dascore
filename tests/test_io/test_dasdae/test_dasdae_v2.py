@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import warnings
 
 import h5py
 import numpy as np
@@ -17,9 +18,11 @@ from dascore.core.coords import (
 )
 from dascore.io.dasdae import utils as dasdae_utils
 from dascore.io.dasdae.utils import _read_stored_coord, _save_coord
+from dascore.warnings import SnapWarning
 from tests.conftest import join_patches
 
 T0 = np.datetime64("2020-01-01T00:00:00")
+MS = np.timedelta64(1, "ms")
 
 
 @pytest.fixture(scope="module")
@@ -308,6 +311,81 @@ class TestSnapIds:
             out = dc.read(path, snap=snap)[0]
             assert out.attrs.data_id == patch.attrs.data_id
             assert "_snapped_dims" not in dict(out.attrs)
+
+
+class TestFilesWithAStepBesideLabels:
+    """
+    Version 2 files written before labels stated no step store an array
+    beside a step its labels may sit off; they read by rule 3.
+    """
+
+    @staticmethod
+    def _old_file(path, labels, step):
+        """A file as earlier version 2 writers left it: labels beside a step."""
+        coord = NumericCoord.from_labels(labels)
+        data = np.arange(len(labels), dtype=np.float64)
+        patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
+        dc.write(patch, path, "DASDAE")
+        timedelta = np.asarray(step).dtype.kind == "m"
+        with h5py.File(path, "r+") as h5:
+            names = []
+            h5.visit(names.append)
+            (name,) = [x for x in names if x.endswith("_coord_time")]
+            node = h5[name]
+            node.attrs["step"] = (
+                np.int64(step // np.timedelta64(1, "ns")) if timedelta else step
+            )
+            node.attrs["step_is_timedelta64"] = timedelta
+        return path
+
+    def test_labels_near_their_step_snap(self, tmp_path):
+        """Labels within max_shift of a grid come back on it by default."""
+        jitter = np.tile([0, 100_000, -100_000, 0], 25).astype("m8[ns]")
+        labels = T0.astype("M8[ns]") + np.arange(100) * MS + jitter
+        path = self._old_file(tmp_path / "near.h5", labels, MS)
+        time = dc.read(path)[0].get_coord("time")
+        assert time.evenly_sampled and time.step == MS
+        exact = dc.read(path, snap=False)[0].get_coord("time")
+        assert exact.step is None and np.array_equal(exact.values, labels)
+
+    def test_labels_off_their_step_read_as_stored(self, tmp_path):
+        """Labels past max_shift of a grid read back as stored, with a warning."""
+        jitter = np.tile([0, 300_000], 50).astype("m8[ns]")
+        labels = T0.astype("M8[ns]") + np.arange(100) * MS + jitter
+        path = self._old_file(tmp_path / "off.h5", labels, MS)
+        with pytest.warns(SnapWarning, match="stored time labels"):
+            time = dc.read(path)[0].get_coord("time")
+        assert time.step is None and time.runs_count == 1
+        assert np.array_equal(time.values, labels)
+
+    def test_irregular_labels_read_silently(self, tmp_path):
+        """Labels half a step or more off any grid are what was written."""
+        labels = T0.astype("M8[ns]") + np.array([0, 1, 3, 4, 9]) * MS
+        path = self._old_file(tmp_path / "irregular.h5", labels, MS)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            time = dc.read(path)[0].get_coord("time")
+        assert time.step is None and np.array_equal(time.values, labels)
+
+    def test_labels_skipping_positions_are_segments(self, tmp_path):
+        """A dense run with holes, once one stored list, reads as segments."""
+        kept = np.arange(1500)[np.arange(1500) % 3 != 2]
+        labels = T0.astype("M8[ns]") + kept * MS
+        path = self._old_file(tmp_path / "holes.h5", labels, MS)
+        time = dc.read(path)[0].get_coord("time")
+        assert time.runs_count == 500 and {x.step for x in time.segments} == {MS}
+        assert np.array_equal(time.values, labels)
+
+    def test_float_labels_on_their_step_are_a_grid(self, tmp_path):
+        """Float labels on their step within rounding snap, or read exactly."""
+        labels = 1.6e9 + np.arange(100) * 1e-3
+        path = self._old_file(tmp_path / "float.h5", labels, 1e-3)
+        time = dc.read(path)[0].get_coord("time")
+        assert time.evenly_sampled
+        ulps = 8 * np.spacing(labels.max())
+        np.testing.assert_allclose(time.values, labels, rtol=0, atol=ulps)
+        exact = dc.read(path, snap=False)[0].get_coord("time")
+        assert exact.step is None and np.array_equal(exact.values, labels)
 
 
 class TestMultiRunRoundTrip:

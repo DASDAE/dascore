@@ -1,9 +1,9 @@
 """
-Every writer keeps a coordinate's step, flags and holes, or refuses.
+Every writer keeps a coordinate's step and segments, or refuses.
 
 Rule 13 of the coordinate guidelines (`notes/coordinates.qmd`): a writer
 never silently splits, stretches, fills or drops a step; a format which
-cannot store holes or jitter raises, saying to regularize or split first.
+cannot store segments or labels raises, saying to regularize or split first.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def _stored(fio, path):
 
 
 class TestWriterCoordinates:
-    """Each writer keeps a coordinate's step, flags and holes, or refuses."""
+    """Each writer keeps a coordinate's step and segments, or refuses."""
 
     def test_every_writer_listed(self):
         """The list covers every writer DASCore registers."""
@@ -126,7 +126,8 @@ class TestWriterCoordinates:
         keeps = (
             case in {"even", "one channel"}
             or _label(fio) in EXACT
-            or (_label(fio) == "DASDAE 1" and case == "stepless")
+            # jittered labels state no step, as stepless ones do
+            or (_label(fio) == "DASDAE 1" and case in {"stepless", "jittered"})
             or (time_only and case == "distance gaps")
         )
         args = (patch, path, fio.name, fio.version)
@@ -143,7 +144,7 @@ class TestWriterCoordinates:
         for dim in ["time"] if time_only else patch.dims:
             expected, got = patch.get_coord(dim), meta.get_coord(dim)
             assert got.step == expected.step
-            assert (got.jittered, got.gapped) == (expected.jittered, expected.gapped)
+            assert segment_layout(got) == segment_layout(expected)
             assert np.array_equal(got.values, expected.values)
 
     @pytest.mark.parametrize("fio", WRITERS, ids=_label)

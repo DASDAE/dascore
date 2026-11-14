@@ -74,9 +74,9 @@ def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
     """
     Refuse dimensions a format stores only as a grid, saying how to make one.
 
-    Writers keep a coordinate's step and holes, or refuse (rule 13 of the
+    Writers keep a coordinate's step and segments, or refuse (rule 13 of the
     coordinate guidelines, `notes/coordinates.qmd`); a format which stores
-    a start and a step cannot hold holes, jitter or labels with no step.
+    a start and a step cannot hold segments or labels with no step.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)
@@ -87,7 +87,7 @@ def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
 def _layout(coord) -> tuple:
     """What a written coordinate must read back as: its steps and segments."""
     segments = tuple((len(x), x.step) for x in coord.segments)
-    return coord.step, coord.jittered, coord.gapped, segments
+    return coord.step, segments
 
 
 def written_step(name: str, coord, why: str):

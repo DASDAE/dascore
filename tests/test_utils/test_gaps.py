@@ -10,8 +10,6 @@ from dascore.exceptions import ParameterError, UnitError
 from dascore.units import get_quantity
 from dascore.utils.gaps import (
     GapTolerance,
-    RunRecord,
-    contiguous_runs,
     get_gap_edges,
     is_monotonic_and_finite,
 )
@@ -181,33 +179,3 @@ class TestGapTolerance:
             GapTolerance(count=1.0, excess=1.0)
         with pytest.raises(ParameterError):
             GapTolerance()
-
-
-class TestContiguousRuns:
-    """Runs joined into the stretches their holes leave."""
-
-    def test_holes_end_stretches(self):
-        """On a step, only skipped positions end a stretch."""
-        runs = [
-            RunRecord(3, 0, 2, 1, 0),
-            RunRecord(2, 3, 4, 1, 3),
-            RunRecord(1, 9, 9, 1, 9),
-        ]
-        out = contiguous_runs(runs, step=1)
-        assert [(x.count, x.min, x.max, x.step) for x in out] == [
-            (5, 0, 4, 1),
-            (1, 9, 9, 1),
-        ]
-        jittered = contiguous_runs(runs, step=1, jittered=True)
-        assert {x.step for x in jittered} == {None}
-
-    def test_segments_are_their_own_stretches(self):
-        """Without a step every run is a segment, keeping its own step."""
-        runs = [
-            RunRecord(3, 0.0, 2.0, 1.0),
-            RunRecord(3, 3.0, 4.0, 0.5),
-            RunRecord(2, 9.0, 12.0),
-        ]
-        out = contiguous_runs(runs)
-        assert out == runs
-        assert contiguous_runs([]) == []

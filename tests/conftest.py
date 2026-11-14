@@ -629,11 +629,11 @@ def two_run_patch():
 
 @pytest.fixture(scope="session")
 def jittered_patch():
-    """A patch whose time labels keep a step but sit off its grid."""
+    """A patch whose time labels sit off the grid of the step they state."""
     labels = np.arange(120.0)
     labels[1::7] += 0.1
-    time = NumericCoord.from_labels(labels, step=1.0)
-    assert time.jittered and not time.gapped
+    time = dc.get_coord(data=labels, step=1.0)
+    assert time.step is None and time.runs_count == 1  # labels state no step
     data = (labels**2)[None]  # spacing shows in what is computed
     coords = {"distance": np.array([0]), "time": time}
     return dc.Patch(data=data, coords=coords, dims=("distance", "time"))

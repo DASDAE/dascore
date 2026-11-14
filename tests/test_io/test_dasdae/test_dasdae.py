@@ -702,7 +702,7 @@ class TestLegacyFixtureCompatibility:
             group.create_dataset("_coord_distance", data=np.array([0.0, 1.0, 3.0]))
             group.create_dataset("data", data=np.zeros(3))
             summary = _get_metadata_from_group(group)
-        # the labels are jittered on their own fitted step, not the legacy one
+        # the labels state no step, not the legacy one
         distance = summary.coords["distance"]
         assert not distance.evenly_sampled and distance.step != 1.0
 
@@ -1342,10 +1342,11 @@ class TestExactLabels:
 
     @pytest.mark.parametrize("snap", [True, False])
     def test_declared_step_labels_roundtrip(self, tmp_path, snap):
-        """Labels stored with a declared step read back exactly in both modes."""
+        """Labels kept exactly beside a declared step read back as stored."""
         values = np.arange(300) * 0.1
         values[1::2] += 0.1 * 5e-7
         coord = dc.get_coord(data=values, step=0.1, snap=False)
+        assert coord.step is None
         patch = dc.Patch(
             data=np.zeros((300, 2)),
             dims=("time", "distance"),
@@ -1354,4 +1355,7 @@ class TestExactLabels:
         path = tmp_path / "declared.h5"
         dc.write(patch, path, "DASDAE")
         out = dc.read(path, snap=snap)[0].get_coord("time")
-        np.testing.assert_array_equal(out.values, values)
+        if snap:  # within max_shift of a grid, which a snap puts them on
+            assert out.evenly_sampled and np.allclose(out.values, values)
+        else:
+            np.testing.assert_array_equal(out.values, values)

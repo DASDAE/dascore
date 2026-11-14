@@ -207,9 +207,8 @@ def get_coord(
     require_sorted
         If True, require the coordinate to be sorted or raise Error.
     require_evenly_sampled
-        If True, require the coordinate to be evenly sampled or raise Error:
-        it must have a step and be neither jittered nor gapped (see
-        [`NumericCoord`](`dascore.core.coords.NumericCoord`)).
+        If True, require the coordinate to be evenly sampled, one grid (see
+        [`NumericCoord`](`dascore.core.coords.NumericCoord`)), or raise Error.
 
     Raises
     ------
@@ -1477,13 +1476,11 @@ def split_gaps(self: PatchType) -> dc.Spool:
     """
     Split the patch into contiguous patches.
 
-    The patch splits at every hole
-    [missing](`dascore.core.coords.BaseCoord.missing`) reports and where
-    runs sharing no step change step or leave a gap; irregular labels
-    sharing no step stay one piece. Two gapped dimensions give one piece
-    per pair of stretches. Each output is a view of the patch's data; a
-    patch without holes comes back unchanged. A spool holds a patch with
-    holes whole, so this is the one way to split it.
+    The patch splits between its coordinates' segments; one list of
+    irregular labels stays one piece. Two dimensions of several segments
+    give one piece per pair of segments. Each output is a view of the
+    patch's data; a patch without gaps comes back unchanged. A spool holds
+    a patch with gaps whole, so this is the one way to split it.
 
     Parameters
     ----------

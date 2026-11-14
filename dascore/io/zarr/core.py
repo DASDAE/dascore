@@ -100,7 +100,7 @@ def _range_fields(coord) -> dict | None:
     """
     Return the fields describing a coordinate's grid (see `COORD_PREFIX`).
 
-    None where it has no grid (holes, jitter, partial), or where JSON (no
+    None where it has no grid (segments, labels, partial), or where JSON (no
     numpy scalar types) leaves the description unable to rebuild the labels
     exactly; those labels are read instead.
     """

@@ -265,85 +265,25 @@ class GapTolerance:
 @dataclass(frozen=True, slots=True)
 class RunRecord:
     """
-    One run of a coordinate's labels, holding no hole.
+    One segment of a coordinate's labels.
 
-    A coordinate states its runs as these, and a spool index stores them
-    as rows, so the gap questions below get one answer whichever is asked.
-
-    ``count`` samples span the labels ``min`` to ``max``. ``step`` is the
-    spacing the run keeps: the coordinate's, or a grid run's own where the
-    coordinate has none; None where it keeps none. ``position`` is where
-    the run's first sample sits on the coordinate's grid, its first sample
-    being 0; None where the coordinate has no grid.
+    A coordinate states its segments as these, and a spool index stores
+    them as rows, so the gap questions below get one answer whichever is
+    asked. ``count`` samples span the labels ``min`` to ``max``; ``step``
+    is a grid segment's own, None for labels.
     """
 
     count: int
     min: Any
     max: Any
     step: Any = None
-    position: int | None = None
-
-
-def run_holes(records) -> list[int]:
-    """The positions missing before each run; 0 where none are or none are known."""
-    out, end = [], None
-    for record in records:
-        known = end is not None and record.position is not None
-        out.append(record.position - end if known else 0)
-        end = None if record.position is None else record.position + record.count
-    return out
-
-
-def contiguous_runs(records, step=None, jittered: bool = False) -> list[RunRecord]:
-    """
-    Join a coordinate's runs into the stretches its holes leave.
-
-    Segments share no grid, so on a coordinate without a step each run is
-    its own stretch, keeping its own step. On one run of labels with a
-    step a stretch ends at each hole, and keeps the step unless the labels
-    are jittered.
-
-    Examples
-    --------
-    >>> from dascore.utils.gaps import RunRecord, contiguous_runs
-    >>> runs = [RunRecord(3, 0, 2, 1, 0), RunRecord(2, 5, 6, 1, 5)]
-    >>> [(x.count, x.min, x.max) for x in contiguous_runs(runs, step=1)]
-    [(3, 0, 2), (2, 5, 6)]
-    """
-    if not records or pd.isnull(step):
-        return list(records or ())
-    groups: list[list[RunRecord]] = []
-    for record, hole in zip(records, run_holes(records), strict=True):
-        if hole > 0 or not groups:
-            groups.append([record])
-        else:
-            groups[-1].append(record)
-    return [
-        RunRecord(
-            count=sum(x.count for x in group),
-            min=min(x.min for x in group),
-            max=max(x.max for x in group),
-            step=None if jittered else step,
-            position=group[0].position,
-        )
-        for group in groups
-    ]
 
 
 def contiguous_windows(coord) -> list[tuple[int, int]]:
-    """
-    The positional ``(start, stop)`` windows over which a coordinate is contiguous.
-
-    One window per stretch
-    [`contiguous_runs`](`dascore.utils.gaps.contiguous_runs`) joins the
-    coordinate's runs into, so a window ends at every hole
-    [missing](`dascore.core.coords.BaseCoord.missing`) reports, and runs
-    joined by sub-sample jitter are one window.
-    """
+    """The positional ``(start, stop)`` window of each of a coordinate's segments."""
     if not hasattr(type(coord), "_run_records") or coord.evenly_sampled:
         return [(0, len(coord))]
-    runs = contiguous_runs(coord._run_records(), coord.step, coord.jittered)
-    stops = np.cumsum([x.count for x in runs]).tolist()
+    stops = np.cumsum([x.count for x in coord._run_records()]).tolist()
     return list(zip([0, *stops[:-1]], stops, strict=True))
 
 

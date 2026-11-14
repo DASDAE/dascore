@@ -99,8 +99,7 @@ class TestSeamTest:
         assert bool(gaps) == warns
         for patch in out:
             coord = patch.get_coord("time")
-            assert coord.evenly_sampled
-            assert not coord.jittered and not coord.gapped
+            assert coord.evenly_sampled and coord.runs_count == 1
 
     @pytest.mark.parametrize(
         ("width", "joins"), [(1.19, True), (1.21, False), (0.81, True), (0.79, False)]

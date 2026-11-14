@@ -2590,7 +2590,7 @@ def write(
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     _check_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.Spool):
-        # a spool holds a patch with holes whole; its writer keeps or refuses them
+        # a spool holds a patch with gaps whole; its writer keeps or refuses them
         patch_or_spool = dc.spool([patch_or_spool])
     if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:
         msg = (

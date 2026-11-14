@@ -53,7 +53,7 @@ from dascore.utils.array import (
 from dascore.utils.hdf5 import create_dataset, staged_group
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import _uneven_message
-from dascore.utils.time import to_int
+from dascore.utils.time import to_float, to_int
 
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
@@ -415,20 +415,29 @@ def _node_step(attrs):
 
 def _read_coord(node, name, attrs2, snap):
     """
-    Rebuild one coordinate from its node, on a grid if `snap` and jittered,
-    and say whether snapping moved its labels.
+    Rebuild one coordinate from its node, snapping it if `snap` and it is
+    one list of labels within half a step of a grid, and say whether
+    snapping moved its labels.
 
-    Only labels written jittered snap: holes and irregular labels are what
-    was written, not a grid's noise.
+    Segments and irregular labels are what was written, not a grid's noise,
+    so they read back as stored, without a warning; labels near a grid are
+    checked as every reader checks them (`stored_coord`).
     """
     coord = _read_stored_coord(node, name, attrs2)
-    if not (snap and coord.jittered) or coord.gapped:
+    if not (snap and isinstance(coord, NumericCoord) and coord.ndim == 1):
         return coord, False
-    units = coord.units
-    out = stored_coord(coord.values, True, name=name, where=node.file, units=units)
-    # The helper keeps the stored labels when its check fails, in which
-    # case nothing moved.
-    return out, not np.array_equal(out.values, coord.values)
+    if coord.runs_count > 1 or len(coord) < 2:
+        return coord, False
+    values = np.asarray(coord.values)
+    if values.dtype.kind in "mM":
+        rel = to_float(values - values[0])
+    else:
+        rel = values.astype(np.float64) - float(values[0])
+    fit = rel[-1] / (len(rel) - 1)
+    if coord.evenly_sampled or np.any(np.abs(rel / fit - np.arange(len(rel))) >= 0.5):
+        return coord, False
+    out = stored_coord(values, True, name=name, where=node.file, units=coord.units)
+    return out, not np.array_equal(out.values, values)
 
 
 def _read_stored_coord(node, name, attrs2):
@@ -478,9 +487,8 @@ def _read_stored_coord(node, name, attrs2):
     array = _read_array(node)
     if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate
         return get_coord(data=array, units=units, snap=True)
-    # A stored nominal step is a grid claim the values must meet, which a
-    # legacy file's jittered values need not; it names the spacing only for
-    # a single sample, where the values cannot.
+    # A stored nominal step is a grid claim the values need not meet; it
+    # names the spacing only for a single sample, where the values cannot.
     step = step if len(array) == 1 else None
     return get_coord(data=array, units=units, step=step, snap=False)
 

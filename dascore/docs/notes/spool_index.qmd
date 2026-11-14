@@ -16,7 +16,7 @@ The index splits its metadata across several tables so nothing is stored more th
 | `attrs` | patch | Attribute values, one column per attribute name and value kind |
 | `attr_meta` | attribute name and value kind | Which `attrs` column holds which attribute, and its canonical units |
 | `coord_defs` | distinct coordinate | A summary of each unique coordinate |
-| `coord_runs` | run of a coordinate | The pieces of a coordinate with holes in it |
+| `coord_runs` | run of a coordinate | The segments of a coordinate with gaps in it |
 | `patch_coords` | coordinate on a patch | Links each patch to its coordinates |
 | `coord_variants` | coordinate name, dtype, kind, units, and relativity | How many patches have each variant |
 
@@ -35,18 +35,18 @@ Matching ranges never imply matching values. Evenly spaced (range) coordinates a
 
 A `coord_defs` row describes a coordinate the same way the coordinate describes itself (rule 12 of the [coordinate guidelines](coordinates.qmd)):
 
-- its range and step;
-- whether its values are `jittered` (slightly off the step grid) or `gapped` (missing grid points of its one step; segments, which share none, are neither);
-- how far its values stray from the grid, in steps (`offset_min`, `offset_max`);
-- how many runs it has (`run_count`).
+- its range, and its step if it is one grid (one list of labels, or several segments, states none);
+- how many segments it has (`run_count`).
 
 Range coordinates also store their exact grid (`step_numerator`, `step_denominator`, `origin_offset`, and `length`, the sample count). `is_exact` marks rows that can rebuild every value of the coordinate without opening the file. Range columns are named by storage type: `*_int` for nanosecond times and durations, `*_float` for numbers, and `*_str` for text.
 
-### Holes and runs
+### Segments and runs
 
-A coordinate with holes is stored as several runs: gap-free stretches, each with its sample count, range, step, and `position` on the grid. The holes are the grid positions between runs. In-memory coordinates produce the same run records (`dascore.utils.gaps.RunRecord`) and the same code joins them, so a spool in memory and a directory of the same patches report identical gaps.
+A coordinate of several segments is stored as several runs, one per segment, each with its sample count, range, and step (none for a segment of labels). Segments share no grid, so a run says nothing of the samples a gap lacks; the gaps are the seams between runs. In-memory coordinates produce the same run records (`dascore.utils.gaps.RunRecord`) and the same code reads them, so a spool in memory and a directory of the same patches report identical gaps.
 
-A coordinate with more than `dascore.config.max_index_runs` (256) runs is stored by range, step, and flags only, with a warning naming the file. Anything that needs its runs reads them from the file.
+A coordinate with more than `dascore.config.max_index_runs` (256) segments is stored by range and segment count only, with a warning naming the file. Anything that needs its runs reads them from the file.
+
+An index written by an older DASCore, whose schema version differs, is deleted and rebuilt when opened, since it is a cache of the files.
 
 ### What else is kept
 
@@ -200,7 +200,7 @@ assert row["source_path"].startswith("memorypatch://")
 assert cat.resolve_row(row.to_dict()) is patch
 ```
 
-A patch whose dimensional coordinates have holes is still one row; the index stores its runs, so reports and plans see the holes.
+A patch whose dimensional coordinates have several segments is still one row; the index stores its runs, so reports and plans see the gaps.
 
 Patches from files are identified by `(base_uri, source_path, source_patch_key)` and loaded through their readers.
 

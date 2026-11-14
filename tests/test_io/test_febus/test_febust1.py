@@ -167,9 +167,12 @@ class TestFebusT1DistanceGrid:
 
     def test_fixture_is_even_on_its_own(self, quantized_distance):
         """float32 values held in float64 are judged as float32, so they are even."""
-        coord = dc.get_coord(values=quantized_distance, units="m", snap=False)
+        coord = dc.get_coord(values=quantized_distance, units="m")
         assert coord.sorted and coord.evenly_sampled
-        np.testing.assert_array_equal(coord.values, quantized_distance)
+        np.testing.assert_allclose(coord.values, quantized_distance, rtol=0, atol=1e-3)
+        exact = dc.get_coord(values=quantized_distance, units="m", snap=False)
+        assert exact.step is None
+        np.testing.assert_array_equal(exact.values, quantized_distance)
 
     def test_quantized_distance_is_snapped(self, t1_path, tmp_path, quantized_distance):
         """A float32-quantized distance array still reads as an even grid."""

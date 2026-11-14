@@ -1446,10 +1446,6 @@ def _segment_runs(coord, members, runs, index_rows, name: str):
 _CARRIED_RUN_FIELDS = (
     "step_float",
     "step_int",
-    "jittered",
-    "gapped",
-    "offset_min",
-    "offset_max",
     "run_count",
     "runs",
 )

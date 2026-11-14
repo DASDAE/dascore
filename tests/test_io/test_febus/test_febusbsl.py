@@ -85,7 +85,7 @@ class TestFebusBSL:
         assert "datetime64" in str(np.dtype(time.dtype))
         assert time.evenly_sampled
         stored = dc.read(bsl_path, snap=False)[0].get_coord("time")
-        assert stored.jittered and not stored.evenly_sampled
+        assert stored.step is None and not stored.evenly_sampled
         assert stored.min() == np.datetime64("2026-06-03T15:18:13.422442752")
         assert stored.max() == np.datetime64("2026-06-03T15:28:08.829897728")
         # a whole-ns step keeps the ends within the 256 ns the stored
@@ -223,9 +223,12 @@ class TestG1DistanceGrid:
 
     def test_quantized_distance_is_even_on_its_own(self):
         """float32 values held in float64 are judged as float32, so they are even."""
-        coord = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m", snap=False)
+        coord = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m")
         assert coord.sorted and coord.evenly_sampled
-        np.testing.assert_array_equal(coord.values, _QUANTIZED_DISTANCE)
+        assert_allclose(coord.values, _QUANTIZED_DISTANCE, rtol=0, atol=1e-3)
+        exact = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m", snap=False)
+        assert exact.step is None
+        np.testing.assert_array_equal(exact.values, _QUANTIZED_DISTANCE)
 
     def test_quantized_distance_is_snapped(self):
         """A float32-quantized distance array still reads as an even grid."""

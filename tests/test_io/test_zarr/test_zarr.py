@@ -411,7 +411,9 @@ class TestRangeAttr:
         dc.write(patch, path, "zarr")
         out = dc.read(path)[0]
         assert out == patch
-        assert out.get_array("distance").tobytes() == distance.tobytes()
+        assert (
+            out.get_array("distance").tobytes() == patch.get_array("distance").tobytes()
+        )
 
     def test_coord_encoding_not_described(self, zarr_patch, tmp_path):
         """A coordinate encoded to other labels reads them, as a CF tool does."""

@@ -53,7 +53,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, contiguous_windows
+from dascore.utils.gaps import contiguous_windows
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -655,12 +655,9 @@ def _get_merge_dim(df) -> str | None:
 def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     """Split spool merge kwargs into (attr kwargs, coord kwargs)."""
     merge_kwargs = dict(merge_kwargs or {})
-    tolerance = merge_kwargs.pop("tolerance", None)
-    coord_kwargs = {
-        "tolerance": DEFAULT_TOLERANCE if tolerance is None else tolerance,
-        # attrs and conflicting non-dimensional coords share one policy
-        "conflict": merge_kwargs.get("conflict") or "raise",
-    }
+    merge_kwargs.pop("tolerance", None)  # the plan's, which joined the members
+    # attrs and conflicting non-dimensional coords share one policy
+    coord_kwargs = {"conflict": merge_kwargs.get("conflict") or "raise"}
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
@@ -668,23 +665,16 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     return merge_kwargs, coord_kwargs
 
 
-def _get_merged_coord(
-    df, merge_dim, coords, tolerance=DEFAULT_TOLERANCE, fuse=True, **kwargs
-):
+def _get_merged_coord(df, merge_dim, coords, **kwargs):
     """
     Get merged coordinates for patches combined along merge_dim.
 
-    The merged dimension coordinate is built by truth-preserving
-    concatenation of the member coords (exactly contiguous members fuse to
-    a plain range; recorded seams otherwise), then, if ``fuse`` (a chunk
-    plan keeping a stretch's labels says not), simplified with bounded
-    error: no value moves
-    more than the tolerance allows, `tolerance` steps for a count or the
-    excess itself for a quantity or timedelta (see
-    `dascore.utils.gaps.GapTolerance`), and the members' own step is kept.
-    A chunk output whose stretch has a grid then takes its labels from
-    that grid (see `dascore.utils.patch_assembly.on_stretch_grid`).
-    `kwargs` go to `merge_coord_managers`.
+    The merged dimension coordinate is the truth-preserving concatenation
+    of the member coords (exactly contiguous members join to one grid;
+    recorded seams otherwise). A chunk output whose stretch has a grid then
+    takes its labels from that grid (see
+    `dascore.utils.patch_assembly.on_stretch_grid`). `kwargs` go to
+    `merge_coord_managers`.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -694,16 +684,12 @@ def _get_merged_coord(
         # Non-monotonic (or otherwise unsegmentable) member coordinates:
         # fall back to raw value concatenation of the dim coord.
         return merge_coord_managers(coords, dim=merge_dim, **kwargs)
-    if fuse:
-        merged = merged.fuse(
-            GapTolerance.from_user(tolerance, merge_dim), keep_step=True
-        )
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(coords, dim=merge_dim, dim_coord=merged, **kwargs)
 
 
-def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
+def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     """
     Force a merge of the patches along a dimension.
 
@@ -730,7 +716,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    new_coord = _get_merged_coord(df, merge_dim, coords, fuse=fuse, **coord_kwargs)
+    new_coord = _get_merged_coord(df, merge_dim, coords, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.
@@ -1135,18 +1121,11 @@ def _get_dx_or_spacing_and_axes(
 def _uneven_message(name: str, coord, caller: str) -> str:
     """Why a coordinate is not evenly sampled for caller, and what fixes it."""
     count = len(contiguous_windows(coord))
-    why = [
-        text
-        for text, applies in (
-            ("its labels sit off the grid of its step", coord.jittered),
-            (f"it has {count} segments", count > 1),
-        )
-        if applies
-    ]
+    why = f"it has {count} segments" if count > 1 else "it has no step"
     split = ", Patch.split_gaps to split at them" if count > 1 else ""
     return (
         f"Coordinate {name} is not evenly sampled as required by {caller}: "
-        f"{' and '.join(why) or 'it has no step'}. Use Patch.fill_gaps to "
+        f"{why}. Use Patch.fill_gaps to "
         f"fill gaps{split}, or Patch.snap_coords to put the labels on a grid."
     )
 
