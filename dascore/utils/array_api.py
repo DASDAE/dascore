@@ -54,11 +54,10 @@ NUMPY_BACKEND = "numpy"
 LAZY_BACKEND = "lazy"
 # How a lazy backend is asked for: the class, or the alias, and in brackets
 # the array library its chunks are computed on.
-_LAZY_SPELLING = re.compile(r"(?:lazyarray|lazy)(?:\[\s*([\w.]+)\s*\])?", re.IGNORECASE)
+_LAZY_SPELLING = re.compile(r"(?:lazyarray|lazy)(?:\[\s*(\w+)\s*\])?")
 # The module which is an array library's namespace, where it is not the
 # package itself.
 _NAMESPACES = {"jax": "jax.numpy", "dask": "dask.array"}
-_MODULE_NAMES = {module: name for name, module in _NAMESPACES.items()}
 # The array library patches are being read onto lazily, or None when reads
 # fill memory as usual; see `reading_lazily`.
 _LAZY_READ: ContextVar[str | None] = ContextVar("dascore_lazy_read", default=None)
@@ -152,13 +151,9 @@ def parse_backend(backend: str) -> tuple[bool, str]:
     >>> assert parse_backend("lazy") == (True, "numpy")
     >>> assert parse_backend("LazyArray[jax]") == (True, "jax")
     """
-    text = str(backend).strip()
+    text = str(backend).strip().lower()
     found = _LAZY_SPELLING.fullmatch(text)
     library = (found.group(1) or NUMPY_BACKEND) if found else text
-    # A library is known by the name `backend_name` reports, which is how
-    # a kernel is registered for it; the module it is imported from is
-    # read as that name.
-    library = _MODULE_NAMES.get(library.lower(), library.lower())
     if not re.fullmatch(r"\w+", library):
         msg = (
             f"{backend!r} is not a backend. Name an array library, such as "
@@ -208,9 +203,49 @@ def to_backend(array: Any, backend: str) -> Any:
     return out
 
 
-def fallback_policy(lazy: bool = False) -> str:
-    """Return what the `numpy_fallback` setting says: raise, warn or ignore."""
-    return get_config().numpy_fallback or ("raise" if lazy else "warn")
+def decide_fallback(
+    what: str,
+    how: str,
+    *,
+    lazy: bool = True,
+    refusal: Exception | None = None,
+    stacklevel: int | None = None,
+) -> None:
+    """
+    Apply the `numpy_fallback` setting: refuse, warn, or say nothing.
+
+    Every conversion through NumPy, and every read into memory a lazy
+    backend did not ask for, is decided here.
+
+    Parameters
+    ----------
+    what
+        What cannot be done as asked, which starts either message.
+    how
+        What is done instead, which the warning adds.
+    lazy
+        Whether the data are lazy: unset, the setting refuses for those
+        and warns for any other.
+    refusal
+        The error to raise, in place of the one made from `what`.
+    stacklevel
+        The stack level of the caller, as `warnings.warn` understands it.
+        None points the warning at the first frame outside dascore.
+    """
+    policy = get_config().numpy_fallback or ("raise" if lazy else "warn")
+    if policy == "raise":
+        error = LazyOperationError if lazy else NumpyFallbackError
+        raise refusal or error(
+            f"{what}, and the numpy_fallback setting refuses to convert the "
+            "data to numpy, or to read them into memory, for it."
+        )
+    if policy == "warn":
+        msg = f"{what}; {how}. The numpy_fallback setting decides this."
+        if stacklevel is None:
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
+        else:
+            warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
 
 
 @contextmanager
@@ -253,26 +288,12 @@ def warn_numpy_fallback(
         Point the warning at the first frame outside dascore instead, for a
         caller whose depth varies.
     """
-    policy = fallback_policy()
-    if policy == "ignore":
-        return
-    if policy == "raise":
-        msg = (
-            f"{name} has no {backend} implementation, and the numpy_fallback "
-            "setting refuses to convert the data to numpy for it."
-        )
-        raise NumpyFallbackError(msg)
-    msg = (
-        f"{name} has no {backend} implementation; the data were converted "
-        "to numpy and the output converted back. Silence this with "
-        "dascore.utils.misc.suppress_warnings(NumpyFallbackWarning), or the "
-        "numpy_fallback setting."
+    decide_fallback(
+        f"{name} has no {backend} implementation",
+        "the data were converted to numpy and the output converted back",
+        lazy=False,
+        stacklevel=None if skip_dascore else stacklevel + 1,
     )
-    if skip_dascore:
-        prefix = str(Path(__file__).parent.parent)
-        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
-        return
-    warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
 
 
 def backend_name(array: Any) -> str:

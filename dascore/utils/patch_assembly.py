@@ -17,12 +17,10 @@ row becomes a Patch.
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import accumulate
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -35,7 +33,6 @@ from dascore.core.source import ArraySource
 from dascore.exceptions import (
     CoordMergeError,
     InvalidFiberIOError,
-    LazyOperationError,
     ParameterError,
     UnitError,
 )
@@ -44,7 +41,7 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import (
-    fallback_policy,
+    decide_fallback,
     lazy_read_backend,
     reading_lazily,
     to_numpy,
@@ -75,7 +72,6 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
 )
 from dascore.utils.time import to_float
-from dascore.warnings import NumpyFallbackWarning
 
 
 def _get_varying_dim(df) -> str | None:
@@ -593,7 +589,8 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     if isinstance(patch.data, LazyArray):
         # A fill is written into the data, which a lazy patch holds none
         # of: reading them is the fallback setting's to allow.
-        _allow_reading("fill", f"filling the gaps along {dim} writes into the data")
+        what = f"This fill cannot stay lazy: filling along {dim} writes into the data"
+        decide_fallback(what, "its data were read into memory")
         patch = patch.load()
     if dtype and patch.data.dtype != np.dtype(dtype):  # as its row states it
         with operation_context():
@@ -650,27 +647,8 @@ def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
     return chain, [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
 
 
-def _allow_reading(what: str, why: str) -> None:
-    """Apply the `numpy_fallback` setting to data which must be read after all."""
-    policy = fallback_policy(lazy=True)
-    if policy == "raise":
-        msg = (
-            f"This {what} cannot stay lazy: {why}. Use a backend which reads "
-            "into memory, or set numpy_fallback to 'warn' or 'ignore' to "
-            "have the data read."
-        )
-        raise LazyOperationError(msg)
-    if policy == "warn":
-        msg = (
-            f"A {what} could not stay lazy: {why}; its data were read into "
-            "memory. The numpy_fallback setting decides this."
-        )
-        prefix = str(Path(__file__).parent.parent)
-        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
-
-
 @contextmanager
-def _read_into_memory(why: str, rows: Sequence[Mapping] = ()):
+def _read_into_memory(why: str, rows: Sequence[Mapping]):
     """
     Have a merge which cannot stay lazy read its members into memory.
 
@@ -682,8 +660,9 @@ def _read_into_memory(why: str, rows: Sequence[Mapping] = ()):
     if lazy_read_backend() is None:
         yield
         return
-    if not (rows and all(is_memory_uri(x.get("source_path")) for x in rows)):
-        _allow_reading("merge", why)
+    if not all(is_memory_uri(x.get("source_path")) for x in rows):
+        what = f"This merge cannot stay lazy: {why}"
+        decide_fallback(what, "its members were read into memory")
     with reading_lazily(None):
         yield
 

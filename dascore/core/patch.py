@@ -458,13 +458,9 @@ class Patch(NamespaceOwner, PatchMeta):
         to_backend(np.empty(0), library)
         data = self._data
         if isinstance(data, LazyArray):
-            # Imported here: the lazy kernels are built on the processors,
-            # which are built on the patch.
-            from dascore.lazy.kernels import on_backend  # noqa: PLC0415
-
             # Computed on the library asked for, so nothing is converted
             # but for a pending step with no kernel for it, which is said.
-            new = on_backend(data, library)
+            new = data.with_backend(library)
             new = new if lazy else new.load()
         elif lazy:
             new = LazyArray(self._stored_recipe(), backend=library)

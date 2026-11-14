@@ -35,7 +35,24 @@ import numpy as np
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.recipe import Recipe
-from dascore.utils.array_api import LAZY_BACKEND, NUMPY_BACKEND, to_numpy
+from dascore.utils.array_api import (
+    LAZY_BACKEND,
+    NUMPY_BACKEND,
+    decide_fallback,
+    to_numpy,
+)
+
+
+def _converted(processor, backend: str) -> str | None:
+    """Return the operation a step would take chunks through NumPy for, if any."""
+    if backend == NUMPY_BACKEND:
+        return None
+    if hasattr(type(processor).kernel_for(backend), "_quiet"):
+        return processor.name or type(processor).__name__
+    # A step which runs another operation, as one in a window does, has a
+    # kernel for any library and converts for the operation it runs.
+    inner = getattr(processor, "operation", None)
+    return _converted(inner, backend) if hasattr(inner, "kernel_for") else None
 
 
 class LazyArray:
@@ -80,9 +97,21 @@ class LazyArray:
         return self._backend
 
     def with_backend(self, backend: str) -> LazyArray:
-        """Return the array computed on another array library."""
+        """
+        Return the array computed on another array library.
+
+        A step already pending with no kernel for it would have each chunk
+        converted through NumPy, which the `numpy_fallback` setting decides
+        here, as it does for a step chained afterwards.
+        """
         if backend == self._backend:
             return self
+        for node in self._chain:
+            if (converted := _converted(node.processor, backend)) is not None:
+                decide_fallback(
+                    f"{converted} has no {backend} implementation",
+                    "each chunk is converted to numpy to run it",
+                )
         return LazyArray(self._recipe, self._chain, backend)
 
     @property

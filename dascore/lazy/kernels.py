@@ -47,21 +47,13 @@ Examples
 
 from __future__ import annotations
 
-import warnings
-from pathlib import Path
 from typing import Any
 
 from dascore.core.processor import PatchProcessor, _computes
-from dascore.exceptions import LazyOperationError
-from dascore.lazy.array import LazyArray
+from dascore.lazy.array import LazyArray, _converted
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Unchanged
-from dascore.utils.array_api import (
-    NUMPY_BACKEND,
-    fallback_policy,
-    lazy_refusal,
-)
-from dascore.warnings import NumpyFallbackWarning
+from dascore.utils.array_api import decide_fallback, lazy_refusal
 
 
 def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
@@ -91,13 +83,13 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     if isinstance(contract, ChunkContract):
         if (converted := _converted(processor, data.backend)) is not None:
             # It runs a chunk at a time still, each chunk through NumPy.
-            _fall_back(
+            decide_fallback(
                 f"{converted} has no {data.backend} implementation",
                 "each chunk is converted to numpy to run it",
             )
         return data._appended(Node(processor, plan, contract))
     # No contract: the data are read whole, if the setting allows it.
-    _fall_back(
+    decide_fallback(
         f"{name} cannot run on a lazy patch a chunk at a time",
         "the data were read into memory to run it",
         refusal=lazy_refusal(name),
@@ -109,58 +101,6 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     # Handed back unchanged is "nothing to do", as it is in memory: the
     # patch is left as it was, lazy and under its own id.
     return data if out is loaded else out
-
-
-def on_backend(array: LazyArray, backend: str) -> LazyArray:
-    """
-    Return a lazy array whose chunks are computed on another array library.
-
-    Each step already pending is asked for its kernel on that library. One
-    with none would have every chunk converted through NumPy, which the
-    `numpy_fallback` setting decides here, as it does for a step chained
-    afterwards: nothing is converted without it having been said.
-
-    Parameters
-    ----------
-    array
-        The lazy array.
-    backend
-        The array library to compute on, by the name
-        [`backend_name`](`dascore.utils.array_api.backend_name`) reports.
-    """
-    if backend not in (array.backend, NUMPY_BACKEND):
-        for node in array.chain:
-            if (converted := _converted(node.processor, backend)) is not None:
-                _fall_back(
-                    f"{converted} has no {backend} implementation",
-                    "each chunk is converted to numpy to run it",
-                )
-    return array.with_backend(backend)
-
-
-def _converted(processor, backend: str) -> str | None:
-    """Return the operation a step would take chunks through NumPy for, if any."""
-    if backend == NUMPY_BACKEND:
-        return None
-    if hasattr(type(processor).kernel_for(backend), "_quiet"):
-        return processor.name or type(processor).__name__
-    # A step which runs another operation, as one in a window does, has a
-    # kernel for any library and converts for the operation it runs.
-    inner = getattr(processor, "operation", None)
-    return _converted(inner, backend) if isinstance(inner, PatchProcessor) else None
-
-
-def _fall_back(what: str, how: str, refusal: Exception | None = None) -> None:
-    """Apply the `numpy_fallback` setting to an operation on lazy data."""
-    policy = fallback_policy(lazy=True)
-    if policy == "raise":
-        raise refusal or LazyOperationError(
-            f"{what}, and the numpy_fallback setting refuses to convert for it."
-        )
-    if policy == "warn":
-        prefix = str(Path(__file__).parent.parent)
-        msg = f"{what}; {how}. The numpy_fallback setting decides this."
-        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
 
 
 def _contract(processor, dtype, plan: dict[str, Any]):

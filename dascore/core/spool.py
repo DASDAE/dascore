@@ -104,7 +104,6 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
-from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
 from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
@@ -698,15 +697,11 @@ class Spool(NodeRepr, NamespaceOwner):
         if self._backend is None:
             return read()
         lazy, library = parse_backend(self._backend)
-        if not lazy:
-            return read().set_backend(library)
-        with reading_lazily(library):
+        with reading_lazily(library if lazy else None):
             patch = read()
-        if isinstance(patch.data, LazyArray):
-            return patch.set_backend(f"LazyArray[{library}]")
-        if _is_lazy(patch.data):
-            # Another kind of promise, which a spool held already: left
-            # as it is, and computed when its holder asks.
+        if lazy and _is_lazy(patch.data):
+            # A promise: read lazily just now, or one a spool held
+            # already, which is left as it is.
             return patch
         # In memory: held there by the spool, with nothing read, or read
         # after all as the fallback setting allowed. Put where chunks are
@@ -723,12 +718,8 @@ class Spool(NodeRepr, NamespaceOwner):
         Parameters
         ----------
         backend
-            An array library by name, such as ``"numpy"``, ``"jax"`` or
-            ``"cupy"``: each patch is read into memory and put on it. Or a
-            lazy backend, under which a patch is handed out with nothing
-            read until [`load`](`dascore.Patch.load`): ``"LazyArray"``, or
-            its alias ``"lazy"``, computes each chunk on NumPy, and
-            ``"LazyArray[jax]"`` names another library to compute on.
+            The backend each patch is handed out on, named as
+            [`Patch.set_backend`](`dascore.Patch.set_backend`) names it.
 
         Raises
         ------
@@ -751,22 +742,9 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Notes
         -----
-        - Under a lazy backend a spool which merges files, as
-          `chunk(time=None)` does, hands out one lazy patch which names a
-          window of each file. Nothing is read until it is loaded, and a
-          selection made first reads only the files it touches.
-        - What cannot be lazy -- a selection of samples which are not
-          next to each other, a format which names no stored array, a
-          merge whose members the index cannot describe or which are in
-          different data units -- is decided by the `numpy_fallback`
-          setting: refused under a lazy backend unless the setting is
-          ``"warn"`` or ``"ignore"``, which read it into memory.
-        - A patch the spool already holds in memory is not read, so it
-          is not made lazy: it is put on the library the lazy backend
-          computes on. One which is lazy already stays so.
-        - Patches which are lazy already, gathered in a spool with no lazy
-          backend, are read when that spool merges them, since that is how
-          such a spool loads.
+        [Lazy operations](`dascore/docs/notes/lazy_operations.qmd`) says
+        what a lazy backend reads and when, what cannot be lazy, and how
+        the `numpy_fallback` setting decides that.
         """
         lazy, library = parse_backend(backend)
         # Refused here and not at the first patch, if it cannot be used.
