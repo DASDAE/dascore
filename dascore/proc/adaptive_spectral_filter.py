@@ -328,10 +328,11 @@ class AdaptiveSpectralFilter(PatchProcessor):
         plan = {"axes": window.axes, "size": window.size, "overlap": window.overlap}
         return meta, plan
 
-    def kernel(self, data, *, axes, size, overlap):
+    # A NumPy and numba computation, and named as one: on another array
+    # backend the data are converted for it, and the patch is told.
+    def numpy_kernel(self, data, *, axes, size, overlap):
         """Filter every batch over the selected axes and stack the results."""
         engine = _get_engine(self.engine, len(axes))
-        data = np.asarray(data)
         tail = tuple(range(-len(axes), 0))
         moved = np.moveaxis(data, axes, tail)
         working = moved.reshape((-1, *moved.shape[-len(axes) :]))

@@ -1160,6 +1160,16 @@ class TestPositionFree:
         assert out[0, 0] == 0 and out[0, 80] == 1
 
 
+class _NumpyAnswer(dc.PatchProcessor):
+    """An operation whose kernel answers in NumPy whatever it is given."""
+
+    name = None
+
+    def kernel(self, data):
+        """Return the magnitudes, as a NumPy array."""
+        return np.abs(to_numpy(data))
+
+
 def _on(patch, library: str):
     """The patch with its data on another array library, if it is installed."""
     if library == "dask":
@@ -1403,12 +1413,23 @@ class TestOtherBackends:
 
     def test_kernel_which_answers_in_numpy(self, patch, library):
         """An operation whose kernel hands back NumPy is put back on the library."""
+        expected = patch.window(time=100, samples=True).abs()
+        there = _on(patch, library)
+        out = Windowed(_NumpyAnswer(), time=100, samples=True)(there)
+        assert out.backend == library
+        np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
+
+    def test_numpy_only_operation_is_converted_for(self, patch, library):
+        """An operation which says it is NumPy's own is converted for, and says so."""
         window = {"time": 100, "samples": True}
         expected = patch.window(**window).adaptive_spectral_filter(time=0.05)
         there = _on(patch, library)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
             out = there.window(**window).adaptive_spectral_filter(time=0.05)
+        said = [x for x in caught if x.category is NumpyFallbackWarning]
+        # On dask each piece is NumPy when it is blended, with nothing to say.
+        assert len(said) == (0 if library == "dask" else 1)
         assert out.backend == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
 
