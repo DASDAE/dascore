@@ -20,7 +20,7 @@ from collections.abc import (
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
 from functools import cache, cached_property, wraps
-from graphlib import TopologicalSorter
+from graphlib import CycleError, TopologicalSorter
 from math import prod
 from pathlib import Path
 from threading import RLock
@@ -224,28 +224,47 @@ def _get_reloadable_source_path(
     return ""
 
 
+def _format_names(names: str | tuple[str, ...]) -> set[str]:
+    """Return the upper-cased format names a `before` or `after` gives."""
+    return {x.upper() for x in ((names,) if isinstance(names, str) else names)}
+
+
 def _order_fiber_ios(fiber_ios: list[FiberIO]) -> tuple[FiberIO, ...]:
     """
     Move each fiber_io just before or after the formats it names.
 
-    The rest keep their order. A cycle of such constraints raises
-    `graphlib.CycleError`.
+    Readers naming nothing move only to make room. Constraints forming a
+    cycle are ignored with a warning, keeping the order given.
     """
     rank = {io: float(i) for i, io in enumerate(fiber_ios)}
-    key, graph = dict(rank), {io: set() for io in fiber_ios}  # io: tried first
+    shift = 0.5 / (len(fiber_ios) + 1)  # so a chain never passes a neighbour
+    graph = {io: set() for io in fiber_ios}  # each reader: those tried first
+    edges = []  # (reader, the reader it names, its offset from it)
     for io in fiber_ios:
-        before, after = ({x.upper() for x in names} for names in (io.before, io.after))
+        before, after = _format_names(io.before), _format_names(io.after)
         for other in fiber_ios:
-            if (name := other.name.upper()) in before:
+            if (name := other.name.upper()) == io.name.upper():
+                continue  # a format's versions keep their order
+            if name in before:
                 graph[other].add(io)
-                key[io] = min(key[io], rank[other] - 0.5)
+                edges.append((io, other, -shift))
             if name in after:
                 graph[io].add(other)
-                key[io] = max(key[io], rank[other] + 0.5)
+                edges.append((io, other, shift))
+    key = dict(rank)
+    for _ in fiber_ios:  # each pass carries a move one link along a chain
+        for io, other, offset in edges:
+            pick = min if offset < 0 else max
+            key[io] = pick(key[io], key[other] + offset)
     sorter, ready, out = TopologicalSorter(graph), [], []
-    sorter.prepare()
+    try:
+        sorter.prepare()
+    except CycleError as exc:
+        msg = f"FiberIO before/after constraints form a cycle, ignored: {exc}"
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        return tuple(fiber_ios)
     while sorter.is_active():
-        ready = sorted([*ready, *sorter.get_ready()], key=key.__getitem__)
+        ready = sorted([*ready, *sorter.get_ready()], key=lambda x: (key[x], rank[x]))
         out.append(io := ready.pop(0))
         sorter.done(io)
     return tuple(out)
@@ -336,11 +355,13 @@ class _FiberIOManager:
         """
         Return the fiber_ios to try, in order.
 
-        Those preferring ``extension`` come first, then every other; within
-        each, catch-alls last, and each format's newest version before any
-        older one, then by format name. Each fiber_io is then moved before
-        or after the formats it names.
+        Readers are sorted by, in turn: preferring ``extension`` first,
+        catch-alls (``fallback``) last, each format's highest version (as a
+        string) before any format's other versions, then format name. Each
+        is then moved before or after the formats it names.
         """
+        if extension not in self._extension_list:
+            extension = None  # same order; keeps the cache to known extensions
         key = (input_type, extension)
         if (cached := self._prioritized_cache.get(key)) is not None:
             return cached
@@ -505,9 +526,13 @@ class _FiberIOManager:
             self.load_plugins(format)
             yield from self._yield_format_version(format, version)
             return
-        if input_type is not None and (out := fiber_io_hint.get(input_type)):
-            yield out
-        yield from self._get_prioritized_list(input_type, extension)
+        ordered = self._get_prioritized_list(input_type, extension)
+        hint = fiber_io_hint.get(input_type) if input_type is not None else None
+        # A hint first would pass over readers which must be tried before it.
+        if hint is not None and not hint.after:
+            if not any(hint.name.upper() in _format_names(x.before) for x in ordered):
+                yield hint
+        yield from ordered
 
     def _yield_format_version(self, format, version):
         """Yield file format/version prioritized fiber_ios."""

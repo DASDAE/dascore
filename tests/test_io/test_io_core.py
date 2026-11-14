@@ -10,7 +10,6 @@ import threading
 import warnings
 from dataclasses import replace
 from fractions import Fraction
-from graphlib import CycleError
 from pathlib import Path
 from typing import ClassVar, TypeVar
 
@@ -844,7 +843,7 @@ class TestFiberIOOrder:
         assert self._names(manager) == ["_a", "_b", "_c", "_d", "_e", "_f"]
 
     def test_before_and_after(self, manager):
-        """A format named in `before` or `after` is tried after or before it."""
+        """A reader goes just before the formats in `before`, after those in `after`."""
 
         class _A(FiberIO):
             name, version, after = "_a", "1", ("_c",)
@@ -874,18 +873,60 @@ class TestFiberIOOrder:
 
         names = self._names(manager, extension="zarr")
         assert names == ["_plugin", "_zarr", "_other"]
+        # extensions no reader prefers share one cached order
+        for ext in ("0001", "0002"):
+            assert self._names(manager, extension=ext) == ["_other", "_plugin", "_zarr"]
+        assert set(manager._prioritized_cache) == {(None, "zarr"), (None, None)}
 
-    def test_cycle_raises(self, manager):
-        """Readers each asking to go before the other cannot be ordered."""
+    def test_chain_and_ties(self, manager):
+        """
+        A chain of `before` keeps readers naming nothing in place, and two
+        readers naming one format keep their order by name.
+        """
+        for name, before in [("_a", ()), ("_b", ()), ("_c", ())]:
+            type(name, (FiberIO,), {"name": name, "version": "1", "before": before})
+        for name, before in [("_d", ("_e",)), ("_e", ("_b",)), ("_f", ("_b",))]:
+            type(name, (FiberIO,), {"name": name, "version": "1", "before": before})
+        assert self._names(manager) == ["_a", "_d", "_e", "_f", "_b", "_c"]
 
-        class _A(FiberIO):
-            name, version, before = "_a", "1", ("_b",)
+    def test_own_format_is_ignored(self, manager):
+        """A version naming its own format is not a cycle; versions keep order."""
+
+        class _A1(FiberIO):
+            name, version, after = "_a", "1", ("_a",)
+
+        class _A2(_A1):
+            version = "2"
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ios = manager._get_prioritized_list(None)
+        assert [x.version for x in ios] == ["2", "1"]
+
+    def test_hint_waits_for_readers_before_it(self, manager):
+        """A directory scan's last reader is not tried ahead of one named before it."""
+
+        class _Generic(FiberIO):
+            name, version = "_generic", "1"
+
+        class _Plugin(FiberIO):
+            name, version, before = "_plugin", "1", "_generic"  # a str is a name
+
+        hint = {"file": _Generic()}
+        ios = manager.yield_fiberio(fiber_io_hint=hint, input_type="file")
+        assert [x.name for x in ios] == ["_plugin", "_generic"]
+
+    def test_cycle_warns_and_is_ignored(self, manager):
+        """Readers each asking to go before the other keep the order by name."""
 
         class _B(FiberIO):
             name, version, before = "_b", "1", ("_a",)
 
-        with pytest.raises(CycleError):
-            manager._get_prioritized_list(None)
+        class _A(FiberIO):
+            name, version, before = "_a", "1", ("_b",)
+
+        with pytest.warns(UserWarning, match="cycle"):
+            assert self._names(manager) == ["_a", "_b"]
 
 
 class TestBrokenEntryPoint:
