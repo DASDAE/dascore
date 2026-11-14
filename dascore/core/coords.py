@@ -1543,6 +1543,8 @@ def _onto_grid(coord, values):
     if grid is None or grid.exact or array.dtype.kind != "f" or not array.size:
         return values
     first, step, slack, spacing, last = coord._lookup_terms()
+    if not step:  # every label is the first
+        return values
     if spacing and array.size == 1:  # one value on a float64 grid, in python
         value = float(array.item())
         index = (value - first) / step
