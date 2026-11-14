@@ -42,6 +42,12 @@ import numpy as np
 from dascore.config import get_config
 from dascore.exceptions import PatchError
 from dascore.lazy.contract import Box, ChunkContract, Window
+from dascore.utils.array_api import (
+    NUMPY_BACKEND,
+    _as_numpy_dtype,
+    to_backend,
+    to_numpy,
+)
 
 if TYPE_CHECKING:
     from dascore.lazy.array import LazyArray
@@ -165,20 +171,24 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         or dtype than its metadata stated.
     """
     if 0 in _sizes(box):
-        return np.empty(_sizes(box), array.dtype)
+        return to_backend(np.empty(_sizes(box), array.dtype), array.backend)
     needed = _needs(array, box)
-    data = array.recipe[needed[0]].load()
+    backend = array.backend
+    data = to_backend(array.recipe[needed[0]].load(), backend)
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
         stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
-        kernel = type(processor).kernel_for("numpy")
+        kernel = type(processor).kernel_for(backend)
+        # A step with no kernel for the library was let through, or
+        # refused, when it was chained; here it is converted for quietly.
+        kernel = getattr(kernel, "_quiet", kernel)
         run = partial(kernel, processor, **node.plan)
         data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.
         expected = _sizes(after) if node.contract else stated_shape
-        shape, dtype = tuple(data.shape), np.dtype(data.dtype)
+        shape, dtype = tuple(data.shape), _as_numpy_dtype(data.dtype)
         if shape != expected or dtype != stated_dtype:
             name = type(processor).__name__
             msg = (
@@ -200,5 +210,6 @@ def load(array: LazyArray) -> np.ndarray:
         return compute(array, boxes[0])
     out = np.empty(array.shape, array.dtype)
     for box in boxes:
-        out[box] = compute(array, box)
-    return out
+        out[box] = to_numpy(compute(array, box))
+    # Put together in memory, then handed to the library it was computed on.
+    return out if array.backend == NUMPY_BACKEND else to_backend(out, array.backend)

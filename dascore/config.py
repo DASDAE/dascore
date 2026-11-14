@@ -233,6 +233,18 @@ class DascoreConfig(BaseModel):
             "patch one block."
         ),
     )
+    numpy_fallback: Literal["raise", "warn", "ignore"] | None = Field(
+        default=None,
+        description=(
+            "What happens when an operation has no implementation for a "
+            "patch's array backend and can only run by converting the data "
+            "to NumPy: 'raise' refuses it, 'warn' converts with a "
+            "NumpyFallbackWarning, and 'ignore' converts silently. On a "
+            "lazy patch converting means reading the data into memory, and "
+            "the same setting decides a merge which cannot stay lazy. None, "
+            "the default, is 'raise' for lazy data and 'warn' otherwise."
+        ),
+    )
     lazy_block_size: int = Field(
         default=268_435_456,  # 256 MiB
         ge=0,

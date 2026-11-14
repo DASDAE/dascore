@@ -105,6 +105,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.units import Quantity
+from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -500,6 +501,9 @@ class Spool(NodeRepr, NamespaceOwner):
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
+    # The array backend patches are handed out on, as `set_backend` was
+    # given it. None hands them out as they are read: in memory, on NumPy.
+    _backend: str | None = None
     # single-file provenance (set by _from_file; drives update())
     _file_path = None
     _file_format = None
@@ -656,7 +660,8 @@ class Spool(NodeRepr, NamespaceOwner):
             array = self._as_selector_array(item)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:
-            return self._maybe_enrich(self._catalog.get_patch(int(item)))
+            patch = self._handed_out(lambda: self._catalog.get_patch(int(item)))
+            return self._maybe_enrich(patch)
         except MissingPatchError:
             # MissingPatchError subclasses IndexError for backwards
             # compatibility; it must never masquerade as out-of-bounds
@@ -677,8 +682,89 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         # The catalog snapshots the relation once and skips patches which
         # cannot be resolved (see #583).
-        for patch in self._catalog:
+        patches = iter(self._catalog)
+        while True:
+            # A patch at a time: a backend set for the reads of this spool
+            # must not be in force while the caller holds a patch.
+            try:
+                patch = self._handed_out(patches.__next__)
+            except StopIteration:
+                return
             yield self._maybe_enrich(patch)
+
+    def _handed_out(self, read: Callable[[], dc.Patch]) -> dc.Patch:
+        """Return the patch `read` gets, on the backend this spool was set to."""
+        if self._backend is None:
+            return read()
+        lazy, library = parse_backend(self._backend)
+        if not lazy:
+            return read().set_backend(library)
+        with reading_lazily(library):
+            patch = read()
+        source = patch._source
+        if _is_lazy(patch.data) or (source is not None and source.loadable):
+            return patch.set_backend(f"LazyArray[{library}]")
+        # Held in memory with nothing to read later, or read after all as
+        # the fallback setting allowed: put where chunks are computed.
+        return patch.set_backend(library)
+
+    def set_backend(self, backend: str) -> Self:
+        """
+        Return a spool whose patches are handed out on another array backend.
+
+        Nothing is read or converted here. Each patch the new spool hands
+        out, by indexing, iterating or loading, is read onto the backend.
+
+        Parameters
+        ----------
+        backend
+            An array library by name, such as ``"numpy"``, ``"jax"`` or
+            ``"cupy"``: each patch is read into memory and put on it. Or a
+            lazy backend, under which a patch is handed out with nothing
+            read until [`load`](`dascore.Patch.load`): ``"LazyArray"``, or
+            its alias ``"lazy"``, computes each chunk on NumPy, and
+            ``"LazyArray[jax]"`` names another library to compute on.
+
+        Raises
+        ------
+        ParameterError
+            If the name is no backend, or the array library cannot be
+            imported.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.utils.downloader import fetch
+        >>>
+        >>> spool = dc.spool(fetch("example_dasdae_event_1.h5"))
+        >>> lazy = spool.set_backend("lazy")
+        >>> patch = lazy[0]
+        >>> assert patch.backend == "lazy"
+        >>> # Operations wait until the data are asked for.
+        >>> out = patch.abs().load()
+        >>> assert out.equals(spool[0].abs())
+
+        Notes
+        -----
+        - Under a lazy backend a spool which merges files, as
+          `chunk(time=None)` does, hands out one lazy patch which names a
+          window of each file. Nothing is read until it is loaded, and a
+          selection made first reads only the files it touches.
+        - What cannot be lazy -- a selection of samples which are not
+          next to each other, a format which names no stored array, a
+          merge whose members the index cannot describe or which are in
+          different data units -- is decided by the `numpy_fallback`
+          setting: refused under a lazy backend unless the setting is
+          ``"warn"`` or ``"ignore"``, which read it into memory.
+        - A patch the spool already holds in memory, with nothing to read
+          later, is put on the library the lazy backend computes on.
+        """
+        lazy, library = parse_backend(backend)
+        # Refused here and not at the first patch, if it cannot be used.
+        to_backend(np.empty(0), library)
+        new = self.__class__(self)
+        new._backend = f"LazyArray[{library}]" if lazy else library
+        return new
 
     def load(self) -> Self:
         """

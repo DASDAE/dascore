@@ -1185,18 +1185,25 @@ def _lazy_kernel():
 def _via_numpy(numpy_kernel, name: str):
     """Return `numpy_kernel` run on numpy copies, its result sent back."""
 
-    def run_on_numpy(processor, data, **plan):
-        warn_numpy_fallback(name, backend_name(data), skip_dascore=True)
+    def convert(processor, data, **plan):
+        """Run the numpy kernel on a numpy copy, and send the result back."""
         numpy_data = to_numpy(data)
         result = numpy_kernel(processor, numpy_data, **plan)
         # Handed back unchanged is still "nothing to do".
         return data if result is numpy_data else _back_to(result, data)
 
+    def run_on_numpy(processor, data, **plan):
+        warn_numpy_fallback(name, backend_name(data), skip_dascore=True)
+        return convert(processor, data, **plan)
+
     # Says that this is a conversion and not the backend's own kernel, and
     # under what name the conversion is warned of. `Any`, because the
-    # attribute is one a plain function lacks.
+    # attributes are ones a plain function lacks.
     out: Any = run_on_numpy
     out._converts = name
+    # The same conversion with nothing said, for a caller which has
+    # already applied the `numpy_fallback` setting.
+    out._quiet = convert
     return out
 
 

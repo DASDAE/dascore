@@ -46,13 +46,21 @@ Examples
 
 from __future__ import annotations
 
+import warnings
+from pathlib import Path
 from typing import Any
 
 from dascore.core.processor import PatchProcessor, _computes
+from dascore.exceptions import LazyOperationError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Unchanged
-from dascore.utils.array_api import lazy_refusal
+from dascore.utils.array_api import (
+    NUMPY_BACKEND,
+    fallback_policy,
+    lazy_refusal,
+)
+from dascore.warnings import NumpyFallbackWarning
 
 
 def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
@@ -74,13 +82,69 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     LazyOperationError
         If the operation states no contract this backend can keep.
     """
+    name = processor.name or type(processor).__name__
     contract = _contract(processor, data.dtype, plan)
     if isinstance(contract, Unchanged):
         return data
+    kernel = type(processor).kernel_for(data.backend)
+    converts = data.backend != NUMPY_BACKEND and hasattr(kernel, "_quiet")
     if isinstance(contract, ChunkContract):
+        if converts:
+            # It runs a chunk at a time still, each chunk through NumPy.
+            _fall_back(
+                f"{name} has no {data.backend} implementation",
+                "each chunk is converted to numpy to run it",
+            )
         return data._appended(Node(processor, plan, contract))
-    # No contract: refused, and nothing read.
-    raise lazy_refusal(processor.name or type(processor).__name__)
+    # No contract: the data are read whole, if the setting allows it.
+    _fall_back(
+        f"{name} cannot run on a lazy patch a chunk at a time",
+        "the data were read into memory to run it",
+        refusal=lazy_refusal(name),
+    )
+    return getattr(kernel, "_quiet", kernel)(processor, data.load(), **plan)
+
+
+def on_backend(array: LazyArray, backend: str) -> LazyArray:
+    """
+    Return a lazy array whose chunks are computed on another array library.
+
+    Each step already pending is asked for its kernel on that library. One
+    with none would have every chunk converted through NumPy, which the
+    `numpy_fallback` setting decides here, as it does for a step chained
+    afterwards: nothing is converted without it having been said.
+
+    Parameters
+    ----------
+    array
+        The lazy array.
+    backend
+        The array library to compute on, by the name
+        [`backend_name`](`dascore.utils.array_api.backend_name`) reports.
+    """
+    if backend not in (array.backend, NUMPY_BACKEND):
+        for node in array.chain:
+            processor = node.processor
+            if hasattr(type(processor).kernel_for(backend), "_quiet"):
+                name = processor.name or type(processor).__name__
+                _fall_back(
+                    f"{name} has no {backend} implementation",
+                    "each chunk is converted to numpy to run it",
+                )
+    return array.with_backend(backend)
+
+
+def _fall_back(what: str, how: str, refusal: Exception | None = None) -> None:
+    """Apply the `numpy_fallback` setting to an operation on lazy data."""
+    policy = fallback_policy(lazy=True)
+    if policy == "raise":
+        raise refusal or LazyOperationError(
+            f"{what}, and the numpy_fallback setting refuses to convert for it."
+        )
+    if policy == "warn":
+        prefix = str(Path(__file__).parent.parent)
+        msg = f"{what}; {how}. The numpy_fallback setting decides this."
+        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
 
 
 def _contract(processor, dtype, plan: dict[str, Any]):

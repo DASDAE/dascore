@@ -17,9 +17,12 @@ row becomes a Patch.
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import accumulate
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -32,13 +35,20 @@ from dascore.core.source import ArraySource
 from dascore.exceptions import (
     CoordMergeError,
     InvalidFiberIOError,
+    LazyOperationError,
     ParameterError,
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
+from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
-from dascore.utils.array_api import to_numpy
+from dascore.utils.array_api import (
+    fallback_policy,
+    lazy_read_backend,
+    reading_lazily,
+    to_numpy,
+)
 from dascore.utils.attrs import (
     _is_missing,
     combine_patch_attrs,
@@ -64,6 +74,7 @@ from dascore.utils.pd import (
     get_dim_names_from_columns,
 )
 from dascore.utils.time import to_float
+from dascore.warnings import NumpyFallbackWarning
 
 
 def _get_varying_dim(df) -> str | None:
@@ -633,6 +644,37 @@ def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
     return chain, [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
 
 
+@contextmanager
+def _read_into_memory(why: str):
+    """
+    Have a merge which cannot stay lazy read its members into memory.
+
+    Under a lazy backend that is the `numpy_fallback` setting's to allow:
+    it is refused, said, or done silently. Inside the block reads fill
+    memory as usual, so the merge is the eager one.
+    """
+    if lazy_read_backend() is None:
+        yield
+        return
+    policy = fallback_policy(lazy=True)
+    if policy == "raise":
+        msg = (
+            f"This merge cannot stay lazy: {why}. Merge on a backend which "
+            "reads into memory, or set numpy_fallback to 'warn' or 'ignore' "
+            "to have the members read."
+        )
+        raise LazyOperationError(msg)
+    if policy == "warn":
+        msg = (
+            f"A merge could not stay lazy: {why}; its members were read into "
+            "memory. The numpy_fallback setting decides this."
+        )
+        prefix = str(Path(__file__).parent.parent)
+        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
+    with reading_lazily(None):
+        yield
+
+
 @dataclass
 class PatchAssembler:
     """
@@ -693,6 +735,22 @@ class PatchAssembler:
                     joined, df_dict_list, merge_dim, samples, units
                 )
                 return [patch]
+        if merging:
+            # Members whose merged size the rows do not state are merged
+            # as loaded patches, which a lazy backend has none of.
+            why = "the size of what its members make is not known until they are read"
+            with _read_into_memory(why):
+                out = self._loaded_members(joined, df_dict_list, merge_dim, units)
+            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
+        else:
+            out = self._loaded_members(joined, df_dict_list, merge_dim, units)
+        patches = [x["patch"] for x in out]
+        if len(patches) == 1 and df_dict_list:
+            patches = [self._on_grid(patches[0], joined, df_dict_list[0])]
+        return patches
+
+    def _loaded_members(self, joined, df_dict_list, merge_dim, units) -> list[dict]:
+        """Return each member as a patch, with what merging needs of its coords."""
         out = []
         target_units = None
         for patch_kwargs in df_dict_list:
@@ -703,12 +761,7 @@ class PatchAssembler:
             info = patch.coords._get_dim_summary()
             info["patch"] = patch
             out.append(info)
-        if len(out) > expected_len:
-            out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
-        patches = [x["patch"] for x in out]
-        if len(patches) == 1 and df_dict_list:
-            patches = [self._on_grid(patches[0], joined, df_dict_list[0])]
-        return patches
+        return out
 
     def _on_grid(self, patch, joined, row) -> dc.Patch:
         """The patch on its stretch's grid, unless a source changed since planning."""
@@ -762,7 +815,12 @@ class PatchAssembler:
             out = self._merge_from_index(joined, df_dict_list, merge_dim, metas)
             if out is not None:  # its sources were found unchanged
                 return _on_stretch_grid(out, self.plan_dim, df_dict_list[0])
-        out = self._stream(joined, df_dict_list, merge_dim, samples, units)
+        why = (
+            "the index cannot describe every member, a member is in other "
+            "data units, or a file has changed since it was indexed"
+        )
+        with _read_into_memory(why):
+            out = self._stream(joined, df_dict_list, merge_dim, samples, units)
         return self._on_grid(out, joined, df_dict_list[0])
 
     def _merge_from_index(self, joined, df_dict_list, merge_dim, metas):
@@ -785,12 +843,19 @@ class PatchAssembler:
             return None
         if self.sources_unchanged is not None and not self.sources_unchanged(joined):
             return None
-        try:
-            data = recipe.load()
-        except (InvalidFiberIOError, ParameterError):
-            # the resource did not hold the array its row described: a
-            # different shape, or fewer axes than the windows name
-            return None
+        library = lazy_read_backend()
+        if library is not None:
+            # Under a lazy backend the recipe is the patch's data: nothing
+            # is read, and a file which does not hold the array its row
+            # described says so when the data are asked for.
+            data = LazyArray(recipe, backend=library)
+        else:
+            try:
+                data = recipe.load()
+            except (InvalidFiberIOError, ParameterError):
+                # the resource did not hold the array its row described: a
+                # different shape, or fewer axes than the windows name
+                return None
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])

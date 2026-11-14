@@ -127,7 +127,7 @@ hour.load()                      # opens the 60 files the hour touches
 Three cases the eager merge settles by reading need a rule.
 
 - **Members the index cannot describe** are merged from loaded patches today. Under a lazy backend the fallback setting decides.
-- **A file rewritten since it was indexed** is caught before the eager read. The check moves to when the lazy data are read.
+- **A file rewritten since it was indexed** is caught before the eager read. The check moves to when the lazy data are read. *Implemented so far:* the files are checked when the lazy patch is made; one rewritten between then and `load` is refused only if it no longer holds an array of the shape and dtype its row states.
 - **Members in different data units** are rescaled as they are merged. That is arithmetic on the data, so it becomes a pending step or such a merge falls back.
 
 ## How a window meets the executor
@@ -163,14 +163,14 @@ These land before the public API is frozen for 1.0.
 
 1. `window` on in-memory patches: `apply`, reductions, the `ends` option, and `rolling` deprecated for it. Useful with no lazy code at all. *Done.*
 2. Operations which honour a window, and the window contract in the executor. *Done for operations which keep a window's shape, or every n-th sample of it, and take no other patch.*
-3. `set_backend`, the lazy reader, and the merge which stays lazy.
+3. `set_backend`, the lazy reader, and the merge which stays lazy. *Done, but for the check of a changed file, which is made when the lazy patch is made and not when it is read.*
 4. `impulse_window`.
 5. Writing in one pass, and zarr chunks.
 6. Reading ahead of the computation on a thread pool, driven by the read schedule.
 
 ## Still to settle
 
-- The name of the fallback setting.
+- Checking a merged file against the index when a lazy patch reads it, and not only when the patch is made.
 - Operations in a window which change its shape other than by keeping every n-th sample, or which change the length of a dimension which is not windowed, or which take another patch.
 - A contract for a reduction in a window and for `apply`, so they run on a lazy patch.
 - Contracts for the operations a usual chain needs and which state none yet: `detrend`, `decimate`, `taper`, arithmetic with a scalar, the reductions and `sobel_filter`.

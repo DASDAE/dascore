@@ -55,6 +55,16 @@ class IncompatiblePatchError(PatchError):
     """Raised when an operator cannot be performed on a patch."""
 
 
+class NumpyFallbackError(IncompatiblePatchError):
+    """
+    Raised when an operation would convert its data through NumPy.
+
+    Only when the `numpy_fallback` setting is ``"raise"``: an operation
+    with no implementation for the patch's array backend is then refused,
+    where it would otherwise convert the data to NumPy and back.
+    """
+
+
 class LazyOperationError(IncompatiblePatchError):
     """
     Raised when an operation cannot run on a patch whose data are lazy.

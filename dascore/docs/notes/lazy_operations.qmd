@@ -2,7 +2,7 @@
 title: Lazy Operations
 ---
 
-A patch whose data are not read yet holds a [`LazyArray`](`dascore.lazy.array.LazyArray`): a [`Recipe`](`dascore.lazy.recipe.Recipe`), which says which stored samples fill which box of the array, and a chain of the operations run on it since. An operation on such a patch computes nothing. Its kernel appends the processor and its plan to the chain, and [`Patch.load`](`dascore.Patch.load`) runs the chain: on the whole array when that is small, and a chunk at a time when it is not. The rules below are what let the work be split without changing any result. The code cells execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
+A patch whose data are not read yet holds a [`LazyArray`](`dascore.lazy.array.LazyArray`), which [`Patch.set_backend`](`dascore.Patch.set_backend`) and [`Spool.set_backend`](`dascore.core.spool.Spool.set_backend`) give it under the name `"lazy"`: a [`Recipe`](`dascore.lazy.recipe.Recipe`), which says which stored samples fill which box of the array, and a chain of the operations run on it since. An operation on such a patch computes nothing. Its kernel appends the processor and its plan to the chain, and [`Patch.load`](`dascore.Patch.load`) runs the chain: on the whole array when that is small, and a chunk at a time when it is not. The rules below are what let the work be split without changing any result. The code cells execute against the real machinery, so this note fails the doc build if it drifts from the implementation.
 
 ```{python}
 import numpy as np
@@ -30,11 +30,11 @@ loaded = out.load()
 assert loaded.dtype == out.dtype and loaded.shape == out.shape
 ```
 
-**The lazy backend never falls back.** An operation with no contract raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) before anything is read, where another backend would convert to NumPy. So do arithmetic and NumPy functions on the patch, whichever operand is lazy, and `rolling`, stacking a spool, and the waterfall and specplot figures. A patch's repr describes lazy data without reading them. The data are read in these places only:
+**The lazy backend never falls back unasked.** An operation with no contract raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) before anything is read, where another backend would convert to NumPy. The `numpy_fallback` setting can allow it; see [Backends](#backends). So do arithmetic and NumPy functions on the patch, whichever operand is lazy, and `rolling`, stacking a spool, and the waterfall and specplot figures. A patch's repr describes lazy data without reading them. The data are read in these places only:
 
 - `Patch.load` (and `Spool.load`, which calls it), `np.asarray(patch)`, and writing the patch to a file, where the caller asks for the values;
 - `Patch.equals` (and `==`), which compares them;
-- taking a merged patch from a spool, as `spool.chunk(time=None)[0]` does, since that is how a spool loads; a merge which stays lazy is a later feature.
+- taking a merged patch from a spool which has no lazy backend, as `spool.chunk(time=None)[0]` does, since that is how a spool loads.
 
 Everything else refuses.
 
@@ -101,6 +101,25 @@ The whole result is still put together in memory; writing each box out as it is 
 - Nothing is kept between loads. Each piece a spool cuts from a lazy patch runs the chain for itself, so a piece cut along an axis a step needs whole reads and computes that whole axis again.
 - A kernel is not run until the chain is, so an argument its kernel refuses, such as an edge mode scipy does not know, is refused at `load` rather than at the call.
 - A step which recorded no contract, as a kernel registered for the lazy backend may leave, is given all of its input.
+
+## Backends
+
+A patch or a spool is moved to a backend by name. An array library, such as `"numpy"`, `"jax"` or `"cupy"`, holds the data in memory on it. `"LazyArray"`, or its alias `"lazy"`, reads nothing until the data are asked for, and in brackets names the library each box is computed on: `"LazyArray[jax]"`. NumPy is the default.
+
+```{python}
+from dascore.utils.downloader import fetch
+
+spool = dc.spool(fetch("example_dasdae_event_1.h5")).set_backend("lazy")
+waiting = spool[0].abs()
+print(waiting.backend, waiting.set_backend("numpy").backend)
+```
+
+- **A patch** becomes lazy only if its data are what a stored array holds, since a lazy patch is a promise to read. One made or changed in memory is refused.
+- **A spool** hands out each patch on its backend: read lazily where a read can be, which is a selection of neighbouring samples from a format which names its stored arrays. The backend follows the spools made from it, and a read the caller makes meanwhile is the caller's own.
+- **A merge stays lazy.** Under a lazy backend `spool.chunk(time=None)[0]` is one lazy patch whose recipe names a window of each file, built from the index with no file opened. A selection made before `load` reads only the files it touches. The files are checked against the index when the patch is made; one rewritten between then and `load` is refused only if it no longer holds an array of the shape and dtype its row states.
+- **Each box is computed on the library named**, by the kernel each step has for that library. A step with none has each box converted through NumPy.
+
+One setting, `numpy_fallback`, decides every conversion through NumPy: `"raise"` refuses it, `"warn"` converts with a `NumpyFallbackWarning`, and `"ignore"` converts silently. Left unset it is `"raise"` for lazy data and `"warn"` for any other. It decides an operation with no kernel for an array library, an operation with no contract on a lazy patch (which reads the data into memory), a read which cannot be lazy, and a merge which cannot stay lazy: one whose members the index cannot describe or which are in different data units, or whose files have changed since they were indexed. Nothing is converted or read without the setting having allowed it, and a step already pending is asked again when its patch is moved to another library.
 
 ## Where it happens
 
