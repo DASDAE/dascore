@@ -840,10 +840,7 @@ class TestEmptyEnds:
         options = {"time": (10, 50), "window": 0.1, "step": step, "db": db}
         overlap = 24 if step is None else 25
         window = patch.window(time=200, overlap=overlap, samples=True)
-        with warnings.catch_warnings():
-            # Nothing is said of the fill a window holds beyond the patch.
-            warnings.simplefilter("error")
-            out = window.fbe(**options)
+        out = window.fbe(**options)
         whole = patch.fbe(**options)
         assert out.coords == whole.coords
         assert out.attrs.data_units == whole.attrs.data_units
@@ -891,11 +888,32 @@ class TestEmptyEnds:
             warnings.simplefilter("error")
             window.stalta(time=(5, 40), samples=True)
         data = patch.data.copy()
-        data[5, 600:1400] = 0
+        # Forty zeros are behind samples 89 to 99 alone, which only two
+        # windows hold: the one reaching before the patch, and the first
+        # which lies wholly inside it, from sample 0 to 199.
+        data[5, 50:100] = 0
         silent = patch.new(data=data).window(time=200, samples=True)
-        # A silent stretch well inside the patch is the data's own.
         with pytest.warns(RuntimeWarning, match="invalid value"):
             silent.stalta(time=(5, 40), samples=True)
+
+    def test_only_the_fill_is_quiet_in_dask_pieces(self, patch):
+        """A piece knows which of its windows reach beyond the whole patch."""
+        dask_array = pytest.importorskip("dask.array")
+        data = patch.data.copy()
+        chunked = dask_array.from_array(data, chunks=(300, 1000))
+        out = patch.new(data=chunked).window(time=100, samples=True)
+        quiet = out.stalta(time=(5, 40), samples=True)
+        with warnings.catch_warnings():
+            # The second piece's first windows hold data, not fill.
+            warnings.simplefilter("error")
+            quiet.data.compute(scheduler="synchronous")
+        # Zeros behind the second piece's first samples are the data's own.
+        data[5, 1000:1100] = 0
+        chunked = dask_array.from_array(data, chunks=(300, 1000))
+        out = patch.new(data=chunked).window(time=100, samples=True)
+        heard = out.stalta(time=(5, 40), samples=True)
+        with pytest.warns(RuntimeWarning, match="invalid value"):
+            heard.data.compute(scheduler="synchronous")
 
     @pytest.mark.parametrize("step", (None, 0.04), ids=("every", "stepped"))
     def test_fbe_is_close_to_the_plain_one(self, step):
@@ -1056,15 +1074,22 @@ class TestOperationsRefused:
 
     def test_overlap_shorter_than_the_empty_ends(self, patch):
         """The windows must overlap by what is discarded of each."""
-        window = patch.window(time=100, overlap=10, samples=True)
-        with pytest.raises(ParameterError, match="they overlap by 10"):
+        # A rolling window of 25 samples leaves 24 of each window empty.
+        window = patch.window(time=100, overlap=23, samples=True)
+        with pytest.raises(ParameterError, match="they overlap by 23"):
             window.fbe(time=(10, 50), window=0.1)
+        enough = patch.window(time=100, overlap=24, samples=True)
+        assert enough.fbe(time=(10, 50), window=0.1).shape == patch.shape
 
     def test_analysis_window_with_empty_ends(self, patch):
         """A dual is worked out for whole windows, so neither is given."""
         window = {"time": 64, "overlap": 48, "samples": True, "analysis": "hann"}
         with pytest.raises(ParameterError, match="worked out for whole windows"):
             Windowed(_Lags(lag=3), **window)(patch)
+        # Nor for an operation which keeps every n-th sample of a window.
+        skipping = patch.window(time=64, overlap=48, samples=True, analysis="hann")
+        with pytest.raises(ParameterError, match="worked out for whole windows"):
+            skipping.decimate(time=4, filter_type=None)
 
     @pytest.mark.parametrize(
         "change",
@@ -1513,6 +1538,10 @@ class TestOtherBackends:
         "decimate": lambda x: x.window(time=100, samples=True).decimate(
             time=2, filter_type=None
         ),
+        # The last samples of each window, and of the patch, left empty.
+        "empty_at_the_end": lambda x: Windowed(
+            _Lags(lag=7, every=4, ahead=True), time=100, overlap=20, samples=True
+        )(x),
     }
 
     @staticmethod
@@ -1633,7 +1662,8 @@ class TestOtherBackends:
     def test_ragged_length_of_every_nth_sample(self, patch, library, length):
         """A patch whose length is no multiple of four keeps a last short step."""
         ragged = patch.select(time=(0, length), samples=True)
-        window = {"time": 100, "overlap": 20, "samples": True}
+        # Nor is the window's: 98 samples, of which 25 are kept.
+        window = {"time": 98, "overlap": 18, "samples": True}
         operation = _Lags(lag=10, every=4)
         expected = _lagged(ragged.data, 10, every=4)
         assert expected.shape == (300, 500)

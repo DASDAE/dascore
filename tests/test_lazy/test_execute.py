@@ -277,10 +277,10 @@ class TestWindowed:
         "every_nth_two_dims": lambda x: x.window(
             time=80, distance=80, overlap=40, samples=True
         ).decimate(time=4, filter_type=None),
-        # A length which is no multiple of the three samples skipped.
+        # A length, and a window, which are no multiple of the three skipped.
         "every_nth_ragged": lambda x: (
             x.select(time=(0, 1999), samples=True)
-            .window(time=90, samples=True)
+            .window(time=91, overlap=31, samples=True)
             .decimate(time=3, filter_type=None)
         ),
         "in_a_chain": lambda x: (
