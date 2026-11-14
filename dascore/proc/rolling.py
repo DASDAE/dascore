@@ -314,13 +314,6 @@ def _rolling_pandas(data, function, *, window, step, axis, center, args, kwargs)
     return np.squeeze(out) if out.ndim != data.ndim else out
 
 
-def _unfilled(window: int, step: int) -> int:
-    """Return how many of a rolling result's first samples have no whole window."""
-    # A sample is filled once `window` samples lie at or before it, and
-    # every `step`-th sample is kept, starting from the first.
-    return -(-(window - 1) // step)
-
-
 def _rolling_mean(data, *, window, step, axis, pandas):
     """Return the uncentred rolling mean of the engine `rolling` chose."""
     roll, mean = (_rolling_pandas, "mean") if pandas else (_rolling_numpy, np.mean)

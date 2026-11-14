@@ -534,7 +534,9 @@ class _Lags(dc.PatchProcessor):
     Each sample less the one `lag` before it, on any array library.
 
     The first `lag` samples have none before them and are left NaN, which
-    `halo` says. Every `every`-th sample is kept, from sample `skip`.
+    `halo` says. With `ahead` it is the sample `lag` after which is taken,
+    and the last samples which are left NaN. Every `every`-th sample is
+    kept, from sample `skip`.
     """
 
     name = None
@@ -543,6 +545,7 @@ class _Lags(dc.PatchProcessor):
     lag: int = 3
     every: int = 1
     skip: int = 0
+    ahead: bool = False
 
     def get_metadata(self, meta):
         """Return the samples kept along time, and its axis."""
@@ -551,8 +554,8 @@ class _Lags(dc.PatchProcessor):
         return meta.new(coords=coords), {"axis": meta.get_axis("time")}
 
     def halo(self, plan):
-        """Return the samples with nothing `lag` before them, as kept."""
-        return {plan["axis"]: (-(-self.lag // self.every), 0)}
+        """Return how far before or after a sample the other one lies."""
+        return {plan["axis"]: (0, self.lag) if self.ahead else (self.lag, 0)}
 
     def kernel(self, data, *, axis):
         """Return the differences, NaN where there is nothing to take."""
@@ -561,14 +564,19 @@ class _Lags(dc.PatchProcessor):
         shape = (*moved.shape[:-1], self.lag)
         empty = xp.full(shape, xp.nan, dtype=moved.dtype, device=device(moved))
         made = moved[..., self.lag :] - moved[..., : -self.lag]
-        out = xp.concat([empty, made], axis=-1)[..., self.skip :: self.every]
+        parts = [-made, empty] if self.ahead else [empty, made]
+        out = xp.concat(parts, axis=-1)[..., self.skip :: self.every]
         return xp.moveaxis(out, -1, axis)
 
 
-def _lagged(data: np.ndarray, lag: int, every: int = 1) -> np.ndarray:
-    """What `_Lags` makes of the whole of some data: NaN for its first samples."""
-    before = np.full((*data.shape[:-1], lag), np.nan)
-    return (data - np.concatenate([before, data], axis=-1)[..., :-lag])[..., ::every]
+def _lagged(data: np.ndarray, lag: int, every: int = 1, ahead=False) -> np.ndarray:
+    """What `_Lags` makes of the whole of some data: NaN where it has no pair."""
+    empty = np.full((*data.shape[:-1], lag), np.nan)
+    if ahead:
+        other = np.concatenate([data, empty], axis=-1)[..., lag:]
+    else:
+        other = np.concatenate([empty, data], axis=-1)[..., :-lag]
+    return (data - other)[..., ::every]
 
 
 class _NameOnly(dc.PatchProcessor):
@@ -913,27 +921,22 @@ class TestEmptyEnds:
         assert np.isnan(whole.data[:, :39]).all()
         np.testing.assert_allclose(out.data, whole.data, rtol=1e-9, equal_nan=True)
 
-    def test_trailing_ends_are_empty_too(self, patch):
-        """What is empty at the end of a window is at the end of the patch."""
+    @pytest.mark.parametrize("length", (2000, 1999, 1998, 1997, 101))
+    @pytest.mark.parametrize("every", (1, 4))
+    def test_trailing_ends_are_empty_too(self, patch, length, every):
+        """
+        What has nothing after it is empty at the end of the patch too.
 
-        class Leads(_Lags):
-            """Each sample less the one `lag` after it."""
-
-            name = None
-
-            def halo(self, plan):
-                """Return the samples with nothing `lag` after them."""
-                return {plan["axis"]: (0, self.lag)}
-
-            def kernel(self, data, *, axis):
-                """Return the differences, NaN where there is nothing to take."""
-                flipped = np.flip(data, axis=axis)
-                return np.flip(super().kernel(flipped, axis=axis), axis=axis)
-
-        out = Windowed(Leads(lag=7), time=100, samples=True)(patch)
-        expected = np.flip(_lagged(np.flip(patch.data, -1), 7), -1)
-        assert np.isnan(expected[:, -7:]).all()
+        How many samples that is depends on where the patch ends among
+        the samples kept, not on where a window does.
+        """
+        short = patch.select(time=(0, length), samples=True)
+        operation = _Lags(lag=7, every=every, ahead=True)
+        out = Windowed(operation, time=100, overlap=20, samples=True)(short)
+        expected = _lagged(short.data, 7, every=every, ahead=True)
+        assert np.isnan(expected[:, -1]).all() and not np.isnan(expected[:, 0]).any()
         np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(operation(short).data, expected, rtol=0, atol=1e-12)
 
 
 class TestEveryNthSample:

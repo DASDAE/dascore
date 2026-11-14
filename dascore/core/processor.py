@@ -133,9 +133,9 @@ class PatchProcessor(DascoreBaseModel):
     - `chunk_contract(dtype, plan)`: what a chunk of the output needs of
       the input, which is what lets the operation run on a lazy array.
       None, the default, says it cannot.
-    - `halo(plan)`: how many samples at each end of an axis the kernel
-      leaves empty, for want of input before or after them, as a rolling
-      mean leaves its first. No axis by default.
+    - `halo(plan)`: how many samples before and after one of its own a
+      kernel reads to fill it, where it leaves a sample empty for want of
+      them, as a rolling mean leaves its first. No axis by default.
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
@@ -450,19 +450,21 @@ class PatchProcessor(DascoreBaseModel):
 
     def halo(self, plan: dict[str, Any]) -> Mapping[int, tuple[int, int]]:
         """
-        Return the samples at each end of an axis the kernel leaves empty.
+        Return how far along an axis the kernel reads to fill a sample.
 
-        For each axis the kernel cannot fill to its ends, how many samples
-        of its result at the start and at the end hold no value, because
-        the input they need lies before or after the data: a rolling mean
-        leaves NaN until a whole window is behind it. Counted in samples of
-        the result, from the plan `get_metadata` returned, and the same
+        For each axis along which the kernel leaves a sample empty (NaN)
+        when the data it needs lie beyond the array: how many samples of
+        the input before and after that sample it reads. A rolling mean
+        over ten samples, labelled at the last, reads nine before and none
+        after, so its first nine samples are empty. Counted in samples of
+        the input, from the plan `get_metadata` returned, and the same
         whatever the data hold. An axis not named has none, which is the
         default.
 
-        [`Patch.window`](`dascore.Patch.window`) discards them from every
-        window and blends what is left, so the windows must overlap by at
-        least as much; the ends of the patch itself are left NaN.
+        [`Patch.window`](`dascore.Patch.window`) discards from every
+        window the samples which reach beyond it and blends what is left,
+        so the windows must overlap by at least as much; the samples which
+        reach beyond the patch itself are left NaN.
         """
         return {}
 

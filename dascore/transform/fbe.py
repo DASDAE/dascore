@@ -12,12 +12,7 @@ from pydantic import ConfigDict
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import UnitError
 from dascore.proc.filter import PassFilter
-from dascore.proc.rolling import (
-    _PandasPatchRoller,
-    _roller,
-    _rolling_mean,
-    _unfilled,
-)
+from dascore.proc.rolling import _PandasPatchRoller, _roller, _rolling_mean
 from dascore.units import get_quantity
 from dascore.utils.array import _is_offset_unit
 from dascore.utils.misc import check_filter_kwargs
@@ -128,8 +123,8 @@ class Fbe(PatchProcessor):
         }
 
     def halo(self, plan):
-        """Return the samples left empty until a whole window is behind them."""
-        return {plan["axis"]: (_unfilled(plan["window"], plan["step"]), 0)}
+        """Return the samples a rolling window reads before the one it fills."""
+        return {plan["axis"]: (plan["window"] - 1, 0)}
 
     def numpy_kernel(self, data, *, axis, sos, window, step, pandas):
         """Return the root-mean-square of the filtered data in each window."""

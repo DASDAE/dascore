@@ -134,7 +134,7 @@ class TestStaltaUnits:
         assert np.array_equal(out.data, (sta / lta).data, equal_nan=True)
 
     def test_halo_is_the_empty_start(self, random_patch):
-        """What `halo` says is empty is what the kernel leaves NaN, and no more."""
+        """A sample is NaN where what `halo` says it reads lies before the patch."""
         stalta = Stalta(samples=True, time=(5, 20))
         _, plan = stalta.get_metadata(random_patch.drop_data())
         assert stalta.halo(plan) == {random_patch.get_axis("time"): (19, 0)}

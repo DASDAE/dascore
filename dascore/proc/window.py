@@ -280,6 +280,20 @@ def _span(tiles, size, stride, length) -> tuple[list[int], list[slice]]:
     return extent, inside
 
 
+def _empty(length: int, every: int, reach) -> tuple[int, int]:
+    """
+    Return how many samples at each end of an operation's result are empty.
+
+    The operation keeps every `every`-th of `length` samples, from the
+    first, and to fill one reads `reach` samples before and after it.
+    """
+    before, after = reach
+    made = -(-length // every)
+    # The last sample kept which has all it reads after it, if there is one.
+    last = (length - 1 - after) // every
+    return min(-(-before // every), made), made - max(last + 1, 0)
+
+
 @dataclass(frozen=True)
 class _Made:
     """
@@ -302,16 +316,24 @@ class _Made:
     empty: tuple[tuple[int, int], ...]
 
     @classmethod
-    def of(cls, size, stride, length, factor, trim) -> _Made:
-        """Return the geometry for windows given in samples of the input."""
+    def of(cls, size, stride, length, factor, halo) -> _Made:
+        """
+        Return the geometry for windows given in samples of the input.
+
+        `halo` is how many samples of the input before and after one of
+        its own the operation reads to fill it, along each windowed axis.
+        """
         made = tuple(-(-z // q) for z, q in zip(size, factor, strict=True))
+        spans = list(zip(factor, halo, strict=True))
+        # What that leaves empty of a window's result, and of the whole.
+        trim = [_empty(z, q, reach) for z, (q, reach) in zip(size, spans)]
         return cls(
             size=made,
             stride=tuple(x // q for x, q in zip(stride, factor, strict=True)),
             length=tuple(-(-n // q) for n, q in zip(length, factor, strict=True)),
             lead=tuple(before for before, _ in trim),
             kept=tuple(z - sum(ends) for z, ends in zip(made, trim, strict=True)),
-            empty=tuple(trim),
+            empty=tuple(_empty(n, q, reach) for n, (q, reach) in zip(length, spans)),
         )
 
     @property
@@ -392,11 +414,16 @@ class Windowed(PatchProcessor):
       result is then that much shorter. No other change of shape is
       blended.
     - An operation which leaves samples at the ends of its result empty
-      says how many by its `halo`: `fbe` and `stalta` leave NaN until a
-      whole rolling window is behind a sample. Those are discarded from
-      every window and what is left is blended, so the windows must overlap
-      by at least as much. The patch's own first samples have nothing
-      before them, and are left NaN as the operation alone leaves them.
+      says by its `halo` how far it reads around a sample: `fbe` and
+      `stalta` leave NaN until a whole rolling window is behind a sample.
+      Those are discarded from every window and what is left is blended,
+      so the windows must overlap by at least as much. The patch's own
+      first samples have nothing before them, and are left NaN as the
+      operation alone leaves them.
+    - NumPy's floating-point warnings are not raised for a window which
+      reaches beyond the patch, where a logarithm or a quotient of the
+      fill is not about the data; nor, then, for the data that window
+      holds. Windows inside the patch warn as the operation does.
     - On an array backend other than NumPy the data stay where they are.
       A dask array is computed a piece at a time, each from the windows
       which overlap it, so nothing is computed when the operation is
@@ -496,7 +523,7 @@ class Windowed(PatchProcessor):
         # all there is.
         size, stride = plan["size"], plan["stride"]
         only = tuple(-(-z // step) for z, step in zip(size, stride, strict=True))
-        keys = ("axes", "size", "stride", "factor", "trim", "inner")
+        keys = ("axes", "size", "stride", "factor", "halo", "inner")
         where = {x: plan[x] for x in keys}
         # In NumPy's dtype: a dask array's chunks may be another library's.
         probe = np.zeros(tile.shape, _as_numpy_dtype(tile.dtype))
@@ -581,13 +608,13 @@ class Windowed(PatchProcessor):
         out = meta.coords.isel(**strides)[0] if strides else meta.coords
         return tuple(factor), out.drop_coords(*gone)[0] if gone else out
 
-    def _trim(self, window, factor, inner):
-        """Return how many samples at each end of a window's result are empty."""
-        halo = self.operation.halo(inner) or {}
-        trim = tuple(tuple(halo.get(axis, (0, 0))) for axis in window.axes)
-        whole = not any(map(any, trim)) and all(x == 1 for x in factor)
+    def _halo(self, window, factor, inner):
+        """Return how far the operation reads around a sample, for each window axis."""
+        said = self.operation.halo(inner) or {}
+        halo = tuple(tuple(said.get(axis, (0, 0))) for axis in window.axes)
+        whole = not any(map(any, halo)) and all(x == 1 for x in factor)
         if whole:
-            return trim
+            return halo
         if self.analysis is not None:
             self._refuse(
                 "it does not hand back the whole of a window, and an "
@@ -596,18 +623,19 @@ class Windowed(PatchProcessor):
             )
         assert window.stride is not None
         # Of one window alone, which is all that is asked of it here.
-        landed = _Made.of(window.size, window.stride, window.size, factor, trim)
-        for dim, ends, overlap in zip(window.dims, trim, landed.overlap, strict=True):
-            if overlap < 0:
+        landed = _Made.of(window.size, window.stride, window.size, factor, halo)
+        spans = zip(window.dims, landed.size, landed.kept, landed.stride, strict=True)
+        for dim, size, kept, stride in spans:
+            if kept < stride:
                 self._refuse(
-                    f"it leaves {sum(ends)} samples at the ends of each "
+                    f"it leaves {size - kept} samples at the ends of each "
                     f"window empty along {dim}, which are discarded, so the "
                     "windows must overlap by at least that many of the "
-                    f"samples it makes; they overlap by {overlap + sum(ends)}."
+                    f"samples it makes; they overlap by {size - stride}."
                 )
         # A taper whose ramps would cross is refused here, not at the data.
         self._tapers(landed)
-        return trim
+        return halo
 
     def _tapers(self, made: _Made):
         """
@@ -687,7 +715,7 @@ class Windowed(PatchProcessor):
             )
         made, inner = self._planned(tile)
         factor, coords = self._landing(meta, window, tile, made)
-        trim = self._trim(window, factor, inner)
+        halo = self._halo(window, factor, inner)
         # A lazy patch and a dask one both compute later, so both are told
         # now what dtype the blended windows have.
         deferred = meta.backend in (LAZY_BACKEND, "dask")
@@ -699,9 +727,9 @@ class Windowed(PatchProcessor):
             "length": tuple(meta.shape[x] for x in axes),
             "others": tuple(x for x in range(len(meta.shape)) if x not in axes),
             # Every how many samples of a window the operation keeps, and
-            # how many at each end of what it makes are discarded.
+            # how many before and after a sample it reads to fill it.
             "factor": factor,
-            "trim": trim,
+            "halo": halo,
             "inner": inner,
         }
         out = meta.new(attrs=operation._result_attrs(made))
@@ -750,7 +778,7 @@ class Windowed(PatchProcessor):
         length,
         others,
         factor,
-        trim,
+        halo,
         inner,
         quiet,
         like=None,
@@ -767,7 +795,7 @@ class Windowed(PatchProcessor):
         if type(self.operation).kernel_for("numpy") is None:
             return data
         where = {"axes": axes, "size": size, "stride": stride, "length": length}
-        where |= {"factor": factor, "trim": trim}
+        where |= {"factor": factor, "halo": halo}
         out, made = self._blend(data, inner=inner, tiles=tiles, **where)
         if not quiet:
             _warn_if_integers(made, out.dtype)
@@ -783,7 +811,7 @@ class Windowed(PatchProcessor):
         length,
         others,
         factor,
-        trim,
+        halo,
         inner,
         quiet,
         like=None,
@@ -806,7 +834,7 @@ class Windowed(PatchProcessor):
         if kernel is None:
             return data
         where = {"axes": axes, "size": size, "stride": stride, "length": length}
-        where |= {"factor": factor, "trim": trim}
+        where |= {"factor": factor, "halo": halo}
         if backend == "dask" and like is not None and tiles is None:
             return self._by_dask_chunk(
                 data, like=like, others=others, inner=inner, **where
@@ -834,7 +862,7 @@ class Windowed(PatchProcessor):
         widths = [(0, 0)] * (moved.ndim - ndim)
         widths += [(inside.start, extent - inside.stop) for extent, inside in spans]
         moved = _pad_array(moved, widths, fill)
-        landed = _Made.of(size, stride, length, factor, trim)
+        landed = _Made.of(size, stride, length, factor, halo)
         analysis, synthesis, landed = self._tapers(landed)
         # Windows a whole number of colours apart never share a sample, so
         # each such class is run, laid out with nothing between its windows,
@@ -891,7 +919,7 @@ class Windowed(PatchProcessor):
         return xp.moveaxis(total, tail, axes)
 
     def _by_dask_chunk(
-        self, data, *, like, axes, size, stride, length, factor, trim, others, inner
+        self, data, *, like, axes, size, stride, length, factor, halo, others, inner
     ):
         """
         Return the blended windows of a dask array, a chunk at a time.
@@ -910,7 +938,7 @@ class Windowed(PatchProcessor):
         """
         dask, array = optional_import("dask"), optional_import("dask.array")
         where = {"axes": axes, "size": size, "stride": stride, "length": length}
-        where |= {"factor": factor, "trim": trim}
+        where |= {"factor": factor, "halo": halo}
         plan = {**where, "others": others, "inner": inner}
         contract = self.chunk_contract(_as_numpy_dtype(data.dtype), plan)
         sizes = dict(zip(axes, size, strict=True))
@@ -948,7 +976,7 @@ class Windowed(PatchProcessor):
 
         return array.block(build(())).rechunk(tuple(cut))
 
-    def _blend(self, data, *, axes, size, stride, length, factor, trim, inner, tiles):
+    def _blend(self, data, *, axes, size, stride, length, factor, halo, inner, tiles):
         """Return the blended windows, and the dtype the operation made."""
         operation = self.operation
         kernel = type(operation).kernel_for("numpy")
@@ -965,7 +993,7 @@ class Windowed(PatchProcessor):
         whole = np.zeros if fill == 0 else partial(np.full, fill_value=fill)
         padded = whole((*moved.shape[:-ndim], *extent), dtype=dtype)
         padded[(..., *inside)] = moved
-        landed = _Made.of(size, stride, length, factor, trim)
+        landed = _Made.of(size, stride, length, factor, halo)
         analysis, synthesis, landed = self._tapers(landed)
         reach, within = landed.span(tiles)
         keep = landed.pick

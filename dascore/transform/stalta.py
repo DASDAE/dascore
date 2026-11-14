@@ -91,7 +91,7 @@ class Stalta(PatchProcessor):
         return meta.new(coords=coords, attrs=attrs, dtype=np.float64), plan
 
     def halo(self, plan):
-        """Return the samples left empty until the long window is behind them."""
+        """Return the samples the long window reads before the one it fills."""
         return {plan["axis"]: (plan["sizes"][1] - 1, 0)}
 
     def numpy_kernel(self, data, *, axis, sizes, pandas, scale):
