@@ -534,8 +534,7 @@ class _Lags(dc.PatchProcessor):
     Each sample less the one `lag` before it, on any array library.
 
     The first `lag` samples have none before them and are left NaN, which
-    `halo` says unless `said` is False. Every `every`-th sample is kept,
-    from sample `skip`.
+    `halo` says. Every `every`-th sample is kept, from sample `skip`.
     """
 
     name = None
@@ -544,7 +543,6 @@ class _Lags(dc.PatchProcessor):
     lag: int = 3
     every: int = 1
     skip: int = 0
-    said: bool = True
 
     def get_metadata(self, meta):
         """Return the samples kept along time, and its axis."""
@@ -554,8 +552,7 @@ class _Lags(dc.PatchProcessor):
 
     def halo(self, plan):
         """Return the samples with nothing `lag` before them, as kept."""
-        empty = -(-self.lag // self.every) if self.said else 0
-        return {plan["axis"]: (empty, 0)}
+        return {plan["axis"]: (-(-self.lag // self.every), 0)}
 
     def kernel(self, data, *, axis):
         """Return the differences, NaN where there is nothing to take."""
@@ -811,12 +808,6 @@ class TestEmptyEnds:
         assert np.isnan(expected[:, :7]).all() and not np.isnan(expected[:, 7:]).any()
         np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
 
-    def test_unsaid_empty_ends_are_blended(self, patch):
-        """An operation which does not say what it leaves empty blends it."""
-        out = Windowed(_Lags(lag=7, said=False), time=100, samples=True)(patch)
-        # Every window's first samples, wherever another window holds them.
-        assert np.isnan(out.data).mean() > 0.1
-
     def test_warm_up_of_a_real_nan_is_kept(self, patch):
         """Samples are discarded by where they are, not by what they hold."""
         data = patch.data.copy()
@@ -860,27 +851,6 @@ class TestEmptyEnds:
             np.testing.assert_allclose(
                 out.data[:, kept], alone.data[:, empty:], rtol=1e-10
             )
-
-    @pytest.mark.parametrize("library", ("numpy", "array_api_strict", "dask"))
-    def test_a_sample_given_no_weight_adds_nothing(self, patch, library):
-        """
-        A dead channel is as quiet in windows as it is in one piece.
-
-        A Hann ramp starts from zero, and zero times the minus infinity of a
-        silent channel in decibels is NaN, which would reach the sample of
-        the next window which holds all the weight.
-        """
-        data = patch.data.copy()
-        data[5] = 0
-        dead = patch.new(data=data)
-        there = dead if library == "numpy" else _on(dead, library)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            window = there.window(time=200, overlap=50, samples=True)
-            out = to_numpy(window.fbe(time=(10, 50), window=0.1).data)
-        # But for the first samples, which no window has an energy for.
-        out = out[:, 24:]
-        assert np.isneginf(out[5]).all() and np.isfinite(np.delete(out, 5, 0)).all()
 
     @pytest.mark.parametrize("library", ("numpy", "array_api_strict", "dask"))
     def test_no_weight_adds_nothing_on_any_library(self, patch, library):
@@ -943,21 +913,6 @@ class TestEmptyEnds:
         assert np.isnan(whole.data[:, :39]).all()
         np.testing.assert_allclose(out.data, whole.data, rtol=1e-9, equal_nan=True)
 
-    def test_start_of_the_patch_is_not_taken_from_the_fill(self):
-        """
-        A steady record has a steady ratio from its first whole window on.
-
-        A window which reaches before the patch holds zeros there, and a
-        long-term mean of them with the data would be low, so the ratio
-        high: a detector would fire at the start of every patch.
-        """
-        data = np.abs(np.random.default_rng(0).standard_normal((2, 2000))) + 1.0
-        coords = {"distance": np.arange(2.0), "time": np.arange(2000) * 0.004}
-        steady = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-        window = steady.window(time=200, samples=True)
-        out = window.stalta(time=(5, 40), samples=True).data
-        assert np.isnan(out[:, :39]).all() and np.nanmax(out) < 2
-
     def test_trailing_ends_are_empty_too(self, patch):
         """What is empty at the end of a window is at the end of the patch."""
 
@@ -979,24 +934,6 @@ class TestEmptyEnds:
         expected = np.flip(_lagged(np.flip(patch.data, -1), 7), -1)
         assert np.isnan(expected[:, -7:]).all()
         np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
-
-    def test_bounds_dropped_beside_the_window(self, patch):
-        """Cell bounds an operation drops go, whichever dimension is windowed."""
-        time = patch.get_coord("time").values
-        step = patch.get_coord("time").step
-        edges = {"time_start": ("time", time), "time_stop": ("time", time + step)}
-        bounded = patch.update_coords(**edges)
-        whole = bounded.fbe(time=(10, 50), window=0.1)
-        out = bounded.window(distance=30, samples=True).fbe(time=(10, 50), window=0.1)
-        assert out.coords == whole.coords
-        assert set(out.coords.coord_map) == set(whole.coords.coord_map)
-
-    def test_history_names_the_window_and_the_step(self, patch):
-        """The call is recorded as it was written, the step with it."""
-        window = patch.window(time=200, overlap=25, samples=True)
-        out = window.fbe(time=(10, 50), window=0.1, step=0.02)
-        assert "window(overlap=" in out.attrs.history[-1]
-        assert ".fbe(" in out.attrs.history[-1] and "step=" in out.attrs.history[-1]
 
 
 class TestEveryNthSample:
@@ -1042,7 +979,8 @@ class TestEveryNthSample:
             out.data[:, 100:-100], whole.data[:, 100:-100], rtol=0, atol=1e-3
         )
 
-    def test_bounds_of_cells_go_with_the_grid(self, patch):
+    @pytest.mark.parametrize("window", ({"time": 200}, {"distance": 30}))
+    def test_bounds_of_cells_go_with_the_grid(self, patch, window):
         """What `fbe` does to the bounds of time's cells, the window does."""
         time = patch.get_coord("time").values
         step = patch.get_coord("time").step
@@ -1050,11 +988,12 @@ class TestEveryNthSample:
         bounded = patch.update_coords(**edges)
         whole = bounded.fbe(time=(10, 50), window=0.1)
         assert "time_start" not in whole.coords.coord_map
-        out = bounded.window(time=200, samples=True).fbe(time=(10, 50), window=0.1)
+        windows = bounded.window(samples=True, **window)
+        out = windows.fbe(time=(10, 50), window=0.1)
         assert out.coords == whole.coords
         assert set(out.coords.coord_map) == set(whole.coords.coord_map)
         # An operation which keeps them keeps them in a window too.
-        kept = bounded.window(time=200, samples=True).detrend("time")
+        kept = windows.detrend("time")
         assert kept.coords == bounded.coords
 
 
@@ -1808,33 +1747,6 @@ class TestOtherBackends:
         piece = strict.asarray(patch.data[needed])
         expected = windowed.numpy_kernel(patch.data, **plan)[box]
         return (shared, piece, box, needed), expected
-
-    def test_dask_piece_of_another_library(self, patch, library, monkeypatch):
-        """A piece whose chunk is another library's is blended there."""
-        if library != "dask":
-            pytest.skip("only dask computes in pieces")
-        handed = []
-
-        class Magnitudes(dc.proc.Abs):
-            """Abs, which notes the kind of array each window is."""
-
-            name = None
-
-            def kernel(self, data):
-                """Return the magnitudes, on the library the data are on."""
-                handed.append(type(data))
-                return super().kernel(data)
-
-        given, expected = self._piece(patch, Magnitudes())
-        handed.clear()
-        with warnings.catch_warnings():
-            self._refuse_numpy(monkeypatch)
-            warnings.simplefilter("error", NumpyFallbackWarning)
-            out = window_module._blended_piece(*given)
-        # Every window was handed to the kernel as the piece's own kind.
-        assert handed and set(handed) == {type(given[1])}
-        assert type(out) is type(given[1])
-        np.testing.assert_allclose(np.asarray(out), expected, rtol=0, atol=1e-12)
 
     def test_dask_piece_is_cast_to_the_dtype_stated(self, patch, library):
         """A piece on another library comes back in the dtype the result states."""

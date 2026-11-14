@@ -11,12 +11,7 @@ from pydantic import ConfigDict
 
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, UnitError
-from dascore.proc.rolling import (
-    _PandasPatchRoller,
-    _roller,
-    _rolling_mean,
-    _unfilled,
-)
+from dascore.proc.rolling import _PandasPatchRoller, _roller, _rolling_mean
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.array import _is_offset_unit, _quantity
 from dascore.utils.misc import check_filter_kwargs
@@ -97,7 +92,7 @@ class Stalta(PatchProcessor):
 
     def halo(self, plan):
         """Return the samples left empty until the long window is behind them."""
-        return {plan["axis"]: (_unfilled(plan["sizes"][1], 1), 0)}
+        return {plan["axis"]: (plan["sizes"][1] - 1, 0)}
 
     def numpy_kernel(self, data, *, axis, sizes, pandas, scale):
         """Return the short-term rolling mean over the long-term one."""

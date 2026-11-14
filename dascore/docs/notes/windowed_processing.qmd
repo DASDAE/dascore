@@ -35,7 +35,7 @@ Cutting an array into overlapping tiles, running something on each, and putting 
 |---|---|---|---|
 | A halo operation, such as `median_filter` | DASCore; it never affects the result | Discarded | The input's shape |
 | `impulse_window` | DASCore; the overlap is measured | Discarded | The input's shape |
-| `window` | The user; it changes the result | Blended under a taper | The input's shape |
+| `window` | The user; it changes the result | Blended under a taper | The input's shape, or shorter where the operation keeps every n-th sample |
 | A reduction in a window | The user | Nothing to combine | One value for each tile |
 
 The first column is the one a user must understand. Where DASCore picks the tile size, chunking is an implementation detail and the result is the eager one. Where the user picks it, the windowed operation is a different operation from the global one: `window(...).detrend()` is a piecewise detrend, and `window(...).normalize()` is automatic gain control.
@@ -65,7 +65,7 @@ w.apply(func)      # any function of a tile
 
 Everything about a windowed operation is decided from metadata when it is called: the output shape and coordinates, how the plan is cut, and whether the tiling is allowed. A tiling which cannot work is refused at the call, never when the data are read.
 
-- **Shape.** An operation may change a tile's shape if the tiles still land on one output grid, which `get_metadata` on a tile's metadata decides. `decimate(time=10)` in a window and step which are multiples of 10 is blended as usual; in a window of 1005 samples it is refused. A reduction gives one value for each window, labelled by one of the input's samples. *Implemented so far:* an operation which keeps a window's shape, or keeps every n-th sample of a windowed dimension from the window's first, is blended; the windows must advance by a multiple of n samples, and the result is that much shorter. `decimate` and `fbe` with a `step` are such operations. Any other change of shape, and a change of length along a dimension which is not windowed, is refused.
+- **Shape.** An operation may change a tile's shape if the tiles still land on one output grid, which `get_metadata` on a tile's metadata decides. `decimate(time=10)` in windows which advance by a multiple of 10 samples is blended as usual; where they advance by 1005 it is refused. A reduction gives one value for each window, labelled by one of the input's samples. *Implemented so far:* an operation which keeps a window's shape, or keeps every n-th sample of a windowed dimension from the window's first, is blended; the windows must advance by a multiple of n samples, and the result is that much shorter. `decimate` and `fbe` with a `step` are such operations. Any other change of shape, and a change of length along a dimension which is not windowed, is refused.
 - **Plan.** The plan is worked out from a tile's metadata, not the patch's. `taper` in a window therefore tapers each tile. One plan serves every tile: an operation in a window is one kernel, worked out once from the first tile and run on every tile, and a kernel never changes from tile to tile. Only an operation which acts relative to its window can be run that way. A class says that it is one by setting `position_free = True`, or by a `position_free(self, dims)` method where its arguments or the windowed dimensions decide: `line_mute` is one when its values are measured from the start of a coordinate or given for a dimension which is not windowed, and `slope_filter` is not along a frequency dimension of a patch already transformed. An operation which does not say so is refused; none is checked tile by tile. `taper` says so although a ramp length found against a float coordinate can round a sample either way between tiles, and so do `line_mute` and `taper_range` with relative values: every tile is given the first one's plan.
 - **Inputs.** A tile sees itself and the inputs given to the operation, and nothing else. An input shaped like the data, such as the mask of `where`, is tiled alongside the data. Any other input is handed to every tile whole. An operation which needs a channel the tile does not hold must be given it: `patch.window(distance=100).correlate(source)`. *Implemented so far:* an operation given another patch, or an array shaped like the patch, is refused.
 - **Empty ends.** An operation which cannot fill a tile to its ends says how many samples it leaves empty by `halo(plan)`, counted in the samples it makes: a rolling mean has no value until a whole window is behind a sample, so `fbe` and `stalta` leave the first samples of each tile NaN. Those samples are discarded by where they are, never by what they hold, and what is left of each tile is blended under complementary ramps. The tiles must therefore overlap by at least as much as is discarded, which is checked at the call, and an analysis window is refused. The patch's own first samples have nothing before them: a tile which reaches there holds only fill, so they are left NaN, as the operation alone leaves them.
@@ -162,7 +162,7 @@ These land before the public API is frozen for 1.0.
 ## Order of work
 
 1. `window` on in-memory patches: `apply`, reductions, the `ends` option, and `rolling` deprecated for it. Useful with no lazy code at all. *Done.*
-2. Operations which honour a window, and the window contract in the executor. *Done for operations which keep a window's shape and take no other patch.*
+2. Operations which honour a window, and the window contract in the executor. *Done for operations which keep a window's shape, or every n-th sample of it, and take no other patch.*
 3. `set_backend`, the lazy reader, and the merge which stays lazy.
 4. `impulse_window`.
 5. Writing in one pass, and zarr chunks.
@@ -171,6 +171,6 @@ These land before the public API is frozen for 1.0.
 ## Still to settle
 
 - The name of the fallback setting.
-- Operations in a window which change its shape, or which take another patch.
+- Operations in a window which change its shape other than by keeping every n-th sample, or which change the length of a dimension which is not windowed, or which take another patch.
 - A contract for a reduction in a window and for `apply`, so they run on a lazy patch.
 - Contracts for the operations a usual chain needs and which state none yet: `detrend`, `decimate`, `taper`, arithmetic with a scalar, the reductions and `sobel_filter`.

@@ -135,7 +135,7 @@ class PatchProcessor(DascoreBaseModel):
       None, the default, says it cannot.
     - `halo(plan)`: how many samples at each end of an axis the kernel
       leaves empty, for want of input before or after them, as a rolling
-      mean leaves its first. None by default.
+      mean leaves its first. No axis by default.
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the

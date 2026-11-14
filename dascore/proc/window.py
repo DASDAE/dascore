@@ -42,11 +42,9 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     device,
-    is_numpy,
 )
 from dascore.utils.misc import optional_import, suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
-from dascore.utils.signal import get_taper
 from dascore.utils.tiles import _taper_like, fill_dtype, get_tile_plan
 from dascore.utils.window import resolve_window
 
@@ -271,6 +269,17 @@ _DASK_WINDOWS = 8
 _DASK_TURN = threading.Lock()
 
 
+def _span(tiles, size, stride, length) -> tuple[list[int], list[slice]]:
+    """Return how far the given windows reach, and the array's place in it."""
+    extent, inside = [], []
+    for (first, last), z, step, n in zip(tiles, size, stride, length, strict=True):
+        low = first * step - _margin(z, step)
+        high = low + (last - 1 - first) * step + z
+        extent.append(high - low)
+        inside.append(slice(max(low, 0) - low, min(high, n) - low))
+    return extent, inside
+
+
 @dataclass(frozen=True)
 class _Made:
     """
@@ -318,14 +327,7 @@ class _Made:
 
     def span(self, tiles) -> tuple[list[int], list[slice]]:
         """Return how far the given windows' results reach, and the array in it."""
-        extent, inside = [], []
-        spans = zip(tiles, self.size, self.stride, self.length, strict=True)
-        for (first, last), z, step, n in spans:
-            low = first * step - _margin(z, step)
-            high = low + (last - 1 - first) * step + z
-            extent.append(high - low)
-            inside.append(slice(max(low, 0) - low, min(high, n) - low))
-        return extent, inside
+        return _span(tiles, self.size, self.stride, self.length)
 
     def unfilled(self, tiles) -> list[tuple[int, int]]:
         """
@@ -581,7 +583,7 @@ class Windowed(PatchProcessor):
 
     def _trim(self, window, factor, inner):
         """Return how many samples at each end of a window's result are empty."""
-        halo = self.operation.halo(inner)
+        halo = self.operation.halo(inner) or {}
         trim = tuple(tuple(halo.get(axis, (0, 0))) for axis in window.axes)
         whole = not any(map(any, trim)) and all(x == 1 for x in factor)
         if whole:
@@ -604,14 +606,10 @@ class Windowed(PatchProcessor):
                     f"samples it makes; they overlap by {overlap + sum(ends)}."
                 )
         # A taper whose ramps would cross is refused here, not at the data.
-        get_taper(self._taper_name(), landed.kept, landed.overlap)
+        self._tapers(landed)
         return trim
 
-    def _taper_name(self):
-        """Return the taper windows are blended under."""
-        return "hann" if self.taper is None else self.taper
-
-    def _tapers(self, plan, made: _Made):
+    def _tapers(self, made: _Made):
         """
         Return what windows are multiplied by on the way in and out, and where.
 
@@ -620,24 +618,19 @@ class Windowed(PatchProcessor):
         times zero is added, or an infinity or a NaN there would reach the
         sample of the next window which holds all the weight.
         """
-        if made.kept == plan.size:
-            overlap = tuple(z - x for z, x in zip(plan.size, plan.stride, strict=True))
-            analysis, synthesis = _windows(self.analysis, self.taper, plan, overlap)
-        else:
-            # Complementary ramps over what is blended of each window.
-            taper = get_taper(self._taper_name(), made.kept, made.overlap)
-            analysis, synthesis = None, taper
-        lead, kept, cut = list(made.lead), list(made.kept), []
+        # Complementary ramps over what is blended of each window; under an
+        # analysis window that is the whole of it.
+        kept = get_tile_plan(made.kept, made.kept, made.stride)
+        analysis, synthesis = _windows(self.analysis, self.taper, kept, made.overlap)
+        held = []
         for axis in range(synthesis.ndim):
             others = tuple(x for x in range(synthesis.ndim) if x != axis)
-            held = np.flatnonzero(synthesis.any(axis=others))
-            first, stop = int(held[0]), int(held[-1]) + 1
-            lead[axis], kept[axis] = lead[axis] + first, stop - first
-            cut.append(slice(first, stop))
-        if tuple(kept) != made.kept:
-            made = replace(made, lead=tuple(lead), kept=tuple(kept))
-            synthesis = synthesis[tuple(cut)]
-        return analysis, synthesis, made
+            weighted = np.flatnonzero(synthesis.any(axis=others))
+            held.append(slice(int(weighted[0]), int(weighted[-1]) + 1))
+        lead = tuple(at + x.start for at, x in zip(made.lead, held, strict=True))
+        kept = tuple(x.stop - x.start for x in held)
+        made = replace(made, lead=lead, kept=kept)
+        return analysis, synthesis[tuple(held)], made
 
     def get_metadata(self, meta):
         """Return the blended metadata, the tiling, and one window's plan."""
@@ -837,14 +830,12 @@ class Windowed(PatchProcessor):
             moved = xp.astype(moved, _dtype_on(moved, wide))
         # A window reaching beyond the array holds the fill there: the data
         # are lengthened at each end by as much of it as the windows reach.
-        spans = zip(tiles, size, stride, plan.margin, length, strict=True)
+        spans = zip(*_span(tiles, size, stride, length), strict=True)
         widths = [(0, 0)] * (moved.ndim - ndim)
-        for (first, last), z, step, margin, n in spans:
-            low, high = first * step - margin, (last - 1) * step - margin + z
-            widths.append((max(low, 0) - low, high - min(high, n)))
+        widths += [(inside.start, extent - inside.stop) for extent, inside in spans]
         moved = _pad_array(moved, widths, fill)
         landed = _Made.of(size, stride, length, factor, trim)
-        analysis, synthesis, landed = self._tapers(plan, landed)
+        analysis, synthesis, landed = self._tapers(landed)
         # Windows a whole number of colours apart never share a sample, so
         # each such class is run, laid out with nothing between its windows,
         # and added to the rest before the next is begun, so the windows of
@@ -856,7 +847,8 @@ class Windowed(PatchProcessor):
         for index in product(*(range(first, last) for first, last in tiles)):
             colour = tuple(k % c for k, c in zip(index, plan.colours, strict=True))
             classes.setdefault(colour, []).append(index)
-        total, dtype, expected = None, None, None
+        total, dtype = None, None
+        expected = _window_shape(data.shape, axes, landed.size)
         reach, within = landed.span(tiles)
         keep = landed.pick
         for colour in sorted(classes):
@@ -872,8 +864,6 @@ class Windowed(PatchProcessor):
                 if backend_name(out) != backend:
                     # A kernel which answered in NumPy whatever it was given.
                     out = asarray_like(out, tile)
-                if expected is None:
-                    expected = _window_shape(tile.shape, axes, landed.size)
                 if tuple(out.shape) != expected:
                     _refuse_window(operation, tile.shape, out.shape, expected)
                 dtype = _as_numpy_dtype(out.dtype)
@@ -969,25 +959,16 @@ class Windowed(PatchProcessor):
         moved = np.moveaxis(data, axes, tail)
         # The span of the windows given, and where the data sit inside it:
         # a window reaching beyond the array holds the fill there.
-        spans = zip(tiles, size, stride, plan.margin, length, strict=True)
-        extent, inside = [], []
-        for (first, last), z, step, margin, n in spans:
-            low, high = first * step - margin, (last - 1) * step - margin + z
-            extent.append(high - low)
-            inside.append(slice(max(low, 0) - low, min(high, n) - low))
-        inside = (..., *inside)
+        extent, inside = _span(tiles, size, stride, length)
         fill = 0 if self.fill is None else self.fill
         dtype = moved.dtype if fill == 0 else fill_dtype(moved.dtype, fill)
         whole = np.zeros if fill == 0 else partial(np.full, fill_value=fill)
         padded = whole((*moved.shape[:-ndim], *extent), dtype=dtype)
-        padded[inside] = moved
+        padded[(..., *inside)] = moved
         landed = _Made.of(size, stride, length, factor, trim)
-        analysis, synthesis, landed = self._tapers(plan, landed)
+        analysis, synthesis, landed = self._tapers(landed)
         reach, within = landed.span(tiles)
-        # All of a window's result is blended, unless the operation keeps
-        # every n-th sample of it or leaves its ends empty, or the taper
-        # gives its ends no weight.
-        keep = None if landed.kept == tuple(size) else landed.pick
+        keep = landed.pick
         # For each axis and each window along it: where the window is cut
         # from, where what is blended of it is put, and whether it lies
         # wholly inside the array.
@@ -1001,8 +982,8 @@ class Windowed(PatchProcessor):
             put.append([slice(at, at + kept) for at in starts])
             low, high = -(-m // x) - first, (n + m - z) // x - first
             inside.append([low <= k <= high for k in count])
-        put = cut if keep is None else put
-        expected, out, weights, seen = None, None, None, None
+        expected = _window_shape(data.shape, axes, landed.size)
+        out, weights, seen = None, None, None
         # In one order always, so a sample's windows are summed the same
         # way however the array was cut.
         for index in product(*(range(last - first) for first, last in tiles)):
@@ -1016,13 +997,9 @@ class Windowed(PatchProcessor):
                 # that is not about the data.
                 with np.errstate(all="ignore"):
                     made = kernel(operation, tile, **inner)
-            if expected is None:
-                expected = _window_shape(tile.shape, axes, landed.size)
             if np.shape(made) != expected:
                 _refuse_window(operation, tile.shape, np.shape(made), expected)
-            made = np.moveaxis(made, axes, tail)
-            if keep is not None:
-                made = made[keep]
+            made = np.moveaxis(made, axes, tail)[keep]
             if seen is None or made.dtype != seen:
                 # The taper in the precision of what the operation made.
                 weights, seen = _taper_like(synthesis, made), made.dtype
@@ -1056,8 +1033,6 @@ def _blended_piece(shared, piece, box, needed):
     with _DASK_TURN:
         out = contract.apply(partial(kernel, windowed, **plan), piece, box, needed)
     # In the dtype the result states, whatever this piece's values made.
-    if is_numpy(out):
-        return out.astype(dtype, copy=False)
     return array_namespace(out).astype(out, _dtype_on(out, dtype), copy=False)
 
 

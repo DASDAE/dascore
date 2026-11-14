@@ -44,7 +44,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any
 
 # One slice for each axis, each with an int start and stop and a step of one.
@@ -246,17 +245,14 @@ class Tiles(ChunkContract):
     whole: tuple[int, ...] = ()
     factors: Mapping[int, int] = field(default_factory=dict)
 
-    def _made(self, axis: int) -> tuple[int, int, int]:
-        """Return a tile's size, its stride and the axis's length, as made."""
-        size, stride, length = self.spans[axis]
-        factor = self.factors.get(axis, 1)
-        return -(-size // factor), stride // factor, -(-length // factor)
-
     def tiles(self, box: Box) -> tuple[tuple[int, int], ...]:
         """Return the first tile overlapping a box, and one past the last."""
         out = []
-        for axis in self.spans:
-            size, stride, length = self._made(axis)
+        for axis, (size, stride, length) in self.spans.items():
+            # In the samples made, which a box of the output is counted in.
+            every = self.factors.get(axis, 1)
+            size, stride = -(-size // every), stride // every
+            length = -(-length // every)
             margin = _margin(size, stride)
             count = (length - 1 + margin) // stride + 1
             first = max((box[axis].start + margin - size) // stride + 1, 0)
@@ -278,26 +274,17 @@ class Tiles(ChunkContract):
 
     def apply(self, run: Callable[..., Any], data, box: Box, needed: Box):
         """Return the output box, blended from the tiles which overlap it."""
-        tiles = self.tiles(box)
-        run = partial(run, tiles=tiles)
-        if not self.factors:
-            return super().apply(run, data, box, needed)
-        out = run(data)
-        # Where the result starts and stops along each axis: where the data
-        # do, but along a tiled axis in the samples the operation makes.
-        made = [(x.start, x.stop) for x in needed]
-        for axis, (first, last) in zip(self.spans, tiles, strict=True):
-            size, stride, length = self._made(axis)
-            low = first * stride - _margin(size, stride)
-            made[axis] = (
-                max(low, 0),
-                min(low + (last - 1 - first) * stride + size, length),
-            )
+        out = run(data, tiles=self.tiles(box))
+        # The result starts where the data do, counted in the samples made.
+        made = list(needed)
+        for axis, every in self.factors.items():
+            span = needed[axis]
+            made[axis] = slice(span.start // every, -(-span.stop // every))
         # A result of another shape is handed back for the caller to refuse.
-        if tuple(out.shape) != tuple(stop - start for start, stop in made):
+        if tuple(out.shape) != tuple(x.stop - x.start for x in made):
             return out
         spans = zip(box, made, strict=True)
-        return out[tuple(slice(b.start - at, b.stop - at) for b, (at, _) in spans)]
+        return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
 
 
 @dataclass(frozen=True)
