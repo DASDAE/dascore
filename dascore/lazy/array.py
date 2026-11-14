@@ -47,7 +47,7 @@ def _converted(processor, backend: str) -> str | None:
     """Return the operation a step would take chunks through NumPy for, if any."""
     if backend == NUMPY_BACKEND:
         return None
-    if hasattr(type(processor).kernel_for(backend), "_quiet"):
+    if hasattr(type(processor).kernel_for(backend), "_converts"):
         return processor.name or type(processor).__name__
     # A step which runs another operation, as one in a window does, has a
     # kernel for any library and converts for the operation it runs.

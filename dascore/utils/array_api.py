@@ -61,6 +61,8 @@ _NAMESPACES = {"jax": "jax.numpy", "dask": "dask.array"}
 # The array library patches are being read onto lazily, or None when reads
 # fill memory as usual; see `reading_lazily`.
 _LAZY_READ: ContextVar[str | None] = ContextVar("dascore_lazy_read", default=None)
+# Whether every fallback has been decided already; see `fallbacks_decided`.
+_DECIDED: ContextVar[bool] = ContextVar("dascore_fallbacks_decided", default=False)
 
 
 def array_namespace(*arrays: Any) -> Any:
@@ -232,6 +234,8 @@ def decide_fallback(
         The stack level of the caller, as `warnings.warn` understands it.
         None points the warning at the first frame outside dascore.
     """
+    if _DECIDED.get():
+        return
     policy = get_config().numpy_fallback or ("raise" if lazy else "warn")
     if policy == "raise":
         error = LazyOperationError if lazy else NumpyFallbackError
@@ -246,6 +250,22 @@ def decide_fallback(
             warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
         else:
             warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
+
+
+@contextmanager
+def fallbacks_decided():
+    """
+    Run what is inside with every fallback taken as decided already.
+
+    The steps pending on a lazy array were each put to the `numpy_fallback`
+    setting when they were chained, or when the array was moved to another
+    library. Computing them, a box at a time, asks nothing again.
+    """
+    token = _DECIDED.set(True)
+    try:
+        yield
+    finally:
+        _DECIDED.reset(token)
 
 
 @contextmanager

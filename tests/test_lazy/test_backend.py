@@ -211,8 +211,34 @@ class TestPatchSetBackend:
         made = dc.get_example_patch()
         with pytest.raises(ParameterError, match="nothing to read later"):
             made.set_backend("lazy")
-        # A window of a stored array is still one to read later.
+        # Already in memory, it is where NumPy was asked to put it.
         assert made.set_backend("numpy") is made
+
+    def test_changed_in_memory(self, patch):
+        """Nor can one whose data are no longer what its file holds."""
+        with pytest.raises(ParameterError, match="nothing to read later"):
+            patch.abs().set_backend("lazy")
+
+    def test_there_and_back(self, patch, reads):
+        """Read into memory, a patch still names the array it was read from."""
+        loaded = patch.set_backend("lazy").set_backend("numpy")
+        again = loaded.set_backend("lazy")
+        assert again.backend == "lazy" and again.attrs == patch.attrs
+        reads.clear()
+        assert again.load().equals(patch) and len(reads) == 1
+
+    def test_as_a_numpy_array(self, patch, strict):
+        """`np.asarray` of a lazy array on another library is a NumPy array."""
+        lazy = patch.set_backend(f"LazyArray[{STRICT}]")
+        out = np.asarray(lazy.data)
+        assert type(out) is np.ndarray and np.array_equal(out, patch.data)
+
+    def test_an_empty_box(self, patch, strict):
+        """A box of no samples is on the library the others are."""
+        lazy = patch.set_backend(f"LazyArray[{STRICT}]").abs()
+        empty = execute.compute(lazy.data, (slice(0, 0), slice(0, 5)))
+        assert empty.shape == (0, 5)
+        assert type(empty) is type(strict.asarray(np.zeros(1)))
 
     def test_another_library(self, patch, strict):
         """An array library by name holds the data in memory."""
@@ -358,6 +384,17 @@ class TestPendingStepsOnAnotherLibrary:
             with pytest.warns(NumpyFallbackWarning, match="detrend has no"):
                 out = window.detrend("time")
         assert out.backend == "lazy"
+        # Said once, when it was chained: not again for each box, though
+        # the setting refuses by the time the boxes are computed.
+        block = patch.data.nbytes // 6
+        settings = {"lazy_block_size": block, "numpy_fallback": "raise"}
+        with config_context(**settings), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert len(chunk_boxes(out.data)) > 1
+            loaded = out.load()
+        expected = patch.window(time=100, samples=True).detrend("time")
+        assert loaded.backend == STRICT
+        np.testing.assert_allclose(to_numpy(loaded.data), expected.data, atol=1e-9)
         # One with a kernel for the library is chained with nothing said.
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -376,6 +413,19 @@ class TestPendingStepsOnAnotherLibrary:
 
 class TestOperationWithNoContract:
     """An operation which cannot run a chunk at a time obeys the setting."""
+
+    @pytest.mark.parametrize(
+        "call",
+        (lambda x: x + 1, lambda x: np.add(x, 1), lambda x: dc.spool([x, x]).stack()),
+        ids=("arithmetic", "numpy_function", "stack"),
+    )
+    def test_refused_whatever_the_setting(self, patch, call, reads):
+        """What takes the values themselves never reads them unasked."""
+        lazy = patch.set_backend("lazy")
+        with config_context(numpy_fallback="ignore"):
+            with pytest.raises(LazyOperationError):
+                call(lazy)
+        assert not reads
 
     def test_on_another_library(self, patch, strict):
         """Read onto the library, an operation with no kernel for it says so too."""
@@ -722,14 +772,55 @@ class TestLazyMerge:
         lazy = spool.set_backend("lazy").fill_gaps(time=None)
         with config_context(numpy_fallback=policy):
             if policy is None:
-                with pytest.raises(LazyOperationError):
+                with pytest.raises(LazyOperationError, match="fill cannot stay lazy"):
                     lazy[0]
                 return
-            with pytest.warns(NumpyFallbackWarning):
+            with pytest.warns(NumpyFallbackWarning, match="fill cannot stay lazy"):
                 filled = lazy[0]
         assert filled.backend == "numpy" and filled.attrs == expected.attrs
         assert filled.coords == expected.coords and np.isnan(filled.data).any()
         np.testing.assert_array_equal(filled.data, expected.data)
+
+    def test_no_gap_to_fill(self, spool, reads):
+        """With no gap there is nothing to write, so nothing is read or refused."""
+        expected = spool.fill_gaps(time=None)[0]
+        reads.clear()
+        filled = spool.set_backend("lazy").fill_gaps(time=None)[0]
+        assert filled.backend == "lazy" and not reads
+        assert filled.attrs == expected.attrs and filled.load().equals(expected)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_members_in_other_units(self, whole, tmp_path, policy):
+        """Members which are rescaled as they merge are read, if allowed."""
+        size = whole.shape[whole.get_axis("time")]
+        first = whole.select(time=(0, size // 2), samples=True).set_units("m/s")
+        second = whole.select(time=(size // 2, size), samples=True)
+        dc.write(first, tmp_path / "first.h5", "dasdae")
+        dc.write(second.set_units("mm/s"), tmp_path / "second.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        expected = spool.chunk(time=None, conflict="keep_first")[0]
+        lazy = spool.set_backend("lazy").chunk(time=None, conflict="keep_first")
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                    lazy[0]
+                return
+            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
+                merged = lazy[0]
+        # Rescaled, as the eager merge rescales it.
+        assert merged.attrs.data_units == expected.attrs.data_units
+        np.testing.assert_allclose(merged.data, expected.data)
+        assert not np.allclose(merged.data, whole.transpose(*merged.dims).data)
+
+    def test_members_in_files_and_in_memory(self, spool, whole):
+        """One member held in memory does not excuse reading the others."""
+        size = whole.shape[whole.get_axis("time")]
+        # The last quarter held in memory, changed so the index cannot stand
+        # for it, beside the three files before it.
+        held = whole.select(time=(3 * size // 4, size), samples=True) * 1
+        mixed = (spool[:3] + dc.spool([held])).set_backend("lazy")
+        with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+            mixed.chunk(time=None)[0]
 
     @pytest.mark.parametrize("policy", (None, "warn"))
     def test_file_changed_since_it_was_indexed(self, whole, tmp_path, policy):

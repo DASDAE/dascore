@@ -46,6 +46,7 @@ from dascore.utils.array_api import (
     NUMPY_BACKEND,
     _as_numpy_dtype,
     array_namespace,
+    fallbacks_decided,
     to_backend,
 )
 
@@ -180,11 +181,11 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
         kernel = type(processor).kernel_for(backend)
-        # A step with no kernel for the library was let through, or
-        # refused, when it was chained; here it is converted for quietly.
-        kernel = getattr(kernel, "_quiet", kernel)
         run = partial(kernel, processor, **node.plan)
-        data = (node.contract or _EVERYTHING).apply(run, data, after, before)
+        # A step with no kernel for the library was let through, or
+        # refused, when it was chained: it is not asked again for each box.
+        with fallbacks_decided():
+            data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.
         expected = _sizes(after) if node.contract else stated_shape

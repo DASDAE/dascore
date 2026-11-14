@@ -586,6 +586,11 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     )
 
     if isinstance(patch.data, LazyArray):
+        coord = patch.get_coord(dim)
+        stated = dtype is None or patch.data.dtype == np.dtype(dtype)
+        if stated and coord.evenly_sampled and (grid is None or coord == grid):
+            # No gap to fill and nothing to cast: left as lazy as it was.
+            return patch
         # A fill is written into the data, which a lazy patch holds none
         # of: reading them is the fallback setting's to allow.
         what = f"This fill cannot stay lazy: filling along {dim} writes into the data"
