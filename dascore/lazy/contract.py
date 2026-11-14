@@ -223,8 +223,8 @@ class Tiles(ChunkContract):
     factors
         For a tiled axis along which the operation keeps every n-th sample
         of a tile, that n, which the stride is a multiple of. The output is
-        then shorter than the input along the axis: a box is of the output,
-        and what it needs is of the input.
+        then shorter than the input along the axis: a box counts samples of
+        the output, and what it needs counts samples of the input.
 
     Examples
     --------
@@ -234,8 +234,8 @@ class Tiles(ChunkContract):
     >>> box = (slice(10, 20), slice(0, 5))
     >>> assert tiles.tiles(box) == ((2, 6),)
     >>> assert tiles.needs(box, (100, 5)) == (slice(4, 24), slice(0, 5))
-    >>> # Every second sample kept: the same box of the output needs twice
-    >>> # as far along the input.
+    >>> # Every second sample kept: output samples 10 to 19 are input
+    >>> # samples 20 to 38, read with the tiles which hold them.
     >>> halved = Tiles({0: (8, 4, 100)}, factors={0: 2})
     >>> assert halved.needs(box, (100, 5)) == (slice(16, 44), slice(0, 5))
     """

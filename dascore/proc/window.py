@@ -264,8 +264,8 @@ _PROBES = (64, 4096)
 # each piece is given the windows which reach into it from either side, so
 # a piece of one window would compute three to keep one.
 _DASK_WINDOWS = 8
-# DASCore's NumPy kernels are run one at a time when dask computes pieces on
-# several threads: not every one may be run from two threads at once.
+# Kernels are run one at a time when dask computes pieces on several
+# threads: not every one may be run from two threads at once.
 _DASK_TURN = threading.Lock()
 
 
@@ -357,8 +357,8 @@ class _Made:
 
         The whole result's own ends are as empty as a window's: nothing
         lies before the first samples of the patch for the operation to
-        have filled them from, and a window which reaches there holds
-        only fill. They are left as the operation alone leaves them.
+        have filled them from but the fill a window holds there. They are
+        left as the operation alone leaves them.
         """
         out = []
         spans = zip(tiles, self.size, self.stride, self.length, self.empty)
@@ -405,14 +405,14 @@ class Windowed(PatchProcessor):
       Any other is refused.
     - Everything is decided before any data are read. The operation must
       also give back a window with the same dimensions and coordinates,
-      take no other patch or array shaped like the patch, and not settle
-      its result from the data it computed; the window must fit inside its
+      or every n-th sample of them along a windowed dimension, take no
+      other patch or array shaped like the patch, and not settle its
+      result from the data it computed; the window must fit inside its
       dimension.
     - An operation may keep every n-th sample of a windowed dimension, as
       `decimate` and `fbe` with a `step` do, if the windows advance by a
       multiple of n samples, so that every window lands on one grid. The
-      result is then that much shorter. No other change of shape is
-      blended.
+      result is then n times shorter. No other change of shape is blended.
     - An operation which leaves samples at the ends of its result empty
       says by its `halo` how far it reads around a sample: `fbe` and
       `stalta` leave NaN until a whole rolling window is behind a sample.
@@ -591,11 +591,11 @@ class Windowed(PatchProcessor):
                 )
             if stride % every:
                 self._refuse(
-                    f"it keeps every {every}th sample along {dim} and the "
-                    f"windows advance by {stride} samples, which is not a "
+                    f"it keeps one sample in every {every} along {dim} and "
+                    f"the windows advance by {stride} samples, which is not a "
                     f"multiple of {every}, so the windows would not land on "
                     "one grid. Give the window a step or an overlap which "
-                    "makes it one."
+                    f"makes their advance a multiple of {every}."
                 )
             factor.append(every)
             if every != 1:
@@ -648,9 +648,10 @@ class Windowed(PatchProcessor):
         Return what windows are multiplied by on the way in and out, and where.
 
         The last is the geometry of what is blended, less the ends the
-        taper gives no weight: a Hann ramp starts from zero, and nothing
-        times zero is added, or an infinity or a NaN there would reach the
-        sample of the next window which holds all the weight.
+        taper gives no weight. A Hann ramp starts from zero, and a sample
+        of no weight is left out of the sum: an infinity or a NaN times
+        zero is NaN, which would spoil the sample of the next window which
+        holds all the weight there.
         """
         # Complementary ramps over what is blended of each window; under an
         # analysis window that is the whole of it.
@@ -962,8 +963,8 @@ class Windowed(PatchProcessor):
                     if edge - kept[-1] >= least and edges[-1] - edge >= least:
                         kept.append(edge)
                 edges = [*kept, edges[-1]]
-            # A piece is of the result: where every n-th sample is kept, a
-            # chunk's edge falls on the first sample kept at or after it.
+            # A piece counts samples of the result: where every n-th sample
+            # is kept, a chunk's edge falls on the first kept at or after it.
             edges = edges if every == 1 else sorted({-(-x // every) for x in edges})
             spans.append(list(pairwise(edges)))
         # Handed to every task once, not copied into each.

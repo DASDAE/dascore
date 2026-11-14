@@ -133,9 +133,9 @@ class PatchProcessor(DascoreBaseModel):
     - `chunk_contract(dtype, plan)`: what a chunk of the output needs of
       the input, which is what lets the operation run on a lazy array.
       None, the default, says it cannot.
-    - `halo(plan)`: how many samples before and after one of its own a
-      kernel reads to fill it, where it leaves a sample empty for want of
-      them, as a rolling mean leaves its first. No axis by default.
+    - `halo(plan)`: how many samples of the input a kernel reads before
+      and after a sample to fill it, where it leaves the sample empty for
+      want of them, as a rolling mean leaves its first. No axis by default.
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
