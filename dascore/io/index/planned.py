@@ -19,7 +19,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Mapping
 from dataclasses import replace
-from functools import cached_property
+from functools import cached_property, partial
 from typing import Any
 
 import numpy as np
@@ -52,7 +52,7 @@ from dascore.io.index.ingest import (
     typed_value,
 )
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
-from dascore.units import get_quantity
+from dascore.units import convert_units, get_quantity
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
@@ -1416,7 +1416,13 @@ def _segment_runs(coord, members, runs, index_rows, name: str):
     for row in members.to_dict("records"):
         held = runs.get(index_rows.get(row["_patch_row"]), {}).get(coord.coord_name)
         if held is not None and held.runs:
-            records.extend(index_runs(held.runs, kind, absolute))
+            # a member in another spelling of the unit states its runs in it
+            to = partial(convert_units, to_units=coord.units, from_units=held.units)
+            for run in index_runs(held.runs, kind, absolute):
+                if kind == "num" and held.units != coord.units:
+                    step = run.step and to(run.min + run.step) - to(run.min)
+                    run = replace(run, min=to(run.min), max=to(run.max), step=step)
+                records.append(run)
             continue
         low, high, step = (row[f"{name}_{x}"] for x in ("min", "max", "step"))
         if pd.isnull(step):  # its count is unknown, so its runs are too

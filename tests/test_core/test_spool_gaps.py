@@ -10,6 +10,7 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -974,6 +975,22 @@ class TestConcatenatedRuns:
         merged = dc.spool(holed).concatenate(time=None)
         assert len(merged.get_gaps()) == 2 * len(holed) - 1
         assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
+
+    def test_members_in_other_units(self):
+        """A member's gaps, stated in feet beside metres, are reported in metres."""
+
+        def make(start, units):
+            grids = [get_coord(start=start + x, step=1.0, shape=(5,)) for x in (0, 10)]
+            coord = concat_coords(*grids).set_units(units)
+            coords = {"distance": coord, "time": np.arange(3.0)}
+            return dc.Patch(data=np.ones((10, 3)), coords=coords, dims=tuple(coords))
+
+        merged = dc.spool([make(0.0, "m"), make(100.0, "ft")]).concatenate(
+            distance=None
+        )
+        expected = dc.spool(list(merged)).get_gaps("distance")
+        assert len(expected) == 2
+        pd.testing.assert_frame_equal(merged.get_gaps("distance"), expected)
 
     @pytest.mark.parametrize("step", [1.0, -1.0])
     def test_contiguous_members_are_one_run(self, step):
