@@ -432,6 +432,27 @@ class TestDefaultSnap:
             with pytest.warns(SnapWarning, match="stored time labels"):
                 dc.read(path, snap=snap)
 
+    def test_unchecked_outlier_reads_alike(self, tmp_path):
+        """
+        One label 0.3 step off, away from the labels other readers check,
+        reads as stored with the same id by default and under snap=True,
+        which alone warns.
+        """
+        labels = np.arange(20.0)
+        labels[3] += 0.3
+        path = self._write(tmp_path / "outlier.h5", labels)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            default = dc.read(path)[0]
+        match = "outlier.h5: the stored time labels sit up to 0.3 steps off"
+        with pytest.warns(SnapWarning, match=match):
+            named = dc.read(path, snap=True)[0]
+        for patch in (default, named):
+            time = patch.get_coord("time")
+            assert time.step is None
+            np.testing.assert_array_equal(time.values, labels)
+        assert default.attrs.data_id == named.attrs.data_id
+
     def test_dense_holes(self, tmp_path):
         """A list holding many missing samples reads as stored, silently."""
         kept = np.arange(1500)[np.arange(1500) % 3 != 1]

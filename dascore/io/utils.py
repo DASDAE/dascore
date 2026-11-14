@@ -460,15 +460,21 @@ def stored_coord(
         max_shift = dc.get_config().max_shift
         if not shift <= max_shift + resolution / abs(float(ticks)):  # NaN fails
             how = "stated start and step" if stated else "first and last labels"
-            reason = (
-                f"sit up to {shift:.2g} steps off the grid built from its {how}, "
-                f"more than dascore.config.max_shift ({max_shift}); the file may "
-                "hold a gap, or its clock may run apart from its sampling"
-            )
+            reason = _off_grid_reason(shift, how)
     if reason is None:
         return get_coord(start=start, step=step, shape=(count,), units=units)
     _warn_snap(f"the stored {name} labels {reason}", where)
     return get_coord(data=decode(labels[:count]), units=units, snap=False)
+
+
+def _off_grid_reason(shift: float, how: str) -> str:
+    """Why labels `shift` steps off the grid built from `how` stay as stored."""
+    max_shift = dc.get_config().max_shift
+    return (
+        f"sit up to {shift:.2g} steps off the grid built from its {how}, "
+        f"more than dascore.config.max_shift ({max_shift}); the file may "
+        "hold a gap, or its clock may run apart from its sampling"
+    )
 
 
 def _checked_positions(count: int, quartiles: bool) -> np.ndarray:

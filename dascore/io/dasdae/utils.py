@@ -38,6 +38,8 @@ from dascore.io.dasdae._compat import (
     translate_legacy_attrs,
 )
 from dascore.io.utils import (
+    _off_grid_reason,
+    _warn_snap,
     resolve_keyed_source,
     should_snap,
     stored_coord,
@@ -417,25 +419,32 @@ def _read_coord(node, name, attrs2, snap):
     """
     Rebuild one coordinate from its node, and say whether snapping moved it.
 
-    Under the default `snap` (None) one list of labels is the grid its ends
-    fit where every label is within `max_shift` of it, else as stored,
-    silently; a `snap` naming it checks it as every reader does (rule 3).
+    One list of labels is the grid its ends fit where every label is within
+    `max_shift` of it, else as stored: silently under the default `snap`
+    (None), and with the `SnapWarning` of `stored_coord`, whose grid it
+    builds, under a `snap` naming it.
     """
     coord = _read_stored_coord(node, name, attrs2)
     plain = not isinstance(coord, NumericCoord) or coord.ndim != 1 or len(coord) < 2
     if snap is False or plain or coord.evenly_sampled or coord.runs_count > 1:
         return coord, False
-    values = np.asarray(coord.values)
-    if snap is None and values.dtype.kind in "iufmM":
+    values, where = np.asarray(coord.values), node.file
+    if values.dtype.kind in "iufmM":
         # in the labels' own ticks, from the origin, before any float
         ticks = values.astype(np.int64) if values.dtype.kind in "umM" else values
         with np.errstate(all="ignore"):
             rel = np.asarray(ticks - ticks[0]).astype(np.float64)
             fit = rel[-1] / (len(rel) - 1) * np.arange(len(rel))
-            off = np.abs(rel - fit) <= dc.get_config().max_shift * abs(fit[1])
-        if not (fit[1] and np.all(off)):  # NaN and NaT are near no grid
+            shift = np.max(np.abs(rel - fit)) / abs(fit[1])  # in steps
+        if not (fit[1] and shift <= dc.get_config().max_shift):  # NaN fails
+            if snap is not None:
+                # stored_coord warns where a label it checks is off its grid
+                checked = stored_coord(values, True, name=name, where=where)
+                if checked.evenly_sampled:  # and here where one it skips is
+                    reason = _off_grid_reason(float(shift), "first and last labels")
+                    _warn_snap(f"the stored {name} labels {reason}", where)
             return coord, False
-    out = stored_coord(values, True, name=name, where=node.file, units=coord.units)
+    out = stored_coord(values, True, name=name, where=where, units=coord.units)
     return out, not np.array_equal(out.values, values)
 
 
