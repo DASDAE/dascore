@@ -104,6 +104,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
+from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
 from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
@@ -699,9 +700,13 @@ class Spool(NodeRepr, NamespaceOwner):
         lazy, library = parse_backend(self._backend)
         with reading_lazily(library if lazy else None):
             patch = read()
+        if lazy and isinstance(patch.data, LazyArray):
+            # Read lazily just now, or held lazy already: computed on the
+            # library named, which its pending steps are asked about.
+            return patch.set_backend(self._backend)
         if lazy and _is_lazy(patch.data):
-            # A promise: read lazily just now, or one a spool held
-            # already, which is left as it is.
+            # Another kind of promise, which a spool held already: left
+            # as it is, and computed when its holder asks.
             return patch
         # In memory: held there by the spool, with nothing read, or read
         # after all as the fallback setting allowed. Put where chunks are

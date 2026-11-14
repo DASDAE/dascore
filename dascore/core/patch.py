@@ -450,7 +450,13 @@ class Patch(NamespaceOwner, PatchMeta):
 
         Notes
         -----
-        ``set_backend("numpy")`` is what `load` does to a lazy patch.
+        - ``set_backend("numpy")`` is what `load` does to a lazy patch.
+        - Data in memory on one array library are moved to another through
+          NumPy, since that is what every library takes an array from.
+        - A step already pending on a lazy patch is asked for its kernel
+          on the library named, and one with none is the `numpy_fallback`
+          setting's to allow, as it is when a step is chained. What was
+          allowed when a step was chained is not asked again at `load`.
         """
         lazy, library = parse_backend(backend)
         # Refused here and not when the data are asked for, if the library

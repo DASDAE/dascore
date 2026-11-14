@@ -28,6 +28,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.patch import _is_lazy
 from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO
@@ -787,7 +788,13 @@ class PlanResolver(PatchResolver):
             trim_dims=self.trim_dims,
             aux_coords=bool(self.aux_coords),
             stamped=self.stamped,
+            in_memory=self._member_in_memory,
         )
+
+    def _member_in_memory(self, row: Mapping) -> bool:
+        """Whether a member is a patch held with its data in memory."""
+        held = self.live_entries().get(str(row.get("source_path")))
+        return held is not None and not _is_lazy(held.data)
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
         """Whether a member reads as a window of its stored array, reading nothing."""

@@ -578,6 +578,36 @@ class TestSpoolSetBackend:
             merged = held.set_backend("lazy").chunk(time=None)[0]
         assert merged.backend == "numpy" and merged.equals(expected)
 
+    def test_lazy_patches_held_are_moved_and_asked(self, patch, strict):
+        """A patch held lazy computes on the library the spool names."""
+        held = dc.spool([patch.set_backend("lazy").abs()])
+        out = held.set_backend(f"LazyArray[{STRICT}]")[0]
+        assert out.backend == "lazy" and out.data.backend == STRICT
+        assert out.load().backend == STRICT
+        # And a step it has pending is asked for its kernel there.
+        pending = dc.spool([_Doubles()(patch.set_backend("lazy"))])
+        with pytest.raises(LazyOperationError, match="_Doubles has no"):
+            pending.set_backend(f"LazyArray[{STRICT}]")[0]
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_lazy_patches_held_merge(self, spool, policy, reads):
+        """Merging patches a spool holds lazy reads them, which is said."""
+        # Members the merge has to load: each is an operation on a file.
+        held = dc.spool([x.abs() for x in spool.set_backend("lazy")])
+        expected = dc.spool([x.abs() for x in spool]).chunk(time=None)[0]
+        reads.clear()
+        merged = held.set_backend("lazy").chunk(time=None)
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                    merged[0]
+                assert not reads
+                return
+            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
+                out = merged[0]
+        assert out.backend == "numpy" and len(reads) == len(spool)
+        np.testing.assert_array_equal(out.data, expected.data)
+
     def test_promise_of_another_kind(self):
         """A dask patch a spool holds is a promise already, and left one."""
         dask_array = pytest.importorskip("dask.array")

@@ -66,7 +66,6 @@ from dascore.utils.patch import (
     _get_merged_coord,
     _split_coord_merge_kwargs,
 )
-from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     get_dim_names_from_columns,
@@ -648,19 +647,20 @@ def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
 
 
 @contextmanager
-def _read_into_memory(why: str, rows: Sequence[Mapping]):
+def _read_into_memory(why: str, rows: Sequence[Mapping], in_memory=None):
     """
     Have a merge which cannot stay lazy read its members into memory.
 
     Under a lazy backend that is the `numpy_fallback` setting's to allow:
     it is refused, said, or done silently. Inside the block reads fill
     memory as usual, so the merge is the eager one. Members a spool
-    already holds in memory are not read at all, and need no leave.
+    already holds in memory, which `in_memory` says of a row, are not read
+    at all, and need no leave; one it holds lazy is read like any other.
     """
     if lazy_read_backend() is None:
         yield
         return
-    if not all(is_memory_uri(x.get("source_path")) for x in rows):
+    if in_memory is None or not all(in_memory(x) for x in rows):
         what = f"This merge cannot stay lazy: {why}"
         decide_fallback(what, "its members were read into memory")
     with reading_lazily(None):
@@ -702,6 +702,9 @@ class PatchAssembler:
     aux_coords: bool = False
     # Attrs the plan restates on its output, so members' values never clash.
     stamped: tuple[str, ...] = ()
+    # Whether a member is a patch the spool holds with its data in memory,
+    # so that merging it reads nothing.
+    in_memory: Callable[[Mapping], bool] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -731,7 +734,7 @@ class PatchAssembler:
             # Members whose merged size the rows do not state are merged
             # as loaded patches, which a lazy backend has none of.
             why = "the size of what its members make is not known until they are read"
-            with _read_into_memory(why, df_dict_list):
+            with _read_into_memory(why, df_dict_list, self.in_memory):
                 out = self._loaded_members(joined, df_dict_list, merge_dim, units)
             out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
         else:
@@ -818,7 +821,7 @@ class PatchAssembler:
             "the index cannot describe every member, a member is in other "
             "data units, or a file has changed since it was indexed"
         )
-        with _read_into_memory(why, df_dict_list):
+        with _read_into_memory(why, df_dict_list, self.in_memory):
             out = self._stream(joined, df_dict_list, merge_dim, samples, units)
         return self._on_grid(out, joined, df_dict_list[0])
 
