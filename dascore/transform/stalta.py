@@ -57,6 +57,8 @@ class Stalta(PatchProcessor):
     model_config = ConfigDict(extra="allow")
     _positional_fields = ()
     data_type = "stalta"
+    # The rolling windows are sized by the sampling alone.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the ratio's metadata, and each window and how it is rolled."""
@@ -87,6 +89,10 @@ class Stalta(PatchProcessor):
             "scale": scale,
         }
         return meta.new(coords=coords, attrs=attrs, dtype=np.float64), plan
+
+    def halo(self, plan):
+        """Return the samples the long window reads before the one it fills."""
+        return {plan["axis"]: (plan["sizes"][1] - 1, 0)}
 
     def numpy_kernel(self, data, *, axis, sizes, pandas, scale):
         """Return the short-term rolling mean over the long-term one."""

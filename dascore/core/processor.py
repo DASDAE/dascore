@@ -43,7 +43,7 @@ import numbers
 import sys
 import textwrap
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -133,6 +133,9 @@ class PatchProcessor(DascoreBaseModel):
     - `chunk_contract(dtype, plan)`: what a chunk of the output needs of
       the input, which is what lets the operation run on a lazy array.
       None, the default, says it cannot.
+    - `halo(plan)`: how many samples of the input a kernel reads before
+      and after a sample to fill it, where it leaves the sample empty for
+      want of them, as a rolling mean leaves its first. No axis by default.
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
@@ -444,6 +447,26 @@ class PatchProcessor(DascoreBaseModel):
         operation is refused rather than the data loaded for it.
         """
         return None
+
+    def halo(self, plan: dict[str, Any]) -> Mapping[int, tuple[int, int]]:
+        """
+        Return how far along an axis the kernel reads to fill a sample.
+
+        For each axis along which the kernel leaves a sample empty (NaN)
+        when the data it needs lie beyond the array: how many samples of
+        the input before and after that sample it reads. A rolling mean
+        over ten samples, labelled at the last, reads nine before and none
+        after, so its first nine samples are empty. Counted in samples of
+        the input, from the plan `get_metadata` returned, and the same
+        whatever the data hold. An axis not named has none, which is the
+        default.
+
+        [`Patch.window`](`dascore.Patch.window`) discards from every
+        window the samples which reach beyond it and blends what is left,
+        so the windows must overlap by at least as much; the samples which
+        reach beyond the patch itself are left NaN.
+        """
+        return {}
 
     @overload
     def run(self, patch: PatchType) -> PatchType: ...

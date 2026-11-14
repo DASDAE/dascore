@@ -132,3 +132,18 @@ class TestFbeMetadata:
         """Temperatures cannot be squared, as the energy squares the data."""
         with pytest.raises(UnitError, match="offset units"):
             random_patch.set_units("degC").fbe(time=(10, 50), window=0.1)
+
+    @pytest.mark.parametrize("step", (None, 0.008, 0.02, 0.1, 0.3))
+    @pytest.mark.parametrize("rows", (1, 3), ids=("pandas", "numpy"))
+    def test_halo_is_the_empty_start(self, random_patch, step, rows):
+        """A sample is NaN where what `halo` says it reads lies before the patch."""
+        patch = random_patch.isel(distance=slice(0, rows))
+        fbe = Fbe(window=0.1, step=step, time=(10, 50))
+        _, plan = fbe.get_metadata(patch.drop_data())
+        (axis, (before, after)), *others = fbe.halo(plan).items()
+        # A rolling window of 25 samples reads 24 before the one it fills.
+        assert (axis, before, after, others) == (patch.get_axis("time"), 24, 0, [])
+        empty = np.isnan(fbe(patch).data).all(axis=0)
+        # Each sample kept is `step` samples of the patch on from the last.
+        reaches_past = np.arange(empty.size) * plan["step"] < before
+        assert reaches_past.any() and np.array_equal(empty, reaches_past)

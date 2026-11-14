@@ -132,3 +132,11 @@ class TestStaltaUnits:
         sta, lta = (row.rolling(time=x, samples=True).mean() for x in (5, 20))
         out = row.stalta(time=(5, 20), samples=True)
         assert np.array_equal(out.data, (sta / lta).data, equal_nan=True)
+
+    def test_halo_is_the_empty_start(self, random_patch):
+        """A sample is NaN where what `halo` says it reads lies before the patch."""
+        stalta = Stalta(samples=True, time=(5, 20))
+        _, plan = stalta.get_metadata(random_patch.drop_data())
+        assert stalta.halo(plan) == {random_patch.get_axis("time"): (19, 0)}
+        empty = np.isnan(stalta(random_patch).data).all(axis=0)
+        assert empty[:19].all() and not empty[19:].any()

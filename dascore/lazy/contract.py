@@ -44,7 +44,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Any
 
 # One slice for each axis, each with an int start and stop and a step of one.
@@ -221,6 +220,11 @@ class Tiles(ChunkContract):
         [`Halo`](`dascore.lazy.contract.Halo`).
     whole
         The axes which are not tiled and are needed whole.
+    factors
+        For a tiled axis along which the operation keeps every n-th sample
+        of a tile, that n, which the stride is a multiple of. The output is
+        then shorter than the input along the axis: a box counts samples of
+        the output, and what it needs counts samples of the input.
 
     Examples
     --------
@@ -230,16 +234,25 @@ class Tiles(ChunkContract):
     >>> box = (slice(10, 20), slice(0, 5))
     >>> assert tiles.tiles(box) == ((2, 6),)
     >>> assert tiles.needs(box, (100, 5)) == (slice(4, 24), slice(0, 5))
+    >>> # Every second sample kept: output samples 10 to 19 are input
+    >>> # samples 20 to 38, read with the tiles which hold them.
+    >>> halved = Tiles({0: (8, 4, 100)}, factors={0: 2})
+    >>> assert halved.needs(box, (100, 5)) == (slice(16, 44), slice(0, 5))
     """
 
     spans: Mapping[int, tuple[int, int, int]]
     widths: Mapping[int, tuple[int, int]] = field(default_factory=dict)
     whole: tuple[int, ...] = ()
+    factors: Mapping[int, int] = field(default_factory=dict)
 
     def tiles(self, box: Box) -> tuple[tuple[int, int], ...]:
         """Return the first tile overlapping a box, and one past the last."""
         out = []
         for axis, (size, stride, length) in self.spans.items():
+            # In the samples made, which a box of the output is counted in.
+            every = self.factors.get(axis, 1)
+            size, stride = -(-size // every), stride // every
+            length = -(-length // every)
             margin = _margin(size, stride)
             count = (length - 1 + margin) // stride + 1
             first = max((box[axis].start + margin - size) // stride + 1, 0)
@@ -261,7 +274,17 @@ class Tiles(ChunkContract):
 
     def apply(self, run: Callable[..., Any], data, box: Box, needed: Box):
         """Return the output box, blended from the tiles which overlap it."""
-        return super().apply(partial(run, tiles=self.tiles(box)), data, box, needed)
+        out = run(data, tiles=self.tiles(box))
+        # The result starts where the data do, counted in the samples made.
+        made = list(needed)
+        for axis, every in self.factors.items():
+            span = needed[axis]
+            made[axis] = slice(span.start // every, -(-span.stop // every))
+        # A result of another shape is handed back for the caller to refuse.
+        if tuple(out.shape) != tuple(x.stop - x.start for x in made):
+            return out
+        spans = zip(box, made, strict=True)
+        return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
 
 
 @dataclass(frozen=True)
