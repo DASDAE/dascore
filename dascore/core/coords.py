@@ -3482,12 +3482,15 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return ("grid", origin, num, den, extra, int(run.count))
 
     def _id_components(self) -> tuple[Any, ...]:
-        """The runs, the grid they declare, and the dtype they are read as."""
-        return (
+        """The runs, the dtype they are read as, and a blank one's step."""
+        components: tuple[Any, ...] = (
             tuple(int(x) for x in self.shape),
             str(np.dtype(self.dtype)),
             tuple(self._run_identity(x) for x in self.runs),
         )
+        if self._blank is not None and not _is_null(self.step):
+            components += (("step", self._hash_scalar(self.step, "step")),)
+        return components
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord: its grid and segments."""

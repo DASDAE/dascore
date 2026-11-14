@@ -664,6 +664,14 @@ class TestCoordDataId:
         assert coord_1 != coord_2
         assert coord_1.data_id != coord_2.data_id
 
+    def test_partial_coord_data_id_respects_step(self):
+        """Blank coords stating different steps are different grids to build."""
+        coord_1 = get_coord(shape=(5,), step=1)
+        coord_2 = get_coord(shape=(5,), step=2)
+        assert coord_1.data_id != coord_2.data_id
+        assert coord_1.data_id == get_coord(shape=(5,), step=1).data_id
+        assert coord_1.new(start=0) != coord_2.new(start=0)
+
     def test_partial_unit_spelling_is_part_of_the_id(self):
         """Partial coords are hashed in the units they state."""
         numbers = {"shape": (3,), "start": 1.0, "stop": 4.0, "step": 1.0}
