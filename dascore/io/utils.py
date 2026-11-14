@@ -17,7 +17,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import _DASCORE_DIR, INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, _stored_float_dtype, get_coord
+from dascore.core.coords import BaseCoord, _on_grid, _stored_float_dtype, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
     CoordError,
@@ -97,11 +97,16 @@ def written_step(name: str, coord, why: str):
     layout = _layout(coord)
     if _layout(get_coord(data=coord.values, units=coord.units, snap=False)) == layout:
         return None
-    step, *others = {x.step for x in coord.segments}
+    # judged from the segments, which a read past max_index_runs leaves one list
+    segments = coord.segments
+    step, *others = {x.step for x in segments}
+    ends, values = coord._run_offsets()[1:], coord.values
+    seams = _on_grid(values[ends] - values[ends - 1], step) if step else None
     with suppress(CoordError):  # a long fractional grid drifts off its step
-        back = get_coord(data=coord.values, step=step, units=coord.units)
-        if not others and _layout(back) == layout:
-            return step
+        if not others and seams is not None and np.all(seams > 1):
+            back = (get_coord(data=x.values, step=step) for x in segments)
+            if all(_layout(x) == _layout(y) for x, y in zip(back, segments)):
+                return step
     raise CoordError(_uneven_message(name, coord, why))
 
 
@@ -427,10 +432,7 @@ def stored_coord(
     count = len(labels) if count is None else count
     snappable = labels.ndim == 1 and np.dtype(labels.dtype).kind in "iufmM"
     if not (should_snap(snap, name) and snappable and count):
-        # float labels within their precision of a grid are it, unless the
-        # caller asked for every label exactly as stored
-        exact = False if snap is False else None
-        return get_coord(data=decode(labels[:count]), units=units, snap=exact)
+        return get_coord(data=decode(labels[:count]), units=units, snap=False)
     stated = start is not None and step is not None
     positions = _checked_positions(count, quartiles=not stated)
     stored = np.asarray(labels[positions.tolist()])

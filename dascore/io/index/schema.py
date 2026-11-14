@@ -33,9 +33,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 38 drops the jittered and
-# gapped flags, the offset bounds and the runs' grid positions, as segments
-# share no grid. Version 37 identifies a coordinate
+# changes, not only when a column does.
+# Version 38 drops the jittered and gapped flags, offset bounds and run
+# positions, as segments share no grid. Version 37 identifies a coordinate
 # of several segments without a step, as segments state none. Version 36
 # leaves the SEG-Y text
 # header out of the index, so consecutive files merge. Version 35 reads a

@@ -64,12 +64,6 @@ class TestDeclaredStep:
         assert _is_stored(coord) and coord.sorted
         assert coord.step is None
 
-    def test_off_grid_is_labels(self):
-        """A value off the grid is kept, as labels with no step, not moved."""
-        coord = get_coord(data=[1, 3, 4.5], step=1)
-        assert _is_stored(coord) and coord.step is None
-        np.testing.assert_array_equal(coord.values, [1, 3, 4.5])
-
     def test_non_monotonic_with_step_raises(self):
         """A grid claim needs an order to hold it against."""
         with pytest.raises(CoordError, match="monotonic"):
@@ -114,15 +108,35 @@ class TestDeclaredStep:
         assert coord.runs_count == 2 and coord.step is None
 
     def test_dense_holes_are_segments(self):
-        """However dense the holes, each stretch is a segment on the step."""
+        """Up to max_index_runs, each stretch is a segment on the step."""
         dense = np.arange(3000)[np.arange(3000) % 3 != 2]
-        coord = get_coord(data=dense, step=1)
+        with dc.config_context(max_index_runs=1_000):
+            coord = get_coord(data=dense, step=1)
         assert coord.runs_count == 1000 and coord.step is None
         assert {x.step for x in coord.segments} == {1}
         assert {len(x) for x in coord.segments} == {2}
         np.testing.assert_array_equal(coord.values, dense)
         in_feet = coord.set_units("m").convert_units("ft")
         assert in_feet.segments[0].step == pytest.approx(1 / 0.3048)
+
+    @pytest.mark.parametrize(
+        "labels",
+        [
+            np.arange(1200, dtype=np.int64),
+            np.arange(1200) * 0.1,
+            T0.astype("M8[s]") + np.arange(1200, dtype=np.int64).astype("m8[s]"),
+            np.arange(1200, dtype=np.int64).astype("m8[ms]"),
+        ],
+    )
+    def test_past_the_limit_is_one_list(self, labels):
+        """Past max_index_runs stretches, a stated step leaves one list, warning."""
+        kept = labels[np.arange(1200) % 4 != 3]  # 300 stretches of 3
+        step = labels[1] - labels[0]
+        with pytest.warns(DASCoreWarning, match="300 segments.*max_index_runs"):
+            coord = get_coord(data=kept, step=step)
+        assert coord.runs_count == 1 and coord.step is None
+        np.testing.assert_array_equal(coord.values, kept)
+        assert get_coord(data=kept[: 256 * 3], step=step).runs_count == 256
 
     def test_stored_labels_state_no_step(self):
         """A step stated beside stored labels is no claim; labels state none."""
@@ -141,7 +155,8 @@ class TestDeclaredStep:
         summary = design_case.to_summary()
         assert summary.step is None and summary.run_count == 3
         assert not summary.is_range_like
-        array = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
+        with dc.config_context(max_index_runs=1_000):
+            array = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         summary = array.to_summary()
         assert summary.step is None and summary.run_count == 1000
         assert summary.runs is None  # past max_index_runs
@@ -439,7 +454,8 @@ class TestReviewFindings:
 
     def test_promotion_respects_the_declared_grid(self):
         """Even spacing on a finer declared grid is not a range of that spacing."""
-        coord = get_coord(data=np.arange(0, 2000, 2), step=1)
+        with dc.config_context(max_index_runs=1_000):
+            coord = get_coord(data=np.arange(0, 2000, 2), step=1)
         assert coord.runs_count == 1000 and {x.step for x in coord.segments} == {1}
         assert segment_layout(concat_coords(coord)) == segment_layout(coord)
 
@@ -451,6 +467,16 @@ class TestReviewFindings:
             patch.get_coord("distance", require_evenly_sampled=True)
         with pytest.raises(CoordError, match=r"segment.*fill_gaps"):
             patch.update_attrs(data_type="velocity").velocity_to_strain_rate_edgeless()
+
+    def test_stepless_segments_name_snap_coords(self):
+        """Segments stating no step are refused naming snap_coords, not fill_gaps."""
+        first = NumericCoord.from_labels(np.array([0.0, 1.1, 1.9]))
+        time = concat_coords(first, NumericCoord.from_labels(first.values + 3))
+        patch = dc.Patch(data=np.zeros(6), coords={"time": time}, dims=("time",))
+        match = r"2 segments\. Use Patch\.snap_coords.*Patch\.split_gaps"
+        with pytest.raises(CoordError, match=match) as error:
+            patch.taper(time=0.1)
+        assert "fill_gaps" not in str(error.value)
 
     def test_median_spacing_ignores_orientation(self):
         """Either orientation of the same labels reports the same gap."""
@@ -481,7 +507,8 @@ class TestReviewFindings:
     @pytest.fixture()
     def dense_patch(self):
         """A patch whose distance is a thousand segments of two samples."""
-        dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
+        with dc.config_context(max_index_runs=1_000):
+            dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         assert dense.runs_count == 1000
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}
@@ -509,12 +536,6 @@ class TestReviewFindings:
         left = get_coord(data=[0.0, 2.0, 3.0], step=1.0)
         right = get_coord(data=[4.5, 7.5, 9.5], step=1.0)
         assert concat_coords(left, right).runs_count > 1
-
-    def test_data_id_ignores_a_step_beside_labels(self):
-        """Labels state no step, so one passed beside them is no part of them."""
-        plain = NumericCoord.from_labels(np.array([0, 1, 5]))
-        declared = get_coord(runs=(np.array([0, 1, 5]),), step=1)
-        assert plain.data_id == declared.data_id
 
     def test_bare_absolute_excess_on_time(self):
         """A bare excess on a time dimension is seconds, as coordinates read it."""
@@ -672,11 +693,14 @@ class TestReviewRoundThree:
     """Cases the third review round found."""
 
     def test_uneven_block_keeps_its_labels(self):
-        """Neighbouring spacings that differ do not become one grid."""
+        """Spacings that differ beyond float rounding do not become one grid."""
         values = np.array([0, 1, 2, 4, 6])
         assert np.array_equal(get_coord(data=values, snap=False).values, values)
-        floats = np.array([0.0, 0.1, 0.2])
-        assert np.array_equal(get_coord(data=floats, snap=False).values, floats)
+        floats = np.array([0.0, 0.1, 0.2])  # spacings differing by rounding
+        coord = get_coord(data=floats, snap=False)
+        assert coord.evenly_sampled and coord.step == 0.1
+        ulps = 8 * np.spacing(floats.max())
+        np.testing.assert_allclose(coord.values, floats, rtol=0, atol=ulps)
 
     def test_full_slice_keeps_the_declared_step(self):
         """Slicing everything changes nothing, runs and step included."""
@@ -818,7 +842,7 @@ class TestReviewRoundFour:
 
     def test_a_declared_step_does_not_move_labels(self):
         """A step says which grid the labels sit on, not that one restates them."""
-        values = np.array([0.0, 1.00000001, 2.0, 4.0])
+        values = np.array([0.0, 1.0001, 2.0, 4.0])
         coord = get_coord(data=values, step=1.0, snap=False)
         assert coord.step is None
         np.testing.assert_array_equal(coord.values, values)

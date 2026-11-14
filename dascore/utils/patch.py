@@ -53,7 +53,6 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import contiguous_windows
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -665,7 +664,7 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     return merge_kwargs, coord_kwargs
 
 
-def _get_merged_coord(df, merge_dim, coords, **kwargs):
+def _get_merged_coord(merge_dim, coords, **kwargs):
     """
     Get merged coordinates for patches combined along merge_dim.
 
@@ -716,7 +715,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
-    new_coord = _get_merged_coord(df, merge_dim, coords, **coord_kwargs)
+    new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     # The fold named the result; building it is not another array.
@@ -1120,13 +1119,17 @@ def _get_dx_or_spacing_and_axes(
 
 def _uneven_message(name: str, coord, caller: str) -> str:
     """Why a coordinate is not evenly sampled for caller, and what fixes it."""
-    count = len(contiguous_windows(coord))
+    count = getattr(coord, "runs_count", 1)
     why = f"it has {count} segments" if count > 1 else "it has no step"
     split = ", Patch.split_gaps to split at them" if count > 1 else ""
+    snap = "Patch.snap_coords to put the labels on a grid"
+    fix = f"Patch.fill_gaps to fill gaps{split}, or {snap}"
+    if count > 1 and any(x.step is None for x in coord.segments):
+        # fill_gaps needs every segment on a grid, so snapping comes first
+        fix = f"{snap}{split}"
     return (
         f"Coordinate {name} is not evenly sampled as required by {caller}: "
-        f"{why}. Use Patch.fill_gaps to "
-        f"fill gaps{split}, or Patch.snap_coords to put the labels on a grid."
+        f"{why}. Use {fix}."
     )
 
 
@@ -1136,7 +1139,7 @@ def _refuse_segments(patch, dims, operation: str) -> None:
     across samples would ignore; one list of labels is an irregular axis.
     """
     for dim in iterate(dims):
-        if len(contiguous_windows(coord := patch.get_coord(dim))) > 1:
+        if getattr(coord := patch.get_coord(dim), "runs_count", 1) > 1:
             raise CoordError(_uneven_message(dim, coord, operation))
 
 

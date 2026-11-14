@@ -2332,7 +2332,8 @@ class TestFillGaps:
     def test_dense_array_with_step(self):
         """A dense array placed by its declared step is segments, which fill."""
         values = np.delete(np.arange(3000), np.arange(5, 3000, 7))
-        coord = get_coord(data=values, step=1)
+        with dc.config_context(max_index_runs=1_000):
+            coord = get_coord(data=values, step=1)
         assert coord.sorted and not coord.evenly_sampled and coord.runs_count > 1
         out = _gapped_patch(coord, dim="channel").fill_gaps("channel")
         assert out.get_coord("channel") == get_coord(start=0, stop=3000, step=1)

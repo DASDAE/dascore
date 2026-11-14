@@ -1017,7 +1017,9 @@ class TestSplitGapsAndWrite:
     def test_split_gaps_dense_holes(self):
         """Dense holes are many segments, each split off sharing the data."""
         values = np.arange(1500)
-        coord = get_coord(data=values[values % 3 != 2], step=1)
+        with dc.config_context(max_index_runs=1_000):
+            coord = get_coord(data=values[values % 3 != 2], step=1)
+            backwards = get_coord(data=coord.values[::-1], step=-1)
         assert coord.runs_count == 500
         coords = {"distance": [0, 1], "time": coord}
         data = np.zeros((2, len(coord)))
@@ -1026,7 +1028,6 @@ class TestSplitGapsAndWrite:
         assert len(spool) == 500
         assert all(x.get_coord("time").evenly_sampled for x in spool)
         assert np.shares_memory(spool[1].data, patch.data)
-        backwards = get_coord(data=coord.values[::-1], step=-1)
         assert backwards.runs_count == 500
         data = np.zeros(len(backwards))
         patch = dc.Patch(data=data, coords={"time": backwards}, dims=("time",))

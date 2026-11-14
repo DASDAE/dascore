@@ -85,7 +85,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-A coordinate of several segments has no `step`, though each segment keeps its own. `snap=False` keeps an array's values exactly: labels a grid reproduces exactly become that grid, and anything else is one list of labels with no step. By default, float labels within their stored precision of a grid become that grid. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
+A coordinate of several segments has no `step`, though each segment keeps its own. `get_coord` keeps an array's values: labels a grid reproduces become that grid (float labels within their stored precision of it included), and anything else is one list of labels with no step. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])

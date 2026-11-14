@@ -1590,13 +1590,6 @@ class TestRangeCoord:
         assert out.shape == out.values.shape == (len(out),)
         assert out.step == step
 
-    def test_off_grid_values_with_step_are_labels(self):
-        """Values a declared step does not restate keep their labels, no step."""
-        # linspace's spacing is 1/999, not the 1/1000 declared
-        values = np.linspace(0.0, 1, 1000)
-        coord = get_coord(data=values, step=1 / 1_000)
-        assert coord.step is None and np.array_equal(coord.values, values)
-
     def test_len_one_array_like_start_no_deprecation(self):
         """Array-like scalar start should not emit numpy scalar conversion warning."""
         with suppress_warnings(
@@ -3628,11 +3621,12 @@ class TestDeclaredStepSnap:
         ulps = 8 * np.spacing(values.max())
         np.testing.assert_allclose(out.values, values, rtol=0, atol=ulps)
 
-    def test_labels_within_ulps_are_the_grid(self):
+    @pytest.mark.parametrize("snap", [None, True, False])
+    def test_labels_within_ulps_are_the_grid(self, snap):
         """Labels a few ulps off a far grid are on it, within those ulps."""
         values = 1e12 + np.arange(300) * 1e-3
-        out = get_coord(data=values, step=1e-3)
-        assert out.evenly_sampled
+        out = get_coord(data=values, step=1e-3, snap=snap)
+        assert out.evenly_sampled and out.step == 1e-3
         ulps = 8 * np.spacing(values.max())
         np.testing.assert_allclose(out.values, values, rtol=0, atol=ulps)
 
@@ -3650,12 +3644,14 @@ class TestDeclaredStepSnap:
         out = get_coord(data=values, step=0.1)
         assert out.step is None and np.array_equal(out.values, values)
 
-    def test_exact_read_does_not_snap(self):
-        """Without snapping, rounded labels are kept exactly, as labels."""
+    def test_exact_read_holds_rounding_as_the_grid(self):
+        """Without snapping, labels within float exactness are still the grid."""
         values = np.arange(300) * 0.1
         values[1::2] += 0.1 * 5e-7
         out = get_coord(data=values, step=0.1, snap=False)
-        assert out.step is None and np.array_equal(out.values, values)
+        assert out.evenly_sampled and out.step == 0.1
+        ulps = 8 * np.spacing(values.max())
+        np.testing.assert_allclose(out.values, np.arange(300) * 0.1, atol=ulps, rtol=0)
 
 
 class TestSnapTimeUnits:

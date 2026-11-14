@@ -1320,7 +1320,12 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         else:
             min_val, max_val = self.min(), self.max()
             array = self._get_compatible_value(array, relative=relative)
-        # handle out of bounds cases
+        # handle out of bounds cases; a float grid's end takes values within
+        # the rounding select allows (1e-10 steps), which its labels may round by
+        if not samples and self.dtype.kind == "f" and self.evenly_sampled:
+            slack = abs(self.step) * 1e-10
+            for end in (min_val, max_val):
+                array = np.where(np.abs(array - end) <= slack, end, array)
         is_gt, is_lt = array > max_val, array < min_val
         if not allow_out_of_bounds and np.any(is_gt | is_lt):
             msg = f"Value: {array} is out of bounds for {self}"
@@ -2265,10 +2270,23 @@ def _continues(prev: Grid, run: Grid) -> bool:
                 run.stride,
             ) and run.k0 == prev.k0 + prev.count * prev.stride
         return bool(prev.origin + prev.count * prev.step_num == run.origin)
-    if prev.step_den == 1 and prev.phase == run.phase == 0:  # whole ticks
-        return run.origin == prev.origin + prev.count * prev.step_num
     step = Fraction(prev.step_num, prev.step_den)
     return run.ideal_origin == prev.ideal_origin + prev.count * step
+
+
+def _too_many_segments(count: int) -> bool:
+    """Whether ``count`` segments pass `max_index_runs`, warning if so."""
+    if count <= (limit := dc.get_config().max_index_runs):
+        return False
+    msg = (
+        f"These labels would make {count} segments, more than max_index_runs "
+        f"({limit}), so they are kept as one list with no step: fill_gaps, "
+        "split_gaps and the operations refusing several segments no longer see "
+        f"its {count - 1} gaps. Fill or split before removing samples, or raise "
+        "dascore.config.max_index_runs."
+    )
+    warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
+    return True
 
 
 class NumericCoord(BaseCoord):
@@ -2731,15 +2749,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         # a segment per stretch within a run, or one list past the limit
         which = np.searchsorted(self._run_offsets(), indices, side="right")
         edges = np.flatnonzero((diffs != stride) | (np.diff(which) != 0)) + 1
-        if len(edges) >= (limit := dc.get_config().max_index_runs):
-            msg = (
-                f"Removing these samples leaves {len(edges) + 1} segments, more than "
-                f"max_index_runs ({limit}), so the labels are kept as one list with "
-                "no step: fill_gaps, split_gaps and the operations refusing several "
-                f"segments no longer see its {len(edges)} gaps. Fill or split before "
-                "removing samples, or raise dascore.config.max_index_runs."
-            )
-            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
+        if _too_many_segments(len(edges) + 1):
             return self._with_runs((self._get_index_values(indices),))
         runs = []
         for first, stop in zip(np.r_[0, edges], np.r_[edges, len(indices)]):
@@ -3612,16 +3622,16 @@ def _check_chain(coords, ascending: bool) -> None:
             raise CoordError(msg)
 
 
-def _labels_to_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
+def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
     """
     The runs labels state, and their dtype.
 
     A declared step places them on its grid. Otherwise they are one grid
-    where one restates them (float ones within float exactness if
-    ``absorb``), else one stored run with no step.
+    where one restates them (float ones within float exactness), else one
+    stored run with no step.
     """
     if not _is_null(step):
-        return _step_runs(values, step, absorb)
+        return _step_runs(values, step)
     if values.dtype.kind not in "iufmM":  # labels which need not subtract
         return (values,), values.dtype
     if (grid := _fractional_grid(values)) is not None and _grid_holds(
@@ -3643,7 +3653,7 @@ def _labels_to_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
     for grid in grids:
         if _restated(grid, values, values.dtype, near=False):
             return (grid,), values.dtype
-    if absorb and grids and _restated(grids[-1], values, values.dtype, near=True):
+    if grids and _restated(grids[-1], values, values.dtype, near=True):
         return (grids[-1],), values.dtype
     return (values,), values.dtype
 
@@ -3660,45 +3670,27 @@ def _restated(grid: Grid, values, dtype, near: bool) -> bool:
         return bool(np.max(np.abs(labels - values)) <= 2 * allowance)
 
 
-def _whole_tick_runs(values, step, counts, splits) -> tuple | None:
-    """
-    `_step_runs` for integer or time labels on a whole-tick step, all at
-    once: each stretch is its grid exactly where every spacing in it is the
-    step. None for other labels or steps.
-    """
-    whole = _is_int(step) or is_timedelta64(step)
-    ticked = values.dtype == np.int64 or values.dtype.str[-4:] == "[ns]"
-    if not (whole and ticked):  # others take the dtype of their grids
-        return None
-    step = _to_tick(step)
-    ticks = values.view(np.int64) if values.dtype.kind in "mM" else values
-    ticks = ticks.astype(np.int64, copy=False)
-    if np.any(np.diff(ticks)[counts == 1] != step):
-        return (values,), values.dtype
-    starts = ticks[np.r_[0, splits]].tolist()
-    lengths = np.diff(np.r_[0, splits, len(values)]).tolist()
-    runs = tuple(Grid(x, step, 1, n) for x, n in zip(starts, lengths, strict=True))
-    return runs, values.dtype
-
-
-def _step_runs(values, step, absorb=False) -> tuple[tuple, np.dtype]:
+def _step_runs(values, step) -> tuple[tuple, np.dtype]:
     """
     Labels placed on a declared step's grid: a grid (segment) per stretch of
     consecutive positions where grids restate every stretch (within float
-    exactness if ``absorb``), else one stored run with no step.
+    exactness), else one stored run with no step, as also past
+    `max_index_runs` stretches and for integers on a non-integer step.
     """
     magnitude = np.abs(np.asarray(step))[()]
     signed = magnitude if values[-1] > values[0] else -magnitude
-    if (counts := _on_grid(_diffs(values), signed)) is None:
+    counts = _on_grid(_diffs(values), signed)
+    fractional = values.dtype.kind in "iu" and not float(magnitude).is_integer()
+    if counts is None or fractional:
         return (values,), values.dtype
     splits = np.flatnonzero(counts != 1) + 1
-    if (whole := _whole_tick_runs(values, signed, counts, splits)) is not None:
-        return whole
+    if _too_many_segments(len(splits) + 1):
+        return (values,), values.dtype
     runs: list[Any] = []
     dtypes = [values.dtype]
     for block in np.split(values, splits):
         grid, dtype = _range_run(dict(start=block[0], step=signed, shape=block.shape))
-        if not _restated(grid, block, dtype, absorb):
+        if not _restated(grid, block, dtype, near=True):
             return (values,), values.dtype
         runs.append(grid)
         dtypes.append(dtype)
@@ -4058,16 +4050,16 @@ def get_coord(
         than recomputed, so a dump is a contract: pass back the arrays it
         named, not arrays of your own under its keys.
     snap
-        How labels are read. False reads them exactly: labels a fitted grid
-        restates at consecutive positions are that grid; anything else is
-        labels with no step, and no label moves. Integer and time labels are
-        judged in their own tick unit. None (default) reads them as False
-        does, except that float labels within float exactness of the grid (a
-        few units in the last place of the dtype they were stored in) are
-        that grid. DASCore 0.1.24 instead snapped labels within 0.1% of one
-        spacing onto a grid, which True still does. With a declared step,
-        labels are placed on its grid in the same way, a segment per stretch
-        of consecutive positions where grids restate every stretch.
+        How labels are read. None (default) or False reads them exactly:
+        labels a fitted grid restates at consecutive positions are that grid,
+        float ones within float exactness of it (a few units in the last
+        place of the dtype they were stored in); anything else is labels with
+        no step. Integer and time labels are judged in their own tick unit.
+        DASCore 0.1.24 instead snapped labels within 0.1% of one spacing onto
+        a grid, which True still does. With a declared step, labels are
+        placed on its grid in the same way, a segment per stretch of
+        consecutive positions where grids restate every stretch, unless that
+        makes more than `max_index_runs` segments.
 
     Notes
     -----
@@ -4276,7 +4268,7 @@ def get_coord(
             return _range_coord(dict(start=data[0], step=step, shape=(1,)), units)
         return NumericCoord.from_labels(data, units=units)
     if not _is_null(step):  # a declared step is a claim about the grid
-        return _exact_coord(data, step=step, units=units, absorb=snap is not False)
+        return _exact_coord(data, step=step, units=units)
     if snap:  # the 0.1% snap DASCore 0.1.24 applied by default
         start, stop, step, monotonic, uniform = _maybe_get_start_stop_step(data)
         if start is not None:
@@ -4293,7 +4285,7 @@ def get_coord(
     else:
         monotonic = data.ndim == 1 and is_strictly_monotonic(data)
     if monotonic and data.ndim == 1 and not pd.isnull(data).any():
-        return _exact_coord(data, units=units, absorb=snap is not False)
+        return _exact_coord(data, units=units)
     if not monotonic and np.all(pd.isnull(data)):
         # The values say nothing, but their type still does: an array of
         # NaT came from datetimes and should stay datetimes, as the empty
@@ -4338,6 +4330,8 @@ def _released_or_exact(snapped, data, units) -> BaseCoord:
         ):
             return snapped
     exact = _exact_coord(data, units=units)
+    if exact.evenly_sampled:  # float labels within float exactness of a grid
+        return exact
     if _shift(snapped, data) >= 0.5:
         spread = exact.snap()
         return spread if _shift(spread, data) < 0.5 else exact
@@ -4398,7 +4392,7 @@ def _grid_coord(terms, units=None, dtype=None, **spec) -> BaseCoord:
     return _range_coord({**spec, **fields}, units, dtype=dtype)
 
 
-def _exact_coord(values, step=None, units=None, absorb=False) -> BaseCoord:
+def _exact_coord(values, step=None, units=None) -> BaseCoord:
     """The coordinate holding these labels, on a declared step's grids if any."""
     values = np.asarray(values)
     if not _is_null(step):
@@ -4406,5 +4400,5 @@ def _exact_coord(values, step=None, units=None, absorb=False) -> BaseCoord:
         if values.ndim != 1 or not is_strictly_monotonic(values):
             msg = "A declared step needs one-dimensional, monotonic values."
             raise CoordError(msg)
-    runs, dtype = _labels_to_runs(values, step, absorb)
+    runs, dtype = _labels_to_runs(values, step)
     return NumericCoord(runs=runs, units=units, dtype=dtype)

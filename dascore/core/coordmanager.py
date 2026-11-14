@@ -1595,8 +1595,7 @@ def _get_coord_dim_map(coords, dims):
             # the values are read again for the inference to see them,
             # exactly: they were stored as they are, and a scalar stays one.
             snap = False if coord.ndim else None
-            values, units, step = coord.values, coord.units, coord.step
-            out = get_coord(data=values, units=units, step=step, snap=snap)
+            out = get_coord(data=coord.values, units=coord.units, snap=snap)
         else:
             if hasattr(coord, "model_dump"):
                 coord = coord.model_dump(exclude_defaults=True)

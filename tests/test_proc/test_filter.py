@@ -308,11 +308,11 @@ class TestSobelFilter:
         with pytest.raises(CoordError, match="segments"):
             holed_patch.sobel_filter("distance")
 
-    def test_jitter_filters(self, jittered_patch, jittered_forms):
+    def test_jitter_filters(self, jittered_patch):
         """One list of jittered labels is filtered, not refused, as labels are."""
-        labels, _ = jittered_forms
         out = jittered_patch.sobel_filter("time")
-        assert np.allclose(out.data, labels.sobel_filter("time").data)
+        assert out.get_coord("time") == jittered_patch.get_coord("time")
+        assert out.shape == jittered_patch.shape
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still filters."""

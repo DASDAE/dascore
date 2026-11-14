@@ -165,14 +165,15 @@ class TestFebusT1DistanceGrid:
             np.float64
         )
 
-    def test_fixture_is_even_on_its_own(self, quantized_distance):
+    @pytest.mark.parametrize("snap", [None, False])
+    def test_fixture_is_even_on_its_own(self, quantized_distance, snap):
         """float32 values held in float64 are judged as float32, so they are even."""
-        coord = dc.get_coord(values=quantized_distance, units="m")
+        coord = dc.get_coord(values=quantized_distance, units="m", snap=snap)
         assert coord.sorted and coord.evenly_sampled
-        np.testing.assert_allclose(coord.values, quantized_distance, rtol=0, atol=1e-3)
-        exact = dc.get_coord(values=quantized_distance, units="m", snap=False)
-        assert exact.step is None
-        np.testing.assert_array_equal(exact.values, quantized_distance)
+        span = quantized_distance[-1] - quantized_distance[0]
+        assert coord.step == pytest.approx(span / (len(quantized_distance) - 1))
+        ulps = 4 * np.spacing(np.float32(quantized_distance.max()))
+        assert_allclose(coord.values, quantized_distance, rtol=0, atol=ulps)
 
     def test_quantized_distance_is_snapped(self, t1_path, tmp_path, quantized_distance):
         """A float32-quantized distance array still reads as an even grid."""
@@ -188,10 +189,10 @@ class TestFebusT1DistanceGrid:
         assert dist.max() == quantized_distance[-1]
         assert len(dist) == len(quantized_distance)
 
-    def test_distance_exact_when_snap_false(
+    def test_distance_on_its_grid_when_snap_false(
         self, t1_path, tmp_path, quantized_distance
     ):
-        """snap=False still reports the stored distances exactly."""
+        """snap=False holds float32-rounded distances as their grid."""
         path = tmp_path / "quantized_distance_exact.h5"
         shutil.copy2(t1_path, path)
         with h5py.File(path, "r+") as fi:
@@ -199,4 +200,8 @@ class TestFebusT1DistanceGrid:
             fi.create_dataset("Data/Distance", data=quantized_distance)
         payload = dc.scan_payloads(path, snap=False)[0]
         dist = payload.coords.coord_map["distance"]
-        assert np.array_equal(dist.values, quantized_distance)
+        span = quantized_distance[-1] - quantized_distance[0]
+        assert dist.evenly_sampled
+        assert dist.step == pytest.approx(span / (len(quantized_distance) - 1))
+        ulps = 4 * np.spacing(np.float32(quantized_distance.max()))
+        assert_allclose(dist.values, quantized_distance, rtol=0, atol=ulps)

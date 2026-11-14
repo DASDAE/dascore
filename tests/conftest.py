@@ -24,7 +24,7 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
-from dascore.core.coords import NumericCoord, concat_coords
+from dascore.core.coords import concat_coords
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -640,12 +640,10 @@ def jittered_patch():
 
 
 @pytest.fixture(scope="session")
-def jittered_forms(jittered_patch):
-    """The jittered patch as labels with no step, and on its step's grid."""
-    time = jittered_patch.get_coord("time")
-    labels = NumericCoord.from_labels(time.values)
-    grid = dc.get_coord(start=0.0, step=1.0, shape=time.shape)
-    return tuple(jittered_patch.update_coords(time=x) for x in (labels, grid))
+def jittered_grid(jittered_patch):
+    """The jittered patch on its step's grid."""
+    grid = dc.get_coord(start=0.0, step=1.0, shape=jittered_patch.shape[-1:])
+    return jittered_patch.update_coords(time=grid)
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)

@@ -434,7 +434,9 @@ def _read_coord(node, name, attrs2, snap):
     else:
         rel = values.astype(np.float64) - float(values[0])
     fit = rel[-1] / (len(rel) - 1)
-    if coord.evenly_sampled or np.any(np.abs(rel / fit - np.arange(len(rel))) >= 0.5):
+    # NaN and NaT are no grid's noise, so they fail this too
+    near = np.abs(rel / fit - np.arange(len(rel))) < 0.5
+    if coord.evenly_sampled or not np.all(near):
         return coord, False
     out = stored_coord(values, True, name=name, where=node.file, units=coord.units)
     return out, not np.array_equal(out.values, values)

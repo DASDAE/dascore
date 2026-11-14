@@ -982,7 +982,7 @@ class PatchAssembler:
             )
             raise CoordMergeError(msg)
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
-        new_coord = _get_merged_coord(summary_df, merge_dim, coords, **coord_kwargs)
+        new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(
             attrs,

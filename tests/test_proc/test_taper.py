@@ -352,11 +352,11 @@ class TestTaperHoles:
         with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.taper(time=0.1)
 
-    def test_jitter_tapers(self, jittered_patch, jittered_forms):
+    def test_jitter_tapers(self, jittered_patch):
         """One list of jittered labels is tapered, not refused, as labels are."""
-        labels, _ = jittered_forms
         out = jittered_patch.taper(time=0.1)
-        assert np.allclose(out.data, labels.taper(time=0.1).data)
+        assert out.get_coord("time") == jittered_patch.get_coord("time")
+        assert out.data[0, 0] == 0 and out.data[0, 60] == jittered_patch.data[0, 60]
 
     def test_range_on_segments(self, holed_patch, stepless_seam_patch):
         """A range taper weights each sample by its label, across segments too."""

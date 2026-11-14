@@ -1342,11 +1342,11 @@ class TestExactLabels:
 
     @pytest.mark.parametrize("snap", [True, False])
     def test_declared_step_labels_roundtrip(self, tmp_path, snap):
-        """Labels kept exactly beside a declared step read back as stored."""
+        """Labels within float exactness of a declared step are its grid."""
         values = np.arange(300) * 0.1
         values[1::2] += 0.1 * 5e-7
         coord = dc.get_coord(data=values, step=0.1, snap=False)
-        assert coord.step is None
+        assert coord.evenly_sampled and coord.step == 0.1
         patch = dc.Patch(
             data=np.zeros((300, 2)),
             dims=("time", "distance"),
@@ -1355,7 +1355,6 @@ class TestExactLabels:
         path = tmp_path / "declared.h5"
         dc.write(patch, path, "DASDAE")
         out = dc.read(path, snap=snap)[0].get_coord("time")
-        if snap:  # within max_shift of a grid, which a snap puts them on
-            assert out.evenly_sampled and np.allclose(out.values, values)
-        else:
-            np.testing.assert_array_equal(out.values, values)
+        assert out == coord and out.step == 0.1
+        ulps = 8 * np.spacing(values.max())
+        np.testing.assert_allclose(out.values, np.arange(300) * 0.1, atol=ulps, rtol=0)

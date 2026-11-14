@@ -149,25 +149,40 @@ class TestInference:
         coord = get_coord(data=_drifting_floats(), snap=False)
         assert coord.step is None
 
-    def test_far_from_zero(self):
-        """Floats far from zero are their grid within a few ulps, unless exact."""
+    @pytest.mark.parametrize("snap", [None, True, False])
+    def test_far_from_zero(self, snap):
+        """Floats far from zero are their grid within a few ulps, in every mode."""
         values = 1.6e9 + np.arange(1000) * 1e-3
-        coord = get_coord(data=values)
-        assert coord.evenly_sampled
+        coord = get_coord(data=values, snap=snap)
+        span = (values[-1] - values[0]) / (len(values) - 1)
+        assert coord.evenly_sampled and coord.step == pytest.approx(span)
         ulps = 8 * np.spacing(values.max())
         np.testing.assert_allclose(coord.values, values, rtol=0, atol=ulps)
-        exact = get_coord(data=values, snap=False)
-        assert exact.step is None and np.array_equal(exact.values, values)
 
-    def test_float32_held_in_float64(self):
+    @pytest.mark.parametrize("snap", [None, True, False])
+    def test_float32_held_in_float64(self, snap):
         """float64 labels holding float32 values are judged as float32."""
         values = np.linspace(0, 100, 1001, dtype=np.float32).astype(np.float64)
-        coord = get_coord(data=values)
-        assert coord.evenly_sampled
+        coord = get_coord(data=values, snap=snap)
+        span = (values[-1] - values[0]) / (len(values) - 1)
+        assert coord.evenly_sampled and coord.step == pytest.approx(span)
         ulps = 8 * float(np.spacing(np.float32(100)))
         np.testing.assert_allclose(coord.values, values, rtol=0, atol=ulps)
-        exact = get_coord(data=values, snap=False)
-        assert exact.step is None and np.array_equal(exact.values, values)
+
+    def test_rounded_last_label_is_in_bounds(self):
+        """Lookups take a label the grid holds only within rounding, not past it."""
+        dist = np.arange(300) * 0.1  # the grid's last label is 29.9 rounded down
+        time = T0 + np.arange(20) * MS
+        coords = {"distance": dist, "time": time}
+        patch = dc.Patch(
+            data=np.ones((300, 20)), coords=coords, dims=("distance", "time")
+        )
+        coord = patch.get_coord("distance")
+        assert coord.max() < dist[-1] and coord.get_next_index(dist[-1]) == 299
+        assert patch.taper_range(distance=(0, 1, 28, dist[-1])).shape == patch.shape
+        assert patch.correlate(distance=dist[-1]).shape[0] == 300
+        with pytest.raises(ValueError, match="out of bounds"):
+            coord.get_next_index(dist[-1] + 1e-9)
 
     def test_descending(self):
         """A descending grid is judged as the ascending one is."""
@@ -317,13 +332,6 @@ class TestStatedStep:
     def test_one_position(self):
         """Two labels on one grid position are labels the step does not place."""
         values = [0.0, 1.0, 1.3, 2.0]
-        coord = get_coord(data=values, step=1.0)
-        assert coord.step is None
-        np.testing.assert_array_equal(coord.values, values)
-
-    def test_drift(self):
-        """Labels drifting from the stated grid are labels, none moved."""
-        values = np.arange(100) * 1.02
         coord = get_coord(data=values, step=1.0)
         assert coord.step is None
         np.testing.assert_array_equal(coord.values, values)

@@ -514,7 +514,7 @@ def _assert_coords_attrs_match(patch):
         assert coord.min() == summary_coord.min
         assert coord.max() == summary_coord.max
         # a summary states the step of a grid and how many segments there are
-        assert summary_coord.run_count in (None, getattr(coord, "runs_count", 1))
+        assert summary_coord.run_count == getattr(coord, "runs_count", None)
         assert summary_coord.step is None or summary_coord.step == coord.step
 
 

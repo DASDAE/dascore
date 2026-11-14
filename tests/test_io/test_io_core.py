@@ -454,6 +454,16 @@ class TestStoredCoord:
         np.testing.assert_array_equal(out.values, jittered_times)
         assert not out.evenly_sampled
 
+    @pytest.mark.parametrize("snap", [("time",), False])
+    def test_unnamed_rounded_labels_are_their_grid(self, snap):
+        """Float labels within their stored precision of a grid are it, unnamed."""
+        labels = np.linspace(4000, 4009.9, 100, dtype=np.float32)
+        out = stored_coord(labels, snap, name="distance")
+        assert out.evenly_sampled
+        assert out.step == pytest.approx((labels[-1] - labels[0]) / 99)
+        ulps = 4 * np.spacing(labels.max())
+        np.testing.assert_allclose(out.values, labels, rtol=0, atol=ulps)
+
     def test_named_labels_are_gridded(self, jittered_times):
         """A named coordinate spans its first and last labels evenly."""
         out = stored_coord(

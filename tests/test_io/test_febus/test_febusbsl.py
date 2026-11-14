@@ -23,6 +23,7 @@ BSL_NAME = "febusg1_C2_2026-06-03T17.18.13+0200.bsl.h5"
 _QUANTIZED_DISTANCE = np.linspace(
     4000.0, 4000.0 + 99 * 0.1, 100, dtype=np.float32
 ).astype(np.float64)
+_SPAN_STEP = (_QUANTIZED_DISTANCE[-1] - _QUANTIZED_DISTANCE[0]) / 99
 
 
 class TestFebusBSL:
@@ -221,14 +222,14 @@ class TestG1DistanceGrid:
             snap=snap,
         )
 
-    def test_quantized_distance_is_even_on_its_own(self):
+    @pytest.mark.parametrize("snap", [None, False])
+    def test_quantized_distance_is_even_on_its_own(self, snap):
         """float32 values held in float64 are judged as float32, so they are even."""
-        coord = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m")
+        coord = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m", snap=snap)
         assert coord.sorted and coord.evenly_sampled
-        assert_allclose(coord.values, _QUANTIZED_DISTANCE, rtol=0, atol=1e-3)
-        exact = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m", snap=False)
-        assert exact.step is None
-        np.testing.assert_array_equal(exact.values, _QUANTIZED_DISTANCE)
+        assert coord.step == pytest.approx(_SPAN_STEP)
+        ulps = 4 * np.spacing(np.float32(_QUANTIZED_DISTANCE.max()))
+        assert_allclose(coord.values, _QUANTIZED_DISTANCE, rtol=0, atol=ulps)
 
     def test_quantized_distance_is_snapped(self):
         """A float32-quantized distance array still reads as an even grid."""
@@ -248,11 +249,16 @@ class TestG1DistanceGrid:
         assert coord.step == 1.0
         assert np.array_equal(coord.values, distances)
 
-    def test_distance_exact_when_snap_false(self):
-        """snap=False still reports the stored distances exactly."""
+    def test_distance_on_its_grid_when_snap_false(self):
+        """snap=False holds float32-rounded distances as their grid."""
         coords = self._coords(_QUANTIZED_DISTANCE, snap=False)
         distance = coords.coord_map["distance"]
-        assert np.array_equal(distance.values, _QUANTIZED_DISTANCE)
+        assert distance.evenly_sampled
+        assert distance.step == pytest.approx(
+            np.diff(_QUANTIZED_DISTANCE[[0, -1]]) / 99
+        )
+        ulps = 4 * np.spacing(np.float32(_QUANTIZED_DISTANCE.max()))
+        assert_allclose(distance.values, _QUANTIZED_DISTANCE, rtol=0, atol=ulps)
         # The jittery start times are the file's own, so they stay exact too.
         expected = dc.to_datetime64(np.array([0.0, 1.0, 2.05, 3.0]))
         assert np.array_equal(coords.coord_map["time"].values, expected)

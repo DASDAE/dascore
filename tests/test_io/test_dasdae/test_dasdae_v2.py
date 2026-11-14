@@ -358,34 +358,30 @@ class TestFilesWithAStepBesideLabels:
         assert time.step is None and time.runs_count == 1
         assert np.array_equal(time.values, labels)
 
-    def test_irregular_labels_read_silently(self, tmp_path):
-        """Labels half a step or more off any grid are what was written."""
-        labels = T0.astype("M8[ns]") + np.array([0, 1, 3, 4, 9]) * MS
-        path = self._old_file(tmp_path / "irregular.h5", labels, MS)
+
+class TestIrregularLabelsReadSilently:
+    """Labels no grid is near are what was written, so they read without a warning."""
+
+    @pytest.mark.parametrize(
+        "labels",
+        [
+            T0.astype("M8[ns]") + np.array([0, 1, 3, 4, 9]) * MS,
+            np.array([0.0, 1.0, np.nan, 3.0, 4.0]),
+            np.array([0.0, 1.0, 2.0, 3.0, np.nan]),
+            np.array(["2020-01-01", "2020-01-02", "NaT", "2020-01-04"], "M8[ns]"),
+        ],
+    )
+    def test_read_silently(self, tmp_path, labels):
+        """Irregular labels, or labels holding NaN or NaT, read back unchanged."""
+        coord = NumericCoord.from_labels(labels)
+        data = np.arange(len(labels), dtype=np.float64)
+        patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
+        path = dc.write(patch, tmp_path / "labels.h5", "DASDAE")
         with warnings.catch_warnings():
-            warnings.simplefilter("error")
+            warnings.simplefilter("error", SnapWarning)
             time = dc.read(path)[0].get_coord("time")
-        assert time.step is None and np.array_equal(time.values, labels)
-
-    def test_labels_skipping_positions_are_segments(self, tmp_path):
-        """A dense run with holes, once one stored list, reads as segments."""
-        kept = np.arange(1500)[np.arange(1500) % 3 != 2]
-        labels = T0.astype("M8[ns]") + kept * MS
-        path = self._old_file(tmp_path / "holes.h5", labels, MS)
-        time = dc.read(path)[0].get_coord("time")
-        assert time.runs_count == 500 and {x.step for x in time.segments} == {MS}
-        assert np.array_equal(time.values, labels)
-
-    def test_float_labels_on_their_step_are_a_grid(self, tmp_path):
-        """Float labels on their step within rounding snap, or read exactly."""
-        labels = 1.6e9 + np.arange(100) * 1e-3
-        path = self._old_file(tmp_path / "float.h5", labels, 1e-3)
-        time = dc.read(path)[0].get_coord("time")
-        assert time.evenly_sampled
-        ulps = 8 * np.spacing(labels.max())
-        np.testing.assert_allclose(time.values, labels, rtol=0, atol=ulps)
-        exact = dc.read(path, snap=False)[0].get_coord("time")
-        assert exact.step is None and np.array_equal(exact.values, labels)
+        assert time.step is None
+        np.testing.assert_array_equal(time.values, labels)
 
 
 class TestMultiRunRoundTrip:
