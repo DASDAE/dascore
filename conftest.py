@@ -4,7 +4,7 @@ Root pytest configuration.
 `dascore/xarray/index.py` subclasses xarray classes, so it cannot import
 without xarray, and `dascore/xarray/patch.py` has examples which convert
 to xarray; the doctest run (`pytest dascore --doctest-modules`) must skip
-collecting both where that optional dependency is absent. The ARROW
+collecting both where that optional dependency is absent. The DASARROW
 format's example needs pyarrow the same way.
 """
 

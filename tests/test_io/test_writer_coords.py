@@ -48,7 +48,7 @@ WRITERS = [
     ZarrV3(),
 ]
 # Formats which store any coordinate's labels with its step.
-EXACT = {"ARROW 1", "DASDAE 2", "PICKLE ", "NETCDF_CF 1.8", "ZARR 2", "ZARR 3"}
+EXACT = {"DASARROW 1", "DASDAE 2", "PICKLE ", "NETCDF_CF 1.8", "ZARR 2", "ZARR 3"}
 # File names, for formats which care.
 NAMES = {"WAV": "out.wav", "RSF": "out.rsf", "ZARR": "out.zarr"}
 

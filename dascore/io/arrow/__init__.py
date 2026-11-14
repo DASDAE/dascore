@@ -1,5 +1,5 @@
 """
-Support for the DASCore Arrow patch format.
+Support for the DASARROW patch format, DASCore's patch layout in Arrow IPC.
 
 One patch per Arrow IPC file (``.arrow``) or stream (``.arrows``): the
 values are one column, ``data``, in C order, and the dims, coordinates and
