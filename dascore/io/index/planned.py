@@ -1058,6 +1058,10 @@ class PlanResolver(PatchResolver):
                     members = reached(members, dim, *window)
                     grid = None if grid is None else grid.select(tuple(window))[0]
             joined = members.assign(current_index=output_id)
+            if fill and grid is not None and len(grid) == 1:
+                # a sample read beside a window inside a gap is no sample of
+                # it, so it is placed by position below, not relabelled
+                joined = joined.assign(**{f"_{dim}_stretch": None})
             (patch,) = self._assembler()._patch_from_instruction_df(joined)
             if fill:
                 patch = fill_on_grid(patch, dim, grid, merge, row.get("_dtype"))

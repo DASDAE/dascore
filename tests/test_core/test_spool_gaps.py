@@ -535,6 +535,19 @@ class TestSpoolFillGaps:
             assert coord == want.get_coord("time")
             assert segment_layout(coord) == segment_layout(want.get_coord("time"))
 
+    def test_one_sample_windows_inside_a_gap(self):
+        """A one-sample window inside a filled gap holds the fill, not a neighbour."""
+        times = [get_coord(start=x, step=1.0, shape=(2,)) for x in (0.0, 4.0)]
+        patches = [
+            dc.Patch(
+                data=x.values[None], coords={"distance": [0], "time": x}, dims=DIMS
+            )
+            for x in times
+        ]
+        chunked = dc.spool(patches).fill_gaps("time").chunk(time=1)
+        values = [x.data[0, 0] for x in chunked]
+        np.testing.assert_array_equal(values, [0.0, 1.0, np.nan, np.nan, 4.0, 5.0])
+
     @pytest.mark.parametrize(
         "kwargs", [{"tolerance": 3}, {"tolerance": 3, "max_shift": 0.01}]
     )
