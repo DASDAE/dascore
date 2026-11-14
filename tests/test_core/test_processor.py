@@ -2243,6 +2243,14 @@ class TestLazyStep:
         assert raw.data.chain.last.data_id == raw.attrs.data_id == ""
 
 
+class TestHalo:
+    """An operation says what its kernel leaves empty at the ends of an axis."""
+
+    def test_none_unless_said(self):
+        """An operation which says nothing fills its result to the ends."""
+        assert dc.proc.Detrend(dim="time").halo({"axis": 1}) == {}
+
+
 class TestCapturedOperation:
     """A patch method's operation can be had without running it."""
 

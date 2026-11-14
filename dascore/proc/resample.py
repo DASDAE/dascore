@@ -105,6 +105,8 @@ class Decimate(_DecimateFields):
     """
 
     model_config = ConfigDict(extra="allow")
+    # The factor counts samples, wherever the coordinate starts.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the decimated coordinates, the axis, factor and slices."""

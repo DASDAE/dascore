@@ -10,7 +10,7 @@ execute:
 |---|---|---|
 | a value per sample, from the samples around it | a reduction, such as `patch.window(time=0.1).mean()` | a patch shaped like the input |
 | a transform of each window, kept as windows | [`Patch.stft`](`dascore.Patch.stft`), or [`apply`](`dascore.proc.window.PatchWindow.apply`) with `mode="stack"` | a patch with a window axis |
-| a patch operation run in each window, and the windows blended back | the operation, such as `patch.window(time=1).detrend("time")` | a patch shaped like the input |
+| a patch operation run in each window, and the windows blended back | the operation, such as `patch.window(time=1).detrend("time")` | a patch shaped like the input, or shorter where the operation keeps every n-th sample |
 | a function of your own run in each window, and the windows blended back | [`apply`](`dascore.proc.window.PatchWindow.apply`) | a patch shaped like the input |
 
 Window lengths use coordinate units or samples (`samples=True`). `overlap` accepts a count, duration, percentage, or per-dimension mapping, and `step` says how far each window advances instead. A window with neither overlaps the next by half when it is blended, and advances one sample when it is reduced.
@@ -57,7 +57,20 @@ print(local.attrs.history[-1])
 
 The window covers the one operation called on it, and what comes back is an ordinary patch, so a chain goes on from there: `patch.window(time=0.02).detrend("time").pass_filter(time=(1, 300))` detrends in windows and then filters the blended result.
 
-One plan is worked out for the operation, from the first window, and run in every window, so only an operation which acts relative to its window can be run this way. DASCore's `detrend`, `taper`, filters, normalizations, derivatives and the like say that they do. `line_mute` and `taper_range` do when their values are measured from the start of a coordinate (`relative=True`, which is `line_mute`'s default and not `taper_range`'s) or given for a dimension which is not windowed; absolute values along a windowed dimension name a place only some windows hold, and are refused. The operation must also give back a window of the same shape and coordinates and take no other patch, so `decimate` and `select` are refused, and the window must fit inside its dimension. All of this is decided before any data are touched.
+One plan is worked out for the operation, from the first window, and run in every window, so only an operation which acts relative to its window can be run this way. DASCore's `detrend`, `taper`, filters, normalizations, derivatives and the like say that they do. `line_mute` and `taper_range` do when their values are measured from the start of a coordinate (`relative=True`, which is `line_mute`'s default and not `taper_range`'s) or given for a dimension which is not windowed; absolute values along a windowed dimension name a place only some windows hold, and are refused. The operation must also give back a window with the same coordinates and take no other patch, so `select` is refused, and the window must fit inside its dimension. All of this is decided before any data are touched.
+
+An operation may keep every n-th sample of a windowed dimension, as `decimate` and `fbe` with a `step` do, when the windows advance by a multiple of n samples; the result is then that much shorter. An operation built on a rolling window, such as `fbe` or `stalta`, has no value for the first samples of each window. Those are discarded and the rest blended, so the windows must overlap by at least the rolling window:
+
+```{python}
+# Band energy every 0.5 ms, each 20 ms filtered on its own. The rolling
+# window is 2 ms, so the windows overlap by more than that.
+options = {"time": (500, 2000), "window": 0.002, "step": 0.0005}
+energy = patch.window(time=0.02, overlap=0.005).fbe(**options)
+assert energy.coords == patch.fbe(**options).coords
+assert not np.isnan(energy.data).any()
+```
+
+A window which reaches before the patch holds the fill there, so the first samples are computed from the fill and the data together, where `fbe` on the whole patch leaves them NaN.
 
 For a patch operation, data on an array backend other than NumPy stay where they are. A dask array is computed a piece at a time, each from the windows which overlap it, so nothing is computed when the operation is called. On any other backend the windows are cut, run and blended there, which is several array operations for each window and so slower than NumPy; an operation with no implementation for the backend is converted through NumPy as it is outside a window.
 

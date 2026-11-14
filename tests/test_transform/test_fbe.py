@@ -132,3 +132,15 @@ class TestFbeMetadata:
         """Temperatures cannot be squared, as the energy squares the data."""
         with pytest.raises(UnitError, match="offset units"):
             random_patch.set_units("degC").fbe(time=(10, 50), window=0.1)
+
+    @pytest.mark.parametrize("step", (None, 0.008, 0.02, 0.1, 0.3))
+    @pytest.mark.parametrize("rows", (1, 3), ids=("pandas", "numpy"))
+    def test_halo_is_the_empty_start(self, random_patch, step, rows):
+        """What `halo` says is empty is what the kernel leaves NaN, and no more."""
+        patch = random_patch.isel(distance=slice(0, rows))
+        fbe = Fbe(window=0.1, step=step, time=(10, 50))
+        _, plan = fbe.get_metadata(patch.drop_data())
+        (axis, (before, after)), *others = fbe.halo(plan).items()
+        assert axis == patch.get_axis("time") and not after and not others
+        empty = np.isnan(fbe(patch).data).all(axis=0)
+        assert empty[:before].all() and not empty[before:].any()

@@ -221,6 +221,11 @@ class Tiles(ChunkContract):
         [`Halo`](`dascore.lazy.contract.Halo`).
     whole
         The axes which are not tiled and are needed whole.
+    factors
+        For a tiled axis along which the operation keeps every n-th sample
+        of a tile, that n, which the stride is a multiple of. The output is
+        then shorter than the input along the axis: a box is of the output,
+        and what it needs is of the input.
 
     Examples
     --------
@@ -230,16 +235,28 @@ class Tiles(ChunkContract):
     >>> box = (slice(10, 20), slice(0, 5))
     >>> assert tiles.tiles(box) == ((2, 6),)
     >>> assert tiles.needs(box, (100, 5)) == (slice(4, 24), slice(0, 5))
+    >>> # Every second sample kept: the same box of the output needs twice
+    >>> # as far along the input.
+    >>> halved = Tiles({0: (8, 4, 100)}, factors={0: 2})
+    >>> assert halved.needs(box, (100, 5)) == (slice(16, 44), slice(0, 5))
     """
 
     spans: Mapping[int, tuple[int, int, int]]
     widths: Mapping[int, tuple[int, int]] = field(default_factory=dict)
     whole: tuple[int, ...] = ()
+    factors: Mapping[int, int] = field(default_factory=dict)
+
+    def _made(self, axis: int) -> tuple[int, int, int]:
+        """Return a tile's size, its stride and the axis's length, as made."""
+        size, stride, length = self.spans[axis]
+        factor = self.factors.get(axis, 1)
+        return -(-size // factor), stride // factor, -(-length // factor)
 
     def tiles(self, box: Box) -> tuple[tuple[int, int], ...]:
         """Return the first tile overlapping a box, and one past the last."""
         out = []
-        for axis, (size, stride, length) in self.spans.items():
+        for axis in self.spans:
+            size, stride, length = self._made(axis)
             margin = _margin(size, stride)
             count = (length - 1 + margin) // stride + 1
             first = max((box[axis].start + margin - size) // stride + 1, 0)
@@ -261,7 +278,26 @@ class Tiles(ChunkContract):
 
     def apply(self, run: Callable[..., Any], data, box: Box, needed: Box):
         """Return the output box, blended from the tiles which overlap it."""
-        return super().apply(partial(run, tiles=self.tiles(box)), data, box, needed)
+        tiles = self.tiles(box)
+        run = partial(run, tiles=tiles)
+        if not self.factors:
+            return super().apply(run, data, box, needed)
+        out = run(data)
+        # Where the result starts and stops along each axis: where the data
+        # do, but along a tiled axis in the samples the operation makes.
+        made = [(x.start, x.stop) for x in needed]
+        for axis, (first, last) in zip(self.spans, tiles, strict=True):
+            size, stride, length = self._made(axis)
+            low = first * stride - _margin(size, stride)
+            made[axis] = (
+                max(low, 0),
+                min(low + (last - 1 - first) * stride + size, length),
+            )
+        # A result of another shape is handed back for the caller to refuse.
+        if tuple(out.shape) != tuple(stop - start for start, stop in made):
+            return out
+        spans = zip(box, made, strict=True)
+        return out[tuple(slice(b.start - at, b.stop - at) for b, (at, _) in spans)]
 
 
 @dataclass(frozen=True)

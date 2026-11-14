@@ -12,7 +12,12 @@ from pydantic import ConfigDict
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import UnitError
 from dascore.proc.filter import PassFilter
-from dascore.proc.rolling import _PandasPatchRoller, _roller, _rolling_mean
+from dascore.proc.rolling import (
+    _PandasPatchRoller,
+    _roller,
+    _rolling_mean,
+    _unfilled,
+)
 from dascore.units import get_quantity
 from dascore.utils.array import _is_offset_unit
 from dascore.utils.misc import check_filter_kwargs
@@ -70,6 +75,20 @@ class Fbe(PatchProcessor):
     >>> fbe_patch = p.fbe(distance=(.01,.05), window = 5)
     >>> ax = fbe_patch.viz.waterfall(cmap = 'Spectral_r')
     >>> _ = ax.set_title('FBE along distance-axis')
+
+    In windows of a long record, each filtered on its own. The windows
+    must overlap by at least the rolling window, and with a `step` must
+    advance by a multiple of it:
+    >>> windows = p.window(time=0.02, overlap=0.005)
+    >>> fbe_patch = windows.fbe(time=(500, 2000), window=0.002, step=0.0005)
+
+    Notes
+    -----
+    - The first samples have no whole window behind them and are NaN.
+    - In a window of [`Patch.window`](`dascore.Patch.window`) those samples
+      are discarded from each window and the rest blended. Decibels are
+      blended as they are, so where two windows meet the result lies
+      between theirs in decibels.
     """
 
     window: Any
@@ -77,6 +96,8 @@ class Fbe(PatchProcessor):
     db: Any = True
 
     model_config = ConfigDict(extra="allow")
+    # The filter and the rolling windows are sized by the sampling alone.
+    position_free = True
 
     def get_metadata(self, meta):
         """Return the energy's metadata, the filter and the rolling windows."""
@@ -104,6 +125,10 @@ class Fbe(PatchProcessor):
             "step": roller.step,
             "pandas": isinstance(roller, _PandasPatchRoller),
         }
+
+    def halo(self, plan):
+        """Return the samples left empty until a whole window is behind them."""
+        return {plan["axis"]: (_unfilled(plan["window"], plan["step"]), 0)}
 
     def numpy_kernel(self, data, *, axis, sos, window, step, pandas):
         """Return the root-mean-square of the filtered data in each window."""

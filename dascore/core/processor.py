@@ -43,7 +43,7 @@ import numbers
 import sys
 import textwrap
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from importlib.metadata import entry_points
 from pathlib import Path
@@ -133,6 +133,9 @@ class PatchProcessor(DascoreBaseModel):
     - `chunk_contract(dtype, plan)`: what a chunk of the output needs of
       the input, which is what lets the operation run on a lazy array.
       None, the default, says it cannot.
+    - `halo(plan)`: how many samples at each end of an axis the kernel
+      leaves empty, for want of input before or after them, as a rolling
+      mean leaves its first. None by default.
 
     A class whose `get_metadata` returns the same plan wherever the
     patch's coordinates start sets `position_free = True`, beside the
@@ -444,6 +447,24 @@ class PatchProcessor(DascoreBaseModel):
         operation is refused rather than the data loaded for it.
         """
         return None
+
+    def halo(self, plan: dict[str, Any]) -> Mapping[int, tuple[int, int]]:
+        """
+        Return the samples at each end of an axis the kernel leaves empty.
+
+        For each axis the kernel cannot fill to its ends, how many samples
+        of its result at the start and at the end hold no value, because
+        the input they need lies before or after the data: a rolling mean
+        leaves NaN until a whole window is behind it. Counted in samples of
+        the result, from the plan `get_metadata` returned, and the same
+        whatever the data hold. An axis not named has none, which is the
+        default.
+
+        [`Patch.window`](`dascore.Patch.window`) discards them from every
+        window and blends what is left, so the windows must overlap by at
+        least as much.
+        """
+        return {}
 
     @overload
     def run(self, patch: PatchType) -> PatchType: ...

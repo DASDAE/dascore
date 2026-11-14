@@ -266,6 +266,17 @@ class TestWindowed:
             time=64, overlap=48, samples=True, analysis="hann"
         ).abs(),
         "fill": lambda x: x.window(time=64, samples=True, fill=3.0).abs(),
+        # The first samples of each window are empty, and discarded.
+        "empty_ends": lambda x: x.window(time=200, samples=True).fbe(
+            time=(10, 50), window=0.1
+        ),
+        # Every fifth sample of each window is kept, so the result is shorter.
+        "every_nth": lambda x: x.window(time=200, overlap=50, samples=True).fbe(
+            time=(10, 50), window=0.1, step=0.02
+        ),
+        "every_nth_two_dims": lambda x: x.window(
+            time=80, distance=80, overlap=40, samples=True
+        ).decimate(time=4, filter_type=None),
         "in_a_chain": lambda x: (
             x.select(time=(10, 1700), samples=True)
             .window(time=64, samples=True)

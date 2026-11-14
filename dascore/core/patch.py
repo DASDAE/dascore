@@ -990,11 +990,18 @@ class Patch(NamespaceOwner, PatchMeta):
           states (see [`Windowed`](`dascore.proc.window.Windowed`)); it
           must also be written as a
           [`PatchProcessor`](`dascore.core.processor.PatchProcessor`), give
-          back a window of the same shape and coordinates, take no other
-          patch, and not settle its result from the data it computed, and
-          the window must fit inside its dimension. Anything else is
-          refused before any data are touched; a function given to `apply`
-          has no such limits.
+          back a window with the same coordinates, take no other patch,
+          and not settle its result from the data it computed, and the
+          window must fit inside its dimension. Anything else is refused
+          before any data are touched; a function given to `apply` has no
+          such limits.
+        - An operation may keep every n-th sample of a windowed dimension,
+          as ``decimate`` and ``fbe`` with a ``step`` do, when the windows
+          advance by a multiple of n samples; the result is that much
+          shorter. What an operation leaves empty at the start of each
+          window, as ``fbe`` and ``stalta`` do until a whole rolling
+          window is behind a sample, is discarded and the rest blended, so
+          the windows must overlap by at least as much.
         - For a patch operation, data on an array backend other than NumPy
           stay where they are: a dask array is computed a piece at a time
           when it is asked for, and on any other the windows are run and

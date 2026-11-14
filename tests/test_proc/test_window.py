@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-import functools
 import pickle
 import tracemalloc
 import warnings
@@ -16,7 +15,11 @@ from scipy.signal import detrend
 
 import dascore as dc
 from dascore.core import processor as processor_module
-from dascore.core.processor import PatchProcessor, captured_operation
+from dascore.core.processor import (
+    PatchProcessor,
+    captured_operation,
+    register_kernel,
+)
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     FilterValueError,
@@ -37,7 +40,7 @@ from dascore.proc.window import PatchWindow, Windowed, WindowReduce
 from dascore.transform.hilbert import Envelope
 from dascore.units import percent
 from dascore.utils import array_api as array_api_module
-from dascore.utils.array_api import to_numpy
+from dascore.utils.array_api import array_namespace, device, to_numpy
 from dascore.warnings import NumpyFallbackWarning
 
 REDUCERS = ("mean", "median", "min", "max", "std", "sum")
@@ -525,6 +528,51 @@ class _Shrinks(dc.PatchProcessor):
         return data[..., :-1]
 
 
+class _Lags(dc.PatchProcessor):
+    """
+    Each sample less the one `lag` before it, on any array library.
+
+    The first `lag` samples have none before them and are left NaN, which
+    `halo` says unless `said` is False. Every `every`-th sample is kept,
+    from sample `skip`.
+    """
+
+    name = None
+    position_free = True
+
+    lag: int = 3
+    every: int = 1
+    skip: int = 0
+    said: bool = True
+
+    def get_metadata(self, meta):
+        """Return the samples kept along time, and its axis."""
+        kept = slice(self.skip, None, self.every)
+        coords, _ = meta.coords.isel(time=kept)
+        return meta.new(coords=coords), {"axis": meta.get_axis("time")}
+
+    def halo(self, plan):
+        """Return the samples with nothing `lag` before them, as kept."""
+        empty = -(-self.lag // self.every) if self.said else 0
+        return {plan["axis"]: (empty, 0)}
+
+    def kernel(self, data, *, axis):
+        """Return the differences, NaN where there is nothing to take."""
+        xp = array_namespace(data)
+        moved = xp.moveaxis(data, axis, -1)
+        shape = (*moved.shape[:-1], self.lag)
+        empty = xp.full(shape, xp.nan, dtype=moved.dtype, device=device(moved))
+        made = moved[..., self.lag :] - moved[..., : -self.lag]
+        out = xp.concat([empty, made], axis=-1)[..., self.skip :: self.every]
+        return xp.moveaxis(out, -1, axis)
+
+
+def _lagged(data: np.ndarray, lag: int, every: int = 1, fill=0.0) -> np.ndarray:
+    """What `_Lags` makes of data which hold `fill` before their first sample."""
+    before = np.full((*data.shape[:-1], lag), fill)
+    return (data - np.concatenate([before, data], axis=-1)[..., :-lag])[..., ::every]
+
+
 class _NameOnly(dc.PatchProcessor):
     """An operation which writes only its name into history."""
 
@@ -735,6 +783,184 @@ class TestOperations:
         assert op(patch).attrs.data_id == out.attrs.data_id
 
 
+class TestEmptyEnds:
+    """What an operation leaves empty at a window's ends is discarded."""
+
+    WINDOWS: ClassVar = {
+        "default": {"time": 100},
+        # No more than is discarded, so what is kept of the windows abuts.
+        "abutting": {"time": 100, "overlap": 7},
+        "triang": {"time": 100, "taper": "triang"},
+        "two_dims": {"time": 100, "distance": 30},
+        "fill": {"time": 100, "fill": 2.5},
+    }
+
+    @pytest.mark.parametrize("name", WINDOWS)
+    def test_every_sample_is_from_whole_windows(self, patch, name):
+        """
+        The blend is what the operation makes of the patch in one piece.
+
+        A difference is the same in whichever window it is taken, so the
+        windows agree wherever they overlap, and blending them gives it
+        back. Before the patch a window holds the fill.
+        """
+        window = self.WINDOWS[name]
+        out = Windowed(_Lags(lag=7), samples=True, **window)(patch)
+        expected = _lagged(patch.data, 7, fill=window.get("fill", 0.0))
+        np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
+
+    def test_unsaid_empty_ends_are_blended(self, patch):
+        """An operation which does not say what it leaves empty blends it."""
+        out = Windowed(_Lags(lag=7, said=False), time=100, samples=True)(patch)
+        # Every window's first samples, wherever another window holds them.
+        assert np.isnan(out.data).mean() > 0.1
+
+    def test_warm_up_of_a_real_nan_is_kept(self, patch):
+        """Samples are discarded by where they are, not by what they hold."""
+        data = patch.data.copy()
+        data[:, 1000] = np.nan
+        out = Windowed(_Lags(lag=7), time=100, samples=True)(patch.new(data=data))
+        where = np.flatnonzero(np.isnan(out.data).any(axis=0))
+        assert where.tolist() == [1000, 1007]
+
+    @pytest.mark.parametrize("step", (None, 0.02), ids=("every", "stepped"))
+    @pytest.mark.parametrize("db", (True, False))
+    def test_fbe_is_the_plain_one_inside_a_window(self, patch, step, db):
+        """
+        Where the kept parts of windows abut, each holds its own energy.
+
+        With an overlap of what is discarded nothing is blended, so the
+        result over one window is the energy of that window alone.
+        """
+        # A rolling window of 25 samples leaves the first 24 empty; kept
+        # every fifth sample, 5 of each window's 40.
+        options = {"time": (10, 50), "window": 0.1, "step": step, "db": db}
+        overlap = 24 if step is None else 25
+        window = patch.window(time=200, overlap=overlap, samples=True)
+        with warnings.catch_warnings():
+            # Nothing is said of the fill a window holds beyond the patch.
+            warnings.simplefilter("error")
+            out = window.fbe(**options)
+        whole = patch.fbe(**options)
+        assert out.coords == whole.coords
+        assert out.attrs.data_units == whole.attrs.data_units
+        assert out.attrs.data_type == "frequency_band_energy"
+        assert not np.isnan(out.data).any()
+        stride = 200 - overlap
+        every, empty = (1, 24) if step is None else (5, 5)
+        # The first window starts one stride before the patch.
+        for start in (stride * 2, stride * 6):
+            alone = patch.select(time=(start, start + 200), samples=True).fbe(**options)
+            kept = slice(start // every + empty, (start + 200) // every)
+            np.testing.assert_allclose(
+                out.data[:, kept], alone.data[:, empty:], rtol=1e-10
+            )
+
+    @pytest.mark.parametrize("library", ("numpy", "array_api_strict", "dask"))
+    def test_a_sample_given_no_weight_adds_nothing(self, patch, library):
+        """
+        A dead channel is as quiet in windows as it is in one piece.
+
+        A Hann ramp starts from zero, and zero times the minus infinity of a
+        silent channel in decibels is NaN, which would reach the sample of
+        the next window which holds all the weight.
+        """
+        data = patch.data.copy()
+        data[5] = 0
+        dead = patch.new(data=data)
+        there = dead if library == "numpy" else _on(dead, library)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            window = there.window(time=200, overlap=50, samples=True)
+            out = to_numpy(window.fbe(time=(10, 50), window=0.1).data)
+        assert np.isneginf(out[5]).all() and np.isfinite(np.delete(out, 5, 0)).all()
+
+    @pytest.mark.parametrize("step", (None, 0.04), ids=("every", "stepped"))
+    def test_fbe_is_close_to_the_plain_one(self, step):
+        """Away from the ends, windows long beside the band change little."""
+        patch = dc.get_example_patch("random_das", shape=(4, 20_000))
+        options = {"time": (20, 60), "window": 0.5, "step": step, "db": False}
+        out = patch.window(time=4000, overlap=1000, samples=True).fbe(**options)
+        whole = patch.fbe(**options)
+        assert out.coords == whole.coords
+        inside = slice(*((500, -500) if step is None else (50, -50)))
+        np.testing.assert_allclose(
+            out.data[:, inside], whole.data[:, inside], rtol=1e-3
+        )
+
+    def test_stalta(self, patch):
+        """The ratio in windows has a value wherever the plain one has."""
+        out = patch.window(time=200, samples=True).stalta(time=(5, 40), samples=True)
+        whole = patch.stalta(time=(5, 40), samples=True)
+        assert out.coords == whole.coords and not np.isnan(out.data).any()
+        # Rolling means reach no further back than a window's own samples.
+        np.testing.assert_allclose(out.data[:, 200:], whole.data[:, 200:], rtol=1e-9)
+
+    def test_history_names_the_window_and_the_step(self, patch):
+        """The call is recorded as it was written, the step with it."""
+        window = patch.window(time=200, overlap=25, samples=True)
+        out = window.fbe(time=(10, 50), window=0.1, step=0.02)
+        assert "window(overlap=" in out.attrs.history[-1]
+        assert ".fbe(" in out.attrs.history[-1] and "step=" in out.attrs.history[-1]
+
+
+class TestEveryNthSample:
+    """An operation may keep every n-th sample of a windowed dimension."""
+
+    WINDOWS: ClassVar = {
+        # A window of 25 samples kept, every 20, three of them left empty.
+        "overlap": {"time": 100, "overlap": 20},
+        # A window whose length is no multiple of the four.
+        "ragged": {"time": 98, "overlap": 18},
+        "two_dims": {"time": 80, "distance": 80, "overlap": 40},
+        "triang": {"time": 100, "overlap": 20, "taper": "triang"},
+    }
+
+    @pytest.mark.parametrize("name", WINDOWS)
+    def test_windows_land_on_one_grid(self, patch, name):
+        """The blend is every fourth sample of the whole patch's result."""
+        operation = _Lags(lag=10, every=4)
+        out = Windowed(operation, samples=True, **self.WINDOWS[name])(patch)
+        assert out.shape == (300, 500)
+        assert out.coords == operation(patch).coords
+        expected = _lagged(patch.data, 10, every=4)
+        np.testing.assert_allclose(out.data, expected, rtol=0, atol=1e-12)
+
+    def test_decimate(self, patch):
+        """Samples picked out of windows are those picked out of the patch."""
+        window = patch.window(time=100, overlap=20, samples=True)
+        out = window.decimate(time=4, filter_type=None)
+        whole = patch.decimate(time=4, filter_type=None)
+        assert out.coords == whole.coords
+        np.testing.assert_allclose(out.data, whole.data, rtol=0, atol=1e-12)
+
+    def test_filtered_decimate(self, patch):
+        """Filtered in each window, the samples are close to the plain ones."""
+        smooth = patch.pass_filter(time=(None, 10))
+        out = smooth.window(time=400, overlap=100, samples=True).decimate(time=4)
+        whole = smooth.decimate(time=4)
+        assert out.coords == whole.coords
+        # But where a window reaches past the patch and holds the fill.
+        np.testing.assert_allclose(
+            out.data[:, 100:-100], whole.data[:, 100:-100], rtol=0, atol=1e-3
+        )
+
+    def test_bounds_of_cells_go_with_the_grid(self, patch):
+        """What `fbe` does to the bounds of time's cells, the window does."""
+        time = patch.get_coord("time").values
+        step = patch.get_coord("time").step
+        edges = {"time_start": ("time", time), "time_stop": ("time", time + step)}
+        bounded = patch.update_coords(**edges)
+        whole = bounded.fbe(time=(10, 50), window=0.1)
+        assert "time_start" not in whole.coords.coord_map
+        out = bounded.window(time=200, samples=True).fbe(time=(10, 50), window=0.1)
+        assert out.coords == whole.coords
+        assert set(out.coords.coord_map) == set(whole.coords.coord_map)
+        # An operation which keeps them keeps them in a window too.
+        kept = bounded.window(time=200, samples=True).detrend("time")
+        assert kept.coords == bounded.coords
+
+
 class _Typed(dc.PatchProcessor):
     """An operation which plans for a dtype, and is handed that dtype."""
 
@@ -772,9 +998,34 @@ class TestOperationsRefused:
             patch.window(time=100, samples=True, **option).detrend("time")
 
     def test_shape_changes(self, patch):
-        """An operation which changes a window's shape is not blended."""
-        with pytest.raises(ParameterError, match="keep their shape"):
-            patch.window(time=100, samples=True).decimate(time=2)
+        """Only every n-th sample of a window, from its first, is blended."""
+        with pytest.raises(ParameterError, match="or every n-th sample of it"):
+            Windowed(_Lags(lag=3, skip=1, every=2), time=100, samples=True)(patch)
+        # One sample for a window is a reduction, which is not blended.
+        with pytest.raises(ParameterError, match="or every n-th sample of it"):
+            Windowed(_Lags(lag=3, every=100), time=100, samples=True)(patch)
+
+    def test_windows_which_miss_the_grid(self, patch):
+        """Windows must advance by a multiple of the samples skipped."""
+        with pytest.raises(ParameterError, match="not a multiple of 4"):
+            patch.window(time=100, overlap=30, samples=True).decimate(time=4)
+
+    def test_shape_change_beside_the_window(self, patch):
+        """A dimension which is not windowed keeps its length."""
+        with pytest.raises(ParameterError, match="which is not windowed"):
+            patch.window(distance=30, samples=True).decimate(time=4)
+
+    def test_overlap_shorter_than_the_empty_ends(self, patch):
+        """The windows must overlap by what is discarded of each."""
+        window = patch.window(time=100, overlap=10, samples=True)
+        with pytest.raises(ParameterError, match="they overlap by 10"):
+            window.fbe(time=(10, 50), window=0.1)
+
+    def test_analysis_window_with_empty_ends(self, patch):
+        """A dual is worked out for whole windows, so neither is given."""
+        window = {"time": 64, "overlap": 48, "samples": True, "analysis": "hann"}
+        with pytest.raises(ParameterError, match="worked out for whole windows"):
+            Windowed(_Lags(lag=3), **window)(patch)
 
     @pytest.mark.parametrize(
         "change",
@@ -921,6 +1172,11 @@ FREE_CALLS = {
     "Where": lambda x: x.where(np.True_),
     "Flip": lambda x: x.flip("time", flip_coords=False),
     "AdaptiveSpectralFilter": lambda x: x.adaptive_spectral_filter(time=0.05),
+    # These leave the first samples of a window empty, which are discarded.
+    "Fbe": lambda x: x.fbe(time=(10, 50), window=0.1),
+    "Stalta": lambda x: x.stalta(time=(0.02, 0.1)),
+    # And this one keeps every second sample of a window.
+    "Decimate": lambda x: x.decimate(time=2),
     # These three say so only for values measured from a coordinate's start.
     "LineMute": lambda x: x.line_mute(time=(0.1, 0.2)),
     "TaperRange": lambda x: x.taper_range(time=(0.01, 0.02, 0.1, 0.2), relative=True),
@@ -1012,7 +1268,8 @@ class TestPositionFree:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             out = FREE_CALLS[name](patch.window(time=100, samples=True))
-        assert out.shape == patch.shape
+            plain = FREE_CALLS[name](patch)
+        assert out.shape == plain.shape and out.coords == plain.coords
         # Blended, and not a window of nothing: a value for every sample.
         assert not np.isnan(np.abs(out.data)).any()
 
@@ -1204,6 +1461,18 @@ class TestOtherBackends:
             time=64, overlap=48, samples=True, analysis="hann"
         ).demean("time"),
         "fill": lambda x: x.window(time=100, samples=True, fill=2.5).demean("time"),
+        # The first samples of each window left empty, and discarded.
+        "empty_ends": lambda x: Windowed(_Lags(lag=7), time=100, samples=True)(x),
+        # Every fourth sample of each window kept.
+        "every_nth": lambda x: Windowed(
+            _Lags(lag=10, every=4), time=100, overlap=20, samples=True
+        )(x),
+        "every_nth_two_dims": lambda x: Windowed(
+            _Lags(lag=10, every=4), time=80, distance=80, overlap=40, samples=True
+        )(x),
+        "decimate": lambda x: x.window(time=100, samples=True).decimate(
+            time=2, filter_type=None
+        ),
     }
 
     @staticmethod
@@ -1269,10 +1538,10 @@ class TestOtherBackends:
         """
         An operation with no implementation for the library still runs.
 
-        On dask each chunk is blended with NumPy when it is computed, so
-        nothing is converted or said. On another library the array is
-        converted once, for the whole of it, and the warning names the
-        operation.
+        On dask each chunk is blended on the library it is held in when
+        it is computed: NumPy here, so nothing is converted or said. On
+        another library the array is converted once, for the whole of it,
+        and the warning names the operation.
         """
         calls = []
         original = processor_module.to_numpy
@@ -1292,6 +1561,44 @@ class TestOtherBackends:
             assert len(calls) == 1 and len(said) == 1 and "detrend has no" in said[0]
         assert out.backend == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
+
+    @pytest.mark.parametrize("step", (None, 0.02), ids=("every", "stepped"))
+    def test_fbe(self, patch, library, step):
+        """Energy in windows is NumPy's, with a step and without one."""
+        options = {"time": (10, 50), "window": 0.1, "step": step}
+        expected = patch.window(time=200, overlap=50, samples=True).fbe(**options)
+        there = _on(patch, library).window(time=200, overlap=50, samples=True)
+        computed = []
+        with warnings.catch_warnings():
+            # It has no kernel but NumPy's, which dask runs on NumPy chunks
+            # and any other library is converted for, and told so.
+            warnings.simplefilter("ignore", NumpyFallbackWarning)
+            if library == "dask":
+                callbacks = pytest.importorskip("dask.callbacks")
+                counter = callbacks.Callback(posttask=lambda *x: computed.append(1))
+                with counter:
+                    out = there.fbe(**options)
+            else:
+                out = there.fbe(**options)
+        assert out.backend == library and not computed
+        assert out.shape == expected.shape and out.coords == expected.coords
+        values = _values(out)
+        assert values.dtype == expected.dtype
+        np.testing.assert_allclose(values, expected.data, rtol=0, atol=1e-10)
+
+    def test_dask_chunks_of_every_nth_sample(self, patch, library):
+        """Where every n-th sample is kept, each chunk holds its own of them."""
+        if library != "dask":
+            pytest.skip("only dask has chunks")
+        dask_array = pytest.importorskip("dask.array")
+        # Chunks whose edges no multiple of four falls on.
+        chunks = ((300,), (333, 334, 333, 1000))
+        there = patch.new(data=dask_array.from_array(patch.data, chunks=chunks))
+        window = {"time": 100, "overlap": 20, "samples": True}
+        out = Windowed(_Lags(lag=10, every=4), **window)(there)
+        assert out.data.chunks == ((300,), (84, 83, 83, 250))
+        expected = Windowed(_Lags(lag=10, every=4), **window)(patch)
+        np.testing.assert_array_equal(_values(out), expected.data)
 
     def test_dask_keeps_its_chunks(self, patch, library):
         """The result is chunked as the data were, not once for each window."""
@@ -1373,23 +1680,73 @@ class TestOtherBackends:
         # One window whole is 4 by two million samples: 64 MB.
         assert out.dtype == np.float64 and peak < 40e6
 
-    def test_dask_piece_of_another_library(self, patch, library):
-        """A piece whose chunk is another library's goes back to it, blended."""
+    @staticmethod
+    def _piece(patch, operation, box=(slice(0, 300), slice(320, 384))):
+        """One piece of a windowed operation on dask, its chunk on `strict`."""
+        strict = pytest.importorskip("array_api_strict")
+        windowed = Windowed(operation, time=64, samples=True)
+        _, plan = windowed.get_metadata(patch.drop_data())
+        plan = {**plan, "quiet": True}
+        contract = windowed.chunk_contract(patch.dtype, plan)
+        needed = contract.needs(box, patch.shape)
+        shared = (contract, windowed, plan, np.dtype(np.float64))
+        piece = strict.asarray(patch.data[needed])
+        expected = windowed.numpy_kernel(patch.data, **plan)[box]
+        return (shared, piece, box, needed), expected
+
+    def test_dask_piece_of_another_library(self, patch, library, monkeypatch):
+        """A piece whose chunk is another library's is blended there."""
         if library != "dask":
             pytest.skip("only dask computes in pieces")
-        strict = pytest.importorskip("array_api_strict")
-        operation = Windowed(dc.proc.Abs(), time=64, samples=True)
-        _, plan = operation.get_metadata(patch.drop_data())
-        contract = operation.chunk_contract(patch.dtype, plan)
-        run = functools.partial(operation.numpy_kernel, **plan)
-        box = (slice(0, 300), slice(320, 384))
-        needed = contract.needs(box, patch.shape)
-        shared = (contract, run, np.dtype(np.float64))
-        piece = strict.asarray(patch.data[needed])
-        out = window_module._blended_piece(shared, piece, box, needed)
-        whole = operation.numpy_kernel(patch.data, **plan)
-        assert type(out) is type(piece)
-        np.testing.assert_array_equal(np.asarray(out), whole[box])
+        given, expected = self._piece(patch, dc.proc.Abs())
+        with warnings.catch_warnings():
+            self._refuse_numpy(monkeypatch)
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = window_module._blended_piece(*given)
+        assert type(out) is type(given[1])
+        np.testing.assert_allclose(np.asarray(out), expected, rtol=0, atol=1e-12)
+
+    def test_dask_piece_runs_a_registered_kernel(self, patch, library, monkeypatch):
+        """A kernel registered for the chunk's library is the one a piece runs."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        calls = []
+
+        class Halves(dc.PatchProcessor):
+            """An operation written for NumPy alone."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Return half the data."""
+                return data / 2
+
+        @register_kernel(Halves, "array_api_strict")
+        def halves_there(self, data):
+            """Return half the data, on the library they are on."""
+            calls.append(type(data))
+            return data / 2
+
+        given, expected = self._piece(patch, Halves())
+        with warnings.catch_warnings():
+            self._refuse_numpy(monkeypatch)
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = window_module._blended_piece(*given)
+        # Once for each window the piece is under, and never NumPy's.
+        assert calls and set(calls) == {type(given[1])}
+        assert type(out) is type(given[1])
+        np.testing.assert_allclose(np.asarray(out), expected, rtol=0, atol=1e-12)
+
+    def test_dask_piece_never_converts_silently(self, patch, library):
+        """With no kernel for the chunk's library, the conversion is said."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        given, expected = self._piece(patch, dc.proc.Detrend(dim="time"))
+        with pytest.warns(NumpyFallbackWarning, match="detrend has no"):
+            out = window_module._blended_piece(*given)
+        # And the result goes back to where the piece was.
+        assert type(out) is type(given[1])
+        np.testing.assert_allclose(np.asarray(out), expected, rtol=0, atol=1e-12)
 
     def test_dask_result_pickles(self, patch, library):
         """A windowed result on dask can be pickled, tasks and all."""

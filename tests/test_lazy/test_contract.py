@@ -136,6 +136,55 @@ class TestTiles:
                 ]
                 assert list(range(first, last)) == holding
 
+    @pytest.mark.parametrize(
+        "size, stride, length, factor",
+        ((8, 4, 100, 2), (25, 20, 97, 5), (7, 6, 40, 3), (9, 4, 33, 4)),
+    )
+    def test_every_nth_sample(self, size, stride, length, factor):
+        """A box of a shorter output needs the tiles which hold its samples."""
+        tiles = Tiles({0: (size, stride, length)}, factors={0: factor})
+        plan = get_tile_plan((length,), (size,), (stride,))
+        margin, count = plan.margin[0], plan.grid[0]
+        made = -(-length // factor)
+        for start in range(made):
+            for stop in range(start + 1, made + 1):
+                first, last = tiles.tiles((slice(start, stop),))[0]
+                # Output sample j is input sample j * factor, which a tile
+                # holds if it is among the tile's own.
+                holding = [
+                    k
+                    for k in range(count)
+                    if any(
+                        k * stride - margin <= j * factor < k * stride - margin + size
+                        for j in range(start, stop)
+                    )
+                ]
+                assert list(range(first, last)) == holding
+                low = max(first * stride - margin, 0)
+                high = min((last - 1) * stride - margin + size, length)
+                needed = tiles.needs((slice(start, stop),), (length,))
+                assert needed == (slice(low, high),)
+
+    def test_apply_cuts_a_box_of_every_nth_sample(self):
+        """The box is cut from what was made, in the samples made."""
+        tiles = Tiles({0: (8, 4, 100)}, factors={0: 2})
+        box = (slice(10, 20), slice(0, 5))
+        needed = tiles.needs(box, (100, 5))
+        data = np.arange(100.0)[:, None] * np.ones(5)
+        seen = {}
+
+        def run(given, tiles):
+            """Keep every second sample, as each tile would."""
+            seen["tiles"] = tiles
+            return given[::2]
+
+        out = tiles.apply(run, data[needed], box, needed)
+        assert seen["tiles"] == ((5, 11),)
+        np.testing.assert_array_equal(out, data[::2][box])
+        # A result of another shape is handed back for the caller to refuse.
+        whole = tiles.apply(lambda given, tiles: given, data[needed], box, needed)
+        assert whole.shape == data[needed].shape
+
     def test_other_axes(self):
         """An axis which is not tiled is read by its width, or whole."""
         tiles = Tiles({0: (8, 4, 100)}, widths={1: (1, 2)}, whole=(2,))
