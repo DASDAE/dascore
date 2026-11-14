@@ -2286,7 +2286,10 @@ class Spool(NodeRepr, NamespaceOwner):
             """The row's coordinate, read from its source and selected as it loads."""
             rows = catalog.to_df()
             (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
-            coords = _source_manager(catalog.resolver, source, files, projection=dim)
+            # a selection on another coordinate needs that one to replay
+            whole = any(set(x) - {dim} for x, _, _ in residuals)
+            projection = None if whole else dim
+            coords = _source_manager(catalog.resolver, source, files, projection)
             if coords is None:
                 return None
             return _select_manager(coords, residuals).coord_map.get(dim)

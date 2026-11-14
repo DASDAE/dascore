@@ -409,6 +409,15 @@ class TestGappedPatchRows:
         assert out.get_coord("distance").runs_count == 2
         assert len(dc.spool([patch.select(distance=values[[1, 2, 5]])])) == 1
 
+    @pytest.mark.parametrize("kwargs", [dict(samples=True), dict(relative=True)])
+    def test_selection_on_another_coordinate(self, kwargs):
+        """Selecting one run through another coordinate leaves no hole."""
+        patch = _time_runs_patch(2).update_coords(t2=("time", np.arange(20)))
+        spool = dc.spool([patch]).select(t2=(2, 6), **kwargs)
+        assert spool[0].get_coord("time").runs_count == 1
+        assert spool.get_gaps().empty
+        assert spool.get_coverage()["coverage"].iloc[0] == 1
+
     def test_identity_is_stable(self):
         """A gapped patch given again is the same entry."""
         patch = _time_runs_patch(3)
