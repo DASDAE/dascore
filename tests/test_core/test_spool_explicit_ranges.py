@@ -1419,6 +1419,23 @@ class TestWindowsOverFilledGaps:
         expected = [False] if length is None else [True] * 2 + [False] * 3 + [True] * 2
         assert held == expected
 
+    def test_unfillable_rider_leaves_other_outputs(self):
+        """An integer rider in one stretch leaves a float one in another stated."""
+        times = lambda a, b: np.arange(a, b).astype("datetime64[s]")  # noqa
+
+        def make(start, dtype):
+            gain = ("time", np.arange(start, start + 4).astype(dtype))
+            coords = {"time": times(start, start + 4), "gain": gain}
+            return dc.Patch(data=np.ones(4), coords=coords, dims=("time",))
+
+        parts = [make(0, np.float64), make(6, np.float64)]
+        parts += [make(100, np.int64), make(106, np.int64)]
+        filled = dc.spool(parts).fill_gaps(time=np.timedelta64(3, "s"))
+        with pytest.warns(DASCoreWarning, match="dropped associated"):
+            held = ["gain" in x.coords.coord_map for x in filled]
+        assert held == [True, False]
+        assert filled.get_contents()["gain_min"].notna().tolist() == held
+
     def test_window_inside_the_gap(self):
         """A window wholly inside a filled gap is all fill, reading one sample."""
         source, _ = _gapped_2d(0, 10, depth=True)

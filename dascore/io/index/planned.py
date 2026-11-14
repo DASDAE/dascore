@@ -512,9 +512,10 @@ def _aux_coord_info(
                 unit_ok = unit_ok | settled
         if rides and filled is not None:
             held, size = filled
-            kind = joined.get(f"_{name}_coord_dtype", pd.Series(dtype=object))
-            unfillable = ~kind.dropna().map(lambda x: np.dtype(x).kind in "fcMm")
-            absent |= (held < size) & unfillable.any()
+            kind = joined.get(f"_{name}_coord_dtype", pd.Series(None, joined.index))
+            fills = kind.map(lambda x: pd.isnull(x) or np.dtype(x).kind in "fcMm")
+            lacks = (~fills.astype(bool)).groupby(joined["output_id"], sort=True).any()
+            absent |= (held < size) & lacks.to_numpy()  # per output
             none = np.full(len(held), None, dtype=object)
             lows, highs = (np.where(held > 0, x, none) for x in (lows, highs))
         for index in np.flatnonzero(~absent):
