@@ -386,16 +386,16 @@ class TestSourceEnvelopes:
             "time_step": 1.0,
         }
 
-    @pytest.mark.parametrize(
-        "residual",
-        [
-            ({"time": (1.0, None)}, False, True),  # relative bounds
-            ({"time": _canonical_range((1 * m, 2 * m))}, False, False),  # units
-        ],
-    )
-    def test_a_selection_the_reader_cannot_take_keeps_nothing(self, rows, residual):
+    def test_a_selection_the_reader_cannot_take_keeps_nothing(self, rows):
         """It cuts on the patch, which records it without any help."""
+        residual = ({"time": _canonical_range((1 * m, 2 * m))}, False, False)
         assert _source_envelopes(rows, (residual,)) == {}
+
+    def test_a_relative_selection_keeps_the_source_grid(self, rows):
+        """Its samples sit on the source's grid, which planning counts from."""
+        residual = ({"time": (1.0, None)}, False, True)
+        out = _source_envelopes(rows, (residual,))
+        assert out["_time_source_envelope"].iloc[0]["time_min"] == 0.0
 
     def test_a_lone_sample_range_keeps_its_envelope(self, rows):
         """It counts from the source, which the envelope restates as values."""

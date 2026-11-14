@@ -163,10 +163,10 @@ class DascoreConfig(BaseModel):
         default=256,
         ge=1,
         description=(
-            "Runs a spool index stores per coordinate. A coordinate of more "
-            "runs (stretches between its holes, or of another sampling) is "
-            "stored by its envelope, step and flags, with a warning, and "
-            "read from its source when a report or plan needs its runs."
+            "Runs a spool index stores per coordinate; one of more runs is "
+            "stored by its envelope, with a warning, and read from its source "
+            "when a report or plan needs them. Removing samples (a mask, "
+            "dropna) past this many segments leaves one stepless label list."
         ),
     )
 

@@ -16,6 +16,7 @@ from dascore.exceptions import CoordError, ParameterError, UnitError
 from dascore.transform.differentiate import _Derivative, _derivative_metadata
 from dascore.units import convert_units, get_factor_and_unit, get_unit
 from dascore.utils.misc import broadcast_for_index
+from dascore.utils.patch import _refuse_segments
 
 _UNEVEN_MSG = (
     "Only velocity_to_strain_rate with step_multiple=2 supports an unevenly "
@@ -194,6 +195,7 @@ class VelocityToStrainRateEdgeless(PatchProcessor):
         """Return the metadata between samples, and the differencing plan."""
         step_multiple = self.step_multiple
         _check_step_multiple(step_multiple)
+        _refuse_segments(meta, "distance", "velocity_to_strain_rate_edgeless")
         if meta.get_coord("distance").step is None:
             raise CoordError(_UNEVEN_MSG)
         coord = meta.get_coord("distance", require_evenly_sampled=True)

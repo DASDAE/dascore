@@ -503,9 +503,13 @@ class Patch(NamespaceOwner, PatchMeta):
         """Transpose the data array to any dimension order."""
         return dascore.proc.coords.Transpose(dims=dims).run(self)
 
-    def snap_coords(self, *coords, reverse: bool = False) -> Self:
+    def snap_coords(
+        self, *coords, reverse: bool = False, step=None, max_shift=None
+    ) -> Self:
         """Snap coordinates to evenly sampled versions of themselves."""
-        return dascore.proc.coords.SnapCoords(coords=coords, reverse=reverse).run(self)
+        return dascore.proc.coords.SnapCoords(
+            coords=coords, reverse=reverse, step=step, max_shift=max_shift
+        ).run(self)
 
     def sort_coords(self, *coords, reverse: bool = False) -> Self:
         """Sort the patch along one or more coordinates."""

@@ -30,7 +30,6 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
-    ChunkError,
     CoordMergeError,
     InvalidFiberIOError,
     ParameterError,
@@ -59,17 +58,12 @@ from dascore.utils.patch import (
     _get_merge_dim,
     _get_merged_coord,
     _split_coord_merge_kwargs,
-    drop_associated_coords,
 )
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     get_dim_names_from_columns,
 )
 from dascore.utils.time import to_float
-
-# Slack when counting whole steps between a window edge and a sample, so a
-# ratio a float rounding short of a whole number still counts it.
-_STEP_SNAP_RTOL = 1e-9
 
 
 def _get_varying_dim(df) -> str | None:
@@ -521,55 +515,6 @@ def coord_at_stored_unit(coord, row: Mapping, dim: str):
     return coord if unit == "ns" else _at_unit(coord, unit)
 
 
-def patch_from_fill(
-    coords: CoordManager, row: Mapping, plan_dim: str, fill_value
-) -> dc.Patch:
-    """
-    The all-fill patch an output row with no members describes.
-
-    A window lying wholly inside a bridged hole has no source to read
-    from, so its samples are all the fill value. It must still look like
-    the outputs beside it, though: `coords` is a sibling's coordinates,
-    which is what states the values, dtypes and units of every dimension
-    this plan did not chunk. Only the chunked dimension comes from the
-    row, which is the window the plan advertised.
-    """
-    # the cast check lives with fill_gaps, which proc imports from utils
-    from dascore.proc.coords import _fill_scalar  # noqa: PLC0415
-
-    sibling = coords.coord_map[plan_dim]
-    bounds = _row_values(row, plan_dim)
-    step = sibling.step
-    if bounds is None or _is_null(step):
-        msg = (
-            f"Cannot fill a hole along {plan_dim!r}: a window no source feeds "
-            "takes the span its plan row states and the step its neighbours "
-            "are sampled at, and one of those is missing. Chunk without a "
-            "pending sample or relative selection, or without fill_value."
-        )
-        raise ChunkError(msg)
-    # The row's envelope orders values and so states no direction; the
-    # step beside it does, which is why the window is rebuilt from both.
-    low, high, _ = bounds
-    length = int(np.round(abs(high - low) / abs(step))) + 1
-    descending = step < step * 0
-    coord = get_coord(
-        start=high if descending else low,
-        step=step,
-        shape=(length,),
-        units=sibling.units,
-    )
-    # A coordinate riding the chunked dimension describes samples which
-    # are not there, so it cannot come along; one riding any other
-    # dimension is the same for every patch here and does.
-    coords = drop_associated_coords(coords, plan_dim, "Filling the gaps along")
-    coords = coords._update_grid(plan_dim, **{plan_dim: coord})
-    dtype = np.dtype(row.get("_dtype") or np.float64)
-    data = np.full(coords.shape, _fill_scalar(fill_value, dtype), dtype=dtype)
-    attrs = _attrs_from_row(row, coords.dims, coord_names=set(coords.coord_map))
-    return dc.Patch(data=data, coords=coords, dims=coords.dims, attrs=attrs)
-
-
 def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManager:
     """
     The coordinates with ``dim`` labelled by the stretch grid ``row`` names.
@@ -611,10 +556,11 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
 def _fuses(rows: Sequence[Mapping], dim: str) -> bool:
     """
     Whether a merge may fuse its members' labels: as the plan judged them,
-    every member states a step and the plan keeps no stretch's labels.
+    every member states one step and the plan keeps no stretch's labels.
     """
     keeps = (x.get(f"_{dim}_stretch") == "labels" for x in rows)
-    return not any(keeps) and not any(pd.isnull(x.get(f"{dim}_step")) for x in rows)
+    steps = {x.get(f"{dim}_step") for x in rows}
+    return not any(keeps) and len(steps) == 1 and not pd.isnull(steps.pop())
 
 
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
@@ -629,93 +575,48 @@ def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
         )
 
 
-def _whole_steps(ratio) -> int:
-    """How many whole steps fit in a ratio, forgiving float error at the edge."""
-    return int(np.floor(float(ratio) + _STEP_SNAP_RTOL))
-
-
-def _fill_limit(tolerance) -> tuple:
+def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     """
-    The widest hole a fill may close, as `Patch.fill_gaps` states limits.
-
-    A tolerance admits a spacing of so many steps; a hole of that spacing
-    is missing one fewer sample than it spans. An infinite count sets no
-    limit, which is the one way to ask for every hole to be filled.
+    Fill a fill plan's assembled members, as `Patch.fill_gaps` does, onto the
+    nearest positions of ``grid``; the fill, in ``dtype``, pads the rest.
     """
-    if tolerance is None:  # without a tolerance no hole is joined to fill
-        return 0, True
-    if (count := tolerance.count) is not None:
-        if not np.isfinite(count):
-            return None, False
-        return max(int(np.floor(count)) - 1, 0), True
-    # an absolute excess is already stated per hole, not per spacing
-    return tolerance, False
-
-
-def fill_to_row(
-    patch: dc.Patch, dim: str, row: Mapping, fill_value, tolerance
-) -> dc.Patch:
-    """
-    Write the fill value into every sample an assembled output is missing.
-
-    Two kinds are missing, and only the whole output knows both. Inside
-    it are the holes a bridged gap left, whether the members were merged
-    across one or a single member carried one of its own. Outside them
-    are the edge positions a window laid over a hole advertises but no
-    source feeds. A row stating no evenly sampled window (a descending
-    coordinate, whose direction an envelope cannot express) keeps the
-    interior fill and is not padded.
-    """
-    # the placement and the cast check live with fill_gaps, which proc
-    # imports from utils
-    from dascore.proc.coords import _fill_scalar, _place_blocks  # noqa: PLC0415
-
-    # Bounded by the same tolerance which decided the merge: planning
-    # normally splits a patch at its holes, but a pending sample or
-    # relative selection keeps it from describing them, and the whole
-    # patch arrives here with its holes intact.
-    limit, samples = _fill_limit(tolerance)
-    patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
-    coord = patch.get_coord(dim)
-    bounds = _row_values(row, dim)
-    step = coord.step
-    # A row whose envelope the plan could not state -- a pending relative
-    # selection resolves against the patch, not the plan -- says nothing
-    # about where the window ends, so there is no span to pad out to.
-    if bounds is None or _is_null(step):
-        return patch
-    # Counted on the samples' own grid and anchored on their own first
-    # label, so padding can only ever add positions around them: a target
-    # built from the window's edges instead would move every label
-    # whenever those edges did not land on the samples' grid.
-    low, high, _ = bounds
-    size = abs(step)
-    below = _whole_steps((coord.min() - low) / size)
-    above = _whole_steps((high - coord.max()) / size)
-    # the envelope orders values; the array may run the other way
-    before, after = (above, below) if step < step * 0 else (below, above)
-    if before <= 0 and after <= 0:
-        return patch
-    before, after = max(before, 0), max(after, 0)
-    target = get_coord(
-        start=coord.values[0] - before * step,
-        step=step,
-        shape=(before + len(coord) + after,),
-        units=coord.units,
+    fill_value = merge["fill_value"]
+    # proc imports from utils, so this is imported here
+    from dascore.proc.coords import (  # noqa: PLC0415
+        _fill_riders,
+        _fill_scalar,
+        _place_blocks,
     )
+
+    if dtype and patch.data.dtype != np.dtype(dtype):  # as its row states it
+        with operation_context():
+            patch = patch.new(data=to_numpy(patch.data).astype(dtype))
+    # the size `Spool.fill_gaps` gave: samples and one, every gap, or a width
+    tol = merge["tolerance"]
+    samples = tol.count is not None and bool(np.isfinite(tol.count))
+    limit = int(tol.count) - 1 if samples else None if tol.count else tol
+    patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
+    coord: Any = patch.get_coord(dim)  # numeric, as only those fill
+    if grid is None or coord == grid:
+        return patch
+    sign = 1 if grid.sorted or len(grid) < 2 else -1
+    first = round(grid._samples_in((coord[0] - grid[0]) * sign)) if len(grid) else 0
+    start, stop = max(-first, 0), min(len(coord), len(grid) - first)
+    blocks = ((start, stop, first + start),) if stop > start else ()
     data = to_numpy(patch.data)
-    axis = patch.get_axis(dim)
     fill = _fill_scalar(fill_value, data.dtype)
-    blocks = ((0, data.shape[axis], before),)
-    data = _place_blocks(data, axis, len(target), blocks, fill)
-    coords = drop_associated_coords(patch.coords, dim, "Filling the gaps along")
-    # What the padding is and where it went, so the same chunk loaded twice
-    # is the same array rather than two random ids.
-    params = {"dim": dim, "value": fill_value, "before": before, "after": after}
+    data = _place_blocks(data, patch.get_axis(dim), len(grid), blocks, fill)
+    coords, riders = _fill_riders(
+        patch.coords, dim, len(grid), blocks, "Filling the gaps along"
+    )
+    # where the members went in the window, so loading twice gives one id
+    params = {"dim": dim, "value": fill_value, "first": first, "grid": grid}
     attrs = stamp(patch.attrs, [patch.attrs], try_operation_id("Fill", params))
     with operation_context():
         return patch.new(
-            data=data, coords=coords._update_grid(dim, **{dim: target}), attrs=attrs
+            data=data,
+            coords=coords._update_grid(dim, **{dim: grid}).update(**riders),
+            attrs=attrs,
         )
 
 
@@ -1243,4 +1144,7 @@ class PatchAssembler:
         relative paths pass through unchanged — the catalog's resolver
         owns resolving them against the spool root.
         """
-        return df.replace("", None).to_dict("records")
+        return [
+            {k: None if isinstance(v, str) and not v else v for k, v in row.items()}
+            for row in df.to_dict("records")
+        ]

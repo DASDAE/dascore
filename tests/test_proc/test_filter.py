@@ -301,27 +301,23 @@ class TestSobelFilter:
         assert not np.any(pd.isnull(out.data))
 
     def test_holes_raise(self, holed_patch):
-        """Missing samples raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+        """More than one segment raises, naming the fixes."""
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
-        with pytest.raises(CoordError, match="not evenly sampled"):
+        with pytest.raises(CoordError, match="segments"):
             holed_patch.sobel_filter("distance")
 
-    def test_jitter_raises(self, jittered_patch):
-        """Labels off their step's grid raise."""
-        with pytest.raises(CoordError, match="off the grid"):
-            jittered_patch.sobel_filter("time")
+    def test_jitter_filters(self, jittered_patch, jittered_forms):
+        """One list of jittered labels is filtered, not refused, as labels are."""
+        labels, _ = jittered_forms
+        out = jittered_patch.sobel_filter("time")
+        assert np.allclose(out.data, labels.sobel_filter("time").data)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still filters."""
         out = stepless_seam_patch.sobel_filter("time")
         assert out.shape == stepless_seam_patch.shape
-
-    def test_two_runs_raise(self, two_run_patch):
-        """Two step-less segments raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
-            two_run_patch.sobel_filter("time")
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

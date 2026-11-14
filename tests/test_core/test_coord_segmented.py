@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+import tracemalloc
 import warnings
 from fractions import Fraction
 
@@ -21,6 +22,7 @@ from dascore.core.coords import (
 )
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity
+from dascore.warnings import DASCoreWarning
 
 
 @pytest.fixture(scope="session")
@@ -210,7 +212,8 @@ class TestProperties:
 
     def test_step_is_the_common_step(self, float_gap_coord):
         """Runs of one step report it; runs of different steps report none."""
-        assert float_gap_coord.step == 1.0
+        assert float_gap_coord.step is None
+        assert [x.step for x in float_gap_coord.segments] == [1.0, 1.0]
         mixed = concat_coords(
             get_coord(start=0.0, stop=5.0, step=1.0),
             get_coord(start=8.0, stop=13.0, step=0.5),
@@ -402,6 +405,71 @@ class TestSelect:
         """A null select keeps everything."""
         out, _ = float_gap_coord.select(None)
         assert out == float_gap_coord
+
+
+def _pairs_patch(stretches, timed=False):
+    """A patch whose mask keeps `stretches` stretches of two samples."""
+    size = 4 * stretches
+    t0 = np.datetime64("2020-01-01", "ns")
+    start, step = (t0, np.timedelta64(1, "ms")) if timed else (0.0, 0.25)
+    time = get_coord(start=start, step=step, shape=(size,))
+    patch = dc.Patch(data=np.arange(float(size)), coords={"time": time}, dims=("time",))
+    return patch, np.arange(size) % 4 < 2
+
+
+class TestSegmentLimit:
+    """Past `max_index_runs` segments, removing samples leaves one list."""
+
+    @pytest.mark.parametrize("timed", [False, True])
+    @pytest.mark.parametrize("stretches", [256, 257])
+    def test_limit(self, stretches, timed):
+        """256 stretches stay segments; 257 are one list with no step, warned."""
+        patch, mask = _pairs_patch(stretches, timed)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = patch.select(time=mask)
+        coord = out.get_coord("time")
+        said = [x for x in caught if issubclass(x.category, DASCoreWarning)]
+        assert len(said) == (stretches > 256)
+        if said:  # it says what is lost and how to keep it, at the caller's line
+            assert said[0].filename == __file__
+            assert "fill_gaps, split_gaps" in str(said[0].message)
+            assert "max_index_runs" in str(said[0].message)
+        assert coord.runs_count == (256 if stretches == 256 else 1)
+        if stretches > 256:
+            assert isinstance(coord.runs[0], Labels) and coord.step is None
+        np.testing.assert_array_equal(coord.values, patch.get_coord("time")[mask])
+        np.testing.assert_array_equal(out.data, patch.data[mask])
+
+    def test_list_equals_segments(self):
+        """The list and the same labels as segments compare equal."""
+        patch, mask = _pairs_patch(300)
+        listed = patch.get_coord("time")[mask]
+        with dc.config_context(max_index_runs=1_000):
+            segmented = patch.get_coord("time")[mask]
+        assert (listed.runs_count, segmented.runs_count) == (1, 300)
+        assert listed == segmented and segmented == listed
+
+    def test_index_array_and_dropna(self):
+        """Positions and dropna remove samples through the same limit."""
+        patch, mask = _pairs_patch(300)
+        taken = patch.get_coord("time")[np.flatnonzero(mask)]
+        dropped = patch.update(data=np.where(mask, patch.data, np.nan)).dropna("time")
+        for coord in (taken, dropped.get_coord("time")):
+            assert coord.runs_count == 1 and coord.step is None
+            np.testing.assert_array_equal(coord.values, patch.get_coord("time")[mask])
+        np.testing.assert_array_equal(dropped.data, patch.data[mask])
+
+    def test_no_object_per_stretch(self, monkeypatch):
+        """A heavy mask builds no grid per stretch it leaves."""
+        patch, mask = _pairs_patch(10_000)
+        made = []
+        original = Grid.__post_init__
+        monkeypatch.setattr(
+            Grid, "__post_init__", lambda self: made.append(1) or original(self)
+        )
+        patch.select(time=mask)
+        assert len(made) < 10
 
 
 class TestGetItem:
@@ -740,9 +808,13 @@ class TestRoundTrips:
         summary = float_gap_coord.to_summary()
         assert summary.min == 0.0
         assert summary.max == 24.0
-        assert summary.step == 1.0 and summary.gapped
+        assert summary.step is None and not summary.gapped
         assert not summary.is_range_like
-        assert [(x.count, x.position) for x in summary.runs] == [(10, 0), (10, 15)]
+        # segments share no grid, so each states its own step and no position
+        assert [(x.count, x.step, x.position) for x in summary.runs] == [
+            (10, 1.0, None),
+            (10, 1.0, None),
+        ]
         assert summary.len == 20
         assert summary.data_id == float_gap_coord.data_id
 
@@ -827,13 +899,76 @@ class TestEdgeCases:
         assert out is float_gap_coord
 
     def test_eq_other_types(self, float_gap_coord):
-        """Equality is False for other run layouts and run counts."""
+        """Equal labels are equal whatever the runs; other labels or units not."""
         mono = get_coord(data=float_gap_coord.values)
-        assert float_gap_coord != mono
+        assert float_gap_coord == mono and mono == float_gap_coord
         three = concat_coords(
             float_gap_coord, get_coord(start=30.0, stop=40.0, step=1.0)
         )
         assert float_gap_coord != three
+        assert mono.set_units("m") != float_gap_coord
+        assert get_coord(data=float_gap_coord.values + 1) != float_gap_coord
+        partial = get_coord(shape=float_gap_coord.shape, dtype="float64")
+        assert partial != float_gap_coord
+
+    @pytest.mark.parametrize("piece", [slice(0, 2), slice(3, 12), slice(1, 40, 3)])
+    def test_eq_grids_of_equal_labels(self, piece):
+        """A sliced grid equals one rebuilt from its labels, whatever its parent."""
+        sliced = get_coord(start=0.0, stop=5.0, step=0.1)[piece]
+        rebuilt = get_coord(data=sliced.values.copy(), step=sliced.step)
+        assert sliced.runs != rebuilt.runs and sliced == rebuilt
+        assert sliced != get_coord(data=sliced.values + 1e-6, step=sliced.step)
+
+    def test_eq_scalars(self):
+        """Scalar coordinates compare by their one label."""
+        one = get_coord(data=np.array(1.0))
+        assert one == get_coord(data=np.array(1.0))
+        assert one != get_coord(data=np.array(2.0))
+
+    def test_mask_keeps_a_stepless_list(self):
+        """Dropping a sample from labels with no step leaves one list, as on dev."""
+        labels = get_coord(data=np.array([0.0, 1.0, 5.0, 6.0, 20.0, 21.5]))
+        keep = np.ones(6, dtype=bool)
+        keep[3] = False
+        out = labels[keep]
+        assert out.runs_count == 1 and out.step is None
+        np.testing.assert_array_equal(out.values, labels.values[keep])
+
+    def test_eq_split_differently(self):
+        """Segments split at other places, or stated otherwise, are equal by labels."""
+        grid = lambda start, size: get_coord(start=start, step=1.0, shape=(size,))  # noqa
+        labels = NumericCoord.from_labels
+        first = concat_coords(grid(0.0, 5), labels(np.array([7.0, 8, 9, 10])))
+        second = concat_coords(labels(np.arange(5.0)), grid(7.0, 4))
+        assert first == second and first.runs != second.runs
+        assert first != concat_coords(grid(0.0, 5), grid(7.0, 5))
+        # a stated step says nothing the labels do not; a dtype does
+        values = np.array([0.0, 1.0, 3.0])
+        assert labels(values, step=1.0) == labels(values, step=0.5)
+        assert labels(values) != labels(values.astype(np.int64))
+
+    def test_eq_spells_out_no_grid(self):
+        """Comparing long grids and their segments holds no labels in memory."""
+        size = 50_000_000
+        grid = get_coord(start=0.0, step=1.0, shape=(size,))
+        keep = np.ones(size, dtype=bool)
+        keep[size // 2] = False
+        pairs = [
+            (grid, get_coord(start=0.0, step=1.0, shape=(size,))),
+            (grid, get_coord(start=0.5, step=1.0, shape=(size,))),
+            (grid, get_coord(start=0.0, step=1.0, shape=(size - 1,))),
+            (grid[keep], concat_coords(grid[: size // 2], grid[size // 2 + 1 :])),
+            (grid[keep], grid[keep].update_limits(min=1.0)),
+        ]
+        del keep
+        tracemalloc.start()
+        try:
+            found = [x == y for x, y in pairs]
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert found == [True, False, False, True, False]
+        assert peak < 50_000_000
 
     def test_zero_dim_index_returns_scalar(self, float_gap_coord):
         """A 0-d array index returns a scalar value."""
@@ -1084,13 +1219,13 @@ class TestSplitGapsAndWrite:
                 ),
                 2,
             ),
-            # irregular runs sharing no step are not gapped
+            # segments split whatever their steps, labels included
             (
                 concat_coords(
                     get_coord(start=0.0, step=1.0, shape=(3,)),
                     get_coord(data=np.array([3.0, 4.5, 7.0])),
                 ),
-                1,
+                2,
             ),
         ],
     )

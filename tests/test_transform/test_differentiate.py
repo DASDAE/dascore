@@ -278,24 +278,22 @@ class TestHoles:
     """Differentiation must not difference across a coordinate hole."""
 
     def test_holes_raise(self, holed_patch):
-        """Missing samples raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+        """More than one segment raises, naming the fixes."""
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.differentiate("time")
 
-    def test_jitter_raises(self, jittered_patch):
-        """Labels off their step's grid raise."""
-        with pytest.raises(CoordError, match="off the grid"):
-            jittered_patch.differentiate("time")
+    def test_jitter_computes(self, jittered_patch, jittered_forms):
+        """One list of labels is an irregular axis, computed on by its labels."""
+        labels, grid = jittered_forms
+        out = jittered_patch.differentiate("time")
+        assert np.allclose(out.data, labels.differentiate("time").data)
+        # the spacing of the labels, not of the step, shows in the result
+        assert not np.allclose(out.data, grid.differentiate("time").data)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, differentiated by label spacing."""
         out = stepless_seam_patch.differentiate("time")
         assert out.shape == stepless_seam_patch.shape
-
-    def test_two_runs_raise(self, two_run_patch):
-        """Two step-less segments raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
-            two_run_patch.differentiate("time")
 
     def test_fine_datetime_spacing(self):
         """Nanosecond spacing of irregular modern times is kept, not rounded."""

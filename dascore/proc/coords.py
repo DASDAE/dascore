@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 import warnings
 from functools import partial
-from typing import Any, ClassVar, Self
+from typing import Any, Self
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, _fill_layout, concat_coords
+from dascore.core.coords import BaseCoord, _fill_layout
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -36,7 +36,6 @@ from dascore.utils.misc import (
 )
 from dascore.utils.patch import (
     _uneven_message,
-    drop_associated_coords,
     get_dim_axis_value,
 )
 
@@ -86,8 +85,6 @@ class _Reorder(PatchProcessor):
     reverse: bool = False
 
     name = None
-    # Whether the coordinates are snapped to even samples once sorted.
-    _snap: ClassVar[bool] = False
 
     @field_validator("coords", mode="before")
     @classmethod
@@ -98,7 +95,9 @@ class _Reorder(PatchProcessor):
     def get_metadata(self, meta):
         """Return the sorted coordinates and the indexing they imply."""
         recorder = _IndexRecorder()
-        method = meta.coords.snap if self._snap else meta.coords.sort
+        # a snap states where to put the labels; a sort does not
+        snap = {x: getattr(self, x) for x in ("step", "max_shift") if hasattr(self, x)}
+        method = partial(meta.coords.snap, **snap) if snap else meta.coords.sort
         coords, _ = method(*self.coords, array=recorder, reverse=self.reverse)
         # The manager hands back itself when there was nothing to sort.
         if coords is meta.coords:
@@ -118,7 +117,9 @@ class SnapCoords(_Reorder):
 
     Sorts each specified coordinate, then replaces its labels with evenly spaced
     values between its endpoints in the selected sort direction. Data remain
-    unchanged after sorting, so snapping can shift labels. Use
+    unchanged after sorting, so snapping can shift labels: a label moved
+    more than one step warns, since a gap is being spread (use
+    [fill_gaps](`dascore.Patch.fill_gaps`) to keep it). Use
     [interpolate](`dascore.Patch.interpolate`) when linear interpolation is preferable.
 
     Parameters
@@ -127,6 +128,13 @@ class SnapCoords(_Reorder):
         Dimensions to snap. By default, snap every dimensional coordinate.
     reverse
         If True, reverse the sorting of the coordinates.
+    step
+        If given, move each label to the nearest position of this step's
+        grid through the first label instead, so labels skipping positions
+        become segments. Time steps may be given in seconds.
+    max_shift
+        If given, raise rather than move any label further than this many
+        steps.
 
     Examples
     --------
@@ -139,9 +147,16 @@ class SnapCoords(_Reorder):
     >>>
     >>> # snap the distance dimension
     >>> dist_snap = patch.snap_coords("distance")
+    >>>
+    >>> # put time on the grid of its smallest spacing, refusing moves over half a step
+    >>> import numpy as np
+    >>> time = patch.get_coord("time")
+    >>> step = np.diff(time.values).min()
+    >>> grid_snap = patch.snap_coords("time", step=step, max_shift=0.5)
     """
 
-    _snap = True
+    step: Any = None
+    max_shift: float | None = None
 
 
 class SortCoords(_Reorder):
@@ -1033,9 +1048,10 @@ class Unselect(_Query):
 
     Notes
     -----
-    - Removing a range from the middle of a coordinate leaves a hole in
-      it, so the coordinate becomes segmented: it keeps its step and
-      reports the removed samples as missing. That is exactly what
+    - Removing a range from the middle of a coordinate leaves a gap in
+      it, so the coordinate becomes segments, one per stretch kept on its
+      original step (past `max_index_runs`, one list of labels with no
+      step), as `select` leaves them. That is exactly what
       [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses the
       patches' *own* coordinates for: at spool level the complement of a
       range is a hole in every patch rather than a choice between
@@ -1085,18 +1101,9 @@ class Unselect(_Query):
         trims: dict[str, Any] = {
             dim: np.flatnonzero(mask) for dim, mask in keep.items()
         }
-        out, kwargs = Select(**trims, samples=True).get_metadata(meta)
-        coords = out.coords
-        for dim, kept in trims.items():
-            coord = meta.coords.coord_map[dim]
-            # nothing removed, nothing kept, or no grid to keep
-            if len(kept) in (0, len(coord)) or not coord.evenly_sampled:
-                continue
-            # Rebuilt from the contiguous slices kept, so a hole keeps the step.
-            runs = np.split(kept, np.flatnonzero(np.diff(kept) != 1) + 1)
-            joined = concat_coords(*(coord[run[0] : run[-1] + 1] for run in runs))
-            coords = coords.update(**{dim: joined})
-        return (out if coords is out.coords else out.new(coords=coords)), kwargs
+        # select leaves each stretch kept its own segment, as removing
+        # samples does, up to `max_index_runs`
+        return Select(**trims, samples=True).get_metadata(meta)
 
 
 class Order(_Query):
@@ -1549,14 +1556,33 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
     return out
 
 
+def _fill_riders(coords, dim: str, length: int, blocks, action: str):
+    """The coordinates, and riders along ``dim`` placed as the data is (NaN/NaT)."""
+    riders = {}
+    if sum(stop - start for start, stop, _ in blocks) == length:  # none filled
+        return coords, riders
+    for name, dims in coords.dim_map.items():
+        kind = coords.coord_map[name].dtype.kind
+        edge = name in (f"{dim}_start", f"{dim}_stop")
+        if name == dim or dim not in dims or edge or kind not in "fcMm":
+            continue
+        values = coords.coord_map[name].values
+        fill = np.array("NaT", values.dtype) if kind in "Mm" else np.nan
+        placed = _place_blocks(values, dims.index(dim), length, blocks, fill)
+        riders[name] = (dims, placed)
+    return coords.drop_coords(*riders)[0].drop_associated(dim, action), riders
+
+
 class FillGaps(PatchProcessor):
     """
-    Fill the holes along a dimension with a constant value.
+    Fill the gaps between a dimension's segments with a constant value.
 
-    Places runs of samples on one evenly sampled grid and writes `fill_value`
-    where no sample sits, so a segmented coordinate (for example from
+    Joins segments onto one grid, on the earlier segment's step, and writes
+    `fill_value` where no sample sits, so a segmented coordinate (from
+    [`Spool.concatenate`](`dascore.Spool.concatenate`), or
     [`Patch.select`](`dascore.Patch.select`) with a mask removing samples)
-    becomes a plain range, unless a limit leaves wider holes as seams.
+    becomes one grid, unless a limit leaves wider gaps as segment
+    boundaries.
 
     Parameters
     ----------
@@ -1580,13 +1606,16 @@ class FillGaps(PatchProcessor):
 
     Notes
     -----
-    The coordinate needs a declared step: a segmented coordinate whose
-    runs share one step (different steps raise; resample first), or an
-    array declared with a step. A sample or run off the grid moves to the
-    nearest position, by at most half a step.
+    The segment after each gap filled moves onto the grid of the one before
+    it, to the positions nearest its labels, by under half a step; a move
+    beyond the rounding of a float label warns, saying how far. A segment
+    whose samples do not fit consecutive positions of that grid within half
+    a step (another step, or labels with none) raises: resample or snap it
+    first. So does a fill value the data's dtype cannot hold.
 
-    Non-dimensional coordinates along the dimension are dropped with a
-    warning, since their values at the filled positions are unknown.
+    Non-dimensional coordinates along the dimension take NaN (NaT for
+    times) at the filled positions; those of other dtypes are dropped with
+    a warning.
 
     Examples
     --------
@@ -1629,9 +1658,17 @@ class FillGaps(PatchProcessor):
         layout = _fill_layout(meta.get_coord(dim), limit, samples=self.samples)
         if layout is None:
             return meta, {"axis": axis, "length": None, "blocks": None}
-        coord, blocks = layout
-        coords = drop_associated_coords(meta.coords, dim, "Filling gaps along")
-        out = meta.new(coords=coords._update_grid(dim, **{dim: coord}))
+        coord, blocks, moved = layout
+        if moved:
+            msg = (
+                f"Filling gaps along {dim!r} moved the samples after a gap by "
+                f"up to {moved:.3g} of a step, onto the grid before it."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=3)
+        coords, riders = _fill_riders(
+            meta.coords, dim, len(coord), blocks, "Filling gaps along"
+        )
+        out = meta.new(coords=coords._update_grid(dim, **{dim: coord}).update(**riders))
         return out, {"axis": axis, "length": len(coord), "blocks": blocks}
 
     def numpy_kernel(self, data, *, axis, length, blocks):

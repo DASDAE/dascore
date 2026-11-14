@@ -17,6 +17,7 @@ from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
     Grid,
     NumericCoord,
+    _float_allowance,
     _grid_coord,
     _grid_terms,
     _scalar_dtype,
@@ -36,7 +37,12 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.utils import resolve_keyed_source, should_snap, stored_coord
+from dascore.io.utils import (
+    resolve_keyed_source,
+    should_snap,
+    stored_coord,
+    written_step,
+)
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.units import Quantity, Unit, get_quantity, get_quantity_str, get_unit
 from dascore.utils.array import (
@@ -184,6 +190,8 @@ _OBJECT_TYPE = "object_type"
 _RANGE = "CoordRange"
 # An array node's run lengths, whose labels are read as written.
 _EXACT = "exact"
+# The lengths an HDF5 attribute (64 kB, less its header) holds as int64.
+_MAX_SEGMENTS = 8_000
 
 
 def grid_fields(coord) -> dict | None:
@@ -243,14 +251,22 @@ def _save_coord(coord, name, group, compact: bool, options=None):
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
-        step = coord.step
+        step, runs = coord.step, getattr(coord, "runs", ())
+        whole = (isinstance(x, Grid) and x.step_den < 2 for x in runs)
+        if compact and len(runs) > 1 and all(whole):
+            # segments on one whole-tick or float step state it, so each
+            # reads back on it; a fractional step is found exactly anyway
+            steps = {x.step(coord.dtype) for x in runs}
+            step = steps.pop() if len(steps) == 1 else None
         if step is not None and (compact or coord._grid is not None):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
         if compact and getattr(coord, "runs_count", 1) > 1:
-            # irregular runs are read back as the runs they are, unsnapped
-            node.attrs[_EXACT] = [len(x) for x in coord.runs]
+            if coord.runs_count > _MAX_SEGMENTS:  # runs read back as they are
+                why = f"DASDAE, which records up to {_MAX_SEGMENTS:,} segments"
+                raise CoordError(_uneven_message(name[7:], coord, why))
+            node.attrs[_EXACT] = np.array([x.count for x in coord.runs], np.int64)
     if compact:
         node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
@@ -268,18 +284,11 @@ def _save_coords(patch, patch_group, compact: bool, options):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        uneven = coord.step is not None and not coord.evenly_sampled
-        if uneven and not coord._partial:
-            # Version 1 states a step only beside a grid; other labels read
-            # back with the step inference finds, which has no holes.
-            back = get_coord(data=coord.values, units=coord.units, snap=False)
-            if (back.step, back.jittered, back.gapped) != (
-                coord.step,
-                coord.jittered,
-                coord.gapped,
-            ):
-                why = "DASDAE format 1, which stores a step only for a grid"
-                raise CoordError(_uneven_message(name, coord, why))
+        # Version 1 states a step only beside a grid; other labels read back
+        # with the step inference finds, which makes no segments.
+        why = "DASDAE format 1, which stores a step only for a grid"
+        if not coord.evenly_sampled and written_step(name, coord, why) is not None:
+            raise CoordError(_uneven_message(name, coord, why))
         grid = coord._grid
         if grid is not None and grid.exact and grid.step_den != 1:
             # Version 1 stores one whole-tick step and rebuilds the range
@@ -437,18 +446,20 @@ def _read_stored_coord(node, name, attrs2):
         # grid it declares, never a range to rebuild
         array = _read_array(node)
         if (lengths := node_attrs.get(_EXACT)) is not None:
-            # each run read exactly, so a fractional grid keeps its exact
-            # step; a grid of another spacing is labels on the declared one
+            # each run read exactly, on the step its segments state if any,
+            # so a fractional grid keeps its exact step
             runs = []
             for values in np.split(array, np.cumsum(lengths)[:-1]):
                 grid = get_coord(data=values, snap=False)._grid
-                if grid is not None and node_step is not None:
-                    if np.abs(grid.step(array.dtype)) != np.abs(node_step):
-                        grid = None
+                if node_step is not None:  # the grid written, to float precision
+                    spec = dict(start=values[0], step=node_step, shape=values.shape)
+                    written = get_coord(**spec)
+                    off = np.abs(written.values - values).max()
+                    if values.dtype.kind == "f":  # within float precision
+                        off = off > _float_allowance(values, node_step)
+                    grid = grid if off else written._grid
                 runs.append(values if grid is None else grid)
-            return NumericCoord(
-                runs=tuple(runs), units=units, step=node_step, dtype=array.dtype
-            )
+            return NumericCoord(runs=tuple(runs), units=units, dtype=array.dtype)
         if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate
             return get_coord(data=array, units=units, snap=True)
         return get_coord(data=array, units=units, step=node_step, snap=False)

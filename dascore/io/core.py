@@ -2555,12 +2555,12 @@ def write(
         - The path is an ``examples://`` name, which is read-only.
         - An option the format's writer does not accept.
     [`CoordError`](`dascore.exceptions.CoordError`)
-        - The format cannot store a coordinate's holes, jitter or step.
+        - The format cannot store a coordinate's segments or step.
 
     Notes
     -----
     A patch reaches the format's writer whole. Writers keep each
-    coordinate's step, holes and jitter, or refuse, saying to regularize
+    coordinate's segments and their steps, or refuse, saying to regularize
     ([`Patch.snap_coords`](`dascore.Patch.snap_coords`),
     [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`)) or split
     ([`Patch.split_gaps`](`dascore.Patch.split_gaps`)) first.

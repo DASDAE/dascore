@@ -229,11 +229,17 @@ class TestMisc:
         directory spools.)
         """
         spool = dc.spool(g1_two_file_directory)
-        # These weren't directly adjacent files, so the hole is filled.
-        merged = spool.chunk(
-            time=None, tolerance=3, conflict="keep_first", fill_value=np.nan
-        )
+        merged = spool.chunk(time=None, conflict="keep_first", tolerance=3)
         assert len(merged) == 1
+        # each file is one sweep, so though their steps differ by 2.4% the
+        # later sits 0.44 step off the earlier's grid, and fills as a patch
+        with pytest.warns(UserWarning, match="0.441 of a step"):
+            (filled,) = spool.fill_gaps(time=2, samples=True, conflict="keep_first")
+        want = spool.concatenate(time=None, conflict="keep_first")[0]
+        with pytest.warns(UserWarning, match="0.441 of a step"):
+            want = want.fill_gaps(time=2, samples=True)
+        assert filled.get_coord("time") == want.get_coord("time")
+        assert filled.shape == want.shape != merged[0].shape  # one sample filled
 
     def test_mtx_read_raises(self, g1_mtx_buffer):
         """

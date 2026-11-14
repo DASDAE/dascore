@@ -48,5 +48,5 @@ class TestGappedFile:
         """Reading no longer splits the patch, so its key names one (#1284)."""
         patches = list(gapped_file_spool)
         assert len(patches) == 2
-        (gapped,) = [x for x in patches if x.get_coord("time").gapped]
+        (gapped,) = [x for x in patches if x.get_coord("time").runs_count > 1]
         assert gapped.get_coord("time").runs_count == 2

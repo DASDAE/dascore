@@ -27,6 +27,7 @@ from dascore.io.segy.core import SegyV0_0, SegyV0_100, SegyV1_0, SegyV2_0, SegyV
 from dascore.io.wav import WavIO
 from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.misc import suppress_warnings
+from tests.conftest import segment_layout
 
 # Every writer DASCore ships, checked against the plugin manager below.
 WRITERS = [
@@ -168,3 +169,110 @@ class TestWriterCoordinates:
         with _skip_without_dependency(fio):
             with pytest.raises(CoordError, match="NetCDF and Zarr"):
                 dc.write(holed, path, fio.name, fio.version)
+
+    @pytest.mark.parametrize("fio", [NetCDFCFV18(), ZarrV3()], ids=_label)
+    def test_segments_of_two_steps_refused(self, fio, tmp_path):
+        """Segments sharing no step have none to store beside their labels."""
+        first = dc.get_coord(start=0.0, step=1.0, shape=(4,))
+        second = dc.get_coord(start=10.0, step=2.0, shape=(3,))
+        coord = dc.core.coords.concat_coords(first, second)
+        data = np.zeros(len(coord))
+        patch = dc.Patch(data=data, coords={"distance": coord}, dims=("distance",))
+        path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
+        with _skip_without_dependency(fio):
+            with pytest.raises(CoordError, match=r"2 segments.*split_gaps"):
+                dc.write(patch, path, fio.name, fio.version)
+
+
+class TestDASDAESegments:
+    """DASDAE keeps a coordinate's segments and their steps."""
+
+    @pytest.mark.parametrize("start", [0.0, 12.345, 1.7e9, -3.3])
+    @pytest.mark.parametrize("step", [1.0209523, 0.1, 0.001, 1 / 3])
+    def test_float_segments_keep_steps(self, start, step, tmp_path):
+        """Float segments read back as the same segments on the same step."""
+        full = dc.get_coord(start=start, step=step, shape=(50,))
+        keep = np.ones(50, dtype=bool)
+        keep[14:18] = False
+        coords = {"distance": full, "time": np.arange(2.0)}
+        patch = dc.Patch(data=np.zeros((50, 2)), coords=coords, dims=tuple(coords))
+        patch = patch.select(distance=keep)
+        patch.io.write(tmp_path / "out.h5", "dasdae")
+        back = dc.read(tmp_path / "out.h5")[0].get_coord("distance")
+        segments = patch.get_coord("distance").segments
+        assert [(len(x), x.step) for x in back.segments] == [
+            (len(x), x.step) for x in segments
+        ]
+        assert back == patch.get_coord("distance")
+
+    def test_single_sample_segments_keep_steps(self, tmp_path):
+        """Lone samples between holes read back on their segments' step."""
+        start = np.datetime64("2020-01-01", "ns")
+        full = dc.get_coord(start=start, step=np.timedelta64(1, "ms"), shape=(12,))
+        keep = np.isin(np.arange(12), [0, 1, 4, 8, 9])
+        patch = dc.Patch(data=np.zeros(12), coords={"time": full}, dims=("time",))
+        patch = patch.select(time=keep)
+        patch.io.write(tmp_path / "out.h5", "dasdae")
+        back = dc.read(tmp_path / "out.h5")[0].get_coord("time")
+        assert [len(x) for x in back.segments] == [2, 1, 2]
+        assert [x.step for x in back.segments] == [np.timedelta64(1, "ms")] * 3
+
+
+# each label-list format's file name and the module it writes with
+LIST_FORMATS = {
+    "DASDAE": ("out.h5", "h5py"),
+    "NETCDF_CF": ("out.nc", "h5netcdf"),
+    "ZARR": ("out.zarr", "zarr"),
+}
+
+
+class TestManySegments:
+    """Heavily masked and long concatenated coordinates write, or refuse."""
+
+    @staticmethod
+    def _patch(stretches, keep=2, period=4):
+        """A patch masked to `stretches` stretches of `keep` samples."""
+        size = period * stretches
+        start = np.datetime64("2020-01-01", "ns")
+        time = dc.get_coord(start=start, step=np.timedelta64(1, "ms"), shape=(size,))
+        patch = dc.Patch(data=np.zeros(size), coords={"time": time}, dims=("time",))
+        return patch.select(time=np.arange(size) % period < keep)
+
+    @pytest.mark.parametrize("name", list(LIST_FORMATS))
+    def test_masked_round_trip(self, name, tmp_path):
+        """Past the segment limit a mask leaves one list, which every one writes."""
+        file_name, module = LIST_FORMATS[name]
+        pytest.importorskip(module)
+        patch = self._patch(300)
+        patch.io.write(tmp_path / file_name, name)
+        back = dc.read(tmp_path / file_name)[0].get_coord("time")
+        assert back.runs_count == 1 and back.step is None
+        assert back == patch.get_coord("time")
+
+    @pytest.mark.parametrize("name", list(LIST_FORMATS))
+    def test_concatenated_segments_round_trip(self, name, tmp_path):
+        """1,500 segments on one step read back as the same segments."""
+        file_name, module = LIST_FORMATS[name]
+        pytest.importorskip(module)
+        with dc.config_context(max_index_runs=2_000):
+            patch = self._patch(1_500, keep=10, period=13)
+        patch.io.write(tmp_path / file_name, name)
+        back = dc.read(tmp_path / file_name)[0].get_coord("time")
+        coord = patch.get_coord("time")
+        assert back.runs_count == 1_500 and back == coord
+        assert segment_layout(back) == segment_layout(coord)
+        assert {x.step for x in back.segments} == {coord.segments[0].step}
+
+    def test_dasdae_records_up_to_its_segment_limit(self, tmp_path):
+        """8,000 segments write and read back; one more is refused, saying why."""
+        with dc.config_context(max_index_runs=10_000):
+            most, patch = (self._patch(x, keep=2, period=3) for x in (8_000, 8_001))
+        assert most.get_coord("time").runs_count == 8_000
+        most.io.write(tmp_path / "most.h5", "DASDAE")
+        assert dc.read(tmp_path / "most.h5")[0].get_coord("time") == most.get_coord(
+            "time"
+        )
+        with pytest.raises(
+            CoordError, match=r"8,000 segments: it has 8001 segments.*split_gaps"
+        ):
+            patch.io.write(tmp_path / "out.h5", "DASDAE")

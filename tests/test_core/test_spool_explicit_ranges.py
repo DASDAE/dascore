@@ -1244,24 +1244,24 @@ class TestChainedExplicitCut:
         window = values.min() + np.array([2 * _STEP + _STEP // 3, 250 * _STEP])
         _assert_chain_loads(tmp_path, pieces, dict(x=window[None]), 5, "cut")
 
-    def test_filled_chunk_then_regular_chunk(self, tmp_path):
-        """A filled chunk across a hole then a regular chunk drop no sample."""
+    def test_filled_gaps_then_regular_chunk(self, tmp_path):
+        """Filling a hole then a regular chunk drop no sample."""
         whole = _cut_spools(None, _exact_values(300), [300])[0]
         pieces = [whole.select(x=x, samples=True) for x in [(0, 140), (160, None)]]
-        first = dict(x=120 * _STEP + _STEP // 3, keep_partial=True, fill_value=0)
-        _assert_chain_loads(tmp_path, pieces, first, count=6)
+        filled = dict(x=None, fill_value=0)
+        _assert_chain_loads(tmp_path, pieces, filled, count=6, method="fill_gaps")
 
-    def test_edge_padding_carries_no_grid(self):
-        """A window padded past its data is rebuilt on whole ticks, not the grid."""
+    def test_window_past_the_members_is_padded(self):
+        """A window running past the members it reaches is padded on the grid."""
         whole = _cut_spools(None, _exact_values(30), [30])[0]
         pieces = [whole.select(x=x, samples=True) for x in [(0, 10), (20, 30)]]
-        first = dc.spool(pieces).chunk(
-            x=15 * _STEP, fill_value=-1, tolerance=20, keep_partial=True
-        )[:1]
-        eager = dc.spool(list(first))
+        filled = dc.spool(pieces).fill_gaps("x", fill_value=-1)
+        eager = dc.spool(list(filled))
         second = dict(x=5 * _STEP, keep_partial=True)
-        got, expected = first.chunk(**second), eager.chunk(**second)
-        assert [len(x.data[0]) for x in got] == [len(x.data[0]) for x in expected]
+        got, expected = filled.chunk(**second), eager.chunk(**second)
+        assert [x.data[0].tolist() for x in got] == [
+            x.data[0].tolist() for x in expected
+        ]
 
     def test_trimmed_source_grid_is_not_reused(self):
         """A selected row keeps its file's grid, which no longer fits its bounds."""
@@ -1313,14 +1313,14 @@ def _gapped_2d(*starts, depth=False):
     return dc.spool([make(x) for x in starts]), time
 
 
-class TestWindowsOverFilledChunks:
-    """Windows over a chunk which filled its gaps keep the filled grid."""
+class TestWindowsOverFilledGaps:
+    """Windows over a spool which filled its gaps keep the filled grid."""
 
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_window_uses_the_filled_grid(self, method):
         """A window's samples include the fill, labelled on the output's grid."""
         source, _ = _gapped_2d(0, 7)
-        filled = source.chunk(distance=None, tolerance=4, fill_value=-1)
+        filled = source.fill_gaps(distance=3, fill_value=-1)
         (patch,) = getattr(filled, method)(distance=np.array([[3, 8]]))
         assert patch.coords["distance"].values.tolist() == [3, 4, 5, 6, 7, 8]
         assert patch.data[:, 0].tolist() == [1, 1, -1, -1, 1, 1]
@@ -1328,42 +1328,21 @@ class TestWindowsOverFilledChunks:
     def test_rider_selection_then_window(self):
         """A selection on a rider, then a window, still finds the fill."""
         source, time = _gapped_2d(0, 7)
-        filled = source.chunk(distance=None, tolerance=4, fill_value=-1)
+        filled = source.fill_gaps(distance=3, fill_value=-1)
         narrowed = filled.select(reference_time=(time[0], time[1]))
         (patch,) = narrowed.cut(distance=np.array([[3, 8]]))
-        assert patch.coords["distance"].values.tolist() == [3, 4, 5, 6, 7, 8]
         assert patch.shape == (6, 2)
+        assert patch.coords["distance"].values.tolist() == [3, 4, 5, 6, 7, 8]
         assert patch.data[:, 0].tolist() == [1, 1, -1, -1, 1, 1]
 
     def test_window_over_an_output_only_of_fill(self):
         """A window over an output holding only fill keeps the fill."""
         source, time = _gapped_2d(0, 10)
-        filled = source.chunk(distance=2, tolerance=6, fill_value=-1)
+        filled = source.fill_gaps(distance=6, fill_value=-1).chunk(distance=2)
         narrowed = filled.select(reference_time=(time[0], time[1]))
         (patch,) = narrowed.cut(distance=np.array([[5.5, 7]]))
         assert patch.coords["distance"].values.tolist() == [6, 7]
         assert (patch.data == -1).all() and patch.shape == (2, 2)
-
-    def test_distance_rider_selection_then_window(self):
-        """A selection on a rider of the windowed dim still finds the fill."""
-        source, _ = _gapped_2d(0, 7, depth=True)
-        filled = source.chunk(distance=None, tolerance=4, fill_value=-1)
-        with pytest.warns(DASCoreWarning, match="dropped associated"):
-            (patch,) = filled.select(depth=(0, 100)).cut(distance=[[3, 8]])
-        assert patch.coords["distance"].values.tolist() == [3, 4, 5, 6, 7, 8]
-        assert patch.data[:, 0].tolist() == [1, 1, -1, -1, 1, 1]
-
-    def test_rider_selection_over_only_fill(self):
-        """A rider places a window on an output holding only fill, as its sibling."""
-        source, _ = _gapped_2d(0, 10, depth=True)
-        filled = source.chunk(distance=2, tolerance=6, fill_value=-1)
-        narrowed = filled.select(depth=(0, 100))
-        (fill,) = narrowed.cut(distance=np.array([[5.5, 7]]))
-        assert fill.coords["distance"].values.tolist() == [6, 7]
-        assert (fill.data == -1).all()
-        # an output a source feeds still places it
-        (patch,) = narrowed.cut(distance=np.array([[2, 3]]))
-        assert patch.coords["distance"].values.tolist() == [2, 3]
 
     def test_rider_selection_over_selected_pieces(self):
         """Windows over selected pieces, narrowed by a rider, join them."""
@@ -1372,6 +1351,105 @@ class TestWindowsOverFilledChunks:
         (patch,) = pieces.select(depth=(4, 12)).cut(distance=np.array([[1, 7]]))
         assert patch.coords["distance"].values.tolist() == [2, 3, 4, 5, 6]
         assert patch.coords["depth"].values.tolist() == [4, 6, 8, 10, 12]
+
+    def test_nothing_to_fill_keeps_riders(self):
+        """Contiguous patches fill nothing, so a rider window keeps its riders."""
+        source, time = _gapped_2d(0, 5)
+        narrowed = source.select(reference_time=(time[0], time[1]))
+        filled = narrowed.fill_gaps(distance=3, fill_value=-1)
+        (patch,) = filled.cut(distance=np.array([[3, 6]]))
+        assert (patch.data == 1).all() and "reference_time" in patch.coords.coord_map
+
+    @pytest.mark.parametrize("unit", ["s", "ns"])
+    @pytest.mark.parametrize("length", [None, 5])
+    def test_fill_rows_state_the_riders_that_load(self, unit, length):
+        """Rows of a fill state a rider where, and as, the loaded patch has it."""
+        times = lambda a, b: np.arange(a, b).astype(f"datetime64[{unit}]")  # noqa
+
+        def make(start, stop, tag, gain=False):
+            coords = {"time": times(start, stop)}
+            if gain:
+                values = np.arange(start, stop, dtype=np.float64)
+                coords["gain"] = ("time", values)
+            data = np.ones(stop - start)
+            return dc.Patch(
+                data=data, coords=coords, dims=("time",), attrs={"tag": tag}
+            )
+
+        parts = [make(0, 5, "a", True), make(5, 10, "a", True), make(14, 16, "a", True)]
+        parts += [make(100, 105, "b"), make(115, 120, "b")]
+        filled = dc.spool(parts).fill_gaps(time=np.timedelta64(20, unit))
+        if length is not None:
+            filled = filled.chunk(time=np.timedelta64(length, unit), keep_partial=True)
+        rows = filled.get_contents()
+        loaded = list(filled)
+        assert rows["gain_min"].notna().tolist() == [
+            "gain" in x.coords.coord_map for x in loaded
+        ]
+        for (_, row), patch in zip(rows.iterrows(), loaded, strict=True):
+            if "gain" in patch.coords.coord_map:
+                gain = patch.get_array("gain")
+                # a rider's range is stated to float32 precision
+                assert np.isclose(np.nanmin(gain), row["gain_min"], rtol=1e-6)
+                assert np.isclose(np.nanmax(gain), row["gain_max"], rtol=1e-6)
+        tags = [x.attrs.tag for x in filled.select(gain=(0, 100))]
+        assert set(tags) == {"a"} and len(tags) == (1 if length is None else 4)
+        gain = np.concatenate([x.get_array("gain") for x in loaded[: len(tags)]])
+        expected = np.r_[np.arange(10.0), np.nan * np.ones(4), 14.0, 15.0]
+        np.testing.assert_array_equal(gain, expected)
+
+    @pytest.mark.parametrize("length", [None, 2])
+    def test_fill_rows_leave_out_riders_that_cannot_fill(self, length):
+        """A rider no fill value fits is gone exactly where the fill writes."""
+        times = lambda a, b: np.arange(a, b).astype("datetime64[s]")  # noqa
+
+        def make(start, stop):
+            gain = ("time", np.arange(start, stop))
+            coords = {"time": times(start, stop), "gain": gain}
+            return dc.Patch(data=np.ones(stop - start), coords=coords, dims=("time",))
+
+        spool = dc.spool([make(0, 4), make(10, 14)]).fill_gaps("time")
+        if length is not None:
+            spool = spool.chunk(time=length)
+        with pytest.warns(DASCoreWarning, match="dropped associated"):
+            held = ["gain" in x.coords.coord_map for x in spool]
+        rows = spool.get_contents()
+        stated = rows.get("gain_min", pd.Series(np.nan, index=rows.index))
+        assert stated.notna().tolist() == held
+        expected = [False] if length is None else [True] * 2 + [False] * 3 + [True] * 2
+        assert held == expected
+
+    def test_unfillable_rider_leaves_other_outputs(self):
+        """An integer rider in one stretch leaves a float one in another stated."""
+        times = lambda a, b: np.arange(a, b).astype("datetime64[s]")  # noqa
+
+        def make(start, dtype):
+            gain = ("time", np.arange(start, start + 4).astype(dtype))
+            coords = {"time": times(start, start + 4), "gain": gain}
+            return dc.Patch(data=np.ones(4), coords=coords, dims=("time",))
+
+        parts = [make(0, np.float64), make(6, np.float64)]
+        parts += [make(100, np.int64), make(106, np.int64)]
+        filled = dc.spool(parts).fill_gaps(time=np.timedelta64(3, "s"))
+        with pytest.warns(DASCoreWarning, match="dropped associated"):
+            held = ["gain" in x.coords.coord_map for x in filled]
+        assert held == [True, False]
+        assert filled.get_contents()["gain_min"].notna().tolist() == held
+
+    def test_window_inside_the_gap(self):
+        """A window wholly inside a filled gap is all fill, reading one sample."""
+        source, _ = _gapped_2d(0, 10, depth=True)
+        filled = source.fill_gaps(distance=6, fill_value=-1)
+        (fill,) = filled.cut(distance=np.array([[5.5, 7]]))
+        assert fill.coords["distance"].values.tolist() == [6, 7]
+        assert (fill.data == -1).all()
+        # an associated coordinate along the gap cannot be filled
+        assert "depth" not in fill.coords.coord_map
+
+    def test_wider_gap_stays(self):
+        """A gap wider than the size is a boundary, filled with nothing."""
+        source, _ = _gapped_2d(0, 10)
+        assert len(source.fill_gaps(distance=4, fill_value=-1)) == 2
 
 
 @pytest.fixture(scope="module", params=["memory", "directory"])
@@ -1539,34 +1617,14 @@ class TestReviewThreads:
                 data=np.ones((3, 5)), coords=coords, dims=("distance", "time")
             )
 
-        filled = dc.spool([make(0), make(15)]).chunk(time=5, tolerance=20, fill_value=0)
+        filled = dc.spool([make(0), make(15)]).fill_gaps(time=20, fill_value=0)
+        filled = filled.chunk(time=5)
         assert len(filled) == 4
         pieces = filled.select(distance=np.array([[0, 1]]))
         assert [x.shape for x in pieces] == [(2, 5)] * 4
         assert np.all(pieces[1].data == 0) and np.all(pieces[0].data == 1)
         (joined,) = filled.cut(distance=np.array([[0, 1]]))
         assert joined.shape == (2, 20) and np.all(joined.data[:, 5:15] == 0)
-
-    def test_fill_only_metadata_from_nearest_fed(self):
-        """A fill-only output states what its nearest fed sibling holds."""
-        times = lambda a, b: np.arange(a, b).astype("datetime64[s]")  # noqa
-
-        def make(start, stop, tag, gain=False):
-            coords = {"time": times(start, stop)}
-            if gain:
-                coords["gain"] = ("time", np.arange(stop - start, dtype=np.float64))
-            data = np.ones(stop - start)
-            return dc.Patch(
-                data=data, coords=coords, dims=("time",), attrs={"tag": tag}
-            )
-
-        parts = [make(0, 10, "a", True), make(100, 105, "b"), make(115, 120, "b")]
-        filled = dc.spool(parts).chunk(
-            time=5, tolerance=20, fill_value=0, keep_partial=True
-        )
-        stated = filled._catalog.to_df()["gain_min"].notna().tolist()
-        assert stated == [("gain" in x.coords.coord_map) for x in filled]
-        assert [x.attrs.tag for x in filled.select(gain=(0, 100))] == ["a", "a"]
 
     def test_mixed_unit_integers_keep_float_envelopes(self):
         """Integer labels normalised to fractions are stated as they load."""

@@ -151,8 +151,8 @@ class TestSeamTest:
         assert "seam" in str(width) and "excess" in str(excess)
         # a seam 2.4 steps wide misses one sample, which either form fills
         wide = dc.spool([_at(0), _at(11.4)])
-        for tolerance in (GapTolerance.absolute(1.5 * STEP), 2.5 * STEP):
-            (filled,) = wide.chunk(time=None, tolerance=tolerance, fill_value=np.nan)
+        for size in (1.5 * STEP, 1.5 * STEP * dc.get_quantity("s")):
+            (filled,) = wide.fill_gaps(time=size)
             assert len(filled.get_coord("time")) == 21
             assert np.isnan(filled.data).all(axis=0).sum() == 1
 
@@ -514,7 +514,7 @@ class TestOverlap:
             return dc.Patch(data=values[None, :], coords=coords, dims=DIMS)
 
         spool = dc.spool([patch(np.arange(0.0, 10)), patch(np.arange(10.1, 20.1))])
-        (filled,) = spool.chunk(time=None, fill_value=-1.0)
+        (filled,) = spool.fill_gaps("time", fill_value=-1.0)
         assert len(filled.get_coord("time")) == 21
 
     def test_float32_seam_within_stored_precision(self):

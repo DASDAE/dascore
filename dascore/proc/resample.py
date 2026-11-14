@@ -17,8 +17,7 @@ from dascore.utils.array_api import array_namespace
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
-    _refuse_holes_and_jitter,
-    drop_associated_coords,
+    _refuse_segments,
     get_dim_axis_value,
     get_start_stop_step,
 )
@@ -84,11 +83,10 @@ class Decimate(_DecimateFields):
       it: taking every nth value of a dimension takes every nth value of
       everything indexed by it.
 
-    - With a filter, a dimension with holes or jitter raises; use
-      [split_gaps](`dascore.Patch.split_gaps`),
+    - With a filter, a dimension of more than one segment raises; use
       [fill_gaps](`dascore.Patch.fill_gaps`) or
-      [snap_coords](`dascore.Patch.snap_coords`) first. A dimension with
-      no step is filtered sample by sample, as an irregular axis.
+      [split_gaps](`dascore.Patch.split_gaps`) first. One list of labels
+      is filtered sample by sample, as an irregular axis.
 
     See Also
     --------
@@ -114,7 +112,7 @@ class Decimate(_DecimateFields):
         dim, axis, factor = get_dim_axis_value(meta, kwargs=extras)[0]
         coords, slices = meta.coords.decimate(**{dim: int(factor)})
         if self.filter_type:
-            _refuse_holes_and_jitter(meta, dim, "filtered decimate")
+            _refuse_segments(meta, dim, "filtered decimate")
             coords = coords._update_grid(dim)
             # scipy's own refusal of a factor which is not an integer.
             operator.index(factor)
@@ -363,7 +361,7 @@ class Resample(PatchProcessor):
         # The positions scipy's resample gives for its output.
         start = coord[0]
         new_coord = start + (coord[1] - start) * (len(coord) / num) * np.arange(num)
-        cm = drop_associated_coords(meta.coords, dim, "Resampling")
+        cm = meta.coords.drop_associated(dim, "Resampling")
         out = meta.new(coords=cm._update_grid(dim, **{dim: new_coord}))
         plan = {"axis": axis, "num": num, "coord": None, "samples": None}
         # Interpolate if new sampling rate is not very close to desired sampling rate.

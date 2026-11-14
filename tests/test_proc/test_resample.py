@@ -421,24 +421,24 @@ class TestDecimateHoles:
     """Filtered decimation must not filter across a coordinate hole."""
 
     def test_filtered_holes_raise(self, holed_patch):
-        """Missing samples raise before filtering, naming the fixes."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+        """More than one segment raises before filtering, naming the fixes."""
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.decimate(time=2)
 
-    def test_filtered_jitter_raises(self, jittered_patch):
-        """Labels off their step's grid raise before filtering."""
-        with pytest.raises(CoordError, match="filtered decimate"):
-            jittered_patch.decimate(time=2)
+    def test_filtered_jitter_computes(self, jittered_patch, jittered_forms):
+        """One list of labels is an irregular axis, computed on by its labels."""
+        labels, grid = jittered_forms
+        out = jittered_patch.decimate(time=2)
+        want = labels.decimate(time=2)
+        assert np.allclose(out.data, want.data)
+        # every second label is kept as recorded, not as the step's grid
+        assert out.get_coord("time") == want.get_coord("time")
+        assert out.get_coord("time") != grid.decimate(time=2).get_coord("time")
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which still decimates."""
         out = stepless_seam_patch.decimate(time=2)
         assert out.shape == (1, 60)
-
-    def test_two_runs_raise(self, two_run_patch):
-        """Two step-less segments raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
-            two_run_patch.decimate(time=2)
 
     def test_raw_striding_runs(self, holed_patch):
         """Striding without a filter still takes every nth sample."""

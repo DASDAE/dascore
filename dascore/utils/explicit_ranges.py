@@ -12,7 +12,7 @@ import pandas as pd
 from dascore.config import config_context
 from dascore.exceptions import ParameterError
 from dascore.units import Quantity, convert_units
-from dascore.utils.misc import express_range_for_coord
+from dascore.utils.misc import express_range_for_coord, suppress_warnings
 
 
 @dataclass(frozen=True)
@@ -239,11 +239,6 @@ def _planned_manager(plan, row, files=None, projection=None):
     # Patch utilities import spool/chunk planning; defer until plans are read.
     from dascore.utils import patch_assembly as pa  # noqa: PLC0415
 
-    if not recovered:  # only fill: its nearest fed sibling's, on this one's grid
-        ids = plan.member_rows["output_id"].to_numpy(np.int64)
-        near = str(ids[np.argmin(np.abs(ids - int(key)))])
-        sibling = {**row, "source_patch_key": near}
-        return _planned_manager(plan, sibling, files, requested_projection)
     if len(recovered) == 1:
         coords = recovered[0]
     else:
@@ -264,19 +259,16 @@ def _planned_manager(plan, row, files=None, projection=None):
             **kwargs,
         )
     coords = pa.on_stretch_grid(coords, plan.dim, rows[0])
+    if (snap := plan.merge_kwargs.get("snap")) is not None:  # as the patch loads
+        names = [x for x in snap[0] or coords.dims if x in coords.dims]
+        with suppress_warnings(UserWarning):  # warned as it loads
+            coords = coords.snap(*names, **snap[1])[0]
     if plan.merge_kwargs.get("fill_value") is None or plan.dim not in coords.dims:
         return _project_manager(coords, requested_projection)
     # A filled output takes its grid from the output, not its anchor.
     filled = _row_coordinate(row, plan.dim)
     current = coords.coord_map[plan.dim]
-    if filled is None or (
-        filled.shape == current.shape
-        and filled.min() == current.min()
-        and filled.max() == current.max()
-        and filled.step == current.step
-        and str(filled.units) == str(current.units)
-    ):
-        # Float index envelopes can describe an identical integer grid.
+    if filled is None or filled == current:  # nothing filled, riders keep
         return _project_manager(coords, requested_projection)
     riding = [
         name

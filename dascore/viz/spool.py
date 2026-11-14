@@ -147,7 +147,7 @@ def coverage(
     the group holds and the holes between them. The holes are the ones
     [`get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports, so a gap
     drawn here is exactly a boundary
-    [`chunk`](`dascore.Spool.chunk`) with a `fill_value` would refuse to close, and the
+    [`chunk`](`dascore.Spool.chunk`) starts a new output at, and the
     percentage on each lane is that group's
     [`get_coverage`](`dascore.core.spool.Spool.get_coverage`).
 

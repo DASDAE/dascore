@@ -6,6 +6,7 @@ import math
 import re
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
@@ -14,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, snap_type
+from dascore.constants import _DASCORE_DIR, INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, _stored_float_dtype, get_coord
 from dascore.core.summary import normalize_source_patch_key
@@ -34,8 +35,6 @@ from dascore.utils.time import to_exact_fraction
 from dascore.warnings import SnapWarning
 
 _CF_CALENDARS = frozenset(("standard", "gregorian", "proleptic_gregorian"))
-# Warnings point past DASCore to the caller which read the file.
-_DASCORE_DIR = str(Path(dc.__file__).parent)
 
 
 def cf_time_values(node, index=slice(None)):
@@ -83,6 +82,27 @@ def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
         coord = patch.get_coord(dim)
         if not coord.evenly_sampled:
             raise CoordError(_uneven_message(dim, coord, f"the {writer} writer"))
+
+
+def _layout(coord) -> tuple:
+    """What a written coordinate must read back as: its steps and segments."""
+    segments = tuple((len(x), x.step) for x in coord.segments)
+    return coord.step, coord.jittered, coord.gapped, segments
+
+
+def written_step(name: str, coord, why: str):
+    """The step the labels read back with: none, their segments' one, or refused."""
+    if coord.ndim != 1 or coord._partial or not hasattr(coord, "segments"):
+        return None
+    layout = _layout(coord)
+    if _layout(get_coord(data=coord.values, units=coord.units, snap=False)) == layout:
+        return None
+    step, *others = {x.step for x in coord.segments}
+    with suppress(CoordError):  # a long fractional grid drifts off its step
+        back = get_coord(data=coord.values, step=step, units=coord.units)
+        if not others and _layout(back) == layout:
+            return step
+    raise CoordError(_uneven_message(name, coord, why))
 
 
 def get_attr_names(attr_cls) -> set[str]:

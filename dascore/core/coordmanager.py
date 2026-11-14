@@ -553,7 +553,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
         return out, array
 
     def snap(
-        self, *coords, array: MaybeArray = None, reverse: bool = False
+        self,
+        *coords,
+        array: MaybeArray = None,
+        reverse: bool = False,
+        step=None,
+        max_shift=None,
     ) -> tuple[Self, MaybeArray]:
         """
         Force the specified coordinates to be monotonic and evenly sampled.
@@ -569,6 +574,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
             The array to sort/snap.
         reverse
             If true, sort in descending order, else ascending.
+        step
+            Place the labels on this step's grid instead of spreading them.
+        max_shift
+            Raise where a label would move further than this many steps.
         """
         coords = self.dims if len(coords) == 0 else coords
         cm, array = self.sort(*coords, array=array, reverse=reverse)
@@ -578,7 +587,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
         updates = {}
         for coord_name in coords:
             current = cm.coord_map[coord_name]
-            snapped = current.snap()
+            snapped = current.snap(step=step, max_shift=max_shift, warn=True)
             if snapped is not current:
                 updates[coord_name] = snapped
         if not updates:
@@ -1432,7 +1441,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         def _flip_coord(coord, axis):
             inds = broadcast_for_index(coord.ndim, axis, slice(None, None, -1))
-            return coord[inds]
+            # a 1D coordinate takes the slice itself, which keeps its segments
+            return coord[inds[0]] if coord.ndim == 1 else coord[inds]
 
         out = {}
         dim_map = self.dim_map

@@ -197,19 +197,16 @@ class TestChunk:
         with pytest.raises(ChunkError, match=msg):
             diverse_spool.chunk(time=10000)
 
-    @pytest.mark.parametrize("fill_value", (None, np.nan))
     @pytest.mark.parametrize("keep_partial", (False, True))
     @pytest.mark.parametrize(
         "kwargs",
         ({"time": 0.0012}, {"distance": 0.3}, {"distance": 0.3 * get_quantity("mm")}),
     )
-    def test_chunk_shorter_than_sample(self, kwargs, fill_value, keep_partial):
+    def test_chunk_shorter_than_sample(self, kwargs, keep_partial):
         """Sub-sample chunks name the request as too short (#1251)."""
         patch = dc.get_example_patch().set_units(distance="mm")
         with pytest.raises(ChunkError, match="shorter than the sample step") as exc:
-            dc.spool([patch]).chunk(
-                **kwargs, fill_value=fill_value, keep_partial=keep_partial
-            )
+            dc.spool([patch]).chunk(**kwargs, keep_partial=keep_partial)
         assert repr(next(iter(kwargs))) in str(exc.value)
         assert "smaller chunk" not in str(exc.value)
 
@@ -880,7 +877,7 @@ class TestChunkMerge:
             assert len(spool.chunk(time=None, tolerance=10)) == 1
         with warnings.catch_warnings():
             warnings.filterwarnings("error")
-            assert len(spool.chunk(time=None, tolerance=10, fill_value=np.nan)) == 1
+            assert len(spool.fill_gaps(time=9, samples=True, fill_value=np.nan)) == 1
 
 
 def _bare_assembler():
@@ -1052,7 +1049,7 @@ class TestDescendingChunk:
         """A fill value bridges a hole beside trimmed descending overlaps."""
         spans = [([8, 7, 6, 5], 0.1), ([5, 4, 3], 0.2), ([1, 0], 0.3)]
         spool = dc.spool([self._member(v, t, -1.0) for v, t in spans])
-        patch = spool.chunk(time=None, tolerance=10, fill_value=-9.0)[0]
+        patch = spool.fill_gaps(time=9, samples=True, fill_value=-9.0)[0]
         labels = patch.get_coord("time").values
         np.testing.assert_array_equal(labels, np.arange(8.0, -1, -1))
         expected = [8.1, 7.1, 6.1, 5.1, 4.2, 3.2, -9.0, 1.3, 0.3]
@@ -1520,10 +1517,10 @@ class TestQuantityTolerance:
         step = dc.to_float(random_patch.get_coord("time").step)
         spool = self._gapped(random_patch, 5)
         wide = get_quantity(f"{5 * step} s")
-        merged = spool.chunk(time=None, tolerance=wide, fill_value=np.nan)
-        assert len(merged) == 1
+        with pytest.warns(UserWarning, match="gap"):
+            assert len(spool.chunk(time=None, tolerance=wide)) == 1
         narrow = get_quantity(f"{step} s")
-        assert len(spool.chunk(time=None, tolerance=narrow, fill_value=np.nan)) == 2
+        assert len(spool.chunk(time=None, tolerance=narrow)) == 2
 
     def test_merged_coord_keeps_its_step(self, random_patch):
         """A merge under an absolute tolerance keeps the patches' own step."""
@@ -1531,7 +1528,7 @@ class TestQuantityTolerance:
         step = dc.to_float(coord.step)
         spool = self._gapped(random_patch, 3)
         tolerance = get_quantity(f"{4 * step} s")
-        merged = spool.chunk(time=None, tolerance=tolerance, fill_value=np.nan)
+        merged = spool.fill_gaps(time=tolerance)
         assert merged[0].get_coord("time").step == coord.step
 
     def test_distance_unit_converts(self, random_spool):
@@ -1544,15 +1541,16 @@ class TestQuantityTolerance:
         # Read as metres instead, both would clear it and both legs would
         # merge, so the pair pins the conversion in both directions.
         assert step == 1.0 and hole == 9.0
-        kwargs = {"distance": None, "fill_value": np.nan}
-        assert len(spool.chunk(tolerance=40 * dc.units.ft, **kwargs)) == 1
+        kwargs = {"distance": None}
+        with pytest.warns(UserWarning, match="gap"):
+            assert len(spool.chunk(tolerance=40 * dc.units.ft, **kwargs)) == 1
         assert len(spool.chunk(tolerance=20 * dc.units.ft, **kwargs)) == 2
 
     def test_non_time_merge_assembles(self, random_spool):
         """A distance merge under a converted tolerance assembles whole."""
         spool = self._shifted(random_spool[0], "distance", 3)
         tolerance = 4 / 0.3048 * dc.units.ft
-        merged = spool.chunk(distance=None, tolerance=tolerance, fill_value=np.nan)[0]
+        merged = spool.fill_gaps(distance=tolerance)[0]
         coord = merged.get_coord("distance")
         assert coord.step is not None
         assert len(coord) == sum(len(x.get_coord("distance")) for x in spool) + 2
@@ -1566,7 +1564,7 @@ class TestQuantityTolerance:
         spool = self._gapped(random_patch, 3)
         seconds_would_merge = 3 * step < 6
         assert seconds_would_merge
-        kwargs = {"time": None, "fill_value": np.nan}
+        kwargs = {"time": None}
         assert (
             len(spool.chunk(tolerance=get_quantity("2 dimensionless"), **kwargs)) == 2
         )
@@ -1578,7 +1576,7 @@ class TestQuantityTolerance:
         """A timedelta says the same thing as a time quantity."""
         step = random_patch.get_coord("time").step
         spool = self._gapped(random_patch, 5)
-        kwargs = {"time": None, "fill_value": 0.0}
+        kwargs = {"time": None}
         delta = spool.chunk(tolerance=6 * step, **kwargs)
         seconds = get_quantity(f"{6 * dc.to_float(step)} s")
         quantity = spool.chunk(tolerance=seconds, **kwargs)
@@ -1589,7 +1587,7 @@ class TestQuantityTolerance:
     def test_datetime_timedelta_accepted(self, random_patch):
         """The stdlib timedelta is a timedelta too."""
         spool = self._gapped(random_patch, 5)
-        out = spool.chunk(time=None, tolerance=timedelta(seconds=1), fill_value=0)
+        out = spool.chunk(time=None, tolerance=timedelta(seconds=1))
         assert len(out) == 1
 
     def test_timedelta_reads_a_numeric_time_coord(self, random_patch):
@@ -1600,7 +1598,7 @@ class TestQuantityTolerance:
         )
         base = random_patch.rename_coords(time="shot").update_coords(shot=numeric)
         spool = self._shifted(base, "shot", 3)
-        kwargs = {"shot": None, "fill_value": np.nan}
+        kwargs = {"shot": None}
         delta = spool.chunk(tolerance=to_timedelta64(4), **kwargs)
         quantity = spool.chunk(tolerance=get_quantity("4 s"), **kwargs)
         assert len(delta) == len(quantity) == 1
@@ -1716,7 +1714,7 @@ class TestQuantityTolerance:
     def test_infinite_sample_count_merges_everything(self, random_patch):
         """An infinite count is a coherent request: no boundary is a gap."""
         spool = self._gapped(random_patch, 500)
-        merged = spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)
+        merged = spool.fill_gaps("time", fill_value=np.nan)
         assert len(merged) == 1
         # and the patch it advertises actually loads: an infinite
         # count is no bound on the snap, not a bound of NaT
@@ -2391,22 +2389,62 @@ class TestRegularChunkPartition:
         out = first.chunk(distance=25.0, keep_partial=True)
         assert sum(x.shape[0] for x in out) == 600
 
-    def test_fill_value_windows(self, tmp_path, route):
+
+class TestFilledWindows:
+    """Windows of a fill, planned straight onto the files."""
+
+    @pytest.mark.parametrize("route", ["memory", "disk"])
+    def test_fill_windows(self, tmp_path, route):
         """Filled windows hold the same samples, ending at the last one."""
         whole, *spools = _cut_spools(tmp_path, _exact_values(), [300, 300])
-        out = spools[route == "disk"].chunk(x=0.1, keep_partial=True, fill_value=0)
+        filled = spools[route == "disk"].fill_gaps("x", fill_value=0)
+        out = filled.chunk(x=0.1, keep_partial=True)
         expected = _half_open_windows(whole, 0.1, None)
         assert _labels(out) == [(y.tolist(), x.tolist()) for x, y in expected]
 
-    def test_fill_value_off_grid_selection(self):
+    def test_fill_off_grid_selection(self):
         """A filled window of a view starting between samples starts on one."""
         whole, mem, _ = _cut_spools(None, np.arange(100.0), [50, 50])
         view = mem.select(x=(10.5, 90.2))
-        out = view.chunk(x=10, keep_partial=True, fill_value=0)
+        out = view.fill_gaps("x", fill_value=0).chunk(x=10, keep_partial=True)
         bounds = out.get_contents()[["x_min", "x_max"]].to_numpy().tolist()
         assert bounds == [[x, x + 9.0] for x in range(11, 90, 10)]
         joined = np.concatenate([x.data for x in out], axis=1)
         assert np.array_equal(joined, whole.select(x=(11, 90)).data)
+
+    @pytest.mark.parametrize("route", ["memory", "disk"])
+    def test_cut_of_off_grid_selection(self, tmp_path, route):
+        """A cut of a fill of a view between samples keeps the samples' labels."""
+        full = np.datetime64("2020-01-01", "ns") + np.arange(105) * 2_000_000
+        values = np.delete(full.astype("datetime64[ns]"), np.s_[40:45])
+        _, *spools = _cut_spools(tmp_path, values, [40, 60])
+        spool = spools[route == "disk"]
+        ms = np.timedelta64(1, "ms")
+        view = spool.select(x=(values[5] + ms, values[90] + ms))
+        window = np.array([[full[20], full[60]]])
+        (got,) = view.fill_gaps("x").cut(x=window)
+        (want,) = spool.fill_gaps("x").cut(x=window)
+        assert got.get_coord("x") == want.get_coord("x")
+        assert np.array_equal(got.get_coord("x").values, full[20:61])
+        assert np.array_equal(got.data, want.data, equal_nan=True)
+
+    @pytest.mark.parametrize(
+        "select", [dict(time=(2.2, 2.9)), dict(time=(0.8, -0.1), relative=True)]
+    )
+    def test_window_holding_no_position_is_skipped(self, select):
+        """A selection between two samples leaves no position to fill."""
+        time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
+        coords = {"distance": [0], "time": time}
+        patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
+        view = dc.spool([patch]).select(**select)
+        with pytest.raises(ChunkError, match="chunk"):
+            view.fill_gaps("time").chunk(time=2.0, keep_partial=True)
+
+    def test_pickles_unbuilt(self, random_spool):
+        """A fill pickles before anything built its catalog, and loads after."""
+        filled = random_spool.fill_gaps("time")
+        back = pickle.loads(pickle.dumps(filled))
+        assert [x.shape for x in back] == [x.shape for x in filled]
 
 
 class TestLongFractionalGrid:
@@ -3613,7 +3651,7 @@ class TestRecipeMerge:
         second = self._patch(start, 8, seed=2)
         spool = self._write(tmp_path, [first, second])
         assert len(spool.chunk(time=None)) == 2
-        merged = spool.chunk(time=None, tolerance=10, fill_value=fill)
+        merged = spool.fill_gaps(time=9, samples=True, fill_value=fill)
         assert len(merged) == 1
         out = merged[0]
         assert route.counts == {"patch": 0, "array": 2}
@@ -3676,7 +3714,7 @@ class TestChunkFillValue:
         """A merge over the hole comes back evenly sampled at the true step."""
         first, second = gapped_spool
         step = first.get_coord("time").step
-        merged = gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+        merged = gapped_spool.fill_gaps(time=9, samples=True, fill_value=np.nan)[0]
         coord = merged.get_coord("time")
         assert coord.evenly_sampled
         assert coord.step == step
@@ -3701,11 +3739,11 @@ class TestChunkFillValue:
 
     def test_fill_value_does_not_widen_the_tolerance(self, gapped_spool):
         """A hole the tolerance does not span is still a boundary."""
-        assert len(gapped_spool.chunk(time=None, fill_value=np.nan)) == 2
+        assert len(gapped_spool.fill_gaps(time=0, samples=True)) == 2
 
     def test_nothing_to_fill_is_untouched(self, random_spool):
         """A contiguous spool merges as it would without a fill value."""
-        merged = random_spool.chunk(time=None, fill_value=np.nan)[0]
+        merged = random_spool.fill_gaps("time")[0]
         assert merged.get_coord("time").evenly_sampled
         assert not np.isnan(merged.data).any()
 
@@ -3714,7 +3752,7 @@ class TestChunkFillValue:
         gapped = join_patches(list(gapped_spool))
         assert _is_segmented(gapped.get_coord("time"))
         # one source patch, so nothing is merged and only the fill reshapes it
-        filled = dc.spool([gapped]).chunk(time=None, tolerance=20, fill_value=np.nan)[0]
+        filled = dc.spool([gapped]).fill_gaps(time=19, samples=True)[0]
         where = np.flatnonzero(np.isnan(filled.data).all(axis=0))
         first = len(gapped_spool[0].get_coord("time"))
         assert np.array_equal(where, np.arange(first, first + self.hole))
@@ -3724,7 +3762,7 @@ class TestChunkFillValue:
 
     def test_filled_spool_rechunks_without_losing_fill(self, gapped_spool):
         """Re-planning a filled spool must not collapse back to its sources."""
-        filled = gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)
+        filled = gapped_spool.fill_gaps(time=9, samples=True, fill_value=np.nan)
         again = filled.chunk(time=None)
         assert len(again) == 1
         before, after = filled[0], again[0]
@@ -3769,7 +3807,7 @@ class TestChunkFillValue:
             for x in starts
         ]
         spool = dc.spool(patches)
-        return spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0], t0
+        return spool.fill_gaps(time=9, samples=True, fill_value=np.nan)[0], t0
 
     def test_hole_between_offset_lattices_keeps_the_step(self):
         """Members sharing a step on offset lattices fill at that step."""
@@ -3805,7 +3843,7 @@ class TestChunkFillValue:
 
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""
-        merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]
+        merged = gapped_spool.fill_gaps("time", fill_value=np.nan)[0]
         assert merged.get_coord("time").evenly_sampled
         assert len(self._fill_positions(merged)) == self.hole
 
@@ -3813,26 +3851,24 @@ class TestChunkFillValue:
         """A tolerance stated in the coordinate's own units bounds the fill."""
         step = random_patch.get_coord("time").step
         # the tolerance is the seam's width: the hole and the step after it
-        wide = gapped_spool.chunk(
-            time=None, tolerance=(self.hole + 1) * step, fill_value=np.nan
-        )[0]
+        wide = gapped_spool.fill_gaps(time=self.hole * step)[0]
         assert len(self._fill_positions(wide)) == self.hole
         # a hole wider than the tolerance is left as a boundary
-        narrow = gapped_spool.chunk(time=None, tolerance=2 * step, fill_value=np.nan)
+        narrow = gapped_spool.fill_gaps(time=step)
         assert len(narrow) == 2
 
     def test_integer_data_raises(self, gapped_spool):
         """Integers have no null, so NaN cannot be what a hole holds."""
         spool = dc.spool([x.new(data=x.data.astype(np.int32)) for x in gapped_spool])
         with pytest.raises(ParameterError, match="Cannot fill data of dtype"):
-            spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+            spool.fill_gaps(time=9, samples=True, fill_value=np.nan)[0]
 
     def test_integer_fill_value(self, gapped_spool):
         """A value of the data's own dtype fills it."""
         spool = dc.spool(
             [x.new(data=x.data.astype(np.int32) + 1) for x in gapped_spool]
         )
-        merged = spool.chunk(time=None, tolerance=10, fill_value=0)[0]
+        merged = spool.fill_gaps(time=9, samples=True, fill_value=0)[0]
         assert merged.data.dtype == np.int32
         axis = merged.get_axis("time")
         other = tuple(x for x in range(merged.ndim) if x != axis)
@@ -3853,7 +3889,7 @@ class TestChunkFillWindows:
     def test_windows_cover_the_hole(self, spool_and_tolerance):
         """Every second of the bridged span comes back, filled where it must be."""
         spool, tolerance = spool_and_tolerance
-        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
         patches = list(chunked)
         assert len(patches) == 8
         # one window per second, none of them short
@@ -3866,7 +3902,7 @@ class TestChunkFillWindows:
     def test_partial_window_is_padded(self, spool_and_tolerance):
         """A window the sources only partly feed is filled out, not left short."""
         spool, tolerance = spool_and_tolerance
-        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
         patch = chunked[2]
         assert len(patch.get_coord("time")) == 250
         assert int(np.isnan(patch.data).all(axis=0).sum()) == 249
@@ -3874,7 +3910,7 @@ class TestChunkFillWindows:
     def test_patches_match_the_rows(self, spool_and_tolerance):
         """Every assembled patch spans the window its contents row advertises."""
         spool, tolerance = spool_and_tolerance
-        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
         contents = chunked.get_contents()
         for num, row in enumerate(contents.itertuples()):
             coord = chunked[num].get_coord("time")
@@ -3907,7 +3943,7 @@ class TestChunkFillWindows:
         for name, patch in (("a.h5", first), ("b.h5", second)):
             dc.write(patch, path / name, "dasdae")
         spool = dc.spool(path).update()
-        merged = spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
+        merged = spool.fill_gaps(time=9, samples=True, fill_value=np.nan)[0]
         coord = merged.get_coord("time")
         assert coord.evenly_sampled
         assert coord.step == random_patch.get_coord("time").step
@@ -3927,7 +3963,7 @@ class TestChunkFillWindows:
         spool = dc.spool([patch])
         # 2.5 samples per window, so no window edge lands on a position
         plain = list(spool.chunk(time=2.5))
-        filled = list(spool.chunk(time=2.5, fill_value=np.nan))
+        filled = list(spool.fill_gaps("time").chunk(time=2.5))
         assert len(filled) == len(plain)
         for fill, expected in zip(filled, plain):
             # nothing was missing, so filling changes neither labels nor data
@@ -3948,7 +3984,7 @@ class TestChunkFillWindows:
                 second.new(data=second.data.astype(np.float32)),
             ]
         )
-        chunked = mixed.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
+        chunked = mixed.fill_gaps(time=tolerance).chunk(time=1)
         # a fed window keeps its own member's dtype; the all-fill one cannot
         assert chunked[0].data.dtype == np.float16
         assert chunked[4].data.dtype == np.float32
@@ -3962,9 +3998,7 @@ class TestChunkFillWindows:
         second = patch.select(time=(start + to_timedelta64(6), ...))
         spool = dc.spool([first, second])
         with suppress_warnings(UserWarning):
-            chunked = spool.chunk(
-                time=1, tolerance=to_timedelta64(5), fill_value=np.nan
-            )
+            chunked = spool.fill_gaps(time=to_timedelta64(5)).chunk(time=1)
         filled = chunked[4]
         assert np.isnan(filled.data).all()
         assert np.array_equal(filled.get_coord("distance").values, values)
@@ -3977,74 +4011,52 @@ class TestChunkFillWindows:
             [patch.select(distance=(200, 299)), patch.select(distance=(0, 100))]
         )
         with suppress_warnings(UserWarning):
-            chunked = spool.chunk(distance=20, tolerance=200, fill_value=np.nan)
+            chunked = spool.fill_gaps(distance=200).chunk(distance=20)
         assert {len(x.get_coord("distance")) for x in chunked} == {20}
         # every window runs high to low, as its sources do
         for windowed in chunked:
             coord = windowed.get_coord("distance")
             assert coord.values[0] > coord.values[-1]
-        # the hole spans 101 to 199, so those windows hold nothing else
+        # windows count from the top, as a chunk of the filled patch does,
+        # and the hole spans 199 down to 101
         all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
-        assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
+        assert all_fill == [False] * 5 + [True] * 4 + [False] * 6
+        filled = dc.spool([spool.fill_gaps(distance=200)[0]]).chunk(distance=20)
+        assert [x.get_coord("distance") for x in chunked] == [
+            x.get_coord("distance") for x in filled
+        ]
 
     def test_window_shorter_than_a_step_is_refused(self, random_patch):
         """A window holding no sample position is no output at all."""
         with pytest.raises(ChunkError, match="chunk"):
-            dc.spool([random_patch]).chunk(time=0.001, fill_value=np.nan)
-
-    def test_window_holding_no_position_is_skipped(self):
-        """A selection between two samples leaves no position to fill."""
-        time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
-        coords = {"distance": [0], "time": time}
-        patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
-        view = dc.spool([patch]).select(time=(0.8, -0.1), relative=True)
-        with pytest.raises(ChunkError, match="chunk"):
-            view.chunk(time=2.0, keep_partial=True, fill_value=np.nan)
+            dc.spool([random_patch]).fill_gaps("time").chunk(time=0.001)
 
     def test_one_sample_output_is_not_padded(self):
         """An output of one sample states no step to pad by."""
         coords = {"distance": np.arange(2.0), "time": np.array([5.0])}
         patch = dc.Patch(data=np.ones((2, 1)), coords=coords, dims=tuple(coords))
-        out = dc.spool([patch]).chunk(time=None, tolerance=20, fill_value=np.nan)
+        out = dc.spool([patch]).fill_gaps(time=19, samples=True, fill_value=np.nan)
         assert len(out) == 1
         assert out[0].shape == (2, 1)
         assert not np.isnan(out[0].data).any()
 
-    def test_fill_window_needs_a_span_and_a_step(self, random_patch):
-        """Neither the row's span nor the sibling's step can be missing."""
-        coords = random_patch.coords
-        row = {
-            "dims": "distance,time",
-            "time_min": random_patch.get_coord("time").min(),
-            "time_max": random_patch.get_coord("time").max(),
-            "time_step": random_patch.get_coord("time").step,
-        }
-        # the span the window covers is what says how many samples it holds
-        assembly_module.patch_from_fill(coords, row, "time", np.nan)
-        with pytest.raises(ChunkError, match="Cannot fill a hole along 'time'"):
-            assembly_module.patch_from_fill(
-                coords, {**row, "time_step": None}, "time", np.nan
-            )
-
-    def test_all_fill_windows_share_one_read(self, spool_and_tolerance):
-        """The sibling a fill window copies its structure from is read once."""
+    def test_all_fill_windows_read_one_sample(self, spool_and_tolerance, monkeypatch):
+        """A window inside a filled gap reads one sample, for its other dims."""
         spool, tolerance = spool_and_tolerance
-        chunked = spool.chunk(time=1, tolerance=tolerance, fill_value=np.nan)
-        resolver = chunked._catalog.resolver
-        reads = []
-        original = resolver._load_member
-        resolver._load_member = lambda *a, **kw: (
-            reads.append(1),
-            original(*a, **kw),
-        )[1]
+        chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
+        sizes = []
+        original = PatchAssembler._patch_from_instruction_df
+
+        def assembled(self, *args, **kwargs):
+            out = original(self, *args, **kwargs)
+            sizes.extend(x.shape[x.get_axis("time")] for x in out)
+            return out
+
+        monkeypatch.setattr(PatchAssembler, "_patch_from_instruction_df", assembled)
         # three windows lie wholly inside the hole, between two fed ones
         for index in (3, 4, 5):
             assert np.isnan(chunked[index].data).all()
-        first_pass = len(reads)
-        assert 0 < first_pass <= 2  # one sibling on each side of the hole
-        for index in (3, 4, 5):
-            assert np.isnan(chunked[index].data).all()
-        assert len(reads) == first_pass  # the coordinates are kept
+        assert sizes == [1, 1, 1]  # one output each, of one sample
 
     def test_fill_window_keeps_associated_coords(self, random_patch_with_lat_lon):
         """A window with no data still carries what its siblings carry."""
@@ -4054,9 +4066,7 @@ class TestChunkFillWindows:
         second = patch.select(time=(start + to_timedelta64(6), ...))
         spool = dc.spool([first, second])
         with suppress_warnings(UserWarning):
-            chunked = spool.chunk(
-                time=1, tolerance=to_timedelta64(5), fill_value=np.nan
-            )
+            chunked = spool.fill_gaps(time=to_timedelta64(5)).chunk(time=1)
         fed, filled = chunked[0], chunked[4]
         assert set(fed.coords.coord_map) == set(filled.coords.coord_map)
         # riding distance, which the chunk did not touch, so the values

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -346,24 +348,29 @@ class TestTaperHoles:
     """Tapering must not treat a coordinate with holes as one record."""
 
     def test_holes_raise(self, holed_patch):
-        """Missing samples raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+        """More than one segment raises, naming the fixes."""
+        with pytest.raises(CoordError, match=r"segments.*fill_gaps.*split_gaps"):
             holed_patch.taper(time=0.1)
 
-    def test_jitter_raises(self, jittered_patch):
-        """Labels off their step's grid raise."""
-        with pytest.raises(CoordError, match="off the grid"):
-            jittered_patch.taper(time=0.1)
+    def test_jitter_tapers(self, jittered_patch, jittered_forms):
+        """One list of jittered labels is tapered, not refused, as labels are."""
+        labels, _ = jittered_forms
+        out = jittered_patch.taper(time=0.1)
+        assert np.allclose(out.data, labels.taper(time=0.1).data)
+
+    def test_range_on_segments(self, holed_patch, stepless_seam_patch):
+        """A range taper weights each sample by its label, across segments too."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = holed_patch.taper_range(time=(0.0, 110.0, 130.0, 159.0))
+        expected = stepless_seam_patch.taper_range(time=(0.0, 110.0, 130.0, 159.0))
+        assert out.get_coord("time") == holed_patch.get_coord("time")
+        assert np.allclose(out.data, expected.data)
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular axis, which tapers by its labels."""
         out = stepless_seam_patch.taper(time=0.1)
         assert out.shape == stepless_seam_patch.shape
-
-    def test_two_runs_raise(self, two_run_patch):
-        """Two step-less segments raise, naming the fixes."""
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
-            two_run_patch.taper(time=0.1)
 
 
 class TestTaperDtype:

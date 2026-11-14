@@ -278,8 +278,22 @@ class TestUnevenDistance:
             dims=("time", "distance"),
             attrs={"data_type": "velocity"},
         )
-        with pytest.raises(CoordError, match=r"more than one segment.*split_gaps"):
+        with pytest.raises(CoordError, match=r"segments.*split_gaps"):
             patch.velocity_to_strain_rate()
+
+    def test_edgeless_segments_raise(self, two_run_patch):
+        """The edgeless form names the fixes for segments, which it refuses."""
+        patch = dc.Patch(
+            data=two_run_patch.data,
+            coords={
+                "time": np.array([0.0]),
+                "distance": two_run_patch.get_coord("time"),
+            },
+            dims=("time", "distance"),
+            attrs={"data_type": "velocity"},
+        )
+        with pytest.raises(CoordError, match=r"segments.*split_gaps"):
+            patch.velocity_to_strain_rate_edgeless()
 
     def test_edgeless_raises(self, uneven_patch):
         """The edgeless form points to differentiate."""

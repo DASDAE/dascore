@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol, cast, overload
@@ -17,6 +18,7 @@ from pydantic import TypeAdapter
 import dascore as dc
 from dascore.config import get_config
 from dascore.constants import (
+    _DASCORE_DIR,
     CONFLICT,
     WARN_LEVELS,
     PatchMetaType,
@@ -51,7 +53,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, contiguous_windows
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
@@ -79,6 +81,7 @@ from dascore.utils.patch_registry import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
+from dascore.warnings import DASCoreWarning
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -737,15 +740,6 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, fuse=True, **kwargs):
     return [new_dict]
 
 
-def drop_associated_coords(coords, dim: str, action: str):
-    """
-    Drop, with a warning, the non-dimensional coordinates along a dimension.
-
-    See [`CoordManager.drop_associated`](`dascore.core.CoordManager.drop_associated`).
-    """
-    return coords.drop_associated(dim, action)
-
-
 def get_start_stop_step(patch: PatchType, dim):
     """Convenience method for getting start, stop, step for a given coord."""
     assert dim in patch.dims, f"{dim} is not in Patch dimensions of {patch.dims}"
@@ -1140,42 +1134,31 @@ def _get_dx_or_spacing_and_axes(
 
 def _uneven_message(name: str, coord, caller: str) -> str:
     """Why a coordinate is not evenly sampled for caller, and what fixes it."""
+    count = len(contiguous_windows(coord))
     why = [
         text
         for text, applies in (
             ("its labels sit off the grid of its step", coord.jittered),
-            ("it has missing samples", coord.gapped),
+            (f"it has {count} segments", count > 1),
         )
         if applies
     ]
-    split = ", Patch.split_gaps to split at them" if coord.gapped else ""
+    split = ", Patch.split_gaps to split at them" if count > 1 else ""
     return (
         f"Coordinate {name} is not evenly sampled as required by {caller}: "
         f"{' and '.join(why) or 'it has no step'}. Use Patch.fill_gaps to "
-        f"fill holes{split}, or Patch.snap_coords to put the labels on a grid."
+        f"fill gaps{split}, or Patch.snap_coords to put the labels on a grid."
     )
 
 
-def _refuse_holes_and_jitter(patch, dims, operation: str) -> None:
+def _refuse_segments(patch, dims, operation: str) -> None:
     """
-    Refuse dims with missing samples or labels off their step's grid.
-
-    A coordinate with no step is an irregular axis, which an operation
-    computes on by its labels, as DASCore 0.1.x did; one with a step it does
-    not keep (holes or jitter), or several segments sharing no step, raises
-    a CoordError naming the operation.
+    Refuse dims of several segments, whose gaps an operation computing
+    across samples would ignore; one list of labels is an irregular axis.
     """
     for dim in iterate(dims):
-        coord = patch.get_coord(dim)
-        if coord.gapped or coord.jittered:
+        if len(contiguous_windows(coord := patch.get_coord(dim))) > 1:
             raise CoordError(_uneven_message(dim, coord, operation))
-        if coord.step is None and getattr(coord, "runs_count", 1) > 1:
-            msg = (
-                f"Coordinate {dim} has more than one segment, which {operation} "
-                "cannot compute across. Use Patch.fill_gaps to join them or "
-                "Patch.split_gaps to split at them."
-            )
-            raise CoordError(msg)
 
 
 def align_patch_coords(
@@ -1688,9 +1671,22 @@ def _concatenate_group(
             members = [
                 x if x.units is None else x.convert_units(units) for x in members
             ]
-        values = np.concatenate(_joinable(members, dim), axis=0)
-        # the released snap, until concatenation joins labels exactly
-        joined_dim = dc.core.coords.get_coord(data=values, units=units, snap=True)
+        try:  # members chaining in order join exactly, each its own segment
+            joined_dim = dc.core.coords.concat_coords(*members)
+            # segments, not members: one may sit in another's gap
+            lows = [s.min() for x in members if not x.degenerate for s in x.segments]  # ty: ignore[unresolved-attribute]
+            if lows != sorted(lows, reverse=joined_dim.reverse_sorted):
+                raise CoordError("concat_coords put the members in its own order")
+        except (CoordError, TypeError):  # others join by value, as released
+            values = np.concatenate(_joinable(members, dim), axis=0)
+            joined_dim = dc.core.coords.get_coord(data=values, units=units, snap=True)
+            ordered = joined_dim.sorted or joined_dim.reverse_sorted
+            if not (ordered or joined_dim._partial or pd.isnull(values).any()):
+                msg = (
+                    f"Concatenating along {dim!r} gave labels out of order, as "
+                    "the patches overlap or are not in order."
+                )
+                warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops the rest
         riders = {}

@@ -10,12 +10,24 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.core.spool as spool_module
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import random_spool
-from dascore.exceptions import ChunkError, ParameterError, UnitError
+from dascore.exceptions import (
+    ChunkError,
+    CoordError,
+    CoordMergeError,
+    ParameterError,
+    UnitError,
+)
+from dascore.utils.misc import suppress_warnings
+from dascore.utils.patch import _concatenate_group
+from dascore.warnings import DASCoreWarning
+from tests.conftest import segment_layout
 
 ONE_SECOND = np.timedelta64(1, "s")
 ONE_NS = np.timedelta64(1, "ns")
@@ -175,10 +187,10 @@ class TestGetGaps:
         """A report describes the patches the spool holds, not their sources."""
         merged = gappy_spool.concatenate(time=None)
         assert len(merged) == 1
-        # concatenate ignores the coordinate values, so the holes are
-        # inside the one patch it made and no boundary is left to report
-        assert merged.get_gaps().empty
-        assert merged.get_coverage()["coverage"].iloc[0] == 1
+        # concatenate keeps each patch a segment, so the holes between them
+        # are where chunk would split the one patch it made
+        assert len(merged.get_gaps()) == len(gappy_spool) - 1
+        assert merged.get_coverage()["coverage"].iloc[0] < 1
         # and the report agrees with rebuilding the spool from its patches
         assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
 
@@ -389,12 +401,12 @@ class TestGappedPatchRows:
         assert len(patch.split_gaps()) == 6
 
     def test_read_selection_with_holes_is_one_patch(self, tmp_path):
-        """A read picking labels which leave holes gives one gapped patch."""
+        """A read picking labels which leave holes gives one segmented patch."""
         patch = dc.get_example_patch()
         path = dc.write(patch, tmp_path / "one.h5", "dasdae")
         values = patch.get_coord("distance").values
         (out,) = dc.read(path, distance=values[[1, 2, 5]])
-        assert out.get_coord("distance").gapped
+        assert out.get_coord("distance").runs_count == 2
         assert len(dc.spool([patch.select(distance=values[[1, 2, 5]])])) == 1
 
     def test_identity_is_stable(self):
@@ -421,7 +433,7 @@ class TestChunkKeepsHoles:
         assert joined.get_gaps().empty
         with warnings.catch_warnings():  # a fill spreads no labels, so no warning
             warnings.simplefilter("error")
-            filled = spool.chunk(time=None, tolerance=100_000, fill_value=np.nan)
+            filled = spool.fill_gaps("time")
         assert len(filled) == 1 and filled.get_gaps().empty
         assert filled[0].get_coord("time").evenly_sampled
         assert len(filled[0].get_coord("time")) > 200
@@ -499,3 +511,563 @@ class TestChunkKeepsHoles:
             yielded = list(chunked)
         assert all(x.get_coord(d).runs_count == 1 for x in yielded for d in x.dims)
         assert len(chunked) == len(yielded) == len(dc.spool(yielded))
+
+
+class TestSpoolFillGaps:
+    """Spool.fill_gaps fills lazily, and chunk and cut join across what it filled."""
+
+    def test_fills_gaps_up_to_the_size(self, gappy_spool):
+        """Gaps up to the size join into one patch; wider ones stay apart."""
+        assert len(gappy_spool.fill_gaps(time=0.5)) == len(gappy_spool)
+        (filled,) = gappy_spool.fill_gaps(time=2)
+        step = gappy_spool[0].get_coord("time").step
+        assert filled.get_coord("time").step == step
+        holes = np.isnan(filled.data).all(axis=filled.get_axis("distance") or 0)
+        assert holes.sum() == 3 * (ONE_SECOND // step)
+
+    def test_chunk_joins_across_the_fill(self, gappy_spool):
+        """A later chunk cuts the filled stretch into whole windows."""
+        chunked = gappy_spool.fill_gaps("time").chunk(time=4)
+        expected = dc.spool([gappy_spool.fill_gaps("time")[0]]).chunk(time=4)
+        assert len(chunked) == len(expected)
+        for got, want in zip(chunked, expected, strict=True):
+            np.testing.assert_array_equal(got.data, want.data)  # NaN where
+            coord = got.get_coord("time")
+            assert coord == want.get_coord("time")
+            assert segment_layout(coord) == segment_layout(want.get_coord("time"))
+
+    def test_one_sample_windows_inside_a_gap(self):
+        """A one-sample window inside a filled gap holds the fill, not a neighbour."""
+        times = [get_coord(start=x, step=1.0, shape=(2,)) for x in (0.0, 4.0)]
+        patches = [
+            dc.Patch(
+                data=x.values[None], coords={"distance": [0], "time": x}, dims=DIMS
+            )
+            for x in times
+        ]
+        chunked = dc.spool(patches).fill_gaps("time").chunk(time=1)
+        values = [x.data[0, 0] for x in chunked]
+        np.testing.assert_array_equal(values, [0.0, 1.0, np.nan, np.nan, 4.0, 5.0])
+
+    def test_empty_spool(self, gappy_spool):
+        """Filling a spool a selection emptied gives an empty spool."""
+        empty = gappy_spool.select(time=(None, T0 - ONE_SECOND))
+        assert not len(empty.fill_gaps("time"))
+        assert not len(empty.fill_gaps("time").chunk(time=1))
+
+    @staticmethod
+    def _mixed(dtype):
+        """A float64 patch, then one of ``dtype`` after a seven-sample gap."""
+        patches = [
+            dc.Patch(
+                data=np.arange(3, dtype=y)[None],
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=x, step=1.0, shape=(3,)),
+                },
+                dims=DIMS,
+            )
+            for x, y in ((0.0, np.float64), (10.0, dtype))
+        ]
+        return dc.spool(patches).fill_gaps("time")
+
+    def test_all_fill_window_is_not_its_donors_dtype(self):
+        """A window only of fill takes the stretch's dtype, not a neighbour's."""
+        chunked = self._mixed(np.int32).chunk(time=3)
+        for fill in (chunked[1], chunked[2]):  # an int32 patch is nearest the second
+            assert fill.data.dtype == np.float64 and np.isnan(fill.data).all()
+
+    def test_trimmed_window_takes_its_rows_dtype(self):
+        """A cut holding only a narrower patch loads as the fill states it."""
+        filled = self._mixed(np.float32)
+        (got,) = filled.cut(time=[[10.0, 12.0]])
+        (want,) = dc.spool(list(filled)).cut(time=[[10.0, 12.0]])
+        assert got.data.dtype == want.data.dtype == np.float64
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_windows_keep_the_fill_conflict_policy(self, gappy_spool, conflict):
+        """Windows of a fill carry the attrs the fill settled for its stretch."""
+        spool = dc.spool([x.update_attrs(gain=i) for i, x in enumerate(gappy_spool)])
+        filled = spool.fill_gaps("time", conflict=conflict)
+        (expected,) = {x.attrs.get("gain") for x in filled}
+        windows = [[spool[1].get_coord("time").min(), None]]
+        for out in (filled.chunk(time=4), filled.cut(time=windows)):
+            assert {x.attrs.get("gain") for x in out} == {expected}
+
+    @pytest.mark.parametrize(
+        "kwargs", [{"tolerance": 3}, {"tolerance": 3, "max_shift": 0.01}]
+    )
+    def test_chunk_keeps_its_own_seam_test(self, kwargs):
+        """A chunk's tolerance and max_shift join the fill's outputs, as filled."""
+        spool = random_spool(time_gap=np.timedelta64(6, "ms"), length=3)
+        filled = spool.fill_gaps(time=0.001)
+        with suppress_warnings(UserWarning):
+            got = filled.chunk(time=None, **kwargs)
+            want = dc.spool(list(filled)).chunk(time=None, **kwargs)
+        assert len(got) == len(want) == 1
+        for out, expected in zip(got, want, strict=True):
+            assert out.get_coord("time") == expected.get_coord("time")
+            np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_window_reads_only_the_members_it_reaches(self, gappy_spool):
+        """Loading a window reads the files it reaches, not the whole stretch."""
+        filled = gappy_spool.fill_gaps("time")
+        resolver = filled._catalog.resolver
+        reads = []
+        original = resolver._load_member
+        resolver._load_member = lambda *a, **kw: (
+            reads.append(1),
+            original(*a, **kw),
+        )[1]
+        start = gappy_spool[0].get_coord("time").min()
+        window = start + np.array([[1, 2]]) * ONE_SECOND
+        (out,) = filled.cut(time=window)
+        assert len(reads) == 1 and not np.isnan(out.data).any()
+
+    def test_chunk_plans_once_onto_the_files(self, gappy_spool, monkeypatch):
+        """A chunk of a fill is one plan, its windows loading from the files."""
+        plans = []
+        build = spool_module.build_chunk_plan
+
+        def counted(*args, **kwargs):
+            plans.append(kwargs)
+            return build(*args, **kwargs)
+
+        monkeypatch.setattr(spool_module, "build_chunk_plan", counted)
+        filled = gappy_spool.fill_gaps("time")
+        chunked = filled.chunk(time=4)
+        assert len(plans) == 1
+        assert filled._catalog._built is None  # the fill's own was never built
+        paths = chunked._catalog.resolver.member_rows["source_path"].astype(str)
+        assert not paths.str.startswith("plan://").any()
+        assert len(chunked) == len(filled.chunk_plan(time=4).outputs)
+
+    @pytest.mark.parametrize("start", [0.0, 1e9])
+    def test_float_grid_windows(self, start):
+        """Windows of a float grid whose step no float holds keep its samples."""
+        full = get_coord(start=start, step=0.1, shape=(60,))
+
+        def make(part):
+            coords = {"distance": [0], "x": full[part]}
+            return dc.Patch(
+                data=np.arange(60.0)[part][None], coords=coords, dims=("distance", "x")
+            )
+
+        filled = dc.spool([make(slice(0, 20)), make(slice(25, 60))]).fill_gaps("x")
+        chunks = filled.chunk(x=1.0, keep_partial=True)
+        data = np.concatenate([x.data[0] for x in chunks])
+        labels = np.concatenate([x.get_coord("x").values for x in chunks])
+        np.testing.assert_allclose(labels, full.values, rtol=0, atol=1e-6)
+        assert np.isnan(data[20:25]).all() and np.array_equal(
+            data[25:], np.arange(25.0, 60)
+        )
+        (cut,) = filled.cut(x=np.array([[full[18], full[27]]]))
+        assert cut.shape == (1, 10) and np.isnan(cut.data[0, 2:7]).all()
+
+    @pytest.mark.parametrize(
+        ("start", "step", "window"),
+        [
+            (1e9, 0.1, 3.7),
+            (1e9, 0.001, 0.01),
+            (1.7e9, 1.0209523, 10.209523),
+            (1e4, 0.001, 0.037),
+            (1e6, 0.001, 0.01),
+            (0.0, 0.25, 2.5),
+        ],
+    )
+    def test_float_windows_match_filled_patch(self, start, step, window):
+        """Windows of a fill hold, sample for sample, those of the filled patch."""
+        full = get_coord(start=start, step=step, shape=(600,))
+
+        def make(part):
+            coords = {"x": full[part], "distance": np.arange(2.0)}
+            data = np.arange(600.0)[part][:, None] * np.ones((1, 2))
+            return dc.Patch(data=data, coords=coords, dims=("x", "distance"))
+
+        parts = (slice(0, 200), slice(207, 400), slice(450, 600))
+        filled = dc.spool([make(x) for x in parts]).fill_gaps("x")
+        expected = dc.spool([filled[0]]).chunk(x=window, keep_partial=True)
+        out = filled.chunk(x=window, keep_partial=True)
+        assert len(out) == len(expected)
+        for got, want in zip(out, expected, strict=True):
+            np.testing.assert_array_equal(got.data, want.data)
+            assert got.get_coord("x") == want.get_coord("x")
+
+    @pytest.mark.parametrize("timed", [False, True])
+    @pytest.mark.parametrize(
+        "select",
+        [
+            dict(time=(1.05, -1.05), relative=True),
+            dict(time=(1.05, 203.95)),  # bounds between samples
+            dict(time=(1, -1), samples=True),
+        ],
+    )
+    def test_windows_over_a_selection_match_the_fill(self, select, timed):
+        """Windows of a selection's fill are those of the materialized fill."""
+        conv = dc.to_datetime64 if timed else float
+        step = dc.to_timedelta64(1.0) if timed else 1.0
+        patches = [
+            dc.Patch(
+                data=np.arange(100.0)[None] + start,
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=conv(start), step=step, shape=(100,)),
+                },
+                dims=("distance", "time"),
+            )
+            for start in (0.0, 105.0)
+        ]
+        if not select.get("relative") and not select.get("samples"):
+            select = dict(time=tuple(conv(x) for x in select["time"]))
+        view = dc.spool(patches).select(**select)
+        filled = view.fill_gaps(time=10)
+        expected = dc.spool(list(filled)).chunk(time=20, keep_partial=True)
+        out = filled.chunk(time=20, keep_partial=True)
+        assert len(out) == len(expected)
+        for got, want in zip(out, expected, strict=True):
+            np.testing.assert_array_equal(got.data, want.data)
+            assert got.get_coord("time") == want.get_coord("time")
+
+    def test_gap_window_takes_its_own_stretch(self):
+        """A window of only fill describes, and loads from, its own stretch."""
+
+        def make(start, count, station, channels=2):
+            coords = {
+                "time": get_coord(start=float(start), step=0.01, shape=(count,)),
+                "distance": np.arange(channels) * 1.0,
+            }
+            data = np.zeros((count, channels))
+            attrs = {"station": station}
+            return dc.Patch(data=data, coords=coords, dims=tuple(coords), attrs=attrs)
+
+        spool = dc.spool([make(0, 100, "A"), make(10.0, 50, "A"), make(0, 300, "B", 3)])
+        out = spool.fill_gaps("time").chunk(time=1)
+        rows = out.get_contents()
+        for station, patch in zip(rows["station"], out, strict=True):
+            assert patch.attrs.station == station
+            assert patch.shape[1] == (2 if station == "A" else 3)
+
+    @pytest.mark.parametrize("fill_value", [np.nan, None])
+    @pytest.mark.parametrize("offset", [0.0, 0.3, -0.3, 0.45])
+    @pytest.mark.parametrize("missing", [0, 1, 2, 3])
+    @pytest.mark.parametrize(
+        "size", [None, {"x": 1}, {"x": 2}, {"x": 2.4}, {"x": 2, "samples": True}]
+    )
+    def test_matches_patch_fill(self, offset, missing, size, fill_value):
+        """A spool fills each seam exactly where the joined patch fills it."""
+        first = get_coord(start=0.0, step=1.0, shape=(10,))
+        second = get_coord(start=10.0 + missing + offset, step=1.0, shape=(6,))
+
+        def make(coord, start=0.0):
+            data = np.arange(len(coord)) + start
+            return dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+
+        kwargs = {"x": None} if size is None else size
+        spool = dc.spool([make(first), make(second, 10.0)])
+        joined = make(concat_coords(first, second))
+        with suppress_warnings(UserWarning):
+            want = joined.fill_gaps(**kwargs, fill_value=fill_value).split_gaps()
+            got = spool.fill_gaps(**kwargs, fill_value=fill_value)
+        assert len(got) == len(want) == len(got.get_contents())
+        for out, expected in zip(got, want, strict=True):
+            np.testing.assert_array_equal(out.data, expected.data)  # NaN where
+            coord, other = out.get_coord("x"), expected.get_coord("x")
+            assert coord == other and segment_layout(coord) == segment_layout(other)
+
+    @pytest.mark.parametrize("labels", [[20.0, 21.2, 29.9, 31.0], [20, 21.2, 22.9, 24]])
+    def test_labels_beside_an_unfilled_gap_load(self, labels):
+        """A patch of labels no fill reaches loads, alone or in windows."""
+
+        def make(coord):
+            coords = {"time": coord, "distance": np.arange(2.0)}
+            return dc.Patch(
+                data=np.ones((len(coord), 2)), coords=coords, dims=tuple(coords)
+            )
+
+        labels = get_coord(data=np.array(labels))
+        grid = get_coord(start=0.0, step=1.0, shape=(10,))
+        spool = dc.spool([make(grid), make(labels)])
+        assert [x.shape for x in spool.fill_gaps(time=2)] == [(10, 2), (4, 2)]
+        assert [x.shape for x in dc.spool([make(labels)]).fill_gaps("time")] == [(4, 2)]
+        windows = spool.fill_gaps(time=2).chunk(time=5, keep_partial=True)
+        assert sum(x.shape[0] for x in windows) == 14
+
+    def test_conflict(self):
+        """Attrs the patches state differently follow the fill's conflict."""
+        times = [get_coord(start=x, step=1.0, shape=(5,)) for x in (0.0, 7.0)]
+        patches = [
+            dc.Patch(
+                data=np.ones(5), coords={"time": t}, dims=("time",), attrs={"gain": tag}
+            )
+            for t, tag in zip(times, (1.0, 2.0), strict=True)
+        ]
+        with pytest.raises(CoordMergeError, match="gain"):
+            list(dc.spool(patches).fill_gaps("time"))
+        (out,) = dc.spool(patches).fill_gaps("time", conflict="keep_first")
+        assert out.attrs.gain == 1.0 and out.shape == (12,)
+
+    @pytest.mark.parametrize("size", [-1, 2.5])
+    def test_samples_must_be_a_count(self, gappy_spool, size):
+        """A sample size is a whole number, never negative."""
+        with pytest.raises(ParameterError, match="non-negative integer"):
+            gappy_spool.fill_gaps(time=size, samples=True)
+
+    @pytest.mark.parametrize("snap", [False, True])
+    def test_steps_parts_per_million_apart_fill(self, snap):
+        """Files whose steps differ by ppm fill on the first's, as a patch does."""
+        base, start, patches = dc.get_example_patch(), T0, []
+        for num, step in enumerate([4_000_000, 4_000_010, 3_999_990]):
+            coord = get_coord(start=start, step=step * ONE_NS, shape=(2000,))
+            if snap:  # jittered labels, each file snapped to its own step
+                jitter = np.random.default_rng(num).integers(-400_000, 400_000, 2000)
+                coord = get_coord(data=coord.values + jitter * ONE_NS)
+            patches.append(base.update_coords(time=coord))
+            start = coord.max() + step * ONE_NS
+        spool = dc.spool(patches).snap_coords("time") if snap else dc.spool(patches)
+        with suppress_warnings(UserWarning):
+            (out,) = spool.fill_gaps(time=1)
+            (whole,) = spool.fill_gaps("time")  # files chunk(time=None) joins
+            want = spool.concatenate(time=None)[0].fill_gaps("time")
+        assert out.shape == whole.shape == want.shape == (300, 6000)
+        assert out.get_coord("time") == want.get_coord("time")
+        assert out.get_coord("time").step == spool[0].get_coord("time").step
+
+    def test_step_change_across_a_fill_raises(self):
+        """Samples on another step across a filled gap raise, as on a patch."""
+        coords = [
+            get_coord(start=0.0, step=1.0, shape=(10,)),
+            get_coord(start=12.0, step=1.5, shape=(6,)),
+        ]
+        patches = [
+            dc.Patch(data=np.ones(len(x)), coords={"x": x}, dims=("x",)) for x in coords
+        ]
+        joined = dc.Patch(
+            data=np.ones(16), coords={"x": concat_coords(*coords)}, dims=("x",)
+        )
+        with pytest.raises(CoordError, match="Resample or snap"):
+            joined.fill_gaps("x")
+        with pytest.raises(CoordError, match="smaller size, select first, or resamp"):
+            len(dc.spool(patches).fill_gaps("x"))  # it plans as it is asked
+
+    @pytest.mark.parametrize("kwargs", [{}, {"time": 1, "distance": 1}])
+    def test_one_dimension(self, gappy_spool, kwargs):
+        """Filling names exactly one dimension."""
+        with pytest.raises(ParameterError, match="one dimension"):
+            gappy_spool.fill_gaps(**kwargs)
+
+    @pytest.mark.parametrize("method", ["chunk", "chunk_plan"])
+    def test_chunk_refuses_fill_value(self, gappy_spool, method):
+        """Chunk never fills, and names the method which does."""
+        with pytest.raises(ParameterError, match=r"Spool\.fill_gaps"):
+            getattr(gappy_spool, method)(time=None, tolerance=10, fill_value=np.nan)
+
+
+class TestConcatenateOrder:
+    """Concatenate joins in order, and says when the labels it joins are not."""
+
+    @staticmethod
+    def _patch(start):
+        coords = {
+            "distance": [0],
+            "time": get_coord(start=start, step=1.0, shape=(10,)),
+        }
+        return dc.Patch(
+            data=np.arange(10.0)[None] + start, coords=coords, dims=tuple(coords)
+        )
+
+    def test_overlap_warns(self):
+        """Overlapping patches give unordered labels and a warning."""
+        patches = [self._patch(x) for x in (0.0, 5.0)]
+        with pytest.warns(DASCoreWarning, match="out of order"):
+            (out,) = dc.spool(patches).concatenate(time=None)
+        coord = out.get_coord("time")
+        assert not (coord.sorted or coord.reverse_sorted)
+        # each label keeps its sample
+        assert np.array_equal(out.data[0], coord.values)
+
+    def test_member_order_is_kept(self):
+        """A group concatenated directly keeps its members' order and data."""
+        patches = [self._patch(20.0), self._patch(0.0)]
+        with pytest.warns(DASCoreWarning, match="out of order"):
+            out = _concatenate_group(patches, "time", patches[0].attrs, "test")
+        assert np.array_equal(out.data[0], out.get_coord("time").values)
+
+    def test_patch_inside_a_gap(self):
+        """A patch lying in another's gap leaves the labels with their samples."""
+        grids = [get_coord(start=x, step=1.0, shape=(2,)) for x in (0.0, 10.0, 5.0)]
+        times = [concat_coords(*grids[:2]), grids[2]]  # [0, 1, 10, 11], [5, 6]
+        patches = [
+            dc.Patch(
+                data=x.values[None], coords={"distance": [0], "time": x}, dims=DIMS
+            )
+            for x in times
+        ]
+        with pytest.warns(DASCoreWarning, match="out of order"):
+            (out,) = dc.spool(patches).concatenate(time=None)
+        assert np.array_equal(out.data[0], out.get_coord("time").values)
+
+
+class TestSpoolSnapCoords:
+    """Spool.snap_coords snaps each patch alone, as it loads."""
+
+    @pytest.fixture(scope="class")
+    def wacky(self):
+        """A spool of one patch whose coordinates are uneven."""
+        return dc.spool([dc.get_example_patch("wacky_dim_coords_patch")])
+
+    def test_snaps_each_patch(self, wacky):
+        """Each patch comes back as Patch.snap_coords gives it, its step stated."""
+        expected = wacky[0].snap_coords("time")
+        out = wacky.snap_coords("time")
+        assert out[0].get_coord("time") == expected.get_coord("time")
+        assert (
+            out.get_contents()["time_step"].iloc[0] == expected.get_coord("time").step
+        )
+
+    @pytest.mark.parametrize(
+        "kwargs", [{}, {"reverse": True}, {"step": 1.0}, {"step": 0.5}]
+    )
+    def test_lazy_matches_eager(self, kwargs):
+        """Rows, chunks and gaps of a lazy snap are those of the snapped patches."""
+
+        def make(values, start=0.0):
+            coord = get_coord(data=np.asarray(values) + start)
+            coords = {"time": coord, "distance": np.arange(2.0)}
+            data = np.arange(2 * len(coord)).reshape(-1, 2)
+            return dc.Patch(data=data, coords=coords, dims=tuple(coords))
+
+        patches = [
+            make([0.0, 1.1, 1.9, 5.05, 6.4]),
+            make(np.arange(10.0), start=20.0),
+            make([6.4, 5.05, 1.9, 1.1, 0.0], start=40.0),
+            make(np.arange(9.0, -1.0, -1.0), start=60.0),  # a descending grid
+        ]
+        spool = dc.spool(patches)
+        with suppress_warnings(UserWarning):
+            lazy = spool.snap_coords("time", **kwargs)
+            eager = dc.spool([x.snap_coords("time", **kwargs) for x in patches])
+        cols = ["time_min", "time_max", "time_step"]
+        assert lazy.get_contents()[cols].equals(eager.get_contents()[cols])
+        labels = lambda x: [y.get_coord("time").values.tolist() for y in x]  # noqa
+        assert labels(lazy) == labels(eager)
+        assert labels(lazy.chunk(time=None)) == labels(eager.chunk(time=None))
+        chunk = dict(time=3, keep_partial=True)
+        assert labels(lazy.chunk(**chunk)) == labels(eager.chunk(**chunk))
+        # windows between the labels as recorded and as snapped
+        windows = np.array([[1.2, 1.5], [3.0, 4.5], [61.5, 64.2]])
+        assert labels(lazy.cut(time=windows)) == labels(eager.cut(time=windows))
+        assert len(lazy.get_gaps()) == len(eager.get_gaps())
+
+    def test_after_selecting_another_coordinate(self):
+        """A selection on a coordinate riding the dimension is applied first."""
+        time = get_coord(data=np.array([0.0, 1.1, 1.9, 3.02, 4.0, 5.1]))
+        coords = {"time": time, "distance": np.arange(2.0), "q": ("time", time.values)}
+        patch = dc.Patch(data=np.ones((6, 2)), coords=coords, dims=("time", "distance"))
+        with suppress_warnings(UserWarning):
+            spool = dc.spool([patch]).select(q=(1.5, 6.0)).snap_coords("time")
+            coord = spool[0].get_coord("time")
+        contents = spool.get_contents().iloc[0]
+        assert (contents["time_min"], contents["time_step"]) == (
+            coord.min(),
+            coord.step,
+        )
+
+    def test_unknown_dimension_raises(self, wacky):
+        """A dimension no patch has is refused by name."""
+        with pytest.raises(dc.exceptions.CoordError, match="bob"):
+            wacky.snap_coords("bob")
+
+    def test_chunk_keeps_the_snap(self, wacky):
+        """A later chunk plans over the snapped patches, not their sources."""
+        (out,) = wacky.snap_coords("time").chunk(time=None)
+        assert out.get_coord("time").evenly_sampled
+
+    def test_max_shift_raises_when_planned(self, wacky):
+        """A move past max_shift is refused before anything loads."""
+        with pytest.raises(dc.exceptions.CoordError, match="max_shift"):
+            wacky.snap_coords("time", max_shift=0.01)
+
+    def test_step(self, wacky):
+        """step= places each patch's labels on that grid, as a patch's are."""
+        time = np.sort(wacky[0].get_coord("time").values)
+        step = np.diff(time).min()
+        expected = wacky[0].snap_coords("time", step=step).get_coord("time")
+        assert wacky.snap_coords("time", step=step)[0].get_coord("time") == expected
+
+
+class TestConcatenatedRuns:
+    """A concatenation's index row states each member's runs as segments."""
+
+    def test_members_with_runs(self, gappy_spool):
+        """Members holding gaps of their own keep them in the joined row."""
+        holed = [x.unselect(time=(10, 20), samples=True) for x in gappy_spool]
+        merged = dc.spool(holed).concatenate(time=None)
+        assert len(merged.get_gaps()) == 2 * len(holed) - 1
+        assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
+
+    def test_members_in_other_units(self):
+        """A member's gaps, stated in feet beside metres, are reported in metres."""
+
+        def make(start, units):
+            grids = [get_coord(start=start + x, step=1.0, shape=(5,)) for x in (0, 10)]
+            coord = concat_coords(*grids).set_units(units)
+            coords = {"distance": coord, "time": np.arange(3.0)}
+            return dc.Patch(data=np.ones((10, 3)), coords=coords, dims=tuple(coords))
+
+        merged = dc.spool([make(0.0, "m"), make(100.0, "ft")]).concatenate(
+            distance=None
+        )
+        expected = dc.spool(list(merged)).get_gaps("distance")
+        assert len(expected) == 2
+        pd.testing.assert_frame_equal(merged.get_gaps("distance"), expected)
+
+    @pytest.mark.parametrize("step", [1.0, -1.0])
+    def test_contiguous_members_are_one_run(self, step):
+        """Members continuing one grid, either way, give a row stating its step."""
+        coords = [get_coord(start=x * step, step=step, shape=(5,)) for x in (0, 5)]
+        patches = [
+            dc.Patch(data=x.values, coords={"x": x}, dims=("x",)) for x in coords
+        ]
+        merged = dc.spool(patches).concatenate(x=None)
+        assert merged.get_contents()["x_step"].tolist() == [step]
+        assert merged[0].get_coord("x").step == step
+
+    @pytest.mark.parametrize("length", [None, 4])
+    def test_chunk_splits_at_members_gaps(self, length):
+        """A chunk of a concatenation splits where the joined patch's does."""
+        holed = concat_coords(
+            *(get_coord(start=x, step=1, shape=(5,)) for x in (0, 10))
+        )
+        coords = [holed, get_coord(start=20, step=1, shape=(5,))]
+        patches = [
+            dc.Patch(data=np.arange(float(len(x))), coords={"x": x}, dims=("x",))
+            for x in coords
+        ]
+        merged = dc.spool(patches).concatenate(x=None)
+        got = [x.get_coord("x").values.tolist() for x in merged.chunk(x=length)]
+        rebuilt = dc.spool([merged[0]]).chunk(x=length)
+        assert got == [x.get_coord("x").values.tolist() for x in rebuilt]
+        assert len(got) == 3
+
+    def test_chunk_counts_each_segment_from_its_first_label(self):
+        """A segment off the grid of the one before is windowed on its own."""
+        step = 4 * ONE_MS
+        segments = [
+            get_coord(start=T0, step=step, shape=(5,)),
+            get_coord(start=T0 + 10 * step + ONE_MS, step=step, shape=(5,)),
+        ]
+        # a dimension not named time, whose index states no step as None
+        coords = {"x": concat_coords(*segments)}
+        patch = dc.Patch(data=np.arange(10.0), coords=coords, dims=("x",))
+        merged = dc.spool([patch]).concatenate(x=None)
+        got = merged.chunk(x=2 * step, keep_partial=True)
+        want = dc.spool([patch]).chunk(x=2 * step, keep_partial=True)
+        assert [x.get_coord("x") for x in got] == [x.get_coord("x") for x in want]
+
+    def test_concatenating_chunks_keeps_each_sample_once(self):
+        """Members a plan trimmed load trimmed, so no sample repeats."""
+        spool = dc.get_example_spool("random_das")
+        (out,) = spool.chunk(time=3).concatenate(time=None)
+        assert out.shape[out.get_axis("time")] == sum(
+            x.shape[x.get_axis("time")] for x in spool
+        )

@@ -34,10 +34,9 @@ assert regular == same
 |---|---|
 | `sorted` | Whether the coordinate reports ascending ordering |
 | `reverse_sorted` | Whether the coordinate reports descending ordering |
-| `step` | The spacing of the grid the values follow, or `None` if they follow none |
-| `jittered` | Whether some value sits off that grid, by under half a step |
-| `gapped` | Whether positions of that grid hold no value |
-| `evenly_sampled` | Whether there is a step and the values are neither jittered nor gapped |
+| `step` | The spacing of the one grid the values follow, or the step declared for one list of labels; `None` for labels with none, or several segments |
+| `segments` | The coordinate's segments, each one grid or one list of labels |
+| `evenly_sampled` | Whether the coordinate is one grid |
 | `dtype` | NumPy data type |
 | `data` | Array of coordinate values |
 | `units` | Physical units, if present |
@@ -74,7 +73,7 @@ Selection and raw decimation keep the selected bounds, and translation and unit 
 
 ## Coordinates with holes
 
-A coordinate holds its labels as a tuple of *runs*, each an evenly sampled [`Grid`](`dascore.core.coords.Grid`) or stored [`Labels`](`dascore.core.coords.Labels`), so monotonic blocks and the breaks between them survive. Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are known:
+A coordinate is one evenly sampled grid, one list of labels, or several of those in order, called segments. Each segment is a [`Grid`](`dascore.core.coords.Grid`) or stored [`Labels`](`dascore.core.coords.Labels`), and nothing is moved across the boundary between two. Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are known:
 
 ```{python}
 from dascore.core.coords import concat_coords
@@ -86,7 +85,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-A coordinate of several runs reports a `step` only when every run shares it. `snap=False` keeps an array's values exactly: labels a grid reproduces exactly become that grid, and anything else is one run of stored labels with no step, which reports no holes unless a step is declared (below). [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how runs are built and merged.
+A coordinate of several segments has no `step`, though each segment keeps its own. `snap=False` keeps an array's values exactly: labels a grid reproduces exactly become that grid, and anything else is one list of labels with no step. [Coordinate internals](../notes/coordinate_internals.qmd#segmented-coordinates) describes how segments are built and merged.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
@@ -95,25 +94,22 @@ assert np.array_equal(exact.values, values)
 assert exact.runs_count == 1 and exact.step is None
 ```
 
-A spool keeps a patch with holes whole; [`Patch.split_gaps`](`dascore.Patch.split_gaps`) cuts it into contiguous pieces. [`dc.write`](`dascore.write`) also writes it whole: DASDAE, NetCDF, Zarr, and pickle keep its step, holes, and jitter, and formats that store only a grid refuse it, saying to regularize or split first.
+A spool keeps a patch with holes whole; [`Patch.split_gaps`](`dascore.Patch.split_gaps`) cuts it into one patch per segment. [`dc.write`](`dascore.write`) also writes it whole: DASDAE and pickle keep its segments and their steps, NetCDF and Zarr keep segments sharing one step, and formats that store only a grid refuse it, saying to fill or split first.
 
-### Declaring a grid and finding missing samples
+### Declaring a grid
 
-Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid but misses two positions of a step-1 grid. Passing `step` with array data declares the grid. Every value must sit on it (an off-grid value raises rather than moves), and each run of consecutive positions becomes a grid of that step. [`missing()`](`dascore.core.coords.BaseCoord.missing`) then reports the empty positions between the first and last sample, one entry per hole.
+Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid but misses two positions of a step-1 grid. Passing `step` with array data declares the grid. Every value must sit on it (an off-grid value raises rather than moves), and each run of consecutive positions becomes a segment on that step.
 
 ```{python}
 coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-assert coord.runs_count == 3 and coord.step == 1
-
-missing = coord.missing()
-assert missing.count == 6 and not missing.complete
-assert list(missing.iter_runs()) == [(2, 2), (5, 9)]
-print(missing.positions())
+assert coord.runs_count == 3 and coord.step is None
+assert [len(x) for x in coord.segments] == [1, 2, 3]
+assert {x.step for x in coord.segments} == {1}
 ```
 
-A dense array whose runs would outnumber a tenth of its samples stays one stored run with the declared step; `missing()` answers the same. Without a declared step nothing is missing, and evenly sampled coordinates are always complete.
+A dense array whose segments would outnumber a tenth of its samples stays one list of labels keeping the declared step. [`missing()`](`dascore.core.coords.BaseCoord.missing`) reports the empty positions of such a list's grid; a coordinate of several segments shares no grid, so nothing is missing from it.
 
-Filling holes is a patch operation. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) puts every run on one grid and writes a fill value (NaN by default) where no sample sits. A limit such as `fill_gaps(time=10)`, in coordinate units, or a count of missing samples with `samples=True`, fills only holes up to that width (missing samples times the step) and leaves wider ones.
+Filling holes is a patch operation. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) joins the segments onto the first one's grid and writes a fill value (NaN by default) where no sample sits. A limit such as `fill_gaps(time=10)`, in coordinate units, or a count of missing samples with `samples=True`, fills only holes up to that width (missing samples times the step) and leaves wider ones.
 
 ```{python}
 import dascore as dc

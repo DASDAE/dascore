@@ -19,7 +19,7 @@ See [installing a pre-release](../installation.qmd#pre-releases); `[extras]` bri
 
 - [A more flexible and efficient spool indexer based on SQLite](../tutorial/spool.qmd)
     - One [`Spool`](`dascore.Spool`) class; directory indexes support concurrent readers and writers, record every coordinate, and scale to millions of patches.
-    - New methods: [`get_gaps`](`dascore.Spool.get_gaps`), [`get_coverage`](`dascore.Spool.get_coverage`), `unselect`, `load`, `cut`, and `chunk(tolerance=..., fill_value=...)`.
+    - New methods: [`get_gaps`](`dascore.Spool.get_gaps`), [`get_coverage`](`dascore.Spool.get_coverage`), `unselect`, `load`, `cut`, `fill_gaps`, `snap_coords`, and `chunk(tolerance=...)`.
     - `chunk` joins patches whose seams are within `max_shift` and fits one grid per joined stretch. `tolerance` is now off by default; `tolerance=1.5` restores 0.1.x's joining.
 - [The `Inventory`: a StationXML-inspired DAS metadata store](../tutorial/inventory.qmd)
 - [The `AnnotationSet`: a data structure for managing annotations, including points and basic geometries](../tutorial/annotations.qmd)
