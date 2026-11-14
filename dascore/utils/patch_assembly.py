@@ -588,6 +588,9 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
         _place_blocks,
     )
 
+    if dtype and patch.data.dtype != np.dtype(dtype):  # as its row states it
+        with operation_context():
+            patch = patch.new(data=to_numpy(patch.data).astype(dtype))
     # the size `Spool.fill_gaps` gave: samples and one, every gap, or a width
     tol = merge["tolerance"]
     samples = tol.count is not None and bool(np.isfinite(tol.count))
@@ -600,7 +603,7 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     first = round(grid._samples_in((coord[0] - grid[0]) * sign)) if len(grid) else 0
     start, stop = max(-first, 0), min(len(coord), len(grid) - first)
     blocks = ((start, stop, first + start),) if stop > start else ()
-    data = to_numpy(patch.data).astype(dtype or patch.data.dtype, copy=False)
+    data = to_numpy(patch.data)
     fill = _fill_scalar(fill_value, data.dtype)
     data = _place_blocks(data, patch.get_axis(dim), len(grid), blocks, fill)
     coords, riders = _fill_riders(

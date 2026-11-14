@@ -555,6 +555,35 @@ class TestSpoolFillGaps:
         assert not len(empty.fill_gaps("time"))
         assert not len(empty.fill_gaps("time").chunk(time=1))
 
+    @staticmethod
+    def _mixed(dtype):
+        """A float64 patch, then one of ``dtype`` after a seven-sample gap."""
+        patches = [
+            dc.Patch(
+                data=np.arange(3, dtype=y)[None],
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=x, step=1.0, shape=(3,)),
+                },
+                dims=DIMS,
+            )
+            for x, y in ((0.0, np.float64), (10.0, dtype))
+        ]
+        return dc.spool(patches).fill_gaps("time")
+
+    def test_all_fill_window_is_not_its_donors_dtype(self):
+        """A window only of fill takes the stretch's dtype, not a neighbour's."""
+        chunked = self._mixed(np.int32).chunk(time=3)
+        for fill in (chunked[1], chunked[2]):  # an int32 patch is nearest the second
+            assert fill.data.dtype == np.float64 and np.isnan(fill.data).all()
+
+    def test_trimmed_window_takes_its_rows_dtype(self):
+        """A cut holding only a narrower patch loads as the fill states it."""
+        filled = self._mixed(np.float32)
+        (got,) = filled.cut(time=[[10.0, 12.0]])
+        (want,) = dc.spool(list(filled)).cut(time=[[10.0, 12.0]])
+        assert got.data.dtype == want.data.dtype == np.float64
+
     @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
     def test_windows_keep_the_fill_conflict_policy(self, gappy_spool, conflict):
         """Windows of a fill carry the attrs the fill settled for its stretch."""

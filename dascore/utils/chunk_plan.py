@@ -3008,7 +3008,7 @@ def build_chunk_plan(
         kdtypes = dtype_all[keep_row]
         dtype_cache: dict[str, str] = {}
 
-    def _dtypes_of(part, m_counts, rel_src, fed):
+    def _dtypes_of(part, m_counts, rel_src, fed, alone=()):
         """Each fed output's dtype; ``rel_src`` is relative to the partition."""
         part_dtypes = dtype_all[seg_starts[part] : seg_ends[part]]
         if len(pd.unique(part_dtypes)) == 1:
@@ -3018,18 +3018,18 @@ def build_chunk_plan(
         # per-output dtype pools are simple slices
         kdt = kdtypes[koffsets[part] : koffsets[part + 1]]
         bounds = np.cumsum(m_counts) - m_counts
-        # an all-fill output draws from no member, so it is the
-        # partition, not its own pool, which names its dtype
+        # an all-fill output draws only on a donor (``alone``), so it is
+        # the partition, not its own pool, which names its dtype
         whole = _combined_dtype(pd.Series(part_dtypes, dtype=object))
         combined = [
-            _combined_dtype(
+            whole
+            if out in alone
+            else _combined_dtype(
                 pd.Series(
                     kdt[rel_src[bounds[out] : bounds[out] + m_counts[out]]],
                     dtype=object,
                 )
             )
-            if m_counts[out]
-            else whole
             for out in np.flatnonzero(fed)
         ]
         return np.array(["" if x is None else str(x) for x in combined], dtype=object)
@@ -3243,7 +3243,8 @@ def build_chunk_plan(
             if has_dtype:
                 m_counts = np.bincount(rel_out[ma:mb] - a, minlength=b - a)
                 local = rel_src[ma:mb] - koffsets[part]
-                dtype_parts[slot] = _dtypes_of(part, m_counts, local, fed)
+                alone = np.flatnonzero(np.isin(np.arange(a, b), lone))
+                dtype_parts[slot] = _dtypes_of(part, m_counts, local, fed, alone)
     # Police the partitions which produced outputs; too-short (skipped)
     # partitions are exempt, and a conflict in a partition processed
     # before a deferred error outranks that error, exactly as the
