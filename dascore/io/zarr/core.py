@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import re
+from numbers import Integral
+
 import numpy as np
 
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
     CoordError,
     InvalidFiberFileError,
@@ -20,6 +24,7 @@ from dascore.io.dasdae.utils import grid_fields, read_grid_fields
 from dascore.io.netcdf.utils import (
     COORD_PREFIX,
     dataset_to_patch_meta,
+    get_xarray_data_var_name,
     payload_datasets,
     read_dataset_array,
     spool_to_cf_dataset,
@@ -34,9 +39,16 @@ from dascore.utils.patch import (
     check_kind,
     get_patch_names,
 )
+from dascore.xarray.patch import _cf_unit_str, _is_temporal
 
 # The file which marks a directory as a zarr group, by zarr format.
 _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
+# The attribute of a dimension's coordinate array listing the half-open
+# [start, stop) positions along it which hold data, where not all do.
+SPANS_ATTR = "_dascore_spans"
+# The key of one span of a payload, "<payload key>[start:]": by its start
+# alone, so a writer widening the span keeps its patches.
+_SPAN_KEY = re.compile(r"^(?P<key>.+)\[(?P<start>\d+):\]$")
 
 
 def _open_group(path: UPath, zarr_format: int | None):
@@ -116,6 +128,46 @@ def _range_fields(coord) -> dict | None:
     return fields if same and back.dtype == coord.dtype and back == coord else None
 
 
+def coord_attrs(coord) -> dict:
+    """
+    Return the attributes stating a coordinate's grid on a zarr array.
+
+    Set on a coordinate array, they describe its labels, which a scan then
+    never reads; the array may have no chunks written at all. The values
+    are JSON-safe, and include a numeric coordinate's CF ``units``. A float
+    grid's labels are built once to check the description is exact. If the
+    array's length is later changed, its attributes must be rewritten,
+    since a stated length unlike the array's is taken as stale and the
+    labels are read instead.
+
+    Parameters
+    ----------
+    coord
+        A coordinate of one grid.
+
+    Raises
+    ------
+    ParameterError
+        If the coordinate is not one grid JSON describes exactly.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.coords import get_coord
+    >>> from dascore.io.zarr import coord_attrs
+    >>> start, step = np.datetime64(0, "ns"), np.timedelta64(1, "s")
+    >>> time = get_coord(start=start, step=step, shape=(10,))
+    >>> attrs = coord_attrs(time)  # e.g. zarr_array.attrs.update(attrs)
+    """
+    if (fields := _range_fields(coord)) is None:
+        msg = f"Cannot state {coord} as a grid; its labels must be stored."
+        raise ParameterError(msg)
+    out = {COORD_PREFIX + k: v for k, v in fields.items()}
+    if coord.units is not None and not _is_temporal(coord.dtype):
+        out["units"] = _cf_unit_str(coord.units)  # as xarray states them
+    return out
+
+
 def _cf_dataset(spool, encoding: dict | None):
     """
     Return the only patch of a spool as a CF dataset, describing its grids.
@@ -153,6 +205,71 @@ def _payloads(dataset) -> dict:
     # a lone bounds table passes the only-variable rule
     bounds = {x.attrs.get("bounds") for x in dataset.variables.values()}
     return {k: v for k, v in payloads.items() if v[k].dims and k not in bounds}
+
+
+def _stated_spans(payload, where: str) -> tuple[str, list] | None:
+    """
+    Return the dimension whose coordinate states spans, and the spans.
+
+    None where no dimension of the payload states them (it is one patch).
+    """
+    dims, variables = payload[get_xarray_data_var_name(payload)].dims, payload.variables
+    stated = {
+        dim: variables[dim].attrs[SPANS_ATTR]
+        for dim in dims
+        if dim in variables and SPANS_ATTR in variables[dim].attrs
+    }
+    if not stated:
+        return None
+    if len(stated) > 1:
+        names = sorted(stated)
+        msg = f"{where}: only one dimension may state {SPANS_ATTR}, not {names}."
+        raise InvalidFiberFileError(msg)
+    ((dim, raw),) = stated.items()
+    try:
+        spans = [tuple(span) for span in raw]
+    except TypeError:
+        spans = [()]
+    ends = [x for span in spans for x in span]
+    size = payload.sizes[dim]
+    valid = (
+        all(len(span) == 2 and span[0] < span[1] for span in spans)
+        and all(isinstance(x, Integral) and not isinstance(x, bool) for x in ends)
+        and ends == sorted(ends)
+        and (not ends or (ends[0] >= 0 and ends[-1] <= size))
+    )
+    if not valid:
+        msg = (
+            f"{where}: {SPANS_ATTR} of {dim!r} must be sorted, non-empty, "
+            f"non-overlapping [start, stop) integer positions within its {size} "
+            f"samples, not {raw!r}."
+        )
+        raise InvalidFiberFileError(msg)
+    return dim, [(int(start), int(stop)) for start, stop in spans]
+
+
+def _span_keys(key: str, payload, where: str) -> list[str]:
+    """Return the key of each patch of a payload: one per span it states."""
+    if (stated := _stated_spans(payload, f"{where} {key!r}")) is None:
+        return [key]
+    return [f"{key}[{start}:]" for start, _ in stated[1]]
+
+
+def _span_metas(meta: dc.PatchMeta, payload, key: str, where: str) -> list:
+    """Split a payload's description into one per span it states."""
+    if (stated := _stated_spans(payload, f"{where} {key!r}")) is None:
+        return [meta]
+    dim, spans = stated
+    return [
+        dc.PatchMeta(
+            attrs=meta.attrs,
+            coords=meta.coords.select(samples=True, **{dim: (start, stop)})[0],
+            dims=meta.dims,
+            dtype=meta.dtype,
+            source=ArraySource(key=f"{key}[{start}:]"),
+        )
+        for start, stop in spans
+    ]
 
 
 def _patch_keys(group: str, payloads: dict) -> dict:
@@ -207,6 +324,16 @@ def _patches(path: UPath, zarr_format: int | None):
             continue
         with dataset:
             yield from _patch_keys(group, _payloads(dataset)).items()
+
+
+def _span(payload, start: int, where: str):
+    """Return the span of a payload starting at ``start``, as a dataset."""
+    dim, spans = _stated_spans(payload, where) or (None, [])
+    if (stop := dict(spans).get(start)) is None:
+        name = get_xarray_data_var_name(payload)
+        msg = f"No span from {start} stated for '{name}' in {where}."
+        raise PatchAttributeError(msg)
+    return payload.isel({dim: slice(start, stop)})
 
 
 def _payload_group(root, key: str, where: str):
@@ -378,6 +505,9 @@ def _extend(patch, resource: UPath, zarr_format: int, dim: str) -> bool:
     if others:
         msg = f"{key!r} shares {dim!r} with {others}; alone, they would fall short."
         raise NotImplementedError(msg)
+    if SPANS_ATTR in node[dim].attrs:
+        msg = f"{key!r} states {SPANS_ATTR} along {dim!r}, which would not cover it."
+        raise NotImplementedError(msg)
     payload, labels = node[name], node[dim]
     scaled = {"scale_factor", "add_offset"}
     stored = (payload, labels)
@@ -463,10 +593,12 @@ class ZarrV3(FiberIO):
         self, resource: UPath, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Describe each patch from its metadata and coordinates."""
+        where = str(resource)
         return [
-            meta
+            span
             for key, dataset in _patches(resource, _store_format(resource))
             for meta in dataset_to_patch_meta(dataset, snap, key=key)
+            for span in _span_metas(meta, dataset, key, where)
         ]
 
     def read_array(
@@ -474,15 +606,23 @@ class ZarrV3(FiberIO):
     ) -> np.ndarray:
         """Read a window of one patch; only the chunks it touches are read."""
         where, zarr_format = str(resource), _store_format(resource)
+        root = _open_group(resource, zarr_format)
         if not key:  # every group is opened only when no key names a patch
-            keys = [x for x, _ in _patches(resource, zarr_format)]
+            patches = _patches(resource, zarr_format)
+            keys = [x for k, ds in patches for x in _span_keys(k, ds, where)]
             key = resolve_keyed_source(dict(zip(keys, keys)), key, where)
-        node = _payload_group(_open_group(resource, zarr_format), key, where)
+        start = None
+        # one span of a payload, unless a node is named so
+        if (match := _SPAN_KEY.match(key)) and key not in root:
+            key, start = match["key"], int(match["start"])
+        node = _payload_group(root, key, where)
         if (dataset := _open_payload_group(resource, zarr_format, node)) is None:
             raise PatchAttributeError(f"No patch named '{key}' in {where}.")
         with dataset:
             patches = _patch_keys(node.path, _payloads(dataset))
             payload = resolve_keyed_source(patches, key, where)
+            if start is not None:
+                payload = _span(payload, start, where)
             return read_dataset_array(payload, windows, "", where)
 
     def write(

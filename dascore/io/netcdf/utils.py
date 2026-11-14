@@ -151,14 +151,6 @@ def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray 
     return values
 
 
-def _get_dim_coord(dataset, coord_name: str, coord_len: int) -> np.ndarray:
-    """Return one dimension coordinate for a coord-less payload variable."""
-    tied_values = _get_tie_point_coord(dataset, coord_name, coord_len)
-    if tied_values is not None:
-        return tied_values
-    return np.arange(coord_len)
-
-
 def stated_range(variable) -> dict | None:
     """
     Return the grid a variable's (xarray's or zarr's) attrs describe, else None.
@@ -216,11 +208,19 @@ def dataset_to_patch_meta(
         name: (coord.dims, get_scan_coord(coord, snap if name in dims else (), where))
         for name, coord in data_array.coords.items()
     }
-    # A dimension the dataset gives no coordinate is rebuilt on its own.
+    # A dimension the dataset gives no coordinate is rebuilt on its own:
+    # from XDAS tie points, else sample numbers; those of two or more are a
+    # range never built as an array (a store allocated ahead of its data
+    # can hold billions), and shorter ones keep the labels they always had.
     for dim, size in zip(dims, shape, strict=True):
-        if dim not in coords:
-            values = _get_dim_coord(dataset, dim, size)
-            coords[dim] = (dim, stored_coord(values, snap, name=dim, where=where))
+        if dim in coords:
+            continue
+        values = _get_tie_point_coord(dataset, dim, size)
+        if values is None and size > 1:
+            coords[dim] = (dim, get_coord(start=0, stop=size, step=1))
+            continue
+        values = np.arange(size) if values is None else values
+        coords[dim] = (dim, stored_coord(values, snap, name=dim, where=where))
     meta = dc.PatchMeta(
         attrs=_cf_attrs(data_array.attrs, data_var_name),
         coords=dc.get_coord_manager(coords=coords, dims=dims),
