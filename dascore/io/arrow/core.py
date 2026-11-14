@@ -1,4 +1,4 @@
-"""Core module for reading and writing the DASCore Arrow patch format."""
+"""Core module for reading and writing the DASARROW patch format."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ def _read_values(batches, doc) -> np.ndarray:
 
 class ArrowV1(FiberIO):
     """
-    The DASCore Arrow patch format: one patch per Arrow IPC file or stream.
+    The DASARROW patch format: one patch per Arrow IPC file or stream.
 
     The patch's values are one Arrow column, ``data``, flattened in C order
     and split into record batches; the dims, shape, coordinates and attrs
@@ -107,11 +107,11 @@ class ArrowV1(FiberIO):
     >>>
     >>> patch = dc.get_example_patch()
     >>> path = Path(tempfile.mkdtemp()) / "patch.arrow"
-    >>> _ = dc.write(patch, path, "ARROW")
+    >>> _ = dc.write(patch, path, "DASARROW")
     >>> assert dc.spool(path)[0] == patch
     """
 
-    name = "ARROW"
+    name = "DASARROW"
     version = "1"
     preferred_extensions = ("arrow", "arrows")
 
@@ -174,7 +174,7 @@ class ArrowV1(FiberIO):
         pa = optional_import("pyarrow")
         if not isinstance(spool, dc.Patch):
             if len(spool) != 1:
-                msg = f"ARROW holds one patch per file; got {len(spool)}."
+                msg = f"DASARROW holds one patch per file; got {len(spool)}."
                 raise _UnsupportedError(msg)
             spool = spool[0]
         doc = patch_document(spool)
