@@ -118,6 +118,13 @@ smoothed.viz.waterfall(show=True);
 
 A window provides the reductions `mean`, `median`, `min`, `max`, `std`, and `sum`, and `reduce` for any other function. Specify a coordinate-unit window or set `samples=True` for an exact sample count.
 
+A step as long as the window gives non-overlapping blocks, such as the mean of each pair of channels. `align="middle"` starts the blocks at the first sample and labels each at its centre; `ends="partial"` keeps a short last block, reduced over the samples it has.
+
+```{python}
+pairs = event.window(distance=2, step=2, samples=True, align="middle", ends="partial")
+stacked = pairs.mean()
+```
+
 # Gain
 
 ## Automatic gain control
