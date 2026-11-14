@@ -928,6 +928,20 @@ class TestSpoolSnapCoords:
         assert labels(lazy.cut(time=windows)) == labels(eager.cut(time=windows))
         assert len(lazy.get_gaps()) == len(eager.get_gaps())
 
+    def test_after_selecting_another_coordinate(self):
+        """A selection on a coordinate riding the dimension is applied first."""
+        time = get_coord(data=np.array([0.0, 1.1, 1.9, 3.02, 4.0, 5.1]))
+        coords = {"time": time, "distance": np.arange(2.0), "q": ("time", time.values)}
+        patch = dc.Patch(data=np.ones((6, 2)), coords=coords, dims=("time", "distance"))
+        with suppress_warnings(UserWarning):
+            spool = dc.spool([patch]).select(q=(1.5, 6.0)).snap_coords("time")
+            coord = spool[0].get_coord("time")
+        contents = spool.get_contents().iloc[0]
+        assert (contents["time_min"], contents["time_step"]) == (
+            coord.min(),
+            coord.step,
+        )
+
     def test_unknown_dimension_raises(self, wacky):
         """A dimension no patch has is refused by name."""
         with pytest.raises(dc.exceptions.CoordError, match="bob"):

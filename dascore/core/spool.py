@@ -2841,7 +2841,9 @@ class Spool(NodeRepr, NamespaceOwner):
             moves |= step is not None
             for index in np.flatnonzero(dims.map(lambda x, d=dim: d in x) & moves):
                 row = rows.iloc[index].to_dict()
-                manager = _source_manager(resolver, row, files, projection=dim)
+                # a selection on another coordinate needs that one to replay
+                whole = any(set(x) - {dim} for x, _, _ in residuals)
+                manager = _source_manager(resolver, row, files, None if whole else dim)
                 manager = _select_manager(manager, residuals)
                 with suppress_warnings(UserWarning):  # warned as patches load
                     manager = manager.snap(dim, **kwargs)[0]
