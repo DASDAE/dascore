@@ -3706,6 +3706,54 @@ class TestLookupOnRoundedGrid:
         assert len(coord.select((values[-1], values[-1]))[0]) == 1
 
 
+class TestLookupSlack:
+    """
+    A float grid looks values up within its own dtype's allowance, however
+    its end labels happen to be held.
+    """
+
+    @pytest.fixture(
+        params=[
+            # end labels exactly held by float32, interior ones not
+            (np.arange(11) * 0.1, 0.5000005),
+            (np.arange(10001) * 0.1, 500.0001),
+            (np.arange(1001) * 0.001, 0.5000005),
+            (np.arange(1001) * 0.1, 1.00001),
+        ],
+        ids=["tenths", "wide_tenths", "thousandths", "wide"],
+    )
+    def absent(self, request):
+        """A float64 grid and a value near, but not within slack of, a label."""
+        values, value = request.param
+        coord = get_coord(data=values)
+        assert coord.evenly_sampled and coord.dtype == np.float64
+        return coord, value
+
+    def test_absent_value_not_found(self, absent):
+        """The value is no label: select, order and next index all say so."""
+        coord, value = absent
+        assert not coord.select(np.array([value]))[1].any()
+        assert not coord.select(np.array([value, value]))[1].any()
+        assert not len(coord.select((value, value))[0])
+        with pytest.raises(CoordError, match="does not hold"):
+            coord.order(np.array([value]))
+        index = int(np.searchsorted(coord.values, value))
+        assert coord.get_next_index(value) == index
+        assert np.array_equal(
+            coord.get_next_index(np.array([value, value])), [index] * 2
+        )
+
+    def test_float32_query(self):
+        """A float32 value of a float64 grid's label finds it."""
+        coord = get_coord(start=0.0, stop=1.0, step=0.1)
+        query = np.array([0.1, 0.5], dtype=np.float32)
+        _, inds = coord.order(query)
+        assert np.array_equal(inds, [1, 5])
+        assert np.array_equal(np.flatnonzero(coord.select(query)[1]), [1, 5])
+        assert np.array_equal(coord.order(query[:1])[1], [1])
+        assert np.array_equal(np.flatnonzero(coord.select(query[:1])[1]), [1])
+
+
 class TestSnapTimeUnits:
     """Snapping time labels stored in any unit keeps their span."""
 

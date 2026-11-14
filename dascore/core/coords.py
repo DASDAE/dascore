@@ -1529,9 +1529,12 @@ def _stored_float_dtype(values) -> np.dtype:
     return values.dtype
 
 
-def _float_allowance(values, step) -> float:
-    """How far a float label may sit from its grid position and be on it."""
-    dtype = _stored_float_dtype(values)
+def _float_allowance(values, step, dtype=None) -> float:
+    """
+    How far a float label may sit from its grid position and be on it, in
+    units of `dtype`, else of the dtype the labels were stored in.
+    """
+    dtype = np.dtype(dtype or _stored_float_dtype(values))
     scale = dtype.type(np.max(np.abs(values)))
     ulps = _GRID_ULPS * float(np.spacing(scale))
     return max(_GRID_RTOL * abs(float(step)), ulps)
@@ -1553,14 +1556,15 @@ def _onto_grid(coord, values):
         label = last if index == grid.count - 1 else index * spacing + first
         if not (0 <= index < grid.count and abs(label - value) <= slack):
             return values
-        out = np.full(array.shape, label, array.dtype)
+        out = np.full(array.shape, label, np.promote_types(array.dtype, coord.dtype))
         return label if isinstance(values, float) else out[()]
     with np.errstate(all="ignore"):
         index = np.nan_to_num(np.round((array - first) / step))
         index = np.clip(index, 0, grid.count - 1).astype(np.int64)
         labels = grid.labels(index, coord.dtype)
         out = np.where(np.abs(labels - array) <= slack, labels, array)
-    return out.astype(array.dtype)[()]
+    # in a dtype holding both the matched labels and the unmatched values
+    return out.astype(np.promote_types(array.dtype, coord.dtype))[()]
 
 
 def _ticks_as(ticks, dtype) -> np.ndarray:
@@ -2526,7 +2530,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         simple = (grid.k0, grid.stride, grid.parent_count) == (0, 1, None)
         simple = simple and self.dtype == np.float64  # labels python can compute
         spacing = (last - first) / max(grid.count - 1, 1) if simple else 0.0
-        return first, float(step), 2 * _float_allowance(ends, step), spacing, last
+        slack = 2 * _float_allowance(ends, step, self.dtype)
+        return first, float(step), slack, spacing, last
 
     @property
     def _grid(self) -> Grid | None:  # type: ignore[override]
