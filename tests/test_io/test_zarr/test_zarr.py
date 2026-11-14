@@ -1051,10 +1051,24 @@ class TestAllocatedStore:
 
     def test_span_like_name_is_a_name(self, tmp_path):
         """A payload whose own name looks like a span key is read by that name."""
-        path = tmp_path / "named.zarr"
+        path = UPath("memory://dascore_zarr_spans/named.zarr")  # ":" is no Windows name
         group = zarr.open_group(path, mode="w", zarr_format=3)
         group.create_array("x[3:]", data=np.arange(5.0), dimension_names=["time"])
         assert np.array_equal(ZarrV3().read_array(path, key="x[3:]"), np.arange(5.0))
+
+    def test_span_key_beside_like_name(self, tmp_path):
+        """A span key names the span even beside a payload named like it."""
+        path = UPath("memory://dascore_zarr_spans/beside.zarr")
+        group = zarr.open_group(path, mode="w", zarr_format=3)
+        for name, data in [("x", np.arange(4.0)), ("x[0:]", -np.arange(4.0))]:
+            group.create_array(name, data=data, dimension_names=["samples"])
+        samples = group.create_array(
+            "samples", data=np.arange(4), dimension_names=["samples"]
+        )
+        samples.attrs[SPANS_ATTR] = [[0, 2]]
+        assert np.array_equal(ZarrV3().read_array(path, key="x[0:]"), [0.0, 1.0])
+        meta = {x._source.key: x for x in ZarrV3().get_metadata(path)}["x[0:]"]
+        assert meta.shape == (2,)  # a dimension named like a select option
 
     def test_append_refused_along_spans(self, tmp_path):
         """Extending along a dimension stating spans would hide the new samples."""
@@ -1078,7 +1092,16 @@ class TestAllocatedStore:
 
     @pytest.mark.parametrize(
         "spans",
-        [[[0, 10], [5, 20]], [[90, 101]], [[-1, 2]], [[3, 3]], [[0.5, 3.9]], [[1]], 5],
+        [
+            [[0, 10], [5, 20]],
+            [[90, 101]],
+            [[-1, 2]],
+            [[3, 3]],
+            [[0.5, 3.9]],
+            [[0, None]],
+            [[1]],
+            5,
+        ],
     )
     def test_invalid_spans(self, tmp_path, spans):
         """Spans overlapping, out of bounds, empty or not integers name the array."""

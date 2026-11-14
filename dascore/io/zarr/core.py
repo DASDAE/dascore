@@ -233,8 +233,8 @@ def _stated_spans(payload, where: str) -> tuple[str, list] | None:
     ends = [x for span in spans for x in span]
     size = payload.sizes[dim]
     valid = (
-        all(len(span) == 2 and span[0] < span[1] for span in spans)
-        and all(isinstance(x, Integral) and not isinstance(x, bool) for x in ends)
+        all(isinstance(x, Integral) and not isinstance(x, bool) for x in ends)
+        and all(len(span) == 2 and span[0] < span[1] for span in spans)
         and ends == sorted(ends)
         and (not ends or (ends[0] >= 0 and ends[-1] <= size))
     )
@@ -263,7 +263,7 @@ def _span_metas(meta: dc.PatchMeta, payload, key: str, where: str) -> list:
     return [
         dc.PatchMeta(
             attrs=meta.attrs,
-            coords=meta.coords.select(samples=True, **{dim: (start, stop)})[0],
+            coords=meta.coords.isel({dim: slice(start, stop)})[0],
             dims=meta.dims,
             dtype=meta.dtype,
             source=ArraySource(key=f"{key}[{start}:]"),
@@ -612,8 +612,8 @@ class ZarrV3(FiberIO):
             keys = [x for k, ds in patches for x in _span_keys(k, ds, where)]
             key = resolve_keyed_source(dict(zip(keys, keys)), key, where)
         start = None
-        # one span of a payload, unless a node is named so
-        if (match := _SPAN_KEY.match(key)) and key not in root:
+        # one span of the payload the key starts with, where there is one
+        if (match := _SPAN_KEY.match(key)) and match["key"] in root:
             key, start = match["key"], int(match["start"])
         node = _payload_group(root, key, where)
         if (dataset := _open_payload_group(resource, zarr_format, node)) is None:
