@@ -34,6 +34,8 @@ from dascore.utils.array_api import (
     asarray_like,
     backend_name,
     device,
+    is_numpy,
+    to_numpy,
 )
 from dascore.utils.misc import optional_import, suppress_warnings
 from dascore.utils.patch import _call_str, check_patch_attrs, check_patch_coords
@@ -770,12 +772,19 @@ class Windowed(PatchProcessor):
 
 
 def _blended_piece(shared, piece, box, needed):
-    """Return one piece of a dask array: the windows around it blended, and cut."""
+    """
+    Return one piece of a dask array: the windows around it blended, and cut.
+
+    The blend is NumPy's. A piece whose chunks are another library's, as
+    those of a dask array on a GPU are, is brought to NumPy for it and the
+    result put back where the piece was.
+    """
     contract, run, dtype = shared
     with _DASK_TURN:
-        out = contract.apply(run, np.asarray(piece), box, needed)
+        out = contract.apply(run, to_numpy(piece), box, needed)
     # In the dtype the result states, whatever this piece's values made.
-    return out.astype(dtype, copy=False)
+    out = out.astype(dtype, copy=False)
+    return out if is_numpy(piece) else asarray_like(out, piece)
 
 
 def _weighted(xp, array, weights: np.ndarray):

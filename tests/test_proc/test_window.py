@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import functools
 import pickle
 import tracemalloc
 import warnings
@@ -1371,6 +1372,24 @@ class TestOtherBackends:
             tracemalloc.stop()
         # One window whole is 4 by two million samples: 64 MB.
         assert out.dtype == np.float64 and peak < 40e6
+
+    def test_dask_piece_of_another_library(self, patch, library):
+        """A piece whose chunk is another library's goes back to it, blended."""
+        if library != "dask":
+            pytest.skip("only dask computes in pieces")
+        strict = pytest.importorskip("array_api_strict")
+        operation = Windowed(dc.proc.Abs(), time=64, samples=True)
+        _, plan = operation.get_metadata(patch.drop_data())
+        contract = operation.chunk_contract(patch.dtype, plan)
+        run = functools.partial(operation.numpy_kernel, **plan)
+        box = (slice(0, 300), slice(320, 384))
+        needed = contract.needs(box, patch.shape)
+        shared = (contract, run, np.dtype(np.float64))
+        piece = strict.asarray(patch.data[needed])
+        out = window_module._blended_piece(shared, piece, box, needed)
+        whole = operation.numpy_kernel(patch.data, **plan)
+        assert type(out) is type(piece)
+        np.testing.assert_array_equal(np.asarray(out), whole[box])
 
     def test_dask_result_pickles(self, patch, library):
         """A windowed result on dask can be pickled, tasks and all."""
