@@ -427,7 +427,10 @@ def stored_coord(
     count = len(labels) if count is None else count
     snappable = labels.ndim == 1 and np.dtype(labels.dtype).kind in "iufmM"
     if not (should_snap(snap, name) and snappable and count):
-        return get_coord(data=decode(labels[:count]), units=units, snap=False)
+        # float labels within their precision of a grid are it, unless the
+        # caller asked for every label exactly as stored
+        exact = False if snap is False else None
+        return get_coord(data=decode(labels[:count]), units=units, snap=exact)
     stated = start is not None and step is not None
     positions = _checked_positions(count, quartiles=not stated)
     stored = np.asarray(labels[positions.tolist()])
