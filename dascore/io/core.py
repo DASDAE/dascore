@@ -20,6 +20,7 @@ from collections.abc import (
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
 from functools import cache, cached_property, wraps
+from graphlib import TopologicalSorter
 from math import prod
 from pathlib import Path
 from threading import RLock
@@ -223,6 +224,33 @@ def _get_reloadable_source_path(
     return ""
 
 
+def _order_fiber_ios(fiber_ios: list[FiberIO]) -> tuple[FiberIO, ...]:
+    """
+    Move each fiber_io just before or after the formats it names.
+
+    The rest keep their order. A cycle of such constraints raises
+    `graphlib.CycleError`.
+    """
+    rank = {io: float(i) for i, io in enumerate(fiber_ios)}
+    key, graph = dict(rank), {io: set() for io in fiber_ios}  # io: tried first
+    for io in fiber_ios:
+        before, after = ({x.upper() for x in names} for names in (io.before, io.after))
+        for other in fiber_ios:
+            if (name := other.name.upper()) in before:
+                graph[other].add(io)
+                key[io] = min(key[io], rank[other] - 0.5)
+            if name in after:
+                graph[io].add(other)
+                key[io] = max(key[io], rank[other] + 0.5)
+    sorter, ready, out = TopologicalSorter(graph), [], []
+    sorter.prepare()
+    while sorter.is_active():
+        ready = sorted([*ready, *sorter.get_ready()], key=key.__getitem__)
+        out.append(io := ready.pop(0))
+        sorter.done(io)
+    return tuple(out)
+
+
 class _FiberIOManager:
     """
     A structure for intelligently storing, loading, and return FiberIO objects.
@@ -254,7 +282,7 @@ class _FiberIOManager:
         # Kept as two dicts rather than one keyed by a discriminating
         # prefix so each stays a single value type.
         self._input_type_cache: dict[str, frozenset[FiberIO]] = {}
-        self._prioritized_cache: dict[str, tuple[FiberIO, ...]] = {}
+        self._prioritized_cache: dict[tuple, tuple[FiberIO, ...]] = {}
 
     def __getstate__(self) -> dict:
         """Return copy/pickle state without the process-local lock."""
@@ -302,30 +330,33 @@ class _FiberIOManager:
         return cached
 
     @_locked("_lock")
-    def _get_prioritized_list(self, input_type="file") -> tuple[FiberIO, ...]:
-        """Yield a prioritized list of fiber_ios."""
-        if (cached := self._prioritized_cache.get(input_type)) is not None:
+    def _get_prioritized_list(
+        self, input_type="file", extension: str | None = None
+    ) -> tuple[FiberIO, ...]:
+        """
+        Return the fiber_ios to try, in order.
+
+        Those preferring ``extension`` come first, then every other; within
+        each, catch-alls last, and each format's newest version before any
+        older one, then by format name. Each fiber_io is then moved before
+        or after the formats it names.
+        """
+        key = (input_type, extension)
+        if (cached := self._prioritized_cache.get(key)) is not None:
             return cached
         # must load all plugins before getting list
         self.load_plugins()
-        priority_fiber_ios = []
-        second_class_fiber_ios = []
-        for format_name in self.known_formats:
-            if not (unsorted := self._format_version.get(format_name)):
-                continue
-            keys = sorted(unsorted, reverse=True)
-            fiber_ios = [unsorted[key] for key in keys]
-            priority_fiber_ios.append(fiber_ios[0])
-            if len(fiber_ios) > 1:
-                second_class_fiber_ios.extend(fiber_ios[1:])
-        maybe_ios = sorted(
-            priority_fiber_ios + second_class_fiber_ios, key=lambda x: x.fallback
-        )
-        # Now filter to input_type
-        valid_fiberio_by_type = self._get_fiber_io_by_input_type(input_type)
-        out = tuple(x for x in maybe_ios if x in valid_fiberio_by_type)
-        # And return fiberIOs that much the input type.
-        self._prioritized_cache[input_type] = out
+        valid = self._get_fiber_io_by_input_type(input_type)
+        preferred = set(self._extension_list.get(extension, ()))
+        ranked = []
+        for name in sorted(self._format_version):
+            versions = self._format_version[name]
+            for age, ver in enumerate(sorted(versions, reverse=True)):
+                io = versions[ver]
+                if io in valid:
+                    ranked.append(((io not in preferred, io.fallback, age > 0), io))
+        fiber_ios = [io for _, io in sorted(ranked, key=lambda x: x[0])]
+        out = self._prioritized_cache[key] = _order_fiber_ios(fiber_ios)
         return out
 
     def load_plugins(self, format: str | None = None):
@@ -476,10 +507,7 @@ class _FiberIOManager:
             return
         if input_type is not None and (out := fiber_io_hint.get(input_type)):
             yield out
-        if extension is not None:
-            yield from self._yield_extensions(extension, input_type)
-        else:
-            yield from self._get_prioritized_list(input_type)
+        yield from self._get_prioritized_list(input_type, extension)
 
     def _yield_format_version(self, format, version):
         """Yield file format/version prioritized fiber_ios."""
@@ -509,21 +537,6 @@ class _FiberIOManager:
         for fiber_io in dict(sorted(fiber_ios.items(), reverse=True)).values():
             yield fiber_io
         return
-
-    def _yield_extensions(self, extension, input_type=None):
-        """Generator to get fiber_io prioritized by preferred extensions."""
-        has_yielded = set()
-        self.load_plugins()
-        potential_fiberios = self._get_fiber_io_by_input_type(input_type)
-        with self._lock:
-            extension_fiberios = tuple(self._extension_list.get(extension, ()))
-        for fiber_io in extension_fiberios:
-            if fiber_io in potential_fiberios:
-                yield fiber_io
-            has_yielded.add(fiber_io)
-        for fiber_io in self._get_prioritized_list(input_type):
-            if fiber_io not in has_yielded:
-                yield fiber_io
 
     def _get_format(
         self,
@@ -774,6 +787,10 @@ class FiberIO:
     # True for a catch-all reader, tried after every other reader and never
     # as the next file's first guess.
     fallback: bool = False
+    # Format names this is tried before, or after, whatever the order
+    # otherwise; e.g. a plugin reading some zarr stores sets ("ZARR",).
+    before: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
