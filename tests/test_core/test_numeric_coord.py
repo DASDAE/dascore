@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from dascore.core import coords as coords_module
 from dascore.core.coords import (
+    Blank,
     CoordString,
     Grid,
     Labels,
@@ -316,6 +317,11 @@ class TestBaseCoordFallbacks:
     def test_no_discontinuities(self, partial):
         """A coordinate which states no values states no seams."""
         assert not len(partial.get_discontinuities("all"))
+
+    def test_a_float_blank_stating_its_range_is_it(self):
+        """A blank whose float ends and step span its length is that range."""
+        out = get_coord(runs=(Blank((3,), 0.0, 0.30000000000000004),), step=0.1)
+        assert out.evenly_sampled and np.allclose(out.values, [0.0, 0.1, 0.2])
 
     def test_string_coords_keep_base_fallbacks(self):
         """Text has no grid to snap to."""

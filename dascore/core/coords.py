@@ -4312,8 +4312,6 @@ def _released_or_exact(snapped, data, units) -> BaseCoord:
         ):
             return snapped
     exact = _exact_coord(data, units=units)
-    if exact.evenly_sampled:  # as a grid, which the released result was
-        return exact
     if _shift(snapped, data) >= 0.5:
         spread = exact.snap()
         return spread if _shift(spread, data) < 0.5 else exact
