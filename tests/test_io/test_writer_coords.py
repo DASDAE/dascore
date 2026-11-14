@@ -263,9 +263,16 @@ class TestManySegments:
         assert segment_layout(back) == segment_layout(coord)
         assert {x.step for x in back.segments} == {coord.segments[0].step}
 
-    def test_dasdae_refuses_more_segments_than_it_records(self, tmp_path):
-        """An HDF5 attribute holds only so many lengths; the refusal says why."""
-        with dc.config_context(max_index_runs=20_000):
-            patch = self._patch(10_000)
-        with pytest.raises(CoordError, match=r"DASDAE.*10000 segments.*split_gaps"):
+    def test_dasdae_records_up_to_its_segment_limit(self, tmp_path):
+        """8,000 segments write and read back; one more is refused, saying why."""
+        with dc.config_context(max_index_runs=10_000):
+            most, patch = (self._patch(x, keep=2, period=3) for x in (8_000, 8_001))
+        assert most.get_coord("time").runs_count == 8_000
+        most.io.write(tmp_path / "most.h5", "DASDAE")
+        assert dc.read(tmp_path / "most.h5")[0].get_coord("time") == most.get_coord(
+            "time"
+        )
+        with pytest.raises(
+            CoordError, match=r"8,000 segments: it has 8001 segments.*split_gaps"
+        ):
             patch.io.write(tmp_path / "out.h5", "DASDAE")

@@ -190,6 +190,8 @@ _OBJECT_TYPE = "object_type"
 _RANGE = "CoordRange"
 # An array node's run lengths, whose labels are read as written.
 _EXACT = "exact"
+# The lengths an HDF5 attribute (64 kB, less its header) holds as int64.
+_MAX_SEGMENTS = 8_000
 
 
 def grid_fields(coord) -> dict | None:
@@ -261,11 +263,10 @@ def _save_coord(coord, name, group, compact: bool, options=None):
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
         if compact and getattr(coord, "runs_count", 1) > 1:
-            try:  # runs read back as they are; HDF5 holds ~8,000 lengths
-                node.attrs[_EXACT] = np.array([x.count for x in coord.runs], np.int64)
-            except OSError:
-                why = "DASDAE, which records up to about 8,000 segments"
-                raise CoordError(_uneven_message(name[7:], coord, why)) from None
+            if coord.runs_count > _MAX_SEGMENTS:  # runs read back as they are
+                why = f"DASDAE, which records up to {_MAX_SEGMENTS:,} segments"
+                raise CoordError(_uneven_message(name[7:], coord, why))
+            node.attrs[_EXACT] = np.array([x.count for x in coord.runs], np.int64)
     if compact:
         node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
