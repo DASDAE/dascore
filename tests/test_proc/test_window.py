@@ -701,6 +701,15 @@ class _Lags(dc.PatchProcessor):
         return xp.moveaxis(out, -1, axis)
 
 
+def _numpy_warns() -> bool:
+    """Whether this platform raises NumPy's floating-point warnings at all."""
+    # WebAssembly has no floating-point exception flags for NumPy to read.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        np.zeros(1) / np.zeros(1)
+    return bool(caught)
+
+
 def _lagged(data: np.ndarray, lag: int, every: int = 1, ahead=False) -> np.ndarray:
     """What `_Lags` makes of the whole of some data: NaN where it has no pair."""
     empty = np.full((*data.shape[:-1], lag), np.nan)
@@ -1025,6 +1034,8 @@ class TestEmptyEnds:
         # which lies wholly inside it, from sample 0 to 199.
         data[5, 50:100] = 0
         silent = patch.new(data=data).window(time=200, samples=True)
+        if not _numpy_warns():
+            pytest.skip("this platform raises no floating-point warnings")
         with pytest.warns(RuntimeWarning, match="invalid value"):
             silent.stalta(time=(5, 40), samples=True)
 
@@ -1044,6 +1055,8 @@ class TestEmptyEnds:
         chunked = dask_array.from_array(data, chunks=(300, 1000))
         out = patch.new(data=chunked).window(time=100, samples=True)
         heard = out.stalta(time=(5, 40), samples=True)
+        if not _numpy_warns():
+            pytest.skip("this platform raises no floating-point warnings")
         with pytest.warns(RuntimeWarning, match="invalid value"):
             heard.data.compute(scheduler="synchronous")
 
