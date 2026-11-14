@@ -577,6 +577,12 @@ class Windowed(PatchProcessor):
         spans = zip(window.axes, window.dims, window.size, window.stride, strict=True)
         for axis, dim, size, stride in spans:
             every = _every(tile, made, dim, size, made.shape[axis])
+            if every is None and made.shape[axis] == 1:
+                self._refuse(
+                    f"it turns {shapes}, one sample for each window along "
+                    f"{dim}, which leaves nothing to blend; a window must be "
+                    "left at least two samples long."
+                )
             if every is None:
                 self._refuse(
                     f"it turns {shapes}, and along a windowed dimension only "

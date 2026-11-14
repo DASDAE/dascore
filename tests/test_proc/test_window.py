@@ -1040,8 +1040,8 @@ class TestOperationsRefused:
         """Only every n-th sample of a window, from its first, is blended."""
         with pytest.raises(ParameterError, match="or every n-th sample of it"):
             Windowed(_Lags(lag=3, skip=1, every=2), time=100, samples=True)(patch)
-        # One sample for a window is a reduction, which is not blended.
-        with pytest.raises(ParameterError, match="or every n-th sample of it"):
+        # One sample for a window leaves nothing to blend.
+        with pytest.raises(ParameterError, match="one sample for each window"):
             Windowed(_Lags(lag=3, every=100), time=100, samples=True)(patch)
 
     def test_windows_which_miss_the_grid(self, patch):
