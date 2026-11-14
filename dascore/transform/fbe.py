@@ -71,9 +71,9 @@ class Fbe(PatchProcessor):
     >>> ax = fbe_patch.viz.waterfall(cmap = 'Spectral_r')
     >>> _ = ax.set_title('FBE along distance-axis')
 
-    In windows of a long record, each filtered on its own. The windows
-    must overlap by at least the rolling window, and with a `step` must
-    advance by a multiple of it:
+    In windows of a long record, each filtered on its own:
+    >>> # The windows overlap by at least the rolling window, and with a
+    >>> # step they advance by a multiple of it: 15 ms here, every 0.5 ms.
     >>> windows = p.window(time=0.02, overlap=0.005)
     >>> fbe_patch = windows.fbe(time=(500, 2000), window=0.002, step=0.0005)
 
@@ -81,8 +81,10 @@ class Fbe(PatchProcessor):
     -----
     - The first samples have no whole window behind them and are NaN.
     - In a window of [`Patch.window`](`dascore.Patch.window`) those samples
-      are discarded from each window and the rest blended, and the first
-      samples of the patch are NaN as they are here. Decibels are
+      are discarded from each window and the rest blended, so the windows
+      must overlap by at least the rolling window, and with a `step` must
+      advance by a multiple of it. The first samples of the patch are NaN
+      as they are here. Decibels are
       blended as they are, so where two windows meet the result lies
       between theirs in decibels.
     """

@@ -445,6 +445,9 @@ class Windowed(PatchProcessor):
 
     # Reached through `Patch.window`, so it has no patch method of its own.
     name = None
+    # 1.1: a sample the taper gives no weight adds nothing to the blend, so
+    # a NaN or an infinity there no longer reaches the next window's sample.
+    __version__ = "1.1"
 
     operation: Any
     overlap: Any = None
