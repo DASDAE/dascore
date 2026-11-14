@@ -58,6 +58,7 @@ _LAZY_SPELLING = re.compile(r"(?:lazyarray|lazy)(?:\[\s*([\w.]+)\s*\])?", re.IGN
 # The module which is an array library's namespace, where it is not the
 # package itself.
 _NAMESPACES = {"jax": "jax.numpy", "dask": "dask.array"}
+_MODULE_NAMES = {module: name for name, module in _NAMESPACES.items()}
 # The array library patches are being read onto lazily, or None when reads
 # fill memory as usual; see `reading_lazily`.
 _LAZY_READ: ContextVar[str | None] = ContextVar("dascore_lazy_read", default=None)
@@ -152,16 +153,20 @@ def parse_backend(backend: str) -> tuple[bool, str]:
     >>> assert parse_backend("LazyArray[jax]") == (True, "jax")
     """
     text = str(backend).strip()
-    if found := _LAZY_SPELLING.fullmatch(text):
-        return True, (found.group(1) or NUMPY_BACKEND).lower()
-    if not re.fullmatch(r"[\w.]+", text):
+    found = _LAZY_SPELLING.fullmatch(text)
+    library = (found.group(1) or NUMPY_BACKEND) if found else text
+    # A library is known by the name `backend_name` reports, which is how
+    # a kernel is registered for it; the module it is imported from is
+    # read as that name.
+    library = _MODULE_NAMES.get(library.lower(), library.lower())
+    if not re.fullmatch(r"\w+", library):
         msg = (
             f"{backend!r} is not a backend. Name an array library, such as "
             "'numpy' or 'jax', or a lazy one: 'lazy', 'LazyArray' or "
             "'LazyArray[jax]'."
         )
         raise ParameterError(msg)
-    return False, text.lower()
+    return found is not None, library
 
 
 def to_backend(array: Any, backend: str) -> Any:
@@ -188,13 +193,15 @@ def to_backend(array: Any, backend: str) -> Any:
     >>>
     >>> assert isinstance(to_backend(np.array([1, 2]), "numpy"), np.ndarray)
     """
-    if backend == NUMPY_BACKEND:
-        return to_numpy(array)
     if backend_name(array) == backend:
         return array
+    # An array NumPy already holds is handed over as it is.
+    held = array if is_numpy(array) else to_numpy(array)
+    if backend == NUMPY_BACKEND:
+        return held
     try:
         namespace = import_module(_NAMESPACES.get(backend, backend))
-        out = namespace.asarray(to_numpy(array))
+        out = namespace.asarray(held)
     except (ImportError, AttributeError) as error:
         msg = f"No array library called {backend!r} could be used: {error}"
         raise ParameterError(msg) from error

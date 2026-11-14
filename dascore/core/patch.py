@@ -453,6 +453,9 @@ class Patch(NamespaceOwner, PatchMeta):
         ``set_backend("numpy")`` is what `load` does to a lazy patch.
         """
         lazy, library = parse_backend(backend)
+        # Refused here and not when the data are asked for, if the library
+        # cannot be used.
+        to_backend(np.empty(0), library)
         data = self._data
         if isinstance(data, LazyArray):
             # Imported here: the lazy kernels are built on the processors,

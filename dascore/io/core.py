@@ -726,7 +726,12 @@ def _lazy_data(fiber_io, selection, library: str) -> LazyArray | None:
         if scattered
         else "the format names no stored array to read later"
     )
-    what = f"A {fiber_io.name} patch cannot be read lazily here: {why}"
+    _refuse_or_say(f"A {fiber_io.name} patch cannot be read lazily here: {why}")
+    return None
+
+
+def _refuse_or_say(what: str) -> None:
+    """Apply the `numpy_fallback` setting to a read which cannot be lazy."""
     policy = fallback_policy(lazy=True)
     if policy == "raise":
         msg = (
@@ -738,7 +743,11 @@ def _lazy_data(fiber_io, selection, library: str) -> LazyArray | None:
         msg = f"{what}; it was read into memory, as numpy_fallback allows."
         prefix = str(Path(__file__).parent.parent)
         warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
-    return None
+
+
+def _reads_its_own_way(fiber_io) -> bool:
+    """Whether a format replaces `FiberIO.read`, which is what reads lazily."""
+    return type(fiber_io).read is not FiberIO.read
 
 
 def _required_resource_type(method) -> type | None:
@@ -1919,6 +1928,13 @@ def read(
             fiber_io, file_version = _resolve_read_fiberio(
                 man, file_format, file_version
             )
+            if lazy_read_backend() is not None and _reads_its_own_way(fiber_io):
+                # It never asks whether to read lazily, so it is not asked
+                # to: reading is the fallback setting's to allow.
+                _refuse_or_say(
+                    f"A {fiber_io.name} patch cannot be read lazily: the format "
+                    "reads its files by a method of its own"
+                )
             out = fiber_io.read(
                 man,
                 file_version=file_version,

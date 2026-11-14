@@ -69,6 +69,7 @@ from dascore.utils.patch import (
     _get_merged_coord,
     _split_coord_merge_kwargs,
 )
+from dascore.utils.paths import is_memory_uri
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     get_dim_names_from_columns,
@@ -589,6 +590,11 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
         _place_blocks,
     )
 
+    if isinstance(patch.data, LazyArray):
+        # A fill is written into the data, which a lazy patch holds none
+        # of: reading them is the fallback setting's to allow.
+        _allow_reading("fill", f"filling the gaps along {dim} writes into the data")
+        patch = patch.load()
     if dtype and patch.data.dtype != np.dtype(dtype):  # as its row states it
         with operation_context():
             patch = patch.new(data=to_numpy(patch.data).astype(dtype))
@@ -644,33 +650,40 @@ def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
     return chain, [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
 
 
+def _allow_reading(what: str, why: str) -> None:
+    """Apply the `numpy_fallback` setting to data which must be read after all."""
+    policy = fallback_policy(lazy=True)
+    if policy == "raise":
+        msg = (
+            f"This {what} cannot stay lazy: {why}. Use a backend which reads "
+            "into memory, or set numpy_fallback to 'warn' or 'ignore' to "
+            "have the data read."
+        )
+        raise LazyOperationError(msg)
+    if policy == "warn":
+        msg = (
+            f"A {what} could not stay lazy: {why}; its data were read into "
+            "memory. The numpy_fallback setting decides this."
+        )
+        prefix = str(Path(__file__).parent.parent)
+        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
+
+
 @contextmanager
-def _read_into_memory(why: str):
+def _read_into_memory(why: str, rows: Sequence[Mapping] = ()):
     """
     Have a merge which cannot stay lazy read its members into memory.
 
     Under a lazy backend that is the `numpy_fallback` setting's to allow:
     it is refused, said, or done silently. Inside the block reads fill
-    memory as usual, so the merge is the eager one.
+    memory as usual, so the merge is the eager one. Members a spool
+    already holds in memory are not read at all, and need no leave.
     """
     if lazy_read_backend() is None:
         yield
         return
-    policy = fallback_policy(lazy=True)
-    if policy == "raise":
-        msg = (
-            f"This merge cannot stay lazy: {why}. Merge on a backend which "
-            "reads into memory, or set numpy_fallback to 'warn' or 'ignore' "
-            "to have the members read."
-        )
-        raise LazyOperationError(msg)
-    if policy == "warn":
-        msg = (
-            f"A merge could not stay lazy: {why}; its members were read into "
-            "memory. The numpy_fallback setting decides this."
-        )
-        prefix = str(Path(__file__).parent.parent)
-        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
+    if not (rows and all(is_memory_uri(x.get("source_path")) for x in rows)):
+        _allow_reading("merge", why)
     with reading_lazily(None):
         yield
 
@@ -739,7 +752,7 @@ class PatchAssembler:
             # Members whose merged size the rows do not state are merged
             # as loaded patches, which a lazy backend has none of.
             why = "the size of what its members make is not known until they are read"
-            with _read_into_memory(why):
+            with _read_into_memory(why, df_dict_list):
                 out = self._loaded_members(joined, df_dict_list, merge_dim, units)
             out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
         else:
@@ -792,7 +805,11 @@ class PatchAssembler:
         trims = (self.plan_dim, self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
-        return patch if units is None else patch.convert_units(units)
+        # Already in the plan's units, there is nothing to convert, and a
+        # lazy member is not asked to run what would do nothing.
+        if units is None or get_quantity(patch.attrs.data_units) == get_quantity(units):
+            return patch
+        return patch.convert_units(units)
 
     def _merge_patches_streaming(
         self, joined, df_dict_list, merge_dim, samples, units=None
@@ -819,7 +836,7 @@ class PatchAssembler:
             "the index cannot describe every member, a member is in other "
             "data units, or a file has changed since it was indexed"
         )
-        with _read_into_memory(why):
+        with _read_into_memory(why, df_dict_list):
             out = self._stream(joined, df_dict_list, merge_dim, samples, units)
         return self._on_grid(out, joined, df_dict_list[0])
 

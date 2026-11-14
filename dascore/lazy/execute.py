@@ -45,8 +45,8 @@ from dascore.lazy.contract import Box, ChunkContract, Window
 from dascore.utils.array_api import (
     NUMPY_BACKEND,
     _as_numpy_dtype,
+    array_namespace,
     to_backend,
-    to_numpy,
 )
 
 if TYPE_CHECKING:
@@ -208,8 +208,26 @@ def load(array: LazyArray) -> np.ndarray:
     boxes = chunk_boxes(array)
     if len(boxes) == 1:
         return compute(array, boxes[0])
+    if array.backend != NUMPY_BACKEND:
+        return _joined([compute(array, box) for box in boxes], boxes)
     out = np.empty(array.shape, array.dtype)
     for box in boxes:
-        out[box] = to_numpy(compute(array, box))
-    # Put together in memory, then handed to the library it was computed on.
-    return out if array.backend == NUMPY_BACKEND else to_backend(out, array.backend)
+        out[box] = compute(array, box)
+    return out
+
+
+def _joined(pieces: list, boxes: list[Box]):
+    """
+    Return the boxes of an array put together on their own array library.
+
+    Nothing is written in place, which not every library allows, and
+    nothing is taken through NumPy: the boxes, which come an axis at a
+    time with the last changing fastest, are joined along each axis in
+    turn. The boxes are all held until they are joined.
+    """
+    xp = array_namespace(pieces[0])
+    for axis in reversed(range(len(boxes[0]))):
+        count = len({(box[axis].start, box[axis].stop) for box in boxes})
+        runs = range(0, len(pieces), count)
+        pieces = [xp.concat(pieces[n : n + count], axis=axis) for n in runs]
+    return pieces[0]

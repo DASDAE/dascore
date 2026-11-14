@@ -104,6 +104,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
+from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
 from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
@@ -701,11 +702,15 @@ class Spool(NodeRepr, NamespaceOwner):
             return read().set_backend(library)
         with reading_lazily(library):
             patch = read()
-        source = patch._source
-        if _is_lazy(patch.data) or (source is not None and source.loadable):
+        if isinstance(patch.data, LazyArray):
             return patch.set_backend(f"LazyArray[{library}]")
-        # Held in memory with nothing to read later, or read after all as
-        # the fallback setting allowed: put where chunks are computed.
+        if _is_lazy(patch.data):
+            # Another kind of promise, which a spool held already: left
+            # as it is, and computed when its holder asks.
+            return patch
+        # In memory: held there by the spool, with nothing read, or read
+        # after all as the fallback setting allowed. Put where chunks are
+        # computed.
         return patch.set_backend(library)
 
     def set_backend(self, backend: str) -> Self:
@@ -756,8 +761,12 @@ class Spool(NodeRepr, NamespaceOwner):
           different data units -- is decided by the `numpy_fallback`
           setting: refused under a lazy backend unless the setting is
           ``"warn"`` or ``"ignore"``, which read it into memory.
-        - A patch the spool already holds in memory, with nothing to read
-          later, is put on the library the lazy backend computes on.
+        - A patch the spool already holds in memory is not read, so it
+          is not made lazy: it is put on the library the lazy backend
+          computes on. One which is lazy already stays so.
+        - Patches which are lazy already, gathered in a spool with no lazy
+          backend, are read when that spool merges them, since that is how
+          such a spool loads.
         """
         lazy, library = parse_backend(backend)
         # Refused here and not at the first patch, if it cannot be used.
@@ -905,6 +914,17 @@ class Spool(NodeRepr, NamespaceOwner):
         union = PatchCatalog.union([x._as_union_member() for x in spools])
         new = Spool()
         new._catalog = union
+        # The backend the patches are handed out on is the spools' own,
+        # and two different ones have no combined answer.
+        backends = {x._backend for x in spools}
+        if len(backends) > 1:
+            names = sorted("in memory, as read" if x is None else x for x in backends)
+            msg = (
+                f"Spools on different backends cannot be added: {names}. Set "
+                "one backend on each, or on their sum."
+            )
+            raise ParameterError(msg)
+        (new._backend,) = backends
         # An attached inventory is part of what a spool yields, so it must
         # survive the union; two different ones have no combined answer.
         new._inventory, enrichment = combine_inventories(*spools)
@@ -3472,6 +3492,8 @@ class Spool(NodeRepr, NamespaceOwner):
             refreshed._inventory = self._inventory
             refreshed._enrich_kwargs = self._enrich_kwargs
             refreshed._on_unresolved = self._on_unresolved
+            # Nor to hand its patches out on another backend.
+            refreshed._backend = self._backend
             return refreshed
         if isinstance(catalog.resolver, LiveResolver):
             return self  # in-memory contents are trivially current

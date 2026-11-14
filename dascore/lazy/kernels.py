@@ -102,7 +102,13 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
         "the data were read into memory to run it",
         refusal=lazy_refusal(name),
     )
-    return getattr(kernel, "_quiet", kernel)(processor, data.load(), **plan)
+    # Read on the library its chunks compute on. An operation with no
+    # kernel for that either says so itself, as it does for data in memory.
+    loaded = data.load()
+    out = kernel(processor, loaded, **plan)
+    # Handed back unchanged is "nothing to do", as it is in memory: the
+    # patch is left as it was, lazy and under its own id.
+    return data if out is loaded else out
 
 
 def on_backend(array: LazyArray, backend: str) -> LazyArray:

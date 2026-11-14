@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import warnings
 from itertools import pairwise
 
@@ -11,12 +13,17 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.processor import register_kernel
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
     LazyOperationError,
     NumpyFallbackError,
     ParameterError,
 )
+from dascore.io import core as io_core
+from dascore.lazy import execute
+from dascore.lazy.execute import chunk_boxes
 from dascore.utils import array_api as array_api_module
+from dascore.utils import patch_assembly as assembly
 from dascore.utils.array_api import (
     fallback_policy,
     lazy_read_backend,
@@ -25,6 +32,7 @@ from dascore.utils.array_api import (
     to_backend,
     to_numpy,
 )
+from dascore.utils.downloader import fetch
 from dascore.warnings import NumpyFallbackWarning
 
 STRICT = "array_api_strict"
@@ -66,6 +74,49 @@ def undescribed(patch, tmp_path_factory):
     return _in_four_files(patch, tmp_path_factory.mktemp("lazy_undescribed"))
 
 
+@pytest.fixture()
+def reads(reads, monkeypatch):
+    """Every array read from a file, by whichever route it is read."""
+    # The fixture this adds to sees a source loading its own array, which
+    # is how a lazy array and a recipe read. A patch read by its format
+    # takes the other route, through the loader `FiberIO.read` is handed.
+    hook = io_core._paired_hook
+
+    def paired(fiber_io, name):
+        found = hook(fiber_io, name)
+        if name != "_prepare_read":
+            return found
+
+        def prepare(*args, **kwargs):
+            patches, load = found(*args, **kwargs)
+
+            def recorded(requests):
+                for data in load(requests):
+                    reads.append(data)
+                    yield data
+
+            return patches, recorded
+
+        return prepare
+
+    monkeypatch.setattr(io_core, "_paired_hook", paired)
+    return reads
+
+
+def _refuse_numpy(monkeypatch):
+    """Fail the test if DASCore takes an array of another library to NumPy."""
+
+    def refuse(*args, **kwargs):
+        """Raise: nothing should be converted."""
+        raise AssertionError("the data were converted to NumPy")
+
+    # Under every name a module of DASCore's has imported it by.
+    for name, module in list(sys.modules.items()):
+        if name.startswith("dascore") and getattr(module, "to_numpy", None) is to_numpy:
+            monkeypatch.setattr(module, "to_numpy", refuse)
+    assert array_api_module.to_numpy is refuse
+
+
 class _Doubles(dc.PatchProcessor):
     """An operation written for NumPy alone, which a chunk can be given."""
 
@@ -95,13 +146,20 @@ class TestBackendNames:
             ("lazyarray[ jax ]", (True, "jax")),
             ("LazyArray[array_api_strict]", (True, STRICT)),
             ("lazy[numpy]", (True, "numpy")),
+            # The module a library is imported from is read as its name,
+            # which is what a kernel is registered under.
+            ("dask.array", (False, "dask")),
+            ("jax.numpy", (False, "jax")),
+            ("LazyArray[dask.array]", (True, "dask")),
         ),
     )
     def test_spellings(self, name, expected):
         """The class or its alias, in any case, with the library in brackets."""
         assert parse_backend(name) == expected
 
-    @pytest.mark.parametrize("name", ("", "lazy[", "LazyArray[a][b]", "nu mpy", "a-b"))
+    @pytest.mark.parametrize(
+        "name", ("", "lazy[", "LazyArray[a][b]", "nu mpy", "a-b", "a.b", "lazy[a.b]")
+    )
     def test_not_a_backend(self, name):
         """What names nothing is refused, and says what would."""
         with pytest.raises(ParameterError, match="is not a backend"):
@@ -195,8 +253,20 @@ class TestPatchSetBackend:
         loaded = out.load()
         assert loaded.backend == STRICT
         np.testing.assert_array_equal(to_numpy(loaded.data), np.abs(patch.data))
-        # Asked for on NumPy, it is computed there and not converted.
-        assert out.set_backend("numpy").backend == "numpy"
+
+    def test_asked_for_on_numpy_is_computed_there(self, patch, strict, monkeypatch):
+        """Moved back to NumPy, a lazy patch computes there, converting nothing."""
+        out = patch.set_backend(f"LazyArray[{STRICT}]").abs()
+        _refuse_numpy(monkeypatch)
+        loaded = out.set_backend("numpy")
+        assert loaded.backend == "numpy"
+        np.testing.assert_array_equal(loaded.data, np.abs(patch.data))
+
+    def test_library_which_cannot_be_imported(self, patch):
+        """A library which is not installed is refused when it is named."""
+        for name in ("not_an_array_library", "LazyArray[not_an_array_library]"):
+            with pytest.raises(ParameterError, match="No array library called"):
+                patch.set_backend(name)
 
     def test_registered_kernel_runs_each_chunk(self, patch, strict, monkeypatch):
         """A kernel registered for the library is the one a lazy chunk runs."""
@@ -222,18 +292,31 @@ class TestPatchSetBackend:
             return data * 2
 
         lazy = patch.set_backend(f"LazyArray[{STRICT}]")
-        with warnings.catch_warnings():
+        # Small enough blocks that the patch is computed in several boxes.
+        block = patch.data.nbytes // 6
+        with config_context(lazy_block_size=block), warnings.catch_warnings():
             warnings.simplefilter("error", NumpyFallbackWarning)
             out = Halves()(lazy)
-            # Nothing is taken through NumPy on the way.
-            refuse = pytest.fail
-            monkeypatch.setattr(
-                "dascore.core.processor.to_numpy",
-                lambda *args: refuse("the data were converted to NumPy"),
-            )
+            assert len(chunk_boxes(out.data)) > 3
+            # Nothing is taken through NumPy on the way: not a chunk for
+            # the kernel, and not the boxes to put them together.
+            _refuse_numpy(monkeypatch)
             loaded = out.load()
-        assert handed and set(handed) == {type(strict.asarray(np.zeros(1)))}
+        assert len(handed) > 3 and set(handed) == {type(strict.asarray(np.zeros(1)))}
+        assert loaded.backend == STRICT
         np.testing.assert_array_equal(to_numpy(loaded.data), patch.data * 2)
+
+    def test_boxes_joined_along_both_axes(self, patch, strict):
+        """Boxes cut along more than one axis go back where they came from."""
+        lazy = patch.set_backend(f"LazyArray[{STRICT}]").abs()
+        boxes = [
+            (slice(a, b), slice(c, d))
+            for a, b in ((0, 200), (200, 601))
+            for c, d in ((0, 300), (300, 700), (700, 1001))
+        ]
+        pieces = [execute.compute(lazy.data, box) for box in boxes]
+        joined = execute._joined(pieces, boxes)
+        np.testing.assert_array_equal(to_numpy(joined), np.abs(patch.data))
 
     @pytest.mark.parametrize("policy", (None, "raise", "warn", "ignore"))
     def test_no_kernel_for_the_library(self, patch, strict, policy):
@@ -281,6 +364,12 @@ class TestPendingStepsOnAnotherLibrary:
         assert loaded.backend == STRICT
         np.testing.assert_array_equal(to_numpy(loaded.data), patch.data * 2)
 
+    def test_every_pending_step_is_asked(self, patch, strict):
+        """Not the first alone: a later step with no kernel is found too."""
+        pending = _Doubles()(patch.set_backend("lazy").abs())
+        with pytest.raises(LazyOperationError, match="_Doubles has no"):
+            pending.set_backend(f"LazyArray[{STRICT}]")
+
     def test_steps_with_kernels(self, patch, strict):
         """Steps which run on any library move with nothing said."""
         pending = patch.set_backend("lazy").abs()
@@ -295,11 +384,37 @@ class TestPendingStepsOnAnotherLibrary:
 class TestOperationWithNoContract:
     """An operation which cannot run a chunk at a time obeys the setting."""
 
-    def test_refused_by_default(self, patch):
+    def test_refused_by_default(self, patch, reads):
         """Nothing is read for an operation a lazy patch cannot run."""
         lazy = patch.set_backend("lazy")
         with pytest.raises(LazyOperationError):
             lazy.detrend("time")
+        assert not reads
+
+    def test_on_another_library(self, patch, strict):
+        """Read onto the library, an operation with no kernel for it says so too."""
+        lazy = patch.set_backend(f"LazyArray[{STRICT}]")
+        with config_context(numpy_fallback="warn"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                out = lazy.detrend("time")
+        said = [str(x.message) for x in caught if x.category is NumpyFallbackWarning]
+        # Once that the data were read, and once that they were converted.
+        assert len(said) == 2 and "read into memory" in said[0]
+        assert f"detrend has no {STRICT} implementation" in said[1]
+        assert out.backend == STRICT
+        np.testing.assert_allclose(
+            to_numpy(out.data), patch.detrend("time").data, atol=1e-9
+        )
+
+    def test_nothing_to_do_is_still_nothing(self, patch):
+        """An operation which changes nothing leaves the lazy patch as it was."""
+        lazy = patch.set_backend("lazy")
+        assert patch.fill_gaps(time=None) is patch
+        with config_context(numpy_fallback="ignore"):
+            out = lazy.fill_gaps(time=None)
+        # Lazy still, with no step recorded and its own id.
+        assert out.backend == "lazy" and out.attrs == lazy.attrs
 
     @pytest.mark.parametrize("policy", ("warn", "ignore"))
     def test_read_into_memory(self, patch, policy, reads):
@@ -326,13 +441,53 @@ class TestLazyRead:
             lazy = dc.read(path)[0]
         assert lazy_read_backend() is None
         assert lazy.backend == "lazy" and not reads
-        assert lazy.attrs == patch.attrs
+        assert lazy.attrs == patch.attrs and lazy.data.backend == "numpy"
         assert lazy.load().equals(patch) and len(reads) == 1
 
-    def test_none_is_an_ordinary_read(self, path):
+    def test_none_is_an_ordinary_read(self, path, reads):
         """Given no library, reads fill memory as usual."""
         with reading_lazily(None):
             assert dc.read(path)[0].backend == "numpy"
+        # Which the record of reads sees, as it does a lazy array's.
+        assert len(reads) == 1
+
+    def test_computed_on_the_library_named(self, path, strict):
+        """The library the read was given is the one its chunks compute on."""
+        with reading_lazily(STRICT):
+            lazy = dc.read(path)[0]
+        assert lazy.data.backend == STRICT and lazy.load().backend == STRICT
+
+    @pytest.mark.parametrize("policy", (None, "warn", "ignore"))
+    def test_format_which_reads_its_own_way(self, policy):
+        """A format which replaces `read` is not read with nothing said."""
+        path = fetch("sintela_protobuf_1.pb")
+        expected = dc.read(path)[0]
+        spool = dc.spool(path).set_backend("lazy")
+        with config_context(numpy_fallback=policy), warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="a method of its own"):
+                    spool[0]
+                return
+            if policy == "warn":
+                with pytest.warns(NumpyFallbackWarning, match="a method of its own"):
+                    out = spool[0]
+            else:
+                out = spool[0]
+        assert out.backend == "numpy" and out.equals(expected)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_format_which_names_no_stored_array(self, path, policy, monkeypatch):
+        """A read with no array to promise is read, if the setting allows."""
+        monkeypatch.setattr(ArraySource, "loadable", property(lambda self: False))
+        with config_context(numpy_fallback=policy), reading_lazily("numpy"):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="names no stored array"):
+                    dc.read(path)
+                return
+            with pytest.warns(NumpyFallbackWarning, match="read into memory"):
+                out = dc.read(path)[0]
+        assert out.backend == "numpy"
 
     def test_window_of_the_file(self, path, patch, reads):
         """A selection of neighbouring samples is a window to read later."""
@@ -407,6 +562,23 @@ class TestSpoolSetBackend:
         assert lazy.set_backend("numpy")[0].backend == "numpy"
         assert lazy[0].backend == "lazy" and spool[0].backend == "numpy"
 
+    def test_added_spools_keep_their_backend(self, spool, reads):
+        """A sum of spools on one backend is on it; of two, it is refused."""
+        lazy = spool.set_backend("lazy")
+        both = lazy[:2] + lazy[2:]
+        assert len(both) == len(spool)
+        assert {x.backend for x in both} == {"lazy"} and not reads
+        with pytest.raises(ParameterError, match="different backends"):
+            lazy[:2] + spool[2:]
+        # Set on the sum, it is one backend again.
+        summed = (spool[:2] + spool[2:]).set_backend("lazy")
+        assert summed[0].backend == "lazy"
+
+    def test_update_of_one_file_keeps_it(self, path):
+        """A spool of one file, looked at again, is on the same backend."""
+        lazy = dc.spool(path).set_backend("lazy")
+        assert lazy.update()[0].backend == "lazy"
+
     def test_load_reads_everything(self, spool):
         """`load` gives a spool of patches in memory."""
         loaded = spool.set_backend("lazy").load()
@@ -433,6 +605,24 @@ class TestSpoolSetBackend:
         held = dc.get_example_spool("random_das")
         assert held.set_backend("lazy")[0].backend == "numpy"
         assert held.set_backend(f"lazy[{STRICT}]")[0].backend == STRICT
+
+    def test_patches_held_in_memory_merge(self):
+        """Merging what is in memory reads nothing, so nothing is refused."""
+        held = dc.get_example_spool("random_das")
+        expected = held.chunk(time=None)[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            merged = held.set_backend("lazy").chunk(time=None)[0]
+        assert merged.backend == "numpy" and merged.equals(expected)
+
+    def test_promise_of_another_kind(self):
+        """A dask patch a spool holds is a promise already, and left one."""
+        dask_array = pytest.importorskip("dask.array")
+        patch = dc.get_example_patch()
+        there = patch.new(data=dask_array.from_array(patch.data, chunks=(100, 500)))
+        out = dc.spool([there]).set_backend("lazy")[0]
+        assert out.backend == "dask"
+        np.testing.assert_array_equal(to_numpy(out.data), patch.data)
 
 
 class TestLazyMerge:
@@ -493,6 +683,81 @@ class TestLazyMerge:
                 merged = lazy[0]
         # Read after all, whole, by the merge which reads its members.
         assert merged.backend == "numpy" and merged.equals(expected)
+
+    def test_files_which_state_data_units(self, whole, tmp_path):
+        """Members already in the plan's units are not asked to convert."""
+        spool = _in_four_files(whole.set_units("m/s"), tmp_path)
+        # Shorter than a file, so each patch is a part of one member, and
+        # all of them, so one is the merge.
+        for size in (0.3, None):
+            eager = list(spool.chunk(time=size))
+            lazy = list(spool.set_backend("lazy").chunk(time=size))
+            assert len(lazy) == len(eager) and {x.backend for x in lazy} == {"lazy"}
+            for made, expected in zip(lazy, eager, strict=True):
+                assert made.attrs == expected.attrs
+                assert made.load().equals(expected)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_fill_of_a_gap(self, whole, tmp_path, policy):
+        """A fill is written into the data, so it is the setting's to allow."""
+        spool = _in_four_files(whole, tmp_path)
+        (tmp_path / "part_2.h5").unlink()
+        # Single precision before the gap, double after it, so the fill
+        # is in a wider dtype than the first members are stored in.
+        for name in ("part_0.h5", "part_1.h5"):
+            part = dc.read(tmp_path / name)[0]
+            single = part.new(data=part.data.astype(np.float32))
+            dc.write(single, tmp_path / name, "dasdae")
+        spool = dc.spool(tmp_path).update()
+        expected = spool.fill_gaps(time=None)[0]
+        lazy = spool.set_backend("lazy").fill_gaps(time=None)
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError):
+                    lazy[0]
+                return
+            with pytest.warns(NumpyFallbackWarning):
+                filled = lazy[0]
+        assert filled.backend == "numpy" and filled.attrs == expected.attrs
+        assert filled.coords == expected.coords and np.isnan(filled.data).any()
+        np.testing.assert_array_equal(filled.data, expected.data)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_file_changed_since_it_was_indexed(self, whole, tmp_path, policy):
+        """A merge over a file the index no longer describes reads its members."""
+        spool = _in_four_files(whole, tmp_path)
+        expected = spool.chunk(time=None)[0]
+        # Written again: the same samples, at another time.
+        again = dc.read(tmp_path / "part_2.h5")[0]
+        dc.write(again, tmp_path / "part_2.h5", "dasdae")
+        os.utime(tmp_path / "part_2.h5", ns=(1, 1))
+        lazy = spool.set_backend("lazy").chunk(time=None)
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                    lazy[0]
+                return
+            with pytest.warns(NumpyFallbackWarning, match="could not stay lazy"):
+                merged = lazy[0]
+        assert merged.backend == "numpy"
+        np.testing.assert_array_equal(merged.data, expected.data)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_merge_of_unknown_size(self, spool, policy, monkeypatch):
+        """Members merged as loaded patches are read, if the setting allows."""
+        expected = spool.chunk(time=None)[0]
+        # As for members whose merged length the index's rows do not state.
+        monkeypatch.setattr(assembly, "_estimate_merge_samples", lambda *args: None)
+        lazy = spool.set_backend("lazy").chunk(time=None)
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="is not known until"):
+                    lazy[0]
+                return
+            with pytest.warns(NumpyFallbackWarning, match="is not known until"):
+                merged = lazy[0]
+        assert merged.backend == "numpy"
+        np.testing.assert_array_equal(merged.data, expected.data)
 
     def test_setting_restored(self):
         """Nothing here leaves reads lazy behind it."""
