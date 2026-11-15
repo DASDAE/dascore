@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-from dascore.io.zarr.core import ZarrV2, ZarrV3
+from dascore.io.zarr.core import SPANS_ATTR, ZarrV2, ZarrV3, coord_attrs
