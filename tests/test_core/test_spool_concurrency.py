@@ -300,6 +300,18 @@ class TestUpdateExecutor:
             serial.indexer.close()
             parallel.indexer.close()
 
+    def test_skipped_file_warns(self, directory, client):
+        """A file a worker skips warns in the caller, as a serial scan does."""
+        data = (directory / "00.h5").read_bytes()
+        (directory / "bad.h5").write_bytes(data[: len(data) // 3])
+        root = dc.spool(directory)
+        try:
+            with pytest.warns(UserWarning, match="Failed to scan.*bad.h5"):
+                root.update(progress=False, client=client)
+            assert len(root) == 12
+        finally:
+            root.indexer.close()
+
     def test_config_and_lifecycle(self, directory, client):
         """Workers inherit scoped config; changed and deleted files refresh."""
         root = dc.spool(directory)

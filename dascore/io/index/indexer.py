@@ -82,10 +82,20 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
     return status.st_mtime_ns, status.st_size
 
 
-def _scan_batch(paths, config, snap=None):
-    """Scan a source batch using the caller's DASCore configuration."""
+def _scan_batch(paths, config, snap=None, parent_pid=None):
+    """
+    Scan a source batch using the caller's DASCore configuration.
+
+    In another process, warnings are recorded and returned, so the caller's
+    filters see skipped-file warnings as a serial scan would.
+    """
     with config_context(config):
-        return dc.scan(paths, progress=None, snap=snap)
+        if parent_pid is None or os.getpid() == parent_pid:
+            return dc.scan(paths, progress=None, snap=snap), []
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            summaries = dc.scan(paths, progress=None, snap=snap)
+        return summaries, [(str(w.message), w.category) for w in caught]
 
 
 def snap_text(snap) -> str:
@@ -102,14 +112,17 @@ def _scan_with_client(paths, client, progress, snap=None):
         workers = os.cpu_count() or 1
     size = max(1, math.ceil(len(paths) / (4 * workers)))
     batches = [paths[start : start + size] for start in range(0, len(paths), size)]
-    func = partial(_scan_batch, config=get_config(), snap=snap)
+    func = partial(_scan_batch, config=get_config(), snap=snap, parent_pid=os.getpid())
     results = client.map(func, batches)
     summaries = []
     try:
         for batch in track(
             results, "Scanning file batches", progress, length=len(batches)
         ):
-            summaries.extend(batch)
+            batch_summaries, caught = batch
+            summaries.extend(batch_summaries)
+            for message, category in caught:
+                warnings.warn(message, category, stacklevel=2)
     finally:
         # Retained exception tracebacks must not keep queued work alive.
         # Map-only clients are also allowed to return a plain iterable.
