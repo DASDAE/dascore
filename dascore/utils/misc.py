@@ -36,6 +36,7 @@ from dascore.exceptions import (
     InvalidInventoryError,
     MissingOptionalDependencyError,
     ParameterError,
+    ScanError,
 )
 from dascore.utils.array_api import array_namespace, backend_name, device
 from dascore.utils.paths import (
@@ -119,6 +120,21 @@ def validate_warn_level(behavior, name: str = "behavior") -> WARN_LEVELS:
         msg = f"{name} must be one of {get_args(WARN_LEVELS)}, got {behavior!r}."
         raise ParameterError(msg)
     return behavior
+
+
+def report_skipped_source(
+    msg: str, on_error: WARN_LEVELS = "warn", cause: BaseException | None = None
+) -> None:
+    """
+    Report a source a scan skips: warn, raise ScanError, or stay silent.
+
+    The cause, when given, is chained to the raised error so the original
+    failure (e.g. a PermissionError or a reader's error) stays visible.
+    """
+    if on_error == "raise":
+        raise ScanError(msg) from cause
+    if on_error == "warn":
+        warnings.warn(msg, UserWarning)
 
 
 def warn_or_raise(
@@ -223,6 +239,7 @@ def _iter_filesystem(
     skip_hidden: bool = True,
     include_directories: bool = False,
     _warned_timestamp_paths: set[str] | None = None,
+    on_error: WARN_LEVELS = "warn",
 ) -> Generator[Path | UPath | None, str | None, None]:
     """
     Iterate contents of a filesystem like thing.
@@ -249,6 +266,9 @@ def _iter_filesystem(
     _warned_timestamp_paths
         Internal accumulator used to avoid repeating timestamp-filter warnings
         while recursing through one remote traversal.
+    on_error
+        What to do about an inaccessible local entry: "warn" and skip it,
+        "raise" a ScanError, or "ignore" and skip it silently.
 
     Yields
     ------
@@ -267,6 +287,7 @@ def _iter_filesystem(
                 skip_hidden=skip_hidden,
                 include_directories=include_directories,
                 warned_timestamp_paths=warned_timestamp_paths,
+                on_error=on_error,
             )
             return
 
@@ -288,6 +309,7 @@ def _iter_filesystem(
             skip_hidden=skip_hidden,
             include_directories=include_directories,
             _warned_timestamp_paths=warned_timestamp_paths,
+            on_error=on_error,
         )
 
 
@@ -334,6 +356,7 @@ def _iter_local_filesystem(
     skip_hidden: bool,
     include_directories: bool,
     warned_timestamp_paths: set[str],
+    on_error: WARN_LEVELS = "warn",
 ) -> Generator[Path | None, str | None, None]:
     """Traverse one local path or directory tree."""
     # Local paths use scandir directly so we can recurse cheaply and keep the
@@ -360,9 +383,11 @@ def _iter_local_filesystem(
                         skip_hidden=skip_hidden,
                         include_directories=include_directories,
                         warned_timestamp_paths=warned_timestamp_paths,
+                        on_error=on_error,
                     )
-            except PermissionError:
-                warnings.warn(f"Permission denied; skipping {entry.path}", UserWarning)
+            except PermissionError as exc:
+                msg = f"Permission denied; skipping {entry.path}"
+                report_skipped_source(msg, on_error, exc)
     except NotADirectoryError:
         if _passes_iter_filesystem_filters(
             path,

@@ -39,6 +39,7 @@ from dascore.config import config_context, get_config
 from dascore.constants import (
     PROGRESS_LEVELS,
     SOURCE_ATTRS,
+    WARN_LEVELS,
     ExecutorType,
     namespace_select_type,
 )
@@ -1161,6 +1162,18 @@ class PatchCatalog:
         """The directory syncer keeping this catalog current, or None."""
         return self._syncer
 
+    def unread_sources(self) -> list[Path | UPath]:
+        """
+        Sources the index walked whose scans gave no patches, sorted.
+
+        Only a catalog over an indexed directory, live or read-only, walks
+        sources; any other catalog returns an empty list.
+        """
+        root = getattr(self.resolver, "_root", None)
+        if root is None:
+            return []
+        return [root / rel for rel in sorted(self.backend.unread_sources())]
+
     def ordered_rows(self) -> tuple[int, ...]:
         """
         The view's patch ids in presentation order (ids only, cheap).
@@ -1687,6 +1700,7 @@ class PatchCatalog:
         client: ExecutorType | None = None,
         paths=None,
         retry_unreadable: bool = False,
+        on_error: WARN_LEVELS = "warn",
     ) -> PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
         # The scan itself is long-running file IO; it manages its own
@@ -1697,6 +1711,7 @@ class PatchCatalog:
                 progress=progress,
                 client=client,
                 retry_unreadable=retry_unreadable,
+                on_error=on_error,
             )
         self._invalidate()
         return self

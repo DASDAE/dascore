@@ -31,6 +31,7 @@ from dascore.exceptions import (
     MissingOptionalDependencyError,
     MissingPatchError,
     ParameterError,
+    ScanError,
     UnknownExampleError,
     UnknownFiberFormatError,
 )
@@ -765,6 +766,90 @@ class TestGetContents:
         combined = random_spool + dc.spool([])
         want = random_spool.get_contents()["data_size"].tolist()
         assert combined.get_contents()["data_size"].tolist() == want
+
+
+class TestGetUnreadSources:
+    """Tests for listing the sources a directory index got no patches from."""
+
+    @pytest.fixture()
+    def mixed_dir(self, tmp_path):
+        """A directory with a good file, a truncated file, and a text file."""
+        patch = dc.get_example_patch()
+        patch.io.write(tmp_path / "good.h5", "dasdae")
+        patch.io.write(tmp_path / "trunc.h5", "dasdae")
+        raw = (tmp_path / "trunc.h5").read_bytes()
+        (tmp_path / "trunc.h5").write_bytes(raw[: len(raw) // 2])
+        (tmp_path / "README.txt").write_text("not fiber data")
+        return tmp_path
+
+    def test_lists_failed_and_foreign(self, mixed_dir):
+        """Files giving no patches are listed, readable ones are not."""
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            spool = dc.spool(mixed_dir).update(progress=None)
+        expected = [mixed_dir / "README.txt", mixed_dir / "trunc.h5"]
+        assert spool.get_unread_sources() == expected
+
+    def test_fixed_file_leaves_list(self, mixed_dir):
+        """A file fixed and retried is no longer listed."""
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            dc.spool(mixed_dir).update(progress=None)
+        (mixed_dir / "trunc.h5").unlink()  # the DASDAE writer appends
+        dc.get_example_patch().io.write(mixed_dir / "trunc.h5", "dasdae")
+        spool = dc.spool(mixed_dir).update(progress=None, retry_unreadable=True)
+        assert spool.get_unread_sources() == [mixed_dir / "README.txt"]
+
+    def test_before_update(self, mixed_dir):
+        """A spool never updated indexes on first use, as other queries do."""
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            unread = dc.spool(mixed_dir).get_unread_sources()
+        assert unread == [mixed_dir / "README.txt", mixed_dir / "trunc.h5"]
+
+    def test_selection_does_not_narrow(self, mixed_dir):
+        """A spool selected from a directory spool reports the whole index."""
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            spool = dc.spool(mixed_dir).update(progress=None)
+        sub = spool.select(tag="no_such_tag")
+        assert sub.get_unread_sources() == spool.get_unread_sources()
+
+    def test_read_only_index(self, mixed_dir):
+        """A spool reading an index read-only reports from that index."""
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            spool = dc.spool(mixed_dir).update(progress=None)
+        index = spool.indexer.index_path
+        read_only = dc.spool(index=index)
+        names = [x.name for x in read_only.get_unread_sources()]
+        assert names == ["README.txt", "trunc.h5"]
+
+    def test_not_directory_spool(self, random_spool, tmp_path):
+        """In-memory and single-file spools have no unread sources."""
+        path = tmp_path / "patch.h5"
+        dc.get_example_patch().io.write(path, "dasdae")
+        assert random_spool.get_unread_sources() == []
+        assert dc.spool(path).get_unread_sources() == []
+
+    def test_update_on_error_raise(self, mixed_dir):
+        """on_error='raise' raises and records nothing, so a later update rescans."""
+        spool = dc.spool(mixed_dir)
+        with pytest.raises(ScanError, match=r"trunc\.h5"):
+            spool.update(progress=None, on_error="raise")
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            spool = spool.update(progress=None)
+        assert len(spool) == 1
+
+    def test_update_on_error_raise_client(self, mixed_dir):
+        """on_error reaches scans run on a caller's executor."""
+        with ThreadPoolExecutor(2) as client:
+            with pytest.raises(ScanError, match=r"trunc\.h5"):
+                dc.spool(mixed_dir).update(
+                    progress=None, client=client, on_error="raise"
+                )
+
+    def test_update_on_error_ignore(self, mixed_dir):
+        """on_error='ignore' is silent; the skipped file is still listed."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            spool = dc.spool(mixed_dir).update(progress=None, on_error="ignore")
+        assert mixed_dir / "trunc.h5" in spool.get_unread_sources()
 
 
 class TestSelect:
