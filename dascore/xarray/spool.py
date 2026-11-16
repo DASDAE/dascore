@@ -218,11 +218,18 @@ def _with_loaded_range(member_rows, members, source_rows, dim):
 
 
 def _misstated_merge(resolver, row, dim) -> bool:
-    """Whether a member loads a chunk's snapped merge its envelope misstates."""
+    """
+    Whether a member loads a chunk's snapped merge its envelope misstates.
+
+    Only a plan merges: a route which is not one (another library's loader,
+    routing reads of its own rows) loads its rows as they are.
+    """
     path = str(row.get("source_path"))
     for prefix, plan in getattr(resolver.loader, "plan_entries", dict)().items():
+        if not path.startswith(prefix) or getattr(plan, "mode", None) is None:
+            continue
         snaps = plan.mode == "chunk" and plan.merge_kwargs.get("fill_value") is None
-        if path.startswith(prefix) and plan.dim == dim and snaps:
+        if plan.dim == dim and snaps:
             rows = plan.member_rows.sort_values(f"{dim}_min")
             rows = rows[rows["output_id"] == int(path.removeprefix(prefix))]
             meta = plan._assembler().describe_output(rows.to_dict("records"))

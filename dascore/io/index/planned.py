@@ -861,13 +861,23 @@ class PlanResolver(PatchResolver):
         return changed
 
     def _nested_changes(self, rows: pd.DataFrame) -> list[str]:
-        """The changed sources of the plans whose outputs these rows load."""
+        """
+        The changed sources of the plans whose outputs these rows load.
+
+        A route which can't list its members (another library's loader,
+        routing reads of its own rows) has its sources unmeasured, and they
+        are left out, as ``skip_unmeasured`` asks; any route which can, a
+        plan or one wrapping a plan, is measured.
+        """
         paths = rows["source_path"].map(_row_str)
         changed = []
         for prefix, plan in getattr(self.loader, "plan_entries", dict)().items():
             ids = paths[paths.str.startswith(prefix)].str.removeprefix(prefix)
             if len(ids):
-                members = plan.member_rows
+                try:
+                    members = plan.member_rows
+                except (AttributeError, NotImplementedError):
+                    continue
                 members = members[members["output_id"].isin(ids.astype(int))]
                 changed += plan.changed_sources(members, skip_unmeasured=True)
         return changed

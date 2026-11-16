@@ -55,6 +55,7 @@ from dascore.utils.patch_assembly import (
 )
 from dascore.utils.time import to_int, to_timedelta64
 from dascore.warnings import DASCoreWarning
+from dascore.xarray.spool import _misstated_merge
 from tests.conftest import join_patches
 
 
@@ -4320,6 +4321,74 @@ class TestStaleSourceCheck:
         resolver = chunked._catalog.resolver
         assert not resolver._sources_unchanged(resolver.member_rows)
         assert not stats
+
+    def test_a_route_which_is_not_a_plan_is_left_out(
+        self, spool_and_paths, monkeypatch
+    ):
+        """
+        Rows another library's loader routes, which can't list members, are
+        unmeasured: the lenient check leaves them out rather than failing.
+        """
+
+        class Route:  # e.g. a client routing reads of a server's rows
+            @property
+            def member_rows(self):
+                raise NotImplementedError("this route lists no members")
+
+        spool, _ = spool_and_paths
+        resolver = spool.chunk(time=None)._catalog.resolver
+        routes = {"remote://server/": Route()}
+        monkeypatch.setattr(
+            resolver.loader, "plan_entries", lambda: routes, raising=False
+        )
+        rows = resolver.member_rows.assign(source_path="remote://server/7")
+        assert resolver.changed_sources(rows, skip_unmeasured=True) == []
+        assert resolver._sources_unchanged(rows, strict=False)
+
+    def test_xarray_passes_over_a_route_which_is_not_a_plan(
+        self, spool_and_paths, monkeypatch
+    ):
+        """A route with no merge of its own is not asked what its merge snapped."""
+
+        class Route:  # loads its own rows as they are; no plan attributes
+            pass
+
+        spool, _ = spool_and_paths
+        resolver = spool.chunk(time=None)._catalog.resolver
+        routes = {"remote://server/": Route()}
+        monkeypatch.setattr(
+            resolver.loader, "plan_entries", lambda: routes, raising=False
+        )
+        assert not _misstated_merge(
+            resolver, {"source_path": "remote://server/1"}, "time"
+        )
+
+    def test_a_route_which_lists_members_is_measured(
+        self, spool_and_paths, monkeypatch
+    ):
+        """A route which can list its members, a wrapped plan say, is checked."""
+
+        class Wrapped:  # forwards to a plan, as a wrapper might
+            def __init__(self, plan):
+                self.plan = plan
+
+            @property
+            def member_rows(self):
+                return self.plan.member_rows
+
+            def changed_sources(self, rows, skip_unmeasured=False):
+                return ["/changed/file.h5"]
+
+        spool, _ = spool_and_paths
+        resolver = spool.chunk(time=None)._catalog.resolver
+        routes = {"remote://server/": Wrapped(resolver)}
+        monkeypatch.setattr(
+            resolver.loader, "plan_entries", lambda: routes, raising=False
+        )
+        rows = resolver.member_rows.assign(source_path="remote://server/0")
+        assert resolver.changed_sources(rows, skip_unmeasured=True) == [
+            "/changed/file.h5"
+        ]
 
     def test_an_unknown_scheme_is_not_local(self, spool_and_paths, monkeypatch):
         """A scheme no filesystem here claims is not a local file."""
