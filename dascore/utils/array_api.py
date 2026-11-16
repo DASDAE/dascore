@@ -615,6 +615,10 @@ def nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
 
 def _as_numpy_dtype(dtype) -> np.dtype:
     """Return numpy's dtype of the name a dtype, numpy's or another backend's, has."""
+    # A NumPy dtype is already one, and a structured one cannot be rebuilt
+    # from its name.
+    if isinstance(dtype, np.dtype):
+        return dtype
     return np.dtype(str(dtype).rsplit(".", 1)[-1])
 
 

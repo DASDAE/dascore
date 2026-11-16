@@ -287,6 +287,16 @@ class TestPatchSetBackend:
         assert part.backend == "lazy" and len(part.data.chain)
         assert part.load().dtype == dtype
 
+    def test_structured_data_to_another_library(self):
+        """A record dtype survives the check that a library kept the dtype."""
+        dask_array = pytest.importorskip("dask.array")
+        dtype = np.dtype([("x", "<i4"), ("y", "<f8")])
+        coords = {"x": np.arange(6), "y": np.arange(4)}
+        patch = dc.Patch(data=np.zeros((6, 4), dtype), coords=coords, dims=("x", "y"))
+        there = patch.set_backend("dask")
+        assert isinstance(there.data, dask_array.Array)
+        assert there.dtype == dtype and to_backend(there.data, "numpy").dtype == dtype
+
     def test_as_a_numpy_array(self, patch, strict):
         """`np.asarray` of a lazy array on another library is a NumPy array."""
         lazy = patch.set_backend(f"LazyArray[{STRICT}]")
@@ -626,6 +636,9 @@ class TestSpoolSetBackend:
             assert dc.read(path)[0].backend == "numpy"
             assert lazy_read_backend() is None
 
+    @pytest.mark.skipif(
+        sys.platform == "emscripten", reason="emscripten has no threads"
+    )
     def test_prefetching_iterator(self, spool):
         """The iterator which loads ahead hands out the same."""
         backends = [x.backend for x in spool.set_backend("lazy").iterate()]
