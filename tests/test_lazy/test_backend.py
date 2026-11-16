@@ -385,6 +385,21 @@ class TestPendingStepsOnAnotherLibrary:
         with pytest.raises(LazyOperationError, match="_Doubles has no"):
             pending.set_backend(f"LazyArray[{STRICT}]")
 
+    def test_conversion_a_kernel_makes_itself(self, patch):
+        """A kernel which converts on its own is heard when it is computed."""
+        dask_array = pytest.importorskip("dask.array")
+        # Normalize with a window converts dask data through NumPy itself,
+        # which nothing could ask about when it was chained in a window.
+        lazy = patch.set_backend("LazyArray[dask]")
+        window = lazy.window(time=100, samples=True)
+        out = window.normalize("time", window=11, samples=True)
+        assert dask_array is not None and out.backend == "lazy"
+        with pytest.warns(NumpyFallbackWarning, match="normalize has no dask"):
+            out.load()
+        with config_context(numpy_fallback="raise"):
+            with pytest.raises(NumpyFallbackError, match="normalize has no dask"):
+                out.load()
+
     @pytest.mark.parametrize("policy", (None, "warn"))
     def test_operation_in_a_window(self, patch, strict, policy):
         """A window is asked about the operation it runs, when it is chained."""

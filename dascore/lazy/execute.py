@@ -54,6 +54,18 @@ if TYPE_CHECKING:
     from dascore.lazy.array import LazyArray
 
 
+def _converted(processor, backend: str) -> str | None:
+    """Return the operation a step would take chunks through NumPy for, if any."""
+    if backend == NUMPY_BACKEND:
+        return None
+    if hasattr(type(processor).kernel_for(backend), "_converts"):
+        return processor.name or type(processor).__name__
+    # A step which runs another operation, as one in a window does, has a
+    # kernel for any library and converts for the operation it runs.
+    inner = getattr(processor, "operation", None)
+    return _converted(inner, backend) if hasattr(inner, "kernel_for") else None
+
+
 class _Everything(ChunkContract):
     """What a step which recorded no contract needs: all of its input."""
 
@@ -185,7 +197,7 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         run = partial(kernel, processor, **node.plan)
         # A step with no kernel for the library was let through, or
         # refused, when it was chained: it is not asked again for each box.
-        with fallbacks_decided():
+        with fallbacks_decided(_converted(processor, backend)):
             data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.

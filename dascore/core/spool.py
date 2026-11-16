@@ -883,6 +883,8 @@ class Spool(NodeRepr, NamespaceOwner):
         up from it, is spool-wide state: the union carries whichever
         operand has one and applies it to every patch it yields, as
         attaching and enriching the union would; two different ones raise.
+        So is the backend set by `set_backend`: the union is on the one its
+        operands were set to, and two different ones raise.
 
         Examples
         --------

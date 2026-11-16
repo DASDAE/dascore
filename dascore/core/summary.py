@@ -293,7 +293,12 @@ class PatchSummary(DascoreBaseModel):
             coords=patch.coords.to_summary_dict(),
             dims=patch.dims,
             shape=patch.shape,
-            dtype=str(_as_numpy_dtype(patch.dtype)),
+            # A NumPy dtype stays as it is, a structured one among them.
+            dtype=str(
+                patch.dtype
+                if isinstance(patch.dtype, np.dtype)
+                else _as_numpy_dtype(patch.dtype)
+            ),
             source_path=patch._source.path if patch._source else "",
             source_format=patch._source.format if patch._source else "",
             source_version=patch._source.version if patch._source else "",

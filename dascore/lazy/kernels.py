@@ -50,9 +50,10 @@ from __future__ import annotations
 from typing import Any
 
 from dascore.core.processor import PatchProcessor, _computes
-from dascore.lazy.array import LazyArray, _converted
+from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Unchanged
+from dascore.lazy.execute import _converted
 from dascore.utils.array_api import decide_fallback, lazy_refusal
 
 

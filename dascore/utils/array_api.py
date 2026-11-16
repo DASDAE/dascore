@@ -61,8 +61,11 @@ _NAMESPACES = {"jax": "jax.numpy", "dask": "dask.array"}
 # The array library patches are being read onto lazily, or None when reads
 # fill memory as usual; see `reading_lazily`.
 _LAZY_READ: ContextVar[str | None] = ContextVar("dascore_lazy_read", default=None)
-# Whether every fallback has been decided already; see `fallbacks_decided`.
-_DECIDED: ContextVar[bool] = ContextVar("dascore_fallbacks_decided", default=False)
+# The operations whose conversion through NumPy has been decided already;
+# see `fallbacks_decided`.
+_DECIDED: ContextVar[frozenset[str]] = ContextVar(
+    "dascore_fallbacks_decided", default=frozenset()
+)
 
 
 def array_namespace(*arrays: Any) -> Any:
@@ -212,6 +215,7 @@ def decide_fallback(
     lazy: bool = True,
     refusal: Exception | None = None,
     stacklevel: int | None = None,
+    name: str | None = None,
 ) -> None:
     """
     Apply the `numpy_fallback` setting: refuse, warn, or say nothing.
@@ -234,8 +238,12 @@ def decide_fallback(
     stacklevel
         The stack level of the caller, as `warnings.warn` understands it.
         None points the warning at the first frame outside dascore.
+    name
+        The operation which converts, if this is a conversion: one whose
+        conversion was decided already, inside `fallbacks_decided`, is not
+        asked again.
     """
-    if _DECIDED.get():
+    if name is not None and name in _DECIDED.get():
         return
     policy = get_config().numpy_fallback or ("raise" if lazy else "warn")
     if policy == "raise":
@@ -254,15 +262,18 @@ def decide_fallback(
 
 
 @contextmanager
-def fallbacks_decided():
+def fallbacks_decided(*names: str | None):
     """
-    Run what is inside with every fallback taken as decided already.
+    Run what is inside with the conversions of the operations named decided.
 
-    The steps pending on a lazy array were each put to the `numpy_fallback`
-    setting when they were chained, or when the array was moved to another
-    library. Computing them, a box at a time, asks nothing again.
+    A step pending on a lazy array whose operation has no kernel for the
+    array's library was put to the `numpy_fallback` setting when it was
+    chained, or when the array was moved there. Computing it, a box at a
+    time, does not ask again for that operation; any other conversion a
+    kernel makes as it runs is asked about as usual, so none is silent.
     """
-    token = _DECIDED.set(True)
+    decided = {x for x in names if x is not None}
+    token = _DECIDED.set(_DECIDED.get() | decided)
     try:
         yield
     finally:
@@ -315,6 +326,7 @@ def warn_numpy_fallback(
         "the data were converted to numpy and the output converted back",
         lazy=False,
         stacklevel=None if skip_dascore else stacklevel + 1,
+        name=name,
     )
 
 

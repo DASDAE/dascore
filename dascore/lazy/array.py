@@ -44,18 +44,6 @@ from dascore.utils.array_api import (
 )
 
 
-def _converted(processor, backend: str) -> str | None:
-    """Return the operation a step would take chunks through NumPy for, if any."""
-    if backend == NUMPY_BACKEND:
-        return None
-    if hasattr(type(processor).kernel_for(backend), "_converts"):
-        return processor.name or type(processor).__name__
-    # A step which runs another operation, as one in a window does, has a
-    # kernel for any library and converts for the operation it runs.
-    inner = getattr(processor, "operation", None)
-    return _converted(inner, backend) if hasattr(inner, "kernel_for") else None
-
-
 class LazyArray:
     """
     A recipe, and the operations pending on it.
@@ -108,7 +96,7 @@ class LazyArray:
         if backend == self._backend:
             return self
         for node in self._chain:
-            if (converted := _converted(node.processor, backend)) is not None:
+            if (converted := execute._converted(node.processor, backend)) is not None:
                 decide_fallback(
                     f"{converted} has no {backend} implementation",
                     "each chunk is converted to numpy to run it",
