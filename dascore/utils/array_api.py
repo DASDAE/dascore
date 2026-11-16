@@ -216,8 +216,9 @@ def decide_fallback(
     """
     Apply the `numpy_fallback` setting: refuse, warn, or say nothing.
 
-    Every conversion through NumPy, and every read into memory a lazy
-    backend did not ask for, is decided here.
+    Every conversion through NumPy made because an operation has no
+    implementation for the data's library, and every read of lazy data
+    the caller did not ask for, is decided here.
 
     Parameters
     ----------
@@ -226,7 +227,7 @@ def decide_fallback(
     how
         What is done instead, which the warning adds.
     lazy
-        Whether the data are lazy: unset, the setting refuses for those
+        Whether the data are lazy: the setting, left unset, refuses for those
         and warns for any other.
     refusal
         The error to raise, in place of the one made from `what`.
@@ -274,7 +275,8 @@ def reading_lazily(backend: str | None):
     Have reads inside the block return lazy patches, computed on `backend`.
 
     None leaves reads as they are, filling memory. A read which cannot be
-    lazy raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`)
+    lazy is the `numpy_fallback` setting's to allow, which left unset
+    raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`)
     rather than read.
     """
     token = _LAZY_READ.set(backend)

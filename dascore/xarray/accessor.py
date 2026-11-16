@@ -139,8 +139,8 @@ def _guarded(call: Callable, name: str, size: int):
     operation which would have fit is the safe way to be wrong here,
     and the message says which array was judged too large.
     """
-    # Heard as a warning whatever the fallback setting says of it, since
-    # the warning is what stops the conversion here.
+    # A conversion is announced as a warning whatever the fallback setting
+    # says, since the warning is what stops the conversion here.
     with warnings.catch_warnings(), config_context(numpy_fallback="warn"):
         warnings.simplefilter("error", NumpyFallbackWarning)
         try:

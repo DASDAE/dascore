@@ -364,7 +364,7 @@ class TestPendingStepsOnAnotherLibrary:
     @pytest.mark.parametrize("target", (f"LazyArray[{STRICT}]", STRICT))
     @pytest.mark.parametrize("policy", (None, "warn"))
     def test_step_with_no_kernel(self, patch, strict, policy, target):
-        """A step chained on NumPy is not converted for unsaid elsewhere."""
+        """A step chained on NumPy is not converted on another library unsaid."""
         pending = _Doubles()(patch.set_backend("lazy"))
         with config_context(numpy_fallback=policy), warnings.catch_warnings():
             warnings.simplefilter("error")

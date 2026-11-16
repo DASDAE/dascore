@@ -73,7 +73,8 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     Raises
     ------
     LazyOperationError
-        If the operation states no contract this backend can keep.
+        If the operation states no contract this backend can keep, and the
+        `numpy_fallback` setting does not allow its data to be read.
     """
     name = processor.name or type(processor).__name__
     contract = _contract(processor, data.dtype, plan)
@@ -95,7 +96,8 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
         refusal=lazy_refusal(name),
     )
     # Read on the library its chunks compute on. An operation with no
-    # kernel for that either says so itself, as it does for data in memory.
+    # If the operation has no kernel for that library either, it says so
+    # itself, as it does for data in memory.
     loaded = data.load()
     out = kernel(processor, loaded, **plan)
     # Handed back unchanged is "nothing to do", as it is in memory: the

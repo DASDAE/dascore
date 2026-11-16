@@ -658,7 +658,7 @@ def _read_into_memory(why: str, rows: Sequence[Mapping], held=None):
 
     Reading lazy data which nobody asked to have read is the
     `numpy_fallback` setting's to allow: it is refused, said, or done
-    silently. That is a member a spool holds lazy, whatever backend the
+    silently. Such data are a member a spool holds lazy, whatever backend the
     spool is on, and under a lazy backend a member in a file. A member
     held in memory is not read at all, and a spool with no lazy backend
     reads its files as it always has. `held` gives the patch a spool

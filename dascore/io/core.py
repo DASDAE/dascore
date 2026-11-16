@@ -1893,8 +1893,8 @@ def read(
             )
             own_read = type(fiber_io).read is not FiberIO.read
             if lazy_read_backend() is not None and own_read:
-                # It never asks whether to read lazily, so it is not asked
-                # to: reading is the fallback setting's to allow.
+                # Its own read never checks for lazy reading, so the read
+                # is into memory, which the fallback setting must allow.
                 decide_fallback(
                     f"A {fiber_io.name} patch cannot be read lazily: the format "
                     "reads its files by a method of its own",

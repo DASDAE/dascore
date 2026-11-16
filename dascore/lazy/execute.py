@@ -161,7 +161,8 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     """
     Read what one box of a lazy array needs, and compute it.
 
-    Each step runs its processor's NumPy kernel, and what it makes is
+    Each step runs the kernel its processor has for the array's
+    `backend`, and what it makes is
     checked against the dtype its metadata stated and the shape of the box.
     An empty box is returned without running anything.
 

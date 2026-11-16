@@ -450,7 +450,9 @@ class Patch(NamespaceOwner, PatchMeta):
 
         Notes
         -----
-        - ``set_backend("numpy")`` is what `load` does to a lazy patch.
+        - ``set_backend("numpy")`` is what `load` does to a lazy patch
+          computed on NumPy. `load` leaves a ``"LazyArray[jax]"`` patch on
+          JAX, where this computes it on NumPy.
         - Data in memory on one array library are moved to another through
           NumPy, since that is what every library takes an array from.
         - A step already pending on a lazy patch is asked for its kernel
@@ -465,7 +467,8 @@ class Patch(NamespaceOwner, PatchMeta):
         data = self._data
         if isinstance(data, LazyArray):
             # Computed on the library asked for, so nothing is converted
-            # but for a pending step with no kernel for it, which is said.
+            # but for a pending step with no kernel for it, which the
+            # numpy_fallback setting decides.
             new = data.with_backend(library)
             new = new if lazy else new.load()
         elif lazy:

@@ -8,8 +8,9 @@ says which stored samples fill which box of the array, and the
 none of which has computed anything. Its shape, dtype and `data_id` are the
 last step's, or the recipe's when nothing is pending, so they are known
 without reading. [`load`](`dascore.lazy.array.LazyArray.load`) reads the
-recipe and runs each step's NumPy kernel in order, a chunk at a time when
-the whole would be large; see [`dascore.lazy.execute`](`dascore.lazy.execute`).
+recipe and runs each step's kernel for the array's `backend` in order, a
+chunk at a time when the whole would be large; see
+[`dascore.lazy.execute`](`dascore.lazy.execute`).
 
 Examples
 --------

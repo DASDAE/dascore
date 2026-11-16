@@ -502,7 +502,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
-    # The array backend patches are handed out on, as `set_backend` was
+    # The array backend patches are handed out on, as `set_backend` spells
     # given it. None hands them out as they are read: in memory, on NumPy.
     _backend: str | None = None
     # single-file provenance (set by _from_file; drives update())
@@ -718,7 +718,8 @@ class Spool(NodeRepr, NamespaceOwner):
         Return a spool whose patches are handed out on another array backend.
 
         Nothing is read or converted here. Each patch the new spool hands
-        out, by indexing, iterating or loading, is read onto the backend.
+        out, by indexing or iterating, is on the backend. `load` reads every
+        patch into memory, on the library a lazy backend computes on.
 
         Parameters
         ----------
@@ -911,7 +912,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if len(backends) > 1:
             msg = (
                 f"Spools on different backends cannot be added: {backends}. "
-                "Set one backend on each, or on their sum."
+                "Set one backend on each before adding them."
             )
             raise ParameterError(msg)
         new._backend = backends[0] if backends else None

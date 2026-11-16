@@ -198,8 +198,9 @@ class ArraySource:
 
         A source read at once reads from the directory it was named in. One
         kept to read later would read from wherever the process is by then.
-        Only a source whose id is its array's own is changed: one named by
-        where it is kept would be another array under another path.
+        Only a source with an `origin_id` is changed: one identified by
+        where it is kept takes its `data_id` from its path, and would be
+        another array under another path.
         """
         if self.filled or not self.origin_id or not is_local_path(self.path):
             return self
