@@ -205,6 +205,17 @@ def to_backend(array: Any, backend: str) -> Any:
     except (ImportError, AttributeError) as error:
         msg = f"No array library called {backend!r} could be used: {error}"
         raise ParameterError(msg) from error
+    # A library which holds the values in another dtype, as JAX does with
+    # 64-bit numbers unless told otherwise, would change them under the
+    # same id: refused rather than trusted.
+    made = _as_numpy_dtype(out.dtype)
+    if held.size and made != held.dtype:
+        msg = (
+            f"{backend} holds {held.dtype} data as {made}, which would change "
+            f"their values. Configure {backend} to keep {held.dtype}, or "
+            "convert the data first."
+        )
+        raise ParameterError(msg)
     return out
 
 

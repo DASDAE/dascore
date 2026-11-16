@@ -472,7 +472,7 @@ class Patch(NamespaceOwner, PatchMeta):
             new = data.with_backend(library)
             new = new if lazy else new.load()
         elif lazy:
-            new = LazyArray(self._stored_recipe(), backend=library)
+            new = LazyArray(Recipe.from_source(self._lazy_source()), backend=library)
         else:
             new = to_backend(data, library)
         if new is data:
@@ -481,11 +481,17 @@ class Patch(NamespaceOwner, PatchMeta):
         with operation_context():
             # `update` is typed for an array in memory; a lazy one is data too.
             out = self.update(data=cast(Any, new))
-        out._source = self._source
+        # Made lazy, it keeps where its file is from wherever it was made,
+        # so moving it back and forth reads the same file.
+        out._source = (
+            self._lazy_source()
+            if lazy and not isinstance(data, LazyArray)
+            else self._source
+        )
         return out
 
-    def _stored_recipe(self) -> Recipe:
-        """Return the recipe which reads this patch's data from where it is stored."""
+    def _lazy_source(self):
+        """Return the source a lazy patch reads this patch's data from."""
         source = self._source
         if source is None or not source.loadable:
             msg = (
@@ -495,7 +501,7 @@ class Patch(NamespaceOwner, PatchMeta):
                 "data are read from, before they are read."
             )
             raise ParameterError(msg)
-        return Recipe.from_source(source.anchored())
+        return source.anchored()
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

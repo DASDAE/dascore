@@ -76,7 +76,11 @@ from dascore.io.utils import (
 )
 from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
-from dascore.utils.array_api import decide_fallback, lazy_read_backend
+from dascore.utils.array_api import (
+    decide_fallback,
+    lazy_read_backend,
+    reading_lazily,
+)
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
 from dascore.utils.identity import (
@@ -1088,7 +1092,9 @@ class FiberIO:
                 # The ids were worked out above; the read is the operation.
                 with operation_context():
                     new = patch.update(coords=coords, attrs=attrs).to_patch(data)
-                new._source = source
+                # A lazy patch keeps where its file is from wherever it was
+                # read, so making it lazy again later reads the same file.
+                new._source = source if library is None else source.anchored()
                 out.append(new)
         return dc.spool(out)
 
@@ -1892,24 +1898,27 @@ def read(
                 man, file_format, file_version
             )
             own_read = type(fiber_io).read is not FiberIO.read
-            if lazy_read_backend() is not None and own_read:
-                # Its own read never checks for lazy reading, so the read
-                # is into memory, which the fallback setting must allow.
+            library = lazy_read_backend()
+            if library is not None and own_read:
+                # Its own read is not known to read lazily, so it reads
+                # into memory, which the fallback setting must allow.
                 decide_fallback(
                     f"A {fiber_io.name} patch cannot be read lazily: the format "
                     "reads its files by a method of its own",
                     "it was read into memory",
                 )
-            out = fiber_io.read(
-                man,
-                file_version=file_version,
-                _provenance_source=source,
-                time=time,
-                distance=distance,
-                snap=snap,
-                _pre_cast=True,
-                **kwargs,
-            )
+            # And it does so with lazy reading off, whatever it calls.
+            with reading_lazily(None if own_read else library):
+                out = fiber_io.read(
+                    man,
+                    file_version=file_version,
+                    _provenance_source=source,
+                    time=time,
+                    distance=distance,
+                    snap=snap,
+                    _pre_cast=True,
+                    **kwargs,
+                )
             # The reader's own spelling of its format, not the caller's:
             # `dc.read(path, "netcdf_cf")` and `dc.read(path, "NETCDF_CF")`
             # resolve to one FiberIO and must name one datum.

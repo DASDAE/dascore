@@ -6,6 +6,7 @@ import os
 import sys
 import warnings
 from itertools import pairwise
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.processor import register_kernel
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
     LazyOperationError,
     NumpyFallbackError,
@@ -21,6 +23,7 @@ from dascore.exceptions import (
 from dascore.io import core as io_core
 from dascore.lazy import execute
 from dascore.lazy.execute import chunk_boxes
+from dascore.lazy.recipe import Recipe
 from dascore.utils import array_api as array_api_module
 from dascore.utils import patch_assembly as assembly
 from dascore.utils.array_api import (
@@ -30,7 +33,6 @@ from dascore.utils.array_api import (
     to_backend,
     to_numpy,
 )
-from dascore.utils.downloader import fetch
 from dascore.warnings import NumpyFallbackWarning
 
 STRICT = "array_api_strict"
@@ -240,6 +242,50 @@ class TestPatchSetBackend:
         monkeypatch.chdir(elsewhere)
         for lazy in (made, read, handed):
             assert lazy.backend == "lazy" and lazy.load().equals(patch)
+
+    def test_there_and_back_from_elsewhere(self, patch, tmp_path, monkeypatch):
+        """Made lazy from a relative path, it reads the same file after a move."""
+        dc.write(patch, tmp_path / "here.h5", "dasdae")
+        monkeypatch.chdir(tmp_path)
+        with reading_lazily("numpy"):
+            read = dc.read("here.h5")[0]
+        made = dc.read("here.h5")[0].set_backend("lazy")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        # A file of the same name, holding other data, where the process is.
+        dc.write(patch.abs(), elsewhere / "here.h5", "dasdae")
+        monkeypatch.chdir(elsewhere)
+        for lazy in (read, made):
+            again = lazy.set_backend("numpy").set_backend("lazy")
+            assert again.load().equals(patch)
+
+    def test_library_which_narrows_the_data(self, patch, monkeypatch):
+        """A library which would hold the values in fewer bits is refused."""
+        strict = pytest.importorskip("array_api_strict")
+
+        def narrowing(name):
+            """Return a namespace which keeps 64-bit numbers in 32."""
+            return SimpleNamespace(
+                asarray=lambda x: strict.asarray(np.asarray(x, np.float32))
+            )
+
+        monkeypatch.setattr(array_api_module, "import_module", narrowing)
+        with pytest.raises(ParameterError, match="holds float64 data as float32"):
+            patch.set_backend("narrowing")
+
+    def test_structured_data(self, monkeypatch):
+        """A record dtype is checked as it is, and not rebuilt from its name."""
+        dtype = np.dtype([("x", "<i4"), ("y", "<f8")])
+        source = ArraySource(path="/a/record.h5", format="DASDAE", key="")
+        source = source.describe((6, 4), dtype)
+        monkeypatch.setattr(
+            Recipe, "load", lambda self: np.zeros(self.shape, self.dtype)
+        )
+        coords = {"x": np.arange(6), "y": np.arange(4)}
+        lazy = dc.Patch(data=Recipe.from_source(source), coords=coords, dims=("x", "y"))
+        part = lazy.select(x=(1, 4), samples=True)
+        assert part.backend == "lazy" and len(part.data.chain)
+        assert part.load().dtype == dtype
 
     def test_as_a_numpy_array(self, patch, strict):
         """`np.asarray` of a lazy array on another library is a NumPy array."""
@@ -505,10 +551,19 @@ class TestLazyRead:
         assert lazy.load().equals(patch) and len(reads) == 1
 
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_format_which_reads_its_own_way(self, policy):
+    def test_format_which_reads_its_own_way(self, path, policy, monkeypatch):
         """A format which replaces `read` is not read with nothing said."""
-        path = fetch("sintela_protobuf_1.pb")
         expected = dc.read(path)[0]
+        # As one which reads its files by a method of its own does.
+        manager = io_core.FiberIO.manager
+        name, version = dc.get_format(path)
+        fiber_io = type(manager.get_fiberio(format=name, version=version))
+
+        def own_read(self, *args, **kwargs):
+            """Read as the base class does, from a method of the format's."""
+            return io_core.FiberIO.read(self, *args, **kwargs)
+
+        monkeypatch.setattr(fiber_io, "read", own_read)
         spool = dc.spool(path).set_backend("lazy")
         with config_context(numpy_fallback=policy), warnings.catch_warnings():
             warnings.simplefilter("error", NumpyFallbackWarning)

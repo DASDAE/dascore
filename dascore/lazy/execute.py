@@ -202,7 +202,14 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.
         expected = _sizes(after) if node.contract else stated_shape
-        shape, dtype = tuple(data.shape), _as_numpy_dtype(data.dtype)
+        # A NumPy dtype is compared as it is: a structured one cannot be
+        # rebuilt from its name.
+        shape = tuple(data.shape)
+        dtype = (
+            data.dtype
+            if isinstance(data.dtype, np.dtype)
+            else (_as_numpy_dtype(data.dtype))
+        )
         if shape != expected or dtype != stated_dtype:
             name = type(processor).__name__
             msg = (
