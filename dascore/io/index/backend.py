@@ -103,16 +103,16 @@ def _ns_to_time(series: pd.Series, flavor: str) -> pd.Series:
     return out
 
 
+def _plain(value):
+    """A numpy scalar as plain python, and NaN as None."""
+    if hasattr(value, "item"):  # numpy scalar
+        value = value.item()
+    return None if isinstance(value, float) and np.isnan(value) else value
+
+
 def adapt_params(params) -> list:
     """Convert numpy scalars (and NaN) to plain python for DB drivers."""
-    out = []
-    for p in params:
-        if hasattr(p, "item"):  # numpy scalar
-            p = p.item()
-        if isinstance(p, float) and np.isnan(p):
-            p = None
-        out.append(p)
-    return out
+    return [_plain(p) for p in params]
 
 
 # A serialized SQLite build (threadsafety == 3) lets one connection be
@@ -135,9 +135,19 @@ def _safe_close(con: sqlite3.Connection) -> None:
         con.close()
 
 
+# Most of every row is a string, an int or NULL, which bind as they are.
+_BINDS_AS_IS = frozenset({str, int, type(None)})
+
+
+def _adapt_one(value):
+    """One parameter as sqlite3 can bind it."""
+    value = _plain(value)
+    return int(value) if isinstance(value, bool) else value
+
+
 def _adapt(params):
     """Convert numpy/py types sqlite3 can't bind natively."""
-    return [int(p) if isinstance(p, bool) else p for p in adapt_params(params)]
+    return [p if type(p) in _BINDS_AS_IS else _adapt_one(p) for p in params]
 
 
 def _classic_dtypes(df: pd.DataFrame) -> pd.DataFrame:

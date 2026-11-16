@@ -51,6 +51,7 @@ from dascore.models import (
     sensible_model_equals,
     values_equal,
 )
+from dascore.models.types import _to_unit_quantity
 from dascore.units import (
     Quantity,
     Unit,
@@ -111,6 +112,20 @@ step_type = Any
 _TD64_ZERO = np.timedelta64(0, "ns")
 
 
+@cache
+def _dtype_family(dtype) -> str:
+    """The one-letter family ensure_consistent_dtype casts a dtype's values by."""
+    for family, kind in (
+        ("M", np.datetime64),
+        ("m", np.timedelta64),
+        ("f", np.floating),
+        ("i", np.integer),
+    ):
+        if np.issubdtype(dtype, kind):
+            return family
+    return ""
+
+
 def ensure_consistent_dtype(value, name, dtype):
     """Ensure the values are consistent with dtype."""
     # For some reason all ints are getting converted to floats using default
@@ -118,17 +133,18 @@ def ensure_consistent_dtype(value, name, dtype):
     # TODO: See if this is needed in a few version after pydantic 2.1.1
     if pd.isnull(value):
         return value
-    elif np.issubdtype(dtype, np.datetime64):
+    family = _dtype_family(dtype)
+    if family == "M":
         if name == "step":
             value = dc.to_timedelta64(value)
         else:
             value = dc.to_datetime64(value)
-    elif np.issubdtype(dtype, np.timedelta64):
+    elif family == "m":
         value = dc.to_timedelta64(value)
     # convert numpy numerics back to python
-    elif np.issubdtype(dtype, np.floating):
+    elif family == "f":
         value = float(value) if value is not None else np.nan
-    elif np.issubdtype(dtype, np.integer):
+    elif family == "i":
         value = int(value)
     return value
 
@@ -359,6 +375,28 @@ class CoordSummary(DascoreBaseModel):
             unit, count = np.datetime_data(dtype.str)
             step = np.asarray(step).astype(f"m8[{count}{unit}]")[()]
         return get_coord(start=start, stop=stop, step=step, units=self.units)
+
+
+def _coord_summary(fields: dict[str, Any], update=None) -> CoordSummary:
+    """
+    The summary validating ``fields`` builds, then updated with ``update``.
+
+    A coordinate's own fields are already what validation would leave
+    except for the casts its before-validator makes, so those are made
+    here and the model is constructed directly; a summary is built per
+    coordinate while indexing, where validation dominated.
+    """
+    dtype = _get_dtype(fields["min"], fields.get("dtype"))
+    fields["dtype"] = dtype
+    for name in ("min", "max", "step"):
+        fields[name] = ensure_consistent_dtype(fields.get(name), name, dtype)
+    units = fields.get("units")
+    if units is not None and not isinstance(units, Quantity):
+        fields["units"] = _to_unit_quantity(units)
+    fields["dims"] = tuple(fields.get("dims", ()))
+    if (length := fields.get("len")) is not None:
+        fields["len"] = int(length)
+    return CoordSummary.model_construct(**fields, **(update or {}))
 
 
 @cache
@@ -1163,7 +1201,15 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
-        return CoordSummary(
+        return _coord_summary(self._summary_fields(dims), self._summary_update())
+
+    def _summary_update(self) -> dict[str, Any]:
+        """Summary fields already in the coordinate's dtype, set unvalidated."""
+        return {}
+
+    def _summary_fields(self, dims) -> dict[str, Any]:
+        """The fields a summary of this coordinate is validated from."""
+        return dict(
             min=self.min(),
             max=self.max(),
             # a summary with a step rebuilds a range; a step declared on
@@ -3453,6 +3499,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if self._partial or self.ndim != 1 or not len(self):
             count = self.shape[0] if self.ndim else 1
             return (RunRecord(count, self.min(), self.max()),)
+        if len(self.runs) == 1:
+            # one run's ends are the coordinate's, which min and max cache
+            run = self.runs[0]
+            step = run.step(self.dtype) if isinstance(run, Grid) else None
+            return (RunRecord(len(run), self.min(), self.max(), step),)
         out = []
         for run in self.runs:
             grid = isinstance(run, Grid)
@@ -3492,9 +3543,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             components += (("step", self._hash_scalar(self.step, "step")),)
         return components
 
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord: its grid and segments."""
-        summary = super().to_summary(dims=dims)
+    def _summary_update(self) -> dict[str, Any]:
+        """The coordinate's grid and segments, for its summary."""
         records = self._run_records()
         update: dict[str, Any] = {"run_count": len(records)}
         if 1 < len(records) <= dc.get_config().max_index_runs:
@@ -3508,7 +3558,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             else:
                 terms = grid.canonical()[1:]
                 update.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
-        return summary.model_copy(update=update)
+        return update
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()
@@ -3982,18 +4032,9 @@ class CoordString(BaseCoord):
             _raise_string_coord_error("limit updates")
         return self
 
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Return a lossy summary for string coordinates."""
-        return CoordSummary(
-            min=self.min(),
-            max=self.max(),
-            step=None,
-            dtype=self.dtype,
-            units=None,
-            dims=dims,
-            len=self.shape[0] if self.ndim else 1,
-            data_id=self.data_id,
-        )
+    def _summary_fields(self, dims) -> dict[str, Any]:
+        """The fields of a lossy summary for string coordinates."""
+        return {**super()._summary_fields(dims), "step": None, "units": None}
 
     def _id_components(self) -> tuple[Any, ...]:
         """Return the array payload identifying string coords."""

@@ -423,6 +423,17 @@ class TestCoordSummary:
         assert isinstance(out, CoordSummary)
         assert out.data_id == coord.data_id
 
+    def test_matches_validated_summary(self, coord):
+        """The summary built without validation is the one validation builds."""
+        out = coord.to_summary(dims=("x",))
+        fields = coord._summary_fields(("x",))
+        validated = CoordSummary(**fields).model_copy(update=coord._summary_update())
+        assert out.model_fields_set == validated.model_fields_set
+        for name in CoordSummary.model_fields:
+            mine, theirs = getattr(out, name), getattr(validated, name)
+            assert type(mine) is type(theirs), name
+            assert repr(mine) == repr(theirs), name
+
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""
         if not coord.evenly_sampled:

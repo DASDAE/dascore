@@ -21,6 +21,7 @@ import re
 import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
+from functools import cache, lru_cache
 from typing import SupportsInt, TypedDict, cast
 
 import numpy as np
@@ -256,6 +257,11 @@ def _to_ns(value) -> int:
     scalar here would give a coord one summary key on a fresh scan and
     another when the same coord is read back out of an index.
     """
+    # numpy scalars directly; to_int would route them through arrays
+    if isinstance(value, np.datetime64):
+        return int(to_datetime64(value).view(np.int64))
+    if isinstance(value, np.timedelta64):
+        return int(to_timedelta64(value).view(np.int64))
     return int(to_int(value))
 
 
@@ -266,6 +272,8 @@ def typed_value(value) -> TypedValue | None:
     Unit-bearing quantities are converted to base SI units; the canonical
     unit string is recorded so queries can convert consistently.
     """
+    if type(value) is str:  # the common attr, decided without the checks below
+        return TypedValue("str", value) if value else None
     if _is_missing(value):
         return None
     # containers/arrays are complex attrs: never indexable scalars (and
@@ -298,6 +306,7 @@ def typed_value(value) -> TypedValue | None:
     return None  # complex attrs (sequences, dicts, ...) are skipped
 
 
+@lru_cache(maxsize=4096)
 def _attr_name_status(name: str) -> str:
     """
     Classify an attr name for indexing: "ok", "skip", or "reserved".
@@ -487,10 +496,18 @@ def coord_dtype_is_stateable(dtype: str | np.dtype | None) -> bool:
     patch holds it -- but nothing about its values is, so no query
     predicate can be built against it either.
     """
-    if not dtype:
-        return False
+    return bool(dtype) and bool(_envelope_kind(dtype))
+
+
+@cache
+def _envelope_kind(dtype: str | np.dtype) -> str:
+    """How a coord dtype's envelope is stored: "M", "m", "num", "str" or ""."""
     dtype = np.dtype(dtype)
-    return dtype.kind in "mM" or np.issubdtype(dtype, np.number) or dtype.kind in "USO"
+    if dtype.kind in "mM":
+        return dtype.kind
+    if np.issubdtype(dtype, np.number):
+        return "num"
+    return "str" if dtype.kind in "USO" else ""
 
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
@@ -514,9 +531,9 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         units=units_str,
         data_id=data_id,
     )
-    dtype = np.dtype(summary.dtype) if summary.dtype else None
-    if dtype is None:
+    if not summary.dtype:
         return None  # nothing to record: not even a dtype was stated
+    family = _envelope_kind(summary.dtype)
     # A range's row rebuilds every value, and its grid comes along so a
     # fractional step rebuilds the same labels the file holds.
     exact = _ExactFields(
@@ -527,8 +544,8 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     )
     run_count = getattr(summary, "run_count", None)
     runs = _indexed_runs(summary)
-    if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
-        is_datetime = dtype.kind == "M"
+    if family in ("M", "m"):  # datetime64 ("M") / timedelta64 ("m")
+        is_datetime = family == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
         step = summary.step
         return CoordRecord(
@@ -542,7 +559,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             run_count=run_count,
             **common,
         )
-    if np.issubdtype(dtype, np.number):
+    if family == "num":
         # Envelopes are stored in the coordinate's ORIGINAL units, never
         # converted, beside the original unit string — what the patch
         # shows is what the index shows, and a bare query means these
@@ -559,7 +576,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             run_count=run_count,
             **common,
         )
-    if dtype.kind in "USO":
+    if family == "str":
         return CoordRecord(
             value_kind="str",
             min_str=str(summary.min),
