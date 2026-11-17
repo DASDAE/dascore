@@ -40,7 +40,9 @@ from dascore.lazy.recipe import Recipe, concat
 from dascore.utils.array_api import (
     LAZY_BACKEND,
     NUMPY_BACKEND,
+    _as_numpy_dtype,
     array_namespace,
+    asarray_like,
     backend_name,
     decide_fallback,
     is_numpy,
@@ -285,6 +287,11 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
         parts = [x[..., None] for x in parts] if new_axis else parts
         return np.concatenate(parts, axis=axis)
     xp = array_namespace(arrays[0])
+    # Promoted as NumPy promotes the same arrays, which a library may not do.
+    dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
+    if any(_as_numpy_dtype(x.dtype) != dtype for x in arrays):
+        target = asarray_like(np.empty(0, dtype), arrays[0]).dtype
+        arrays = [xp.astype(x, target) for x in arrays]
     if new_axis:
         arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
     return xp.concat(arrays, axis=axis)

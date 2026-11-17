@@ -508,9 +508,10 @@ class DropPrivateCoords(PatchProcessor):
         return meta.new(coords=coords), {"indexer": indexer}
 
     def chunk_contract(self, dtype, plan):
-        """Return that the data are as they were, or emptied along an axis."""
-        index = plan.get("indexer")
-        return Unchanged() if index is None else Window(tuple(index))
+        """Return that the data are as they were, or none for a private dimension."""
+        # Dropping a private dimension takes its axis with it, which no
+        # window of the input describes.
+        return Unchanged() if plan.get("indexer") is None else None
 
     def kernel(self, data, *, indexer=None):
         """Return the data, emptied along any dimension which was private."""

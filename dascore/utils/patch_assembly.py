@@ -965,11 +965,23 @@ class PatchAssembler:
         for number, patch_kwargs in enumerate(df_dict_list):
             patch = self._load_trimmed_patch(patch_kwargs, joined, units)
             patch, target_units = _match_merge_units(patch, merge_dim, target_units)
-            if not number and not is_numpy(patch.data):
+            if not is_numpy(patch.data):
                 # Lazy, or on another library: joined where the members
-                # are, not copied into a NumPy buffer.
+                # are, not copied into a NumPy buffer. What is in the buffer
+                # already is joined with them, as one array in memory.
+                held = []
+                if buffer is not None and axis is not None:
+                    head = broadcast_for_index(buffer.ndim, axis, slice(0, offset))
+                    held.append(buffer[head])
                 return self._joined(
-                    joined, patch, df_dict_list, merge_dim, units, target_units
+                    joined,
+                    patch,
+                    df_dict_list[number + 1 :],
+                    merge_dim,
+                    units,
+                    target_units,
+                    held=(held, coords, attrs, dims),
+                    rows=df_dict_list,
                 )
             data, coord = patch.data, patch.coords
             if dims is None:
@@ -1018,41 +1030,52 @@ class PatchAssembler:
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
         return self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
 
-    def _joined(self, joined, first, rows, merge_dim, units, target_units):
+    def _joined(
+        self, joined, patch, rest, merge_dim, units, target_units, *, held, rows
+    ):
         """
         Merge members which are not NumPy arrays by joining them where they are.
 
         A lazy member which is a window of what is stored stays one, and the
         merged patch reads nothing; members on another library are joined
         there. What cannot be joined so is read or converted as the
-        `numpy_fallback` setting allows. The dtype is promoted a member at a
+        `numpy_fallback` setting allows, as is joining them with members
+        already copied into memory. The dtype is promoted a member at a
         time, as the buffer of NumPy members promotes it.
+
+        `patch` is the first member which is not NumPy, `rest` the rows
+        after it, and `held` the data, coordinates, attrs and dimensions of
+        the members before it, already in memory.
         """
-        patches = [first]
-        for patch_kwargs in rows[1:]:
+        data, coords, attrs, dims = held
+        data, coords, attrs = list(data), list(coords), list(attrs)
+        dims = dims or patch.dims
+        patches = [patch]
+        for patch_kwargs in rest:
             patch = self._load_trimmed_patch(patch_kwargs, joined, units)
             patch, target_units = _match_merge_units(patch, merge_dim, target_units)
-            if patch.dims != first.dims:
-                # the same member with its axes in the merge's order
-                patch = patch.transpose(*first.dims)
             patches.append(patch)
-        data = [x.data for x in patches]
+        for patch in patches:
+            if patch.dims != dims:
+                # the same member with its axes in the merge's order
+                patch = patch.transpose(*dims)
+            data.append(patch.data)
+            coords.append(patch.coords)
+            attrs.append(patch.attrs)
         chain, _ = _cast_chain([_as_numpy_dtype(x.dtype) for x in data])
         if chain[-1] != np.result_type(*(_as_numpy_dtype(x.dtype) for x in data)):
             # Promoted in order, the members give another dtype than joined
             # at once would: what the buffer gives is what is wanted.
             data = [_loaded_to(x, chain[-1]) for x in data]
         try:
-            merged = join(data, axis=first.dims.index(merge_dim))
+            merged = join(data, axis=dims.index(merge_dim))
         except (ParameterError, ValueError) as e:
             msg = (
                 f"Cannot merge patches; their shapes are incompatible "
                 f"along the dimensions not being merged ({merge_dim})."
             )
             raise CoordMergeError(msg) from e
-        coords = [x.coords for x in patches]
-        attrs = [x.attrs for x in patches]
-        return self._assemble(merged, first.dims, merge_dim, coords, attrs, rows)
+        return self._assemble(merged, dims, merge_dim, coords, attrs, rows)
 
     def _assemble(self, data, dims, merge_dim, coords, attrs, rows, defaults=None):
         """Build the merged patch from the members' data, coords and attrs."""

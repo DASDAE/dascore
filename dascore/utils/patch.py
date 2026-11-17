@@ -1840,7 +1840,15 @@ def concatenate_planned(
     stated = [x for x in units if not _is_missing(x)]
     if stated:
         kept = stated[0]
-        patches = [x.convert_units(kept) for x in patches]
+        # One already in them, spelled the same, has nothing to convert, and
+        # a lazy one is not asked to run what would do nothing.
+        same = str(get_quantity(kept))
+        patches = [
+            x
+            if str(get_quantity(x.attrs.data_units)) == same
+            else x.convert_units(kept)
+            for x in patches
+        ]
         attrs = attrs.update(data_units=kept)
     operation = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}

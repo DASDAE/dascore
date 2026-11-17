@@ -115,6 +115,9 @@ def _refuse_numpy(monkeypatch):
         if name.startswith("dascore") and getattr(module, "to_numpy", None) is to_numpy:
             monkeypatch.setattr(module, "to_numpy", refuse)
     assert array_api_module.to_numpy is refuse
+    # And by NumPy taking the strict library's arrays, as `np.asarray` does.
+    if (strict := sys.modules.get(STRICT)) is not None:
+        monkeypatch.setattr(type(strict.asarray(0)), "__array__", refuse)
 
 
 class _Doubles(dc.PatchProcessor):
@@ -815,15 +818,53 @@ class TestSpoolSetBackend:
         assert out.backend == "numpy"
         np.testing.assert_array_equal(out.data, expected.data)
 
-    def test_new_dimension_on_another_library(self, spool, strict):
+    def test_new_dimension_on_another_library(self, spool, strict, monkeypatch):
         """A new dimension is added by the library the data are on."""
         expected = spool.concatenate(run=None)[0]
         held = dc.spool(list(spool.set_backend(STRICT)))
         with warnings.catch_warnings():
             warnings.simplefilter("error", NumpyFallbackWarning)
+            _refuse_numpy(monkeypatch)
             out = held.concatenate(run=None)[0]
+        monkeypatch.undo()
         assert out.backend == STRICT and out.shape == expected.shape
         np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    @pytest.mark.parametrize("call", ("chunk", "concatenate"))
+    def test_mixed_dtypes_on_another_library(self, whole, strict, call):
+        """Members of different dtypes on one library promote as NumPy's do."""
+        size = whole.shape[whole.get_axis("time")]
+        first = whole.select(time=(0, size // 2), samples=True)
+        second = whole.select(time=(size // 2, size), samples=True)
+        parts = [
+            first.new(data=(first.data * 10).astype(np.int32)),
+            second.new(data=second.data.astype(np.float32)),
+        ]
+        expected = getattr(dc.spool(parts), call)(time=None)[0]
+        held = dc.spool([x.set_backend(STRICT) for x in parts])
+        out = getattr(held, call)(time=None)[0]
+        assert out.backend == STRICT
+        values = to_numpy(out.data)
+        assert values.dtype == expected.dtype
+        np.testing.assert_array_equal(values, expected.data)
+
+    def test_lazy_patches_with_units_concatenated(self, whole, tmp_path, reads):
+        """Members which state their units are joined lazily too."""
+        spool = _in_four_files(whole.set_units("m/s"), tmp_path)
+        expected = spool.concatenate(time=None)[0]
+        reads.clear()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = spool.set_backend("lazy").concatenate(time=None)[0]
+        assert out.backend == "lazy" and not reads
+        assert out.attrs == expected.attrs and out.load().equals(expected)
+
+    def test_private_dimension_is_not_dropped_lazily(self, patch):
+        """Dropping a private dimension is refused, as it was."""
+        lazy = patch.set_backend("lazy")
+        renamed = lazy.rename_coords(time="_time")
+        with pytest.raises(LazyOperationError, match="drop_private_coords"):
+            renamed.drop_private_coords()
 
     def test_summary_of_patches_on_another_library(self, spool, strict):
         """A spool of patches on another library can still say what it holds."""
@@ -979,7 +1020,9 @@ class TestLazyMerge:
         assert not np.allclose(merged.data, whole.transpose(*merged.dims).data)
 
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_dtypes_which_promote_in_order(self, whole, tmp_path, policy, monkeypatch):
+    def test_dtypes_which_promote_in_order(
+        self, whole, tmp_path, policy, monkeypatch, reads
+    ):
         """Where promoting in order differs from at once, the members are read."""
         size = whole.shape[whole.get_axis("time")]
         edges = [0, size // 3, 2 * size // 3, size]
@@ -1000,10 +1043,13 @@ class TestLazyMerge:
             assembly.PatchAssembler, "_member_meta_from_index", lambda *args: None
         )
         lazy = spool.set_backend("lazy").chunk(time=None)
+        reads.clear()
         with config_context(numpy_fallback=policy):
             if policy is None:
                 with pytest.raises(LazyOperationError, match="promote in an order"):
                     lazy[0]
+                # Refused before a member is read.
+                assert not reads
                 return
             with pytest.warns(NumpyFallbackWarning, match="promote in an order"):
                 merged = lazy[0]
@@ -1039,6 +1085,27 @@ class TestLazyMerge:
         mixed = (spool[:3] + dc.spool([held])).set_backend("lazy")
         with pytest.raises(LazyOperationError, match="cannot stay lazy"):
             mixed.chunk(time=None)[0]
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_member_in_memory_before_lazy_ones(self, spool, whole, policy, reads):
+        """Lazy members after one in memory are not copied into it unasked."""
+        size = whole.shape[whole.get_axis("time")]
+        # The first quarter held in memory, changed so the index cannot stand
+        # for it, before the three files after it.
+        held = whole.select(time=(0, size // 4), samples=True) * 1
+        expected = (dc.spool([held]) + spool[1:]).chunk(time=None)[0]
+        mixed = (dc.spool([held]) + spool[1:]).set_backend("lazy")
+        reads.clear()
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                    mixed.chunk(time=None)[0]
+                assert not reads
+                return
+            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
+                merged = mixed.chunk(time=None)[0]
+        assert merged.backend == "numpy"
+        np.testing.assert_array_equal(merged.data, expected.data)
 
     def test_file_changed_since_it_was_indexed(self, whole, tmp_path, reads):
         """A file the index no longer describes is read as it is now, lazily."""
