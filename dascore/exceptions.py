@@ -55,13 +55,28 @@ class IncompatiblePatchError(PatchError):
     """Raised when an operator cannot be performed on a patch."""
 
 
+class NumpyFallbackError(IncompatiblePatchError):
+    """
+    Raised when an operation would convert its data through NumPy.
+
+    Only when the `numpy_fallback` setting is ``"raise"``: an operation
+    with no implementation for the patch's array backend is then refused,
+    where it would otherwise convert the data to NumPy and back.
+    """
+
+
 class LazyOperationError(IncompatiblePatchError):
     """
-    Raised when an operation cannot run on a patch whose data are lazy.
+    Raised when something cannot be done while data stay lazy.
 
     The lazy backend never reads the data behind the caller's back, so an
-    operation with no chunk contract is refused rather than loaded for.
-    `Patch.load` reads the data into memory first.
+    operation with no chunk contract is refused rather than loaded for,
+    and so are a read, a fill and a merge which cannot be lazy. Calling
+    `Patch.load` first reads a patch's data into memory, and the
+    `numpy_fallback` setting can allow any of these: ``"warn"`` reads with
+    a warning, ``"ignore"`` without one. Arithmetic on a lazy patch, NumPy
+    functions of one, `rolling`, the figures and stacking a spool of them
+    are refused whatever the setting.
     """
 
 

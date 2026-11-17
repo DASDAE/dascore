@@ -7,7 +7,8 @@ plan -- a contract written above the class which owns the kernel describes
 some other kernel, so it does not count -- then:
 
 - no contract, or a `reconcile` of the processor's own, which would be
-  handed the lazy array: refuses, before anything is read;
+  handed the lazy array: refuses, before anything is read, unless the
+  `numpy_fallback` setting allows the data to be read into memory for it;
 - [`Unchanged`](`dascore.lazy.contract.Unchanged`): hands the data back, so
   the operation is the same no-op it is on data in memory;
 - any other contract: appends the operation to the chain, pending until
@@ -52,7 +53,8 @@ from dascore.core.processor import PatchProcessor, _computes
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Unchanged
-from dascore.utils.array_api import lazy_refusal
+from dascore.lazy.execute import _converted
+from dascore.utils.array_api import decide_fallback, lazy_refusal
 
 
 def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
@@ -72,15 +74,36 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     Raises
     ------
     LazyOperationError
-        If the operation states no contract this backend can keep.
+        If the operation states no contract this backend can keep, and the
+        `numpy_fallback` setting does not allow its data to be read.
     """
+    name = processor.name or type(processor).__name__
     contract = _contract(processor, data.dtype, plan)
     if isinstance(contract, Unchanged):
         return data
+    kernel = type(processor).kernel_for(data.backend)
     if isinstance(contract, ChunkContract):
+        if (converted := _converted(processor, data.backend)) is not None:
+            # It runs a chunk at a time still, each chunk through NumPy.
+            decide_fallback(
+                f"{converted} has no {data.backend} implementation",
+                "each chunk is converted to numpy to run it",
+            )
         return data._appended(Node(processor, plan, contract))
-    # No contract: refused, and nothing read.
-    raise lazy_refusal(processor.name or type(processor).__name__)
+    # No contract: the data are read whole, if the setting allows it.
+    decide_fallback(
+        f"{name} cannot run on a lazy patch a chunk at a time",
+        "the data were read into memory to run it",
+        refusal=lazy_refusal(name),
+    )
+    # Read on the library its chunks compute on. An operation with no
+    # If the operation has no kernel for that library either, it says so
+    # itself, as it does for data in memory.
+    loaded = data.load()
+    out = kernel(processor, loaded, **plan)
+    # Handed back unchanged is "nothing to do", as it is in memory: the
+    # patch is left as it was, lazy and under its own id.
+    return data if out is loaded else out
 
 
 def _contract(processor, dtype, plan: dict[str, Any]):

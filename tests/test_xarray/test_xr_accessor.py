@@ -564,6 +564,26 @@ class TestMemoryLookAhead:
         with pytest.raises(PatchConversionError, match="exceed what memory"):
             lazy_data_array.dc.announce_fallback()
 
+    @pytest.mark.parametrize("policy", ("raise", "warn", "ignore"))
+    def test_refused_whatever_the_fallback_setting(
+        self, monkeypatch, lazy_data_array, policy
+    ):
+        """The guard hears of a conversion the setting would hide or refuse."""
+        import dascore.xarray.accessor as accessor  # noqa: PLC0415
+        from dascore.config import config_context  # noqa: PLC0415
+        from dascore.utils.array_api import warn_numpy_fallback  # noqa: PLC0415
+
+        def method(self):
+            """Convert as an operation with no kernel for the library does."""
+            warn_numpy_fallback("announce", self.backend)
+            return self.new(data=np.asarray(self.data))
+
+        monkeypatch.setattr(dc.Patch, "announce_fallback", method, raising=False)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 1)
+        with config_context(numpy_fallback=policy):
+            with pytest.raises(PatchConversionError, match="exceed what memory"):
+                lazy_data_array.dc.announce_fallback()
+
     def test_the_same_method_runs_when_the_array_fits(
         self, monkeypatch, lazy_data_array
     ):

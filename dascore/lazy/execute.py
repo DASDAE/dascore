@@ -42,9 +42,28 @@ import numpy as np
 from dascore.config import get_config
 from dascore.exceptions import PatchError
 from dascore.lazy.contract import Box, ChunkContract, Window
+from dascore.utils.array_api import (
+    NUMPY_BACKEND,
+    _as_numpy_dtype,
+    array_namespace,
+    fallbacks_decided,
+    to_backend,
+)
 
 if TYPE_CHECKING:
     from dascore.lazy.array import LazyArray
+
+
+def _converted(processor, backend: str) -> str | None:
+    """Return the operation a step would take chunks through NumPy for, if any."""
+    if backend == NUMPY_BACKEND:
+        return None
+    if hasattr(type(processor).kernel_for(backend), "_converts"):
+        return processor.name or type(processor).__name__
+    # A step which runs another operation, as one in a window does, has a
+    # kernel for any library and converts for the operation it runs.
+    inner = getattr(processor, "operation", None)
+    return _converted(inner, backend) if hasattr(inner, "kernel_for") else None
 
 
 class _Everything(ChunkContract):
@@ -154,7 +173,8 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     """
     Read what one box of a lazy array needs, and compute it.
 
-    Each step runs its processor's NumPy kernel, and what it makes is
+    Each step runs the kernel its processor has for the array's
+    `backend`, and what it makes is
     checked against the dtype its metadata stated and the shape of the box.
     An empty box is returned without running anything.
 
@@ -165,20 +185,24 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         or dtype than its metadata stated.
     """
     if 0 in _sizes(box):
-        return np.empty(_sizes(box), array.dtype)
+        return to_backend(np.empty(_sizes(box), array.dtype), array.backend)
     needed = _needs(array, box)
-    data = array.recipe[needed[0]].load()
+    backend = array.backend
+    data = to_backend(array.recipe[needed[0]].load(), backend)
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
         stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
-        kernel = type(processor).kernel_for("numpy")
+        kernel = type(processor).kernel_for(backend)
         run = partial(kernel, processor, **node.plan)
-        data = (node.contract or _EVERYTHING).apply(run, data, after, before)
+        # A step with no kernel for the library was let through, or
+        # refused, when it was chained: it is not asked again for each box.
+        with fallbacks_decided(_converted(processor, backend)):
+            data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.
         expected = _sizes(after) if node.contract else stated_shape
-        shape, dtype = tuple(data.shape), np.dtype(data.dtype)
+        shape, dtype = tuple(data.shape), _as_numpy_dtype(data.dtype)
         if shape != expected or dtype != stated_dtype:
             name = type(processor).__name__
             msg = (
@@ -198,7 +222,26 @@ def load(array: LazyArray) -> np.ndarray:
     boxes = chunk_boxes(array)
     if len(boxes) == 1:
         return compute(array, boxes[0])
+    if array.backend != NUMPY_BACKEND:
+        return _joined([compute(array, box) for box in boxes], boxes)
     out = np.empty(array.shape, array.dtype)
     for box in boxes:
         out[box] = compute(array, box)
     return out
+
+
+def _joined(pieces: list, boxes: list[Box]):
+    """
+    Return the boxes of an array put together on their own array library.
+
+    Nothing is written in place, which not every library allows, and
+    nothing is taken through NumPy: the boxes, which come an axis at a
+    time with the last changing fastest, are joined along each axis in
+    turn. The boxes are all held until they are joined.
+    """
+    xp = array_namespace(pieces[0])
+    for axis in reversed(range(len(boxes[0]))):
+        count = len({(box[axis].start, box[axis].stop) for box in boxes})
+        runs = range(0, len(pieces), count)
+        pieces = [xp.concat(pieces[n : n + count], axis=axis) for n in runs]
+    return pieces[0]

@@ -52,7 +52,9 @@ from dascore.io.index.ingest import (
     typed_value,
 )
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
+from dascore.lazy.array import LazyArray
 from dascore.units import convert_units, get_quantity
+from dascore.utils.array_api import decide_fallback
 from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
@@ -787,7 +789,12 @@ class PlanResolver(PatchResolver):
             trim_dims=self.trim_dims,
             aux_coords=bool(self.aux_coords),
             stamped=self.stamped,
+            held=self._held_member,
         )
+
+    def _held_member(self, row: Mapping):
+        """Return the patch a spool holds for a member, or None for one in a file."""
+        return self.live_entries().get(str(row.get("source_path")))
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
         """Whether a member reads as a window of its stored array, reading nothing."""
@@ -1046,6 +1053,14 @@ class PlanResolver(PatchResolver):
             # each member trimmed as the plan cut it, as assembly trims one
             load = self._assembler()._load_trimmed_patch
             loaded = [load(x, members) for x in members.to_dict("records")]
+            if any(isinstance(x.data, LazyArray) for x in loaded):
+                # Joining writes every member's data into one array, so
+                # reading them is the fallback setting's to allow.
+                decide_fallback(
+                    "This concatenation cannot stay lazy: it joins its members' data",
+                    "its members were read into memory",
+                )
+                loaded = [x.load() for x in loaded]
             patch = concatenate_planned(
                 loaded,
                 dim,

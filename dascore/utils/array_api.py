@@ -11,7 +11,10 @@ lives in [compat](`dascore.compat`).
 
 from __future__ import annotations
 
+import re
 import warnings
+from contextlib import contextmanager
+from contextvars import ContextVar
 from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeGuard
@@ -22,7 +25,12 @@ from array_api_compat import array_namespace as _array_namespace
 from array_api_compat import device, is_array_api_obj, to_device
 
 from dascore.compat import is_array
-from dascore.exceptions import LazyOperationError
+from dascore.config import get_config
+from dascore.exceptions import (
+    LazyOperationError,
+    NumpyFallbackError,
+    ParameterError,
+)
 from dascore.warnings import NumpyFallbackWarning
 
 __all__ = [
@@ -34,6 +42,8 @@ __all__ = [
     "is_numpy",
     "namespace_name",
     "nan_reduce",
+    "parse_backend",
+    "to_backend",
     "to_numpy",
     "warn_numpy_fallback",
 ]
@@ -42,6 +52,20 @@ __all__ = [
 NUMPY_BACKEND = "numpy"
 # The name reported for a lazy array, whose values are read only on `load`.
 LAZY_BACKEND = "lazy"
+# How a lazy backend is asked for: the class, or the alias, and in brackets
+# the array library its chunks are computed on.
+_LAZY_SPELLING = re.compile(r"(?:lazyarray|lazy)(?:\[\s*(\w+)\s*\])?")
+# The module which is an array library's namespace, where it is not the
+# package itself.
+_NAMESPACES = {"jax": "jax.numpy", "dask": "dask.array"}
+# The array library patches are being read onto lazily, or None when reads
+# fill memory as usual; see `reading_lazily`.
+_LAZY_READ: ContextVar[str | None] = ContextVar("dascore_lazy_read", default=None)
+# The operations whose conversion through NumPy has been decided already;
+# see `fallbacks_decided`.
+_DECIDED: ContextVar[frozenset[str]] = ContextVar(
+    "dascore_fallbacks_decided", default=frozenset()
+)
 
 
 def array_namespace(*arrays: Any) -> Any:
@@ -111,6 +135,184 @@ def is_foreign(array: Any) -> bool:
     return is_array_api_obj(array)
 
 
+def parse_backend(backend: str) -> tuple[bool, str]:
+    """
+    Return whether a backend name is lazy, and the array library it names.
+
+    Parameters
+    ----------
+    backend
+        An array library by the name
+        [`backend_name`](`dascore.utils.array_api.backend_name`) reports,
+        such as ``"numpy"`` or ``"jax"``, or a lazy backend: ``"LazyArray"``
+        or its alias ``"lazy"``, with the library each chunk is computed on
+        in brackets, NumPy when none is given.
+
+    Examples
+    --------
+    >>> from dascore.utils.array_api import parse_backend
+    >>>
+    >>> assert parse_backend("numpy") == (False, "numpy")
+    >>> assert parse_backend("lazy") == (True, "numpy")
+    >>> assert parse_backend("LazyArray[jax]") == (True, "jax")
+    """
+    text = str(backend).strip().lower()
+    found = _LAZY_SPELLING.fullmatch(text)
+    library = (found.group(1) or NUMPY_BACKEND) if found else text
+    if not re.fullmatch(r"\w+", library):
+        msg = (
+            f"{backend!r} is not a backend. Name an array library, such as "
+            "'numpy' or 'jax', or a lazy one: 'lazy', 'LazyArray' or "
+            "'LazyArray[jax]'."
+        )
+        raise ParameterError(msg)
+    return found is not None, library
+
+
+def to_backend(array: Any, backend: str) -> Any:
+    """
+    Return an array on the array library a name says.
+
+    Parameters
+    ----------
+    array
+        An array in memory, on any backend.
+    backend
+        The name of the array library, as
+        [`backend_name`](`dascore.utils.array_api.backend_name`) reports it.
+
+    Raises
+    ------
+    ParameterError
+        If no array library of that name can be imported.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.array_api import to_backend
+    >>>
+    >>> assert isinstance(to_backend(np.array([1, 2]), "numpy"), np.ndarray)
+    """
+    if backend_name(array) == backend:
+        return array
+    # An array NumPy already holds is handed over as it is.
+    held = array if is_numpy(array) else to_numpy(array)
+    if backend == NUMPY_BACKEND:
+        return held
+    try:
+        namespace = import_module(_NAMESPACES.get(backend, backend))
+        out = namespace.asarray(held)
+    except (ImportError, AttributeError) as error:
+        msg = f"No array library called {backend!r} could be used: {error}"
+        raise ParameterError(msg) from error
+    # A library which holds the values in another dtype, as JAX does with
+    # 64-bit numbers unless told otherwise, would change them under the
+    # same id: refused rather than trusted.
+    made = _as_numpy_dtype(out.dtype)
+    if held.size and made != held.dtype:
+        msg = (
+            f"{backend} holds {held.dtype} data as {made}, which would change "
+            f"their values. Configure {backend} to keep {held.dtype}, or "
+            "convert the data first."
+        )
+        raise ParameterError(msg)
+    return out
+
+
+def decide_fallback(
+    what: str,
+    how: str,
+    *,
+    lazy: bool = True,
+    refusal: Exception | None = None,
+    stacklevel: int | None = None,
+    name: str | None = None,
+) -> None:
+    """
+    Apply the `numpy_fallback` setting: refuse, warn, or say nothing.
+
+    Every conversion through NumPy made because an operation has no
+    implementation for the data's library, and every read of lazy data
+    the caller did not ask for, is decided here.
+
+    Parameters
+    ----------
+    what
+        What cannot be done as asked, which starts either message.
+    how
+        What is done instead, which the warning adds.
+    lazy
+        Whether the data are lazy: the setting, left unset, refuses for those
+        and warns for any other.
+    refusal
+        The error to raise, in place of the one made from `what`.
+    stacklevel
+        The stack level of the caller, as `warnings.warn` understands it.
+        None points the warning at the first frame outside dascore.
+    name
+        The operation which converts, if this is a conversion: one whose
+        conversion was decided already, inside `fallbacks_decided`, is not
+        asked again.
+    """
+    if name is not None and name in _DECIDED.get():
+        return
+    policy = get_config().numpy_fallback or ("raise" if lazy else "warn")
+    if policy == "raise":
+        error = LazyOperationError if lazy else NumpyFallbackError
+        raise refusal or error(
+            f"{what}, and the numpy_fallback setting refuses to convert the "
+            "data to numpy, or to read them into memory, for it."
+        )
+    if policy == "warn":
+        msg = f"{what}; {how}. The numpy_fallback setting decides this."
+        if stacklevel is None:
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
+        else:
+            warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
+
+
+@contextmanager
+def fallbacks_decided(*names: str | None):
+    """
+    Run what is inside with the conversions of the operations named decided.
+
+    A step pending on a lazy array whose operation has no kernel for the
+    array's library was put to the `numpy_fallback` setting when it was
+    chained, or when the array was moved there. Computing it, a box at a
+    time, does not ask again for that operation; any other conversion a
+    kernel makes as it runs is asked about as usual, so none is silent.
+    """
+    decided = {x for x in names if x is not None}
+    token = _DECIDED.set(_DECIDED.get() | decided)
+    try:
+        yield
+    finally:
+        _DECIDED.reset(token)
+
+
+@contextmanager
+def reading_lazily(backend: str | None):
+    """
+    Have reads inside the block return lazy patches, computed on `backend`.
+
+    None leaves reads as they are, filling memory. A read which cannot be
+    lazy is the `numpy_fallback` setting's to allow, which left unset
+    raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`)
+    rather than read.
+    """
+    token = _LAZY_READ.set(backend)
+    try:
+        yield
+    finally:
+        _LAZY_READ.reset(token)
+
+
+def lazy_read_backend() -> str | None:
+    """Return the array library lazy reads compute on, or None when eager."""
+    return _LAZY_READ.get()
+
+
 def warn_numpy_fallback(
     name: str, backend: str, stacklevel: int = 3, skip_dascore: bool = False
 ) -> None:
@@ -130,16 +332,13 @@ def warn_numpy_fallback(
         Point the warning at the first frame outside dascore instead, for a
         caller whose depth varies.
     """
-    msg = (
-        f"{name} has no {backend} implementation; the data were converted "
-        "to numpy and the output converted back. Silence this with "
-        "dascore.utils.misc.suppress_warnings(NumpyFallbackWarning)."
+    decide_fallback(
+        f"{name} has no {backend} implementation",
+        "the data were converted to numpy and the output converted back",
+        lazy=False,
+        stacklevel=None if skip_dascore else stacklevel + 1,
+        name=name,
     )
-    if skip_dascore:
-        prefix = str(Path(__file__).parent.parent)
-        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
-        return
-    warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
 
 
 def backend_name(array: Any) -> str:
@@ -416,6 +615,10 @@ def nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
 
 def _as_numpy_dtype(dtype) -> np.dtype:
     """Return numpy's dtype of the name a dtype, numpy's or another backend's, has."""
+    # A NumPy dtype is already one, and a structured one cannot be rebuilt
+    # from its name.
+    if isinstance(dtype, np.dtype):
+        return dtype
     return np.dtype(str(dtype).rsplit(".", 1)[-1])
 
 
