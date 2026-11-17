@@ -155,9 +155,10 @@ class TestToNs:
     """Tests for converting index scalars to integer nanoseconds."""
 
     def test_numpy_scalars(self):
-        """Numpy datetimes and timedeltas of any unit convert to nanoseconds."""
+        """Numpy and pandas times of any unit convert to nanoseconds."""
         assert _to_ns(np.datetime64(1, "s")) == 1_000_000_000
         assert _to_ns(np.timedelta64(1500, "us")) == 1_500_000
+        assert _to_ns(pd.Timestamp("1970-01-01T00:00:02")) == 2_000_000_000
 
 
 class TestFlatRelation:
