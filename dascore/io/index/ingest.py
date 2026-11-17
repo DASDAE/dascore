@@ -21,7 +21,7 @@ import re
 import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
-from functools import cache, lru_cache
+from functools import lru_cache
 from typing import SupportsInt, TypedDict, cast
 
 import numpy as np
@@ -496,18 +496,10 @@ def coord_dtype_is_stateable(dtype: str | np.dtype | None) -> bool:
     patch holds it -- but nothing about its values is, so no query
     predicate can be built against it either.
     """
-    return bool(dtype) and bool(_envelope_kind(dtype))
-
-
-@cache
-def _envelope_kind(dtype: str | np.dtype) -> str:
-    """How a coord dtype's envelope is stored: "M", "m", "num", "str" or ""."""
+    if not dtype:
+        return False
     dtype = np.dtype(dtype)
-    if dtype.kind in "mM":
-        return dtype.kind
-    if np.issubdtype(dtype, np.number):
-        return "num"
-    return "str" if dtype.kind in "USO" else ""
+    return dtype.kind in "mM" or np.issubdtype(dtype, np.number) or dtype.kind in "USO"
 
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
@@ -531,9 +523,9 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         units=units_str,
         data_id=data_id,
     )
-    if not summary.dtype:
+    dtype = np.dtype(summary.dtype) if summary.dtype else None
+    if dtype is None:
         return None  # nothing to record: not even a dtype was stated
-    family = _envelope_kind(summary.dtype)
     # A range's row rebuilds every value, and its grid comes along so a
     # fractional step rebuilds the same labels the file holds.
     exact = _ExactFields(
@@ -544,8 +536,8 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     )
     run_count = getattr(summary, "run_count", None)
     runs = _indexed_runs(summary)
-    if family in ("M", "m"):  # datetime64 ("M") / timedelta64 ("m")
-        is_datetime = family == "M"
+    if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
+        is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
         step = summary.step
         return CoordRecord(
@@ -559,7 +551,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             run_count=run_count,
             **common,
         )
-    if family == "num":
+    if np.issubdtype(dtype, np.number):
         # Envelopes are stored in the coordinate's ORIGINAL units, never
         # converted, beside the original unit string — what the patch
         # shows is what the index shows, and a bare query means these
@@ -576,7 +568,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             run_count=run_count,
             **common,
         )
-    if family == "str":
+    if dtype.kind in "USO":
         return CoordRecord(
             value_kind="str",
             min_str=str(summary.min),

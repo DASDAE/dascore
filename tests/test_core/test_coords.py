@@ -423,16 +423,46 @@ class TestCoordSummary:
         assert isinstance(out, CoordSummary)
         assert out.data_id == coord.data_id
 
-    def test_matches_validated_summary(self, coord):
-        """The summary built without validation is the one validation builds."""
-        out = coord.to_summary(dims=("x",))
-        fields = coord._summary_fields(("x",))
+    @staticmethod
+    def _assert_matches_validated(coord):
+        """The unvalidated summary equals the validated one, field by field."""
+        out = coord.to_summary(dims=["x"])
+        fields = coord._summary_fields(["x"])
         validated = CoordSummary(**fields).model_copy(update=coord._summary_update())
         assert out.model_fields_set == validated.model_fields_set
         for name in CoordSummary.model_fields:
             mine, theirs = getattr(out, name), getattr(validated, name)
             assert type(mine) is type(theirs), name
             assert repr(mine) == repr(theirs), name
+
+    def test_matches_validated_summary(self, coord):
+        """The summary built without validation is the one validation builds."""
+        self._assert_matches_validated(coord)
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda: get_coord(data=np.array(["a", "b", "c"])),
+            lambda: get_coord(data=np.arange(6.0).reshape(2, 3)),
+            lambda: concat_coords(
+                get_coord(start=0, stop=10, step=1),
+                get_coord(start=20, stop=30, step=1),
+            ),
+            lambda: get_coord(
+                data=(np.arange(100, dtype=np.int64) * 9999 // 10).astype("m8[us]")
+            ),
+            lambda: get_coord(start=0.0, stop=5.0, step=0.5, units="m"),
+        ],
+        ids=["string", "2d", "segmented", "coarse_fractional", "units"],
+    )
+    def test_matches_validated_summary_other_kinds(self, make):
+        """Coord kinds outside the fixture set match their validated summary too."""
+        self._assert_matches_validated(make())
+
+    def test_coarse_fractional_grid_states_no_step(self):
+        """A fractional grid in a coarse time unit summarizes with no step."""
+        data = (np.arange(1000, dtype=np.int64) * 9999 // 10).astype("timedelta64[us]")
+        assert get_coord(data=data).to_summary().step is None
 
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""

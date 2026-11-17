@@ -112,20 +112,6 @@ step_type = Any
 _TD64_ZERO = np.timedelta64(0, "ns")
 
 
-@cache
-def _dtype_family(dtype) -> str:
-    """The one-letter family ensure_consistent_dtype casts a dtype's values by."""
-    for family, kind in (
-        ("M", np.datetime64),
-        ("m", np.timedelta64),
-        ("f", np.floating),
-        ("i", np.integer),
-    ):
-        if np.issubdtype(dtype, kind):
-            return family
-    return ""
-
-
 def ensure_consistent_dtype(value, name, dtype):
     """Ensure the values are consistent with dtype."""
     # For some reason all ints are getting converted to floats using default
@@ -133,18 +119,18 @@ def ensure_consistent_dtype(value, name, dtype):
     # TODO: See if this is needed in a few version after pydantic 2.1.1
     if pd.isnull(value):
         return value
-    family = _dtype_family(dtype)
-    if family == "M":
+    kind = np.dtype(dtype).kind
+    if kind == "M":
         if name == "step":
             value = dc.to_timedelta64(value)
         else:
             value = dc.to_datetime64(value)
-    elif family == "m":
+    elif kind == "m":
         value = dc.to_timedelta64(value)
     # convert numpy numerics back to python
-    elif family == "f":
+    elif kind == "f":
         value = float(value) if value is not None else np.nan
-    elif family == "i":
+    elif kind in "iu":
         value = int(value)
     return value
 
@@ -315,12 +301,7 @@ class CoordSummary(DascoreBaseModel):
         # derived from min. Copied because the input need not be mutable.
         if isinstance(data, Mapping):
             data = dict(data)
-            min_val = data["min"]
-            dtype = _get_dtype(min_val, data.get("dtype"))
-            data["dtype"] = str(dtype)
-            for name in ["min", "max", "step"]:
-                val = data.get(name)
-                data[name] = ensure_consistent_dtype(val, name, dtype)
+            dtype = _cast_summary_values(data)
             if runs := data.get("runs"):
                 data["runs"] = tuple(_conformed_run(x, dtype) for x in runs)
         return data
@@ -377,26 +358,31 @@ class CoordSummary(DascoreBaseModel):
         return get_coord(start=start, stop=stop, step=step, units=self.units)
 
 
+def _cast_summary_values(data: dict[str, Any]):
+    """Set a summary's dtype from its fields and cast min, max and step to it."""
+    dtype = _get_dtype(data["min"], data.get("dtype"))
+    data["dtype"] = str(dtype)
+    for name in ("min", "max", "step"):
+        data[name] = ensure_consistent_dtype(data.get(name), name, dtype)
+    return dtype
+
+
 def _coord_summary(fields: dict[str, Any], update=None) -> CoordSummary:
     """
-    The summary validating ``fields`` builds, then updated with ``update``.
+    Build a summary from a coordinate's fields without validation.
 
-    A coordinate's own fields are already what validation would leave
-    except for the casts its before-validator makes, so those are made
-    here and the model is constructed directly; a summary is built per
-    coordinate while indexing, where validation dominated.
+    Indexing builds one summary per coordinate, and validation dominated
+    that cost. A coordinate's fields need only the casts the validator
+    makes, so those are applied here; ``update`` then overrides fields.
     """
-    dtype = _get_dtype(fields["min"], fields.get("dtype"))
-    fields["dtype"] = dtype
-    for name in ("min", "max", "step"):
-        fields[name] = ensure_consistent_dtype(fields.get(name), name, dtype)
+    _cast_summary_values(fields)
     units = fields.get("units")
     if units is not None and not isinstance(units, Quantity):
         fields["units"] = _to_unit_quantity(units)
     fields["dims"] = tuple(fields.get("dims", ()))
     if (length := fields.get("len")) is not None:
         fields["len"] = int(length)
-    return CoordSummary.model_construct(**fields, **(update or {}))
+    return CoordSummary.model_construct(**{**fields, **(update or {})})
 
 
 @cache
@@ -1204,11 +1190,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return _coord_summary(self._summary_fields(dims), self._summary_update())
 
     def _summary_update(self) -> dict[str, Any]:
-        """Summary fields already in the coordinate's dtype, set unvalidated."""
+        """Fields overriding the summary's, already in the coordinate's dtype."""
         return {}
 
     def _summary_fields(self, dims) -> dict[str, Any]:
-        """The fields a summary of this coordinate is validated from."""
+        """The fields a summary of this coordinate is built from."""
         return dict(
             min=self.min(),
             max=self.max(),
@@ -4031,10 +4017,6 @@ class CoordString(BaseCoord):
         if any(value is not None for value in (min, max, step)) or unsupported_kwargs:
             _raise_string_coord_error("limit updates")
         return self
-
-    def _summary_fields(self, dims) -> dict[str, Any]:
-        """The fields of a lossy summary for string coordinates."""
-        return {**super()._summary_fields(dims), "step": None, "units": None}
 
     def _id_components(self) -> tuple[Any, ...]:
         """Return the array payload identifying string coords."""
