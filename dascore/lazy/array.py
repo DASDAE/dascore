@@ -280,12 +280,15 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
         # As NumPy always has: its own promotion of mixed dtypes, and speed.
         parts = [x[..., None] for x in arrays] if new_axis else arrays
         return np.concatenate(parts, axis=axis)
+    # Promoted as NumPy promotes the same arrays, from the dtypes they have
+    # now: a library may not do so, nor keep every dtype NumPy holds.
+    dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
     # Arrays NumPy holds join others on their library: putting them there
     # takes nothing through NumPy, as dask's own join of them never did.
     others = {backend_name(x) for x in arrays if not is_numpy(x)}
     if len(others) == 1 and NUMPY_BACKEND not in others:
         like = next(x for x in arrays if not is_numpy(x))
-        arrays = [asarray_like(x, like) if is_numpy(x) else x for x in arrays]
+        arrays = [_moved(x, like, dtype) if is_numpy(x) else x for x in arrays]
     libraries = {backend_name(x) for x in arrays}
     # Something NumPy takes only through `__array__`, which may read it.
     held = libraries == {NUMPY_BACKEND}
@@ -299,13 +302,31 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
         parts = [x[..., None] for x in parts] if new_axis else parts
         return np.concatenate(parts, axis=axis)
     xp = array_namespace(arrays[0])
-    # Promoted as NumPy promotes the same arrays, which a library may not do.
-    dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
     if any(_as_numpy_dtype(x.dtype) != dtype for x in arrays):
         arrays = [cast_on_library(x, dtype) for x in arrays]
     if new_axis:
         arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
     return xp.concat(arrays, axis=axis)
+
+
+def _moved(array: np.ndarray, like, dtype: np.dtype):
+    """Return a NumPy array in `dtype`, on the library `like` is on."""
+    out = asarray_like(array.astype(dtype, copy=False), like)
+    _check_kept(out, dtype)
+    return out
+
+
+def _check_kept(array, dtype: np.dtype) -> None:
+    """Raise if a library holds data in another dtype than they were given in."""
+    held = _as_numpy_dtype(array.dtype)
+    if held != dtype:
+        library = backend_name(array)
+        msg = (
+            f"{library} holds {dtype} data as {held}, which would change "
+            f"their values. Configure {library} to keep {dtype}, or convert "
+            "the data first."
+        )
+        raise ParameterError(msg)
 
 
 def cast_on_library(array, dtype: np.dtype):
@@ -318,16 +339,9 @@ def cast_on_library(array, dtype: np.dtype):
     """
     if is_numpy(array):
         return array.astype(dtype, copy=False)
-    target = asarray_like(np.empty(0, dtype), array).dtype
-    if _as_numpy_dtype(target) != dtype:
-        library = backend_name(array)
-        msg = (
-            f"{library} holds {dtype} data as {_as_numpy_dtype(target)}, which "
-            f"would change their values. Configure {library} to keep {dtype}, "
-            "or convert the data first."
-        )
-        raise ParameterError(msg)
-    return array_namespace(array).astype(array, target)
+    target = asarray_like(np.empty(0, dtype), array)
+    _check_kept(target, dtype)
+    return array_namespace(array).astype(array, target.dtype)
 
 
 def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:

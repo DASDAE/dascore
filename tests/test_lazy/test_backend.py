@@ -951,6 +951,22 @@ class TestSpoolSetBackend:
         with pytest.raises(ParameterError, match="holds float64 data as float32"):
             lazy_array.join(parts, axis=0)
 
+    def test_numpy_member_onto_a_narrowing_library(self, monkeypatch):
+        """A NumPy member is not narrowed as it is put on another library."""
+        from dascore.lazy import array as lazy_array  # noqa: PLC0415
+
+        strict = pytest.importorskip("array_api_strict")
+        parts = [np.array([16777217.0]), strict.asarray(np.zeros(1, np.float32))]
+
+        def narrowing(array, like):
+            """Hold the array as float32, whatever it was."""
+            return strict.asarray(np.asarray(array, np.float32))
+
+        # As a library which keeps 64-bit floats in 32 bits does.
+        monkeypatch.setattr(lazy_array, "asarray_like", narrowing)
+        with pytest.raises(ParameterError, match="holds float64 data as float32"):
+            lazy_array.join(parts, axis=0)
+
     def test_wrapper_numpy_takes_through_its_array_method(self):
         """Something NumPy takes only through `__array__` is converted, said."""
         from dascore.lazy.array import join  # noqa: PLC0415
