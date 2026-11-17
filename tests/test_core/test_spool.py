@@ -836,6 +836,7 @@ class TestGetUnreadSources:
             spool = spool.update(progress=None)
         assert len(spool) == 1
 
+    @pytest.mark.concurrency
     def test_update_on_error_raise_client(self, mixed_dir):
         """on_error reaches scans run on a caller's executor."""
         with ThreadPoolExecutor(2) as client:
