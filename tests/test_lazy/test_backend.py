@@ -866,6 +866,63 @@ class TestSpoolSetBackend:
         with pytest.raises(LazyOperationError, match="drop_private_coords"):
             renamed.drop_private_coords()
 
+    def test_recipes_of_different_dtypes_are_read(self, whole, tmp_path):
+        """Recipes of different dtypes are read: a lazy join could skip a cast."""
+        size = whole.shape[whole.get_axis("time")]
+        first = whole.select(time=(0, size // 2), samples=True)
+        second = whole.select(time=(size // 2, size), samples=True)
+        dc.write(
+            first.new(data=first.data.astype(np.float32)), tmp_path / "a.h5", "dasdae"
+        )
+        dc.write(second, tmp_path / "b.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        expected = spool.concatenate(time=None)[0]
+        lazy = spool.set_backend("lazy").concatenate(time=None)
+        with pytest.raises(LazyOperationError, match="different dtypes"):
+            lazy[0]
+        with config_context(numpy_fallback="warn"):
+            with pytest.warns(NumpyFallbackWarning, match="different dtypes"):
+                out = lazy[0]
+        assert out.dtype == expected.dtype
+        np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_library_which_narrows_in_a_join(self, monkeypatch):
+        """A library which would cast to fewer bits than asked is refused."""
+        from dascore.lazy import array as lazy_array  # noqa: PLC0415
+
+        strict = pytest.importorskip("array_api_strict")
+        parts = [
+            strict.asarray(np.ones(3, np.int32)),
+            strict.asarray(np.ones(3, np.float32)),
+        ]
+        # As a library which keeps 64-bit floats in 32 bits does.
+        monkeypatch.setattr(
+            lazy_array,
+            "asarray_like",
+            lambda x, like: strict.asarray(np.asarray(x, np.float32)),
+        )
+        with pytest.raises(ParameterError, match="holds float64 data as float32"):
+            lazy_array.join(parts, axis=0)
+
+    def test_wrapper_numpy_takes_through_its_array_method(self):
+        """Something NumPy takes only through `__array__` is converted, said."""
+        from dascore.lazy.array import join  # noqa: PLC0415
+
+        class Wrapper:
+            """An array-like which NumPy reads through `__array__`."""
+
+            def __init__(self, data):
+                self.data = data
+                self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
+
+            def __array__(self, dtype=None, copy=None):
+                return self.data
+
+        parts = [Wrapper(np.ones(2)), Wrapper(np.zeros(2))]
+        with pytest.warns(NumpyFallbackWarning, match="cannot be joined on one"):
+            out = join(parts, axis=0)
+        np.testing.assert_array_equal(out, [1, 1, 0, 0])
+
     def test_summary_of_patches_on_another_library(self, spool, strict):
         """A spool of patches on another library can still say what it holds."""
         there = spool.set_backend(STRICT).load()
@@ -1046,12 +1103,12 @@ class TestLazyMerge:
         reads.clear()
         with config_context(numpy_fallback=policy):
             if policy is None:
-                with pytest.raises(LazyOperationError, match="promote in an order"):
+                with pytest.raises(LazyOperationError, match="different dtypes"):
                     lazy[0]
                 # Refused before a member is read.
                 assert not reads
                 return
-            with pytest.warns(NumpyFallbackWarning, match="promote in an order"):
+            with pytest.warns(NumpyFallbackWarning, match="different dtypes"):
                 merged = lazy[0]
         # The dtype a member at a time gives, as the eager merge gives it.
         assert merged.dtype == expected.dtype == np.dtype(np.float32)
@@ -1085,6 +1142,25 @@ class TestLazyMerge:
         mixed = (spool[:3] + dc.spool([held])).set_backend("lazy")
         with pytest.raises(LazyOperationError, match="cannot stay lazy"):
             mixed.chunk(time=None)[0]
+
+    def test_rounding_part_way_along_the_promotion(self, whole):
+        """A member rounds where the NumPy buffer rounds it, on any library."""
+        pytest.importorskip("dask.array")
+        if np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant:
+            pytest.skip("long double is no wider than double here")
+        size = whole.shape[whole.get_axis("time")]
+        edges = [0, size // 3, 2 * size // 3, size]
+        # int64 then uint64 promote to float64, which rounds 2**53 + 1,
+        # before the long double member, which would hold it exactly.
+        parts = []
+        for index, dtype in enumerate((np.int64, np.uint64, np.longdouble)):
+            part = whole.select(time=(edges[index], edges[index + 1]), samples=True)
+            data = np.full(part.shape, 2**53 + 1).astype(dtype)
+            parts.append(part.new(data=data))
+        expected = dc.spool(parts).chunk(time=None)[0]
+        merged = dc.spool([x.set_backend("dask") for x in parts]).chunk(time=None)[0]
+        assert merged.backend == "dask"
+        np.testing.assert_array_equal(to_numpy(merged.data), expected.data)
 
     @pytest.mark.parametrize("policy", (None, "warn"))
     def test_member_in_memory_before_lazy_ones(self, spool, whole, policy, reads):

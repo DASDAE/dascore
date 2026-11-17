@@ -36,13 +36,11 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.lazy.array import LazyArray, join
+from dascore.lazy.array import LazyArray, cast_on_library, join
 from dascore.lazy.recipe import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import (
     _as_numpy_dtype,
-    array_namespace,
-    asarray_like,
     decide_fallback,
     is_numpy,
     lazy_read_backend,
@@ -630,19 +628,23 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
         )
 
 
-def _loaded_to(data, dtype: np.dtype):
-    """Return data, in memory if they were lazy, cast to a NumPy dtype."""
+def _loaded_to(data, dtype: np.dtype, via: np.dtype | None = None):
+    """
+    Return data, in memory if they were lazy, cast to a NumPy dtype.
+
+    `via` is the dtype the samples round at first, as the streaming buffer
+    rounds a member placed before a wider one.
+    """
     if isinstance(data, LazyArray):
         decide_fallback(
-            "This merge cannot stay lazy: its members' dtypes promote in an "
-            "order joining them at once would not follow",
+            "This merge cannot stay lazy: its members are of different "
+            "dtypes, which promote a member at a time",
             "its members were read into memory",
         )
         data = data.load()
-    if is_numpy(data):
-        return data.astype(dtype, copy=False)
-    xp = array_namespace(data)
-    return xp.astype(data, asarray_like(np.empty(0, dtype), data).dtype)
+    if via is not None:
+        data = cast_on_library(data, via)
+    return cast_on_library(data, dtype)
 
 
 def _cast_via(dtype: np.dtype, chain: Sequence[np.dtype]) -> np.dtype | None:
@@ -1062,11 +1064,15 @@ class PatchAssembler:
             data.append(patch.data)
             coords.append(patch.coords)
             attrs.append(patch.attrs)
-        chain, _ = _cast_chain([_as_numpy_dtype(x.dtype) for x in data])
-        if chain[-1] != np.result_type(*(_as_numpy_dtype(x.dtype) for x in data)):
-            # Promoted in order, the members give another dtype than joined
-            # at once would: what the buffer gives is what is wanted.
-            data = [_loaded_to(x, chain[-1]) for x in data]
+        dtypes = [_as_numpy_dtype(x.dtype) for x in data]
+        if len(set(dtypes)) > 1:
+            # Promoted a member at a time, rounding where the buffer of NumPy
+            # members rounds them, so both routes give the same values.
+            chain, casts = _cast_chain(dtypes)
+            data = [
+                _loaded_to(x, chain[-1], via)
+                for x, via in zip(data, casts, strict=True)
+            ]
         try:
             merged = join(data, axis=dims.index(merge_dim))
         except (ParameterError, ValueError) as e:

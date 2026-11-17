@@ -34,6 +34,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from dascore.exceptions import ParameterError
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.recipe import Recipe, concat
@@ -265,7 +266,10 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
         reason = (
             "a new axis is added to lazy data"
             if new_axis and all(lazy)
-            else "it joins lazy data with operations pending, or with data in memory"
+            else (
+                "it joins lazy data with operations pending, of different "
+                "dtypes, or with data in memory"
+            )
         )
         decide_fallback(
             f"This concatenation cannot stay lazy: {reason}",
@@ -277,7 +281,9 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
         parts = [x[..., None] for x in arrays] if new_axis else arrays
         return np.concatenate(parts, axis=axis)
     libraries = {backend_name(x) for x in arrays}
-    if len(libraries) > 1:
+    # Something NumPy takes only through `__array__`, which may read it.
+    held = libraries == {NUMPY_BACKEND}
+    if len(libraries) > 1 or held:
         decide_fallback(
             f"Arrays on {sorted(libraries)} cannot be joined on one library",
             "they were converted to numpy and joined there",
@@ -290,17 +296,43 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     # Promoted as NumPy promotes the same arrays, which a library may not do.
     dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
     if any(_as_numpy_dtype(x.dtype) != dtype for x in arrays):
-        target = asarray_like(np.empty(0, dtype), arrays[0]).dtype
-        arrays = [xp.astype(x, target) for x in arrays]
+        arrays = [cast_on_library(x, dtype) for x in arrays]
     if new_axis:
         arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
     return xp.concat(arrays, axis=axis)
+
+
+def cast_on_library(array, dtype: np.dtype):
+    """
+    Return an array cast to a NumPy dtype, on the library it is on.
+
+    A library which would hold the values in another dtype, as JAX does
+    with 64-bit numbers unless told otherwise, is refused rather than
+    trusted to keep them.
+    """
+    if is_numpy(array):
+        return array.astype(dtype, copy=False)
+    target = asarray_like(np.empty(0, dtype), array).dtype
+    if _as_numpy_dtype(target) != dtype:
+        library = backend_name(array)
+        msg = (
+            f"{library} holds {dtype} data as {_as_numpy_dtype(target)}, which "
+            f"would change their values. Configure {library} to keep {dtype}, "
+            "or convert the data first."
+        )
+        raise ParameterError(msg)
+    return array_namespace(array).astype(array, target)
 
 
 def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:
     """Return lazy arrays joined by their recipes, or None if they cannot be."""
     backends = {x.backend for x in arrays}
     if len(backends) > 1 or any(len(x.chain) for x in arrays):
+        return None
+    # Of one dtype only: a recipe joined with another of a wider dtype casts
+    # its stored samples straight to it, skipping any rounding its own
+    # dtype made, so values could differ from those joined in memory.
+    if len({x.dtype for x in arrays}) > 1:
         return None
     # A recipe join promotes the dtype as NumPy joins arrays in memory.
     joined = concat([x.recipe for x in arrays], axis=axis)
