@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import multiprocessing
 import threading
+import warnings
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -301,12 +303,23 @@ class TestUpdateExecutor:
             parallel.indexer.close()
 
     def test_skipped_file_warns(self, directory, client):
-        """A file a worker skips warns in the caller, as a serial scan does."""
+        """A file a worker skips warns once in the caller, as a serial scan does."""
         data = (directory / "00.h5").read_bytes()
-        (directory / "bad.h5").write_bytes(data[: len(data) // 3])
+        bad = directory / "bad.h5"
+        bad.write_bytes(data[: len(data) // 3])
         root = dc.spool(directory)
         try:
-            with pytest.warns(UserWarning, match="Failed to scan.*bad.h5"):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                root.update(progress=False, client=client)
+            failed = [w for w in caught if "Failed to scan" in str(w.message)]
+            assert len(failed) == 1 and "bad.h5" in str(failed[0].message)
+            assert Path(failed[0].filename).match("dascore/io/core.py")
+            # A filter naming the warning's module silences it, as it would serially.
+            bad.write_bytes(data[: len(data) // 4])
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                warnings.filterwarnings("ignore", module=r"dascore\.io\.core")
                 root.update(progress=False, client=client)
             assert len(root) == 12
         finally:
