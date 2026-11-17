@@ -85,23 +85,25 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
 
 def _module_name(filename: str) -> str | None:
     """The name of the loaded module defined in a file, if any."""
-    for name, module in list(sys.modules.items()):
-        if getattr(module, "__file__", None) == filename:
-            return name
-    return None
+    modules = list(sys.modules.items())
+    return next(
+        (n for n, m in modules if getattr(m, "__file__", None) == filename), None
+    )
 
 
 def _scan_batch(paths, config, parent_pid, snap=None):
     """
     Scan a source batch using the caller's DASCore configuration.
 
-    Returns the summaries and the warnings the scan raised. Outside the
-    caller's process, warnings are recorded with the module, file and line
-    that raised them, for the caller to replay through its own filters; in
-    it, they are emitted directly.
+    Returns the summaries and the warnings the scan raised. Where the
+    caller's warning filters do not reach the worker (another process, or a
+    thread when filters are context-local, as on free-threaded builds),
+    warnings are recorded with the module, file and line that raised them,
+    for the caller to replay; otherwise they are emitted directly.
     """
+    context_local = getattr(sys.flags, "context_aware_warnings", False)
     with config_context(config):
-        if os.getpid() == parent_pid:
+        if os.getpid() == parent_pid and not context_local:
             return dc.scan(paths, progress=None, snap=snap), []
         with suppress_warnings(action="always", record=True) as caught:
             summaries = dc.scan(paths, progress=None, snap=snap)
@@ -114,9 +116,8 @@ def _scan_batch(paths, config, parent_pid, snap=None):
 
 def _replay_warning(message, category, module, filename, lineno):
     """Warn as the recorded module would, sharing its once-per-location registry."""
-    registry = None
-    if (source := sys.modules.get(module or "")) is not None:
-        registry = vars(source).setdefault("__warningregistry__", {})
+    source = sys.modules.get(module or "")
+    registry = vars(source).setdefault("__warningregistry__", {}) if source else None
     warnings.warn_explicit(
         message, category, filename, lineno, module=module, registry=registry
     )

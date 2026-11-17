@@ -325,6 +325,19 @@ class TestUpdateExecutor:
         finally:
             root.indexer.close()
 
+    def test_recorded_warnings_replay_in_caller(self, directory):
+        """A batch scanned elsewhere returns its warnings for the caller to replay."""
+        data = (directory / "00.h5").read_bytes()
+        bad = directory / "bad.h5"
+        bad.write_bytes(data[: len(data) // 3])
+        _, records = indexer_module._scan_batch([bad], get_config(), parent_pid=-1)
+        (record,) = [x for x in records if "Failed to scan" in x[0]]
+        assert record[2] == "dascore.io.core"
+        with pytest.warns(UserWarning, match="Failed to scan") as caught:
+            indexer_module._replay_warning(*record)
+            indexer_module._replay_warning(*record[:2], None, *record[3:])
+        assert {Path(w.filename).name for w in caught} == {"core.py"}
+
     def test_config_and_lifecycle(self, directory, client):
         """Workers inherit scoped config; changed and deleted files refresh."""
         root = dc.spool(directory)
