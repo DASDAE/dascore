@@ -82,7 +82,7 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
     return status.st_mtime_ns, status.st_size
 
 
-def _scan_batch(paths, config, snap=None, parent_pid=None):
+def _scan_batch(paths, config, parent_pid, snap=None):
     """
     Scan a source batch using the caller's DASCore configuration.
 
@@ -90,12 +90,13 @@ def _scan_batch(paths, config, snap=None, parent_pid=None):
     filters see skipped-file warnings as a serial scan would.
     """
     with config_context(config):
-        if parent_pid is None or os.getpid() == parent_pid:
+        if os.getpid() == parent_pid:
             return dc.scan(paths, progress=None, snap=snap), []
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             summaries = dc.scan(paths, progress=None, snap=snap)
-        return summaries, [(str(w.message), w.category) for w in caught]
+        caught = [(str(w.message), w.category, w.filename, w.lineno) for w in caught]
+        return summaries, caught
 
 
 def snap_text(snap) -> str:
@@ -121,8 +122,8 @@ def _scan_with_client(paths, client, progress, snap=None):
         ):
             batch_summaries, caught = batch
             summaries.extend(batch_summaries)
-            for message, category in caught:
-                warnings.warn(message, category, stacklevel=2)
+            for message, category, filename, lineno in caught:
+                warnings.warn_explicit(message, category, filename, lineno)
     finally:
         # Retained exception tracebacks must not keep queued work alive.
         # Map-only clients are also allowed to return a plain iterable.
