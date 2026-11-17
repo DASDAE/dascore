@@ -29,17 +29,21 @@ Examples
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import numpy as np
 
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
-from dascore.lazy.recipe import Recipe
+from dascore.lazy.recipe import Recipe, concat
 from dascore.utils.array_api import (
     LAZY_BACKEND,
     NUMPY_BACKEND,
+    array_namespace,
+    backend_name,
     decide_fallback,
+    is_numpy,
     to_numpy,
 )
 
@@ -213,3 +217,84 @@ class LazyArray:
 # Names the backend only: the lazy backend runs operations through their
 # chunk contracts, never through an array api namespace.
 _NAMESPACE = SimpleNamespace(__name__=LAZY_BACKEND)
+
+
+def join(arrays: Sequence, axis: int, new_axis: bool = False):
+    """
+    Join arrays end to end along an axis, on the backend they are on.
+
+    Lazy arrays with nothing pending are a window of what is stored, and
+    are joined by their recipes, reading nothing: the result is lazy. Any
+    other arrays held on one library are joined there, by the library's
+    own `concat`, so they are never taken through NumPy. What cannot be
+    joined either way -- lazy arrays with operations pending, a mix of lazy
+    and in-memory arrays or of libraries, or a new axis on lazy arrays --
+    is read or converted only as the `numpy_fallback` setting allows.
+
+    Parameters
+    ----------
+    arrays
+        The arrays to join; they agree on every other axis.
+    axis
+        The axis to join along.
+    new_axis
+        Give each array a new axis of length one at the end first, and
+        join along it, as stacking does.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.lazy.array import LazyArray, join
+    >>> from dascore.lazy.recipe import Recipe
+    >>>
+    >>> full = (ArraySource.full((2, 3), x) for x in (1, 2))
+    >>> parts = [LazyArray(Recipe.from_source(x)) for x in full]
+    >>> joined = join(parts, axis=1)
+    >>> assert isinstance(joined, LazyArray) and joined.shape == (2, 6)
+    >>> assert np.array_equal(join([np.ones(2), np.zeros(2)], 0), [1, 1, 0, 0])
+    """
+    arrays = list(arrays)
+    lazy = [isinstance(x, LazyArray) for x in arrays]
+    if all(lazy) and not new_axis:
+        if (out := _joined_recipes(arrays, axis)) is not None:
+            return out
+    if any(lazy):
+        reason = (
+            "a new axis is added to lazy data"
+            if new_axis and all(lazy)
+            else "it joins lazy data with operations pending, or with data in memory"
+        )
+        decide_fallback(
+            f"This concatenation cannot stay lazy: {reason}",
+            "its members were read into memory",
+        )
+        arrays = [x.load() if is_lazy else x for x, is_lazy in zip(arrays, lazy)]
+    if all(is_numpy(x) for x in arrays):
+        # As NumPy always has: its own promotion of mixed dtypes, and speed.
+        parts = [x[..., None] for x in arrays] if new_axis else arrays
+        return np.concatenate(parts, axis=axis)
+    libraries = {backend_name(x) for x in arrays}
+    if len(libraries) > 1:
+        decide_fallback(
+            f"Arrays on {sorted(libraries)} cannot be joined on one library",
+            "they were converted to numpy and joined there",
+            lazy=False,
+        )
+        parts = [to_numpy(x) for x in arrays]
+        parts = [x[..., None] for x in parts] if new_axis else parts
+        return np.concatenate(parts, axis=axis)
+    xp = array_namespace(arrays[0])
+    if new_axis:
+        arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
+    return xp.concat(arrays, axis=axis)
+
+
+def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:
+    """Return lazy arrays joined by their recipes, or None if they cannot be."""
+    backends = {x.backend for x in arrays}
+    if len(backends) > 1 or any(len(x.chain) for x in arrays):
+        return None
+    # A recipe join promotes the dtype as NumPy joins arrays in memory.
+    joined = concat([x.recipe for x in arrays], axis=axis)
+    return LazyArray(joined, backend=next(iter(backends)))

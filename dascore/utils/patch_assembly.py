@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import accumulate
 from typing import Any
@@ -37,13 +36,16 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.lazy.array import LazyArray
+from dascore.lazy.array import LazyArray, join
 from dascore.lazy.recipe import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import (
+    _as_numpy_dtype,
+    array_namespace,
+    asarray_like,
     decide_fallback,
+    is_numpy,
     lazy_read_backend,
-    reading_lazily,
     to_numpy,
 )
 from dascore.utils.attrs import (
@@ -628,6 +630,21 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
         )
 
 
+def _loaded_to(data, dtype: np.dtype):
+    """Return data, in memory if they were lazy, cast to a NumPy dtype."""
+    if isinstance(data, LazyArray):
+        decide_fallback(
+            "This merge cannot stay lazy: its members' dtypes promote in an "
+            "order joining them at once would not follow",
+            "its members were read into memory",
+        )
+        data = data.load()
+    if is_numpy(data):
+        return data.astype(dtype, copy=False)
+    xp = array_namespace(data)
+    return xp.astype(data, asarray_like(np.empty(0, dtype), data).dtype)
+
+
 def _cast_via(dtype: np.dtype, chain: Sequence[np.dtype]) -> np.dtype | None:
     """
     The dtype a member's samples first round at along a promotion chain.
@@ -649,30 +666,6 @@ def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
     dtypes = [np.dtype(x) for x in dtypes]
     chain = list(accumulate(dtypes, np.result_type))
     return chain, [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
-
-
-@contextmanager
-def _read_into_memory(why: str, rows: Sequence[Mapping], held=None):
-    """
-    Have a merge which cannot stay lazy read its members into memory.
-
-    Reading lazy data which nobody asked to have read is the
-    `numpy_fallback` setting's to allow: it is refused, said, or done
-    silently. Such data are a member a spool holds lazy, whatever backend the
-    spool is on, and under a lazy backend a member in a file. A member
-    held in memory is not read at all, and a spool with no lazy backend
-    reads its files as it always has. `held` gives the patch a spool
-    holds for a row, or None for a member in a file. Inside the block
-    reads fill memory, so the merge is the eager one.
-    """
-    patches = [held(x) if held is not None else None for x in rows]
-    lazy = any(x is not None and isinstance(x.data, LazyArray) for x in patches)
-    stored = lazy_read_backend() is not None and any(x is None for x in patches)
-    if lazy or stored:
-        what = f"This merge cannot stay lazy: {why}"
-        decide_fallback(what, "its members were read into memory")
-    with reading_lazily(None):
-        yield
 
 
 @dataclass
@@ -710,9 +703,6 @@ class PatchAssembler:
     aux_coords: bool = False
     # Attrs the plan restates on its output, so members' values never clash.
     stamped: tuple[str, ...] = ()
-    # The patch a spool holds for a member, or None for one in a file:
-    # merging a patch held in memory reads nothing.
-    held: Callable[[Mapping], Any] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -739,11 +729,9 @@ class PatchAssembler:
                 )
                 return [patch]
         if merging:
-            # Members whose merged size the rows do not state are merged
-            # as loaded patches, which a lazy backend has none of.
-            why = "the size of what its members make is not known until they are read"
-            with _read_into_memory(why, df_dict_list, self.held):
-                out = self._loaded_members(joined, df_dict_list, merge_dim, units)
+            # Members whose merged size the rows do not state are merged as
+            # patches; joining lazy ones keeps them lazy where it can.
+            out = self._loaded_members(joined, df_dict_list, merge_dim, units)
             out = _force_patch_merge(out, merge_kwargs=self.merge_kwargs)
         else:
             out = self._loaded_members(joined, df_dict_list, merge_dim, units)
@@ -825,12 +813,7 @@ class PatchAssembler:
             out = self._merge_from_index(joined, df_dict_list, merge_dim, metas)
             if out is not None:  # its sources were found unchanged
                 return _on_stretch_grid(out, self.plan_dim, df_dict_list[0])
-        why = (
-            "the index cannot describe every member, a member is in other "
-            "data units, or a file has changed since it was indexed"
-        )
-        with _read_into_memory(why, df_dict_list, self.held):
-            out = self._stream(joined, df_dict_list, merge_dim, samples, units)
+        out = self._stream(joined, df_dict_list, merge_dim, samples, units)
         return self._on_grid(out, joined, df_dict_list[0])
 
     def _merge_from_index(self, joined, df_dict_list, merge_dim, metas):
@@ -979,9 +962,15 @@ class PatchAssembler:
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs = [], []
         target_units = None
-        for patch_kwargs in df_dict_list:
+        for number, patch_kwargs in enumerate(df_dict_list):
             patch = self._load_trimmed_patch(patch_kwargs, joined, units)
             patch, target_units = _match_merge_units(patch, merge_dim, target_units)
+            if not number and not is_numpy(patch.data):
+                # Lazy, or on another library: joined where the members
+                # are, not copied into a NumPy buffer.
+                return self._joined(
+                    joined, patch, df_dict_list, merge_dim, units, target_units
+                )
             data, coord = patch.data, patch.coords
             if dims is None:
                 dims = patch.dims
@@ -1028,6 +1017,42 @@ class PatchAssembler:
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
         return self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
+
+    def _joined(self, joined, first, rows, merge_dim, units, target_units):
+        """
+        Merge members which are not NumPy arrays by joining them where they are.
+
+        A lazy member which is a window of what is stored stays one, and the
+        merged patch reads nothing; members on another library are joined
+        there. What cannot be joined so is read or converted as the
+        `numpy_fallback` setting allows. The dtype is promoted a member at a
+        time, as the buffer of NumPy members promotes it.
+        """
+        patches = [first]
+        for patch_kwargs in rows[1:]:
+            patch = self._load_trimmed_patch(patch_kwargs, joined, units)
+            patch, target_units = _match_merge_units(patch, merge_dim, target_units)
+            if patch.dims != first.dims:
+                # the same member with its axes in the merge's order
+                patch = patch.transpose(*first.dims)
+            patches.append(patch)
+        data = [x.data for x in patches]
+        chain, _ = _cast_chain([_as_numpy_dtype(x.dtype) for x in data])
+        if chain[-1] != np.result_type(*(_as_numpy_dtype(x.dtype) for x in data)):
+            # Promoted in order, the members give another dtype than joined
+            # at once would: what the buffer gives is what is wanted.
+            data = [_loaded_to(x, chain[-1]) for x in data]
+        try:
+            merged = join(data, axis=first.dims.index(merge_dim))
+        except (ParameterError, ValueError) as e:
+            msg = (
+                f"Cannot merge patches; their shapes are incompatible "
+                f"along the dimensions not being merged ({merge_dim})."
+            )
+            raise CoordMergeError(msg) from e
+        coords = [x.coords for x in patches]
+        attrs = [x.attrs for x in patches]
+        return self._assemble(merged, first.dims, merge_dim, coords, attrs, rows)
 
     def _assemble(self, data, dims, merge_dim, coords, attrs, rows, defaults=None):
         """Build the merged patch from the members' data, coords and attrs."""

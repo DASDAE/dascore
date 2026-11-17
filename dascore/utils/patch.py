@@ -714,7 +714,11 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     data = [x.data for x in ordered]
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
-    new_data = np.concatenate(data, axis=axis)
+    # Imported here: the lazy array reads files through modules built
+    # on the patch utilities.
+    from dascore.lazy.array import join  # noqa: PLC0415
+
+    new_data = join(data, axis=axis)
     new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
@@ -1640,8 +1644,13 @@ def _concatenate_group(
     new_dim = dim not in first.dims
     dims = (*first.dims, dim) if new_dim else first.dims
     axis = dims.index(dim)
-    arrays = [x.data[..., None] if new_dim else x.data for x in patches]
-    data = np.concatenate(arrays, axis=axis)
+    # Joined where the data are: lazy ones stay lazy where they can, and
+    # another library's are joined by that library.
+    # Imported here: the lazy array reads files through modules built
+    # on the patch utilities.
+    from dascore.lazy.array import join  # noqa: PLC0415
+
+    data = join([x.data for x in patches], axis=axis, new_axis=new_dim)
     if new_dim:
         coords = first.coords.update(**{dim: (dim, len(patches))})
     else:

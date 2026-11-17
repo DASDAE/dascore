@@ -180,6 +180,10 @@ CALLS = {
     "Angle": lambda x: x.angle(),
     "Conj": lambda x: x.conj(),
     "_Query": lambda x: x.select(time=(5, 300), distance=(2, 90), samples=True),
+    # A private coordinate along time, which the step drops and nothing else.
+    "DropPrivateCoords": lambda x: x.update_coords(
+        _hidden=("time", np.arange(x.shape[x.get_axis("time")]))
+    ).drop_private_coords(),
     "PassFilter": lambda x: x.pass_filter(time=(10, 100)),
     "MedianFilter": lambda x: x.median_filter(time=5, distance=3, samples=True),
     "SavgolFilter": lambda x: x.savgol_filter(
