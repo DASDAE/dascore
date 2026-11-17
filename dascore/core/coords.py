@@ -118,17 +118,18 @@ def ensure_consistent_dtype(value, name, dtype):
     # TODO: See if this is needed in a few version after pydantic 2.1.1
     if pd.isnull(value):
         return value
-    elif np.issubdtype(dtype, np.datetime64):
+    kind = np.dtype(dtype).kind
+    if kind == "M":
         if name == "step":
             value = dc.to_timedelta64(value)
         else:
             value = dc.to_datetime64(value)
-    elif np.issubdtype(dtype, np.timedelta64):
+    elif kind == "m":
         value = dc.to_timedelta64(value)
     # convert numpy numerics back to python
-    elif np.issubdtype(dtype, np.floating):
+    elif kind == "f":
         value = float(value) if value is not None else np.nan
-    elif np.issubdtype(dtype, np.integer):
+    elif kind in "iu":
         value = int(value)
     return value
 
@@ -299,12 +300,7 @@ class CoordSummary(DascoreBaseModel):
         # derived from min. Copied because the input need not be mutable.
         if isinstance(data, Mapping):
             data = dict(data)
-            min_val = data["min"]
-            dtype = _get_dtype(min_val, data.get("dtype"))
-            data["dtype"] = str(dtype)
-            for name in ["min", "max", "step"]:
-                val = data.get(name)
-                data[name] = ensure_consistent_dtype(val, name, dtype)
+            dtype = _cast_summary_values(data)
             if runs := data.get("runs"):
                 data["runs"] = tuple(_conformed_run(x, dtype) for x in runs)
         return data
@@ -359,6 +355,30 @@ class CoordSummary(DascoreBaseModel):
             unit, count = np.datetime_data(dtype.str)
             step = np.asarray(step).astype(f"m8[{count}{unit}]")[()]
         return get_coord(start=start, stop=stop, step=step, units=self.units)
+
+
+def _cast_summary_values(data: dict[str, Any]):
+    """Set a summary's dtype from its fields and cast min, max and step to it."""
+    dtype = _get_dtype(data["min"], data.get("dtype"))
+    data["dtype"] = str(dtype)
+    for name in ("min", "max", "step"):
+        data[name] = ensure_consistent_dtype(data.get(name), name, dtype)
+    return dtype
+
+
+def _coord_summary(fields: dict[str, Any], update=None) -> CoordSummary:
+    """
+    Build a summary from a coordinate's fields without validation.
+
+    Indexing builds one summary per coordinate, and validation dominated
+    that cost. A coordinate's fields need only the casts the validator
+    makes, so those are applied here; ``update`` then overrides fields.
+    """
+    _cast_summary_values(fields)
+    fields["dims"] = tuple(fields.get("dims", ()))
+    if (length := fields.get("len")) is not None:
+        fields["len"] = int(length)
+    return CoordSummary.model_construct(**{**fields, **(update or {})})
 
 
 @cache
@@ -1163,7 +1183,15 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
-        return CoordSummary(
+        return _coord_summary(self._summary_fields(dims), self._summary_update())
+
+    def _summary_update(self) -> dict[str, Any]:
+        """Fields overriding the summary's, already in the coordinate's dtype."""
+        return {}
+
+    def _summary_fields(self, dims) -> dict[str, Any]:
+        """The fields a summary of this coordinate is built from."""
+        return dict(
             min=self.min(),
             max=self.max(),
             # a summary with a step rebuilds a range; a step declared on
@@ -3453,6 +3481,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if self._partial or self.ndim != 1 or not len(self):
             count = self.shape[0] if self.ndim else 1
             return (RunRecord(count, self.min(), self.max()),)
+        if len(self.runs) == 1:
+            # one run's ends are the coordinate's, which min and max cache
+            run = self.runs[0]
+            step = run.step(self.dtype) if isinstance(run, Grid) else None
+            return (RunRecord(len(run), self.min(), self.max(), step),)
         out = []
         for run in self.runs:
             grid = isinstance(run, Grid)
@@ -3492,9 +3525,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             components += (("step", self._hash_scalar(self.step, "step")),)
         return components
 
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord: its grid and segments."""
-        summary = super().to_summary(dims=dims)
+    def _summary_update(self) -> dict[str, Any]:
+        """The coordinate's grid and segments, for its summary."""
         records = self._run_records()
         update: dict[str, Any] = {"run_count": len(records)}
         if 1 < len(records) <= dc.get_config().max_index_runs:
@@ -3508,7 +3540,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             else:
                 terms = grid.canonical()[1:]
                 update.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
-        return summary.model_copy(update=update)
+        return update
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()
@@ -3981,19 +4013,6 @@ class CoordString(BaseCoord):
         if any(value is not None for value in (min, max, step)) or unsupported_kwargs:
             _raise_string_coord_error("limit updates")
         return self
-
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Return a lossy summary for string coordinates."""
-        return CoordSummary(
-            min=self.min(),
-            max=self.max(),
-            step=None,
-            dtype=self.dtype,
-            units=None,
-            dims=dims,
-            len=self.shape[0] if self.ndim else 1,
-            data_id=self.data_id,
-        )
 
     def _id_components(self) -> tuple[Any, ...]:
         """Return the array payload identifying string coords."""
