@@ -15,6 +15,7 @@ import json
 import math
 import os
 import stat
+import sys
 import tempfile
 import warnings
 from contextlib import suppress
@@ -37,7 +38,11 @@ from dascore.io.index.ingest import (
     summaries_to_records,
 )
 from dascore.utils.identity import _snap_names
-from dascore.utils.misc import _iter_filesystem, validate_warn_level
+from dascore.utils.misc import (
+    _iter_filesystem,
+    suppress_warnings,
+    validate_warn_level,
+)
 from dascore.utils.paths import (
     coerce_to_local_path,
     directory_writable,
@@ -82,10 +87,45 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
     return status.st_mtime_ns, status.st_size
 
 
-def _scan_batch(paths, config, snap=None, on_error="warn"):
-    """Scan a source batch using the caller's DASCore configuration."""
+def _module_name(filename: str) -> str | None:
+    """The name of the loaded module defined in a file, if any."""
+    modules = list(sys.modules.items())
+    return next(
+        (n for n, m in modules if getattr(m, "__file__", None) == filename), None
+    )
+
+
+def _scan_batch(paths, config, parent_pid, snap=None, on_error="warn"):
+    """
+    Scan a source batch using the caller's DASCore configuration.
+
+    Returns the summaries and the warnings the scan raised. Where the
+    caller's warning filters do not reach the worker (another process, or a
+    thread when filters are context-local, as on free-threaded builds),
+    warnings are recorded with the module, file and line that raised them,
+    for the caller to replay; otherwise they are emitted directly.
+    """
+    context_local = getattr(sys.flags, "context_aware_warnings", False)
     with config_context(config):
-        return dc.scan(paths, progress=None, snap=snap, on_error=on_error)
+        if os.getpid() == parent_pid and not context_local:
+            return dc.scan(paths, progress=None, snap=snap, on_error=on_error), []
+        with suppress_warnings(action="always", record=True) as caught:
+            summaries = dc.scan(paths, progress=None, snap=snap, on_error=on_error)
+        records = [
+            (str(w.message), w.category, _module_name(w.filename), w.filename, w.lineno)
+            for w in caught
+        ]
+        return summaries, records
+
+
+def _replay_warning(message, category, module, filename, lineno):
+    """Warn as the recorded module would, sharing its once-per-location registry."""
+    # Passing module=None explicitly would drop the warning unfiltered.
+    options = {}
+    if (source := sys.modules.get(module or "")) is not None:
+        registry = vars(source).setdefault("__warningregistry__", {})
+        options = {"module": module, "registry": registry}
+    warnings.warn_explicit(message, category, filename, lineno, **options)
 
 
 def snap_text(snap) -> str:
@@ -102,14 +142,23 @@ def _scan_with_client(paths, client, progress, snap=None, on_error="warn"):
         workers = os.cpu_count() or 1
     size = max(1, math.ceil(len(paths) / (4 * workers)))
     batches = [paths[start : start + size] for start in range(0, len(paths), size)]
-    func = partial(_scan_batch, config=get_config(), snap=snap, on_error=on_error)
+    func = partial(
+        _scan_batch,
+        config=get_config(),
+        snap=snap,
+        on_error=on_error,
+        parent_pid=os.getpid(),
+    )
     results = client.map(func, batches)
     summaries = []
     try:
         for batch in track(
             results, "Scanning file batches", progress, length=len(batches)
         ):
-            summaries.extend(batch)
+            batch_summaries, caught = batch
+            summaries.extend(batch_summaries)
+            for record in caught:
+                _replay_warning(*record)
     finally:
         # Retained exception tracebacks must not keep queued work alive.
         # Map-only clients are also allowed to return a plain iterable.

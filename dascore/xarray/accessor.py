@@ -17,6 +17,7 @@ from importlib.util import find_spec
 from typing import Any
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.exceptions import PatchConversionError
 from dascore.proc.window import PatchWindow
 from dascore.utils.array_api import is_foreign
@@ -138,7 +139,9 @@ def _guarded(call: Callable, name: str, size: int):
     operation which would have fit is the safe way to be wrong here,
     and the message says which array was judged too large.
     """
-    with warnings.catch_warnings():
+    # A conversion is announced as a warning whatever the fallback setting
+    # says, since the warning is what stops the conversion here.
+    with warnings.catch_warnings(), config_context(numpy_fallback="warn"):
         warnings.simplefilter("error", NumpyFallbackWarning)
         try:
             return call()

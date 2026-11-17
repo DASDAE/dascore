@@ -21,6 +21,7 @@ import re
 import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
+from functools import lru_cache
 from typing import SupportsInt, TypedDict, cast
 
 import numpy as np
@@ -256,6 +257,11 @@ def _to_ns(value) -> int:
     scalar here would give a coord one summary key on a fresh scan and
     another when the same coord is read back out of an index.
     """
+    # numpy scalars directly; to_int would route them through arrays
+    if isinstance(value, np.datetime64):
+        return int(to_datetime64(value).view(np.int64))
+    if isinstance(value, np.timedelta64):
+        return int(to_timedelta64(value).view(np.int64))
     return int(to_int(value))
 
 
@@ -266,6 +272,8 @@ def typed_value(value) -> TypedValue | None:
     Unit-bearing quantities are converted to base SI units; the canonical
     unit string is recorded so queries can convert consistently.
     """
+    if type(value) is str:  # the common attr, decided without the checks below
+        return TypedValue("str", value) if value else None
     if _is_missing(value):
         return None
     # containers/arrays are complex attrs: never indexable scalars (and
@@ -298,6 +306,7 @@ def typed_value(value) -> TypedValue | None:
     return None  # complex attrs (sequences, dicts, ...) are skipped
 
 
+@lru_cache(maxsize=4096)
 def _attr_name_status(name: str) -> str:
     """
     Classify an attr name for indexing: "ok", "skip", or "reserved".

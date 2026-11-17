@@ -8,8 +8,9 @@ says which stored samples fill which box of the array, and the
 none of which has computed anything. Its shape, dtype and `data_id` are the
 last step's, or the recipe's when nothing is pending, so they are known
 without reading. [`load`](`dascore.lazy.array.LazyArray.load`) reads the
-recipe and runs each step's NumPy kernel in order, a chunk at a time when
-the whole would be large; see [`dascore.lazy.execute`](`dascore.lazy.execute`).
+recipe and runs each step's kernel for the array's `backend` in order, a
+chunk at a time when the whole would be large; see
+[`dascore.lazy.execute`](`dascore.lazy.execute`).
 
 Examples
 --------
@@ -35,7 +36,12 @@ import numpy as np
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
 from dascore.lazy.recipe import Recipe
-from dascore.utils.array_api import LAZY_BACKEND
+from dascore.utils.array_api import (
+    LAZY_BACKEND,
+    NUMPY_BACKEND,
+    decide_fallback,
+    to_numpy,
+)
 
 
 class LazyArray:
@@ -49,6 +55,11 @@ class LazyArray:
     chain
         The operations to run on the recipe's array, in order; none by
         default, when the array is the recipe's.
+    backend
+        The array library each chunk is computed on and `load` returns an
+        array of, by the name
+        [`backend_name`](`dascore.utils.array_api.backend_name`) reports;
+        NumPy by default.
 
     Notes
     -----
@@ -57,11 +68,40 @@ class LazyArray:
     them, and metadata-only ones.
     """
 
-    __slots__ = ("_chain", "_recipe")
+    __slots__ = ("_backend", "_chain", "_recipe")
 
-    def __init__(self, recipe: Recipe, chain: Chain | None = None):
+    def __init__(
+        self,
+        recipe: Recipe,
+        chain: Chain | None = None,
+        backend: str = NUMPY_BACKEND,
+    ):
         self._recipe = recipe
         self._chain = Chain() if chain is None else chain
+        self._backend = backend
+
+    @property
+    def backend(self) -> str:
+        """The array library each chunk is computed on."""
+        return self._backend
+
+    def with_backend(self, backend: str) -> LazyArray:
+        """
+        Return the array computed on another array library.
+
+        A step already pending with no kernel for it would have each chunk
+        converted through NumPy, which the `numpy_fallback` setting decides
+        here, as it does for a step chained afterwards.
+        """
+        if backend == self._backend:
+            return self
+        for node in self._chain:
+            if (converted := execute._converted(node.processor, backend)) is not None:
+                decide_fallback(
+                    f"{converted} has no {backend} implementation",
+                    "each chunk is converted to numpy to run it",
+                )
+        return LazyArray(self._recipe, self._chain, backend)
 
     @property
     def recipe(self) -> Recipe:
@@ -127,27 +167,30 @@ class LazyArray:
     def __repr__(self) -> str:
         name = type(self).__name__
         steps = len(self._chain)
-        return f"{name}(shape={self.shape}, dtype={self.dtype}, steps={steps})"
+        on = "" if self._backend == NUMPY_BACKEND else f", backend={self._backend!r}"
+        return f"{name}(shape={self.shape}, dtype={self.dtype}, steps={steps}{on})"
 
     def _appended(self, node: Node) -> LazyArray:
         """Return the array with one more operation pending."""
-        return LazyArray(self._recipe, self._chain.append(node))
+        return LazyArray(self._recipe, self._chain.append(node), self._backend)
 
     def _settled(self, shape, dtype, data_id: str) -> LazyArray:
         """Return the array with its last step settled; see `Node.settled`."""
         *before, last = self._chain.nodes
         node = last.settled(shape, dtype, data_id)
-        return LazyArray(self._recipe, Chain((*before, node)))
+        return LazyArray(self._recipe, Chain((*before, node)), self._backend)
 
     def load(self) -> np.ndarray:
         """
         Read the recipe and run every pending step, returning the array.
 
-        Each step runs its processor's NumPy kernel, on the whole array or,
-        when that would hold an array larger than the `lazy_block_size`
-        setting, a chunk at a time; only the samples the result needs are
-        read. What each step makes is checked against the shape and dtype
-        its metadata stated, which is what the patch said it held all along.
+        Each step runs the kernel its processor has for this array's
+        `backend`, NumPy's unless another library was named, on the whole
+        array or, when that would hold an array larger than the
+        `lazy_block_size` setting, a chunk at a time; only the samples the
+        result needs are read. The array returned is on that library. What
+        each step makes is checked against the shape and dtype its metadata
+        stated, which is what the patch said it held all along.
 
         Raises
         ------
@@ -159,7 +202,7 @@ class LazyArray:
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
         """Load the array for numpy; each call reads and computes it again."""
-        out = self.load()
+        out = to_numpy(self.load())
         return out if dtype is None else out.astype(dtype, copy=False)
 
     def __array_namespace__(self, api_version: str | None = None):

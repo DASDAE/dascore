@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.proc.coords import _fill_scalar
 from dascore.utils.identity import H, dtype_description
+from dascore.utils.paths import coerce_to_local_path, is_local_path
 
 # Where an array is, which names it when nothing better does.
 _LOCATION_FIELDS = ("path", "format", "version", "key")
@@ -190,6 +191,21 @@ class ArraySource:
         if not self.windows or self.windows == whole:
             return base
         return H("window", [base, self.windows])
+
+    def anchored(self) -> ArraySource:
+        """
+        Return the source with a relative local path made absolute.
+
+        A source read at once reads from the directory it was named in. One
+        kept to read later would read from wherever the process is by then.
+        Only a source with an `origin_id` is changed: one identified by
+        where it is kept takes its `data_id` from its path, and would be
+        another array under another path.
+        """
+        if self.filled or not self.origin_id or not is_local_path(self.path):
+            return self
+        local = coerce_to_local_path(self.path)
+        return self if local.is_absolute() else replace(self, path=str(local.resolve()))
 
     def _identity(self) -> tuple[str, str]:
         """Return the id this source has as an operation's parameter."""

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import multiprocessing
+import sys
 import threading
+import warnings
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from contextlib import closing
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -299,6 +302,47 @@ class TestUpdateExecutor:
         finally:
             serial.indexer.close()
             parallel.indexer.close()
+
+    def test_skipped_file_warns(self, directory, client):
+        """A file a worker skips warns once in the caller, as a serial scan does."""
+        data = (directory / "00.h5").read_bytes()
+        bad = directory / "bad.h5"
+        bad.write_bytes(data[: len(data) // 3])
+        root = dc.spool(directory)
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                root.update(progress=False, client=client)
+            failed = [w for w in caught if "Failed to scan" in str(w.message)]
+            assert len(failed) == 1 and "bad.h5" in str(failed[0].message)
+            # attributed to the scan code that raised it, not to the indexer
+            assert Path(failed[0].filename).name != "indexer.py"
+            # A filter naming the warning's module silences it, as it would serially.
+            bad.write_bytes(data[: len(data) // 4])
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                warnings.filterwarnings("ignore", module=r"dascore\.(?!io\.index)")
+                root.update(progress=False, client=client)
+            assert len(root) == 12
+        finally:
+            root.indexer.close()
+
+    def test_recorded_warnings_replay_in_caller(self, directory):
+        """A batch scanned elsewhere returns its warnings for the caller to replay."""
+        data = (directory / "00.h5").read_bytes()
+        bad = directory / "bad.h5"
+        bad.write_bytes(data[: len(data) // 3])
+        _, records = indexer_module._scan_batch([bad], get_config(), parent_pid=-1)
+        (record,) = [x for x in records if "Failed to scan" in x[0]]
+        assert sys.modules[record[2]].__file__ == record[3]
+        with pytest.warns(UserWarning, match="Failed to scan") as caught:
+            indexer_module._replay_warning(*record)
+        assert caught[0].filename == record[3]
+        # A warning from no loaded module still reaches the caller's filters.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(UserWarning, match="Failed to scan"):
+                indexer_module._replay_warning(*record[:2], None, *record[3:])
 
     def test_config_and_lifecycle(self, directory, client):
         """Workers inherit scoped config; changed and deleted files refresh."""

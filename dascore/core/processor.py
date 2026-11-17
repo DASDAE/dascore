@@ -126,7 +126,8 @@ class PatchProcessor(DascoreBaseModel):
       patch, so a chain of kernels can be compiled.
     - `numpy_kernel(data, **plan)`: a numpy, scipy or numba computation.
       NumPy data prefer it; other backends use `kernel` if available,
-      otherwise convert through NumPy with a `NumpyFallbackWarning`.
+      otherwise convert through NumPy as the `numpy_fallback` setting
+      says: with a `NumpyFallbackWarning` unless it is changed.
     - `reconcile(result, out, meta)`: the one hook which sees both halves,
       given the input metadata as well. Return
       metadata to attach the result, or a patch holding the final data.
@@ -372,10 +373,11 @@ class PatchProcessor(DascoreBaseModel):
         registered against its parent must not answer for it. A backend
         other than NumPy first loads its `dascore.kernels` entry points, once.
 
-        The lazy backend never falls back: the first class which computes
-        anything is answered by its own registered lazy kernel, or else by
-        [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), which runs the
-        operation by its chunk contract or refuses it.
+        The lazy backend never falls back unasked: the first class which
+        computes anything is answered by its own registered lazy kernel, or
+        else by [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), which
+        runs the operation by its chunk contract, or refuses it unless the
+        `numpy_fallback` setting lets the data be read into memory.
         """
         if backend != "numpy":
             _load_kernel_plugin(backend)
@@ -444,7 +446,8 @@ class PatchProcessor(DascoreBaseModel):
         dtype and the plan `get_metadata` returned, before anything is read.
         A contract from [`dascore.lazy.contract`](`dascore.lazy.contract`)
         lets it run there; None, the default, says it cannot, and the
-        operation is refused rather than the data loaded for it.
+        operation is refused rather than the data loaded for it, unless
+        the `numpy_fallback` setting allows that.
         """
         return None
 

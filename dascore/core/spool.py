@@ -104,7 +104,9 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
+from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
+from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -500,6 +502,9 @@ class Spool(NodeRepr, NamespaceOwner):
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
+    # The array backend patches are handed out on, as `set_backend` spells
+    # given it. None hands them out as they are read: in memory, on NumPy.
+    _backend: str | None = None
     # single-file provenance (set by _from_file; drives update())
     _file_path = None
     _file_format = None
@@ -686,7 +691,8 @@ class Spool(NodeRepr, NamespaceOwner):
             array = self._as_selector_array(item)
             return self._new_from_catalog(self._catalog.restrict(array))
         try:
-            return self._maybe_enrich(self._catalog.get_patch(int(item)))
+            patch = self._handed_out(lambda: self._catalog.get_patch(int(item)))
+            return self._maybe_enrich(patch)
         except MissingPatchError:
             # MissingPatchError subclasses IndexError for backwards
             # compatibility; it must never masquerade as out-of-bounds
@@ -707,8 +713,81 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         # The catalog snapshots the relation once and skips patches which
         # cannot be resolved (see #583).
-        for patch in self._catalog:
+        patches = iter(self._catalog)
+        while True:
+            # A patch at a time: a backend set for the reads of this spool
+            # must not be in force while the caller holds a patch.
+            try:
+                patch = self._handed_out(patches.__next__)
+            except StopIteration:
+                return
             yield self._maybe_enrich(patch)
+
+    def _handed_out(self, read: Callable[[], dc.Patch]) -> dc.Patch:
+        """Return the patch `read` gets, on the backend this spool was set to."""
+        if self._backend is None:
+            return read()
+        lazy, library = parse_backend(self._backend)
+        with reading_lazily(library if lazy else None):
+            patch = read()
+        if lazy and isinstance(patch.data, LazyArray):
+            # Read lazily just now, or held lazy already: computed on the
+            # library named, which its pending steps are asked about.
+            return patch.set_backend(self._backend)
+        if lazy and _is_lazy(patch.data):
+            # Another kind of promise, which a spool held already: left
+            # as it is, and computed when its holder asks.
+            return patch
+        # In memory: held there by the spool, with nothing read, or read
+        # after all as the fallback setting allowed. Put where chunks are
+        # computed.
+        return patch.set_backend(library)
+
+    def set_backend(self, backend: str) -> Self:
+        """
+        Return a spool whose patches are handed out on another array backend.
+
+        Nothing is read or converted here. Each patch the new spool hands
+        out, by indexing or iterating, is on the backend. `load` reads every
+        patch into memory, on the library a lazy backend computes on.
+
+        Parameters
+        ----------
+        backend
+            The backend each patch is handed out on, named as
+            [`Patch.set_backend`](`dascore.Patch.set_backend`) names it.
+
+        Raises
+        ------
+        ParameterError
+            If the name is no backend, or the array library cannot be
+            imported.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.utils.downloader import fetch
+        >>>
+        >>> spool = dc.spool(fetch("example_dasdae_event_1.h5"))
+        >>> lazy = spool.set_backend("lazy")
+        >>> patch = lazy[0]
+        >>> assert patch.backend == "lazy"
+        >>> # Operations wait until the data are asked for.
+        >>> out = patch.abs().load()
+        >>> assert out.equals(spool[0].abs())
+
+        Notes
+        -----
+        [Lazy operations](`dascore/docs/notes/lazy_operations.qmd`) says
+        what a lazy backend reads and when, what cannot be lazy, and how
+        the `numpy_fallback` setting decides that.
+        """
+        lazy, library = parse_backend(backend)
+        # Refused here and not at the first patch, if it cannot be used.
+        to_backend(np.empty(0), library)
+        new = self.__class__(self)
+        new._backend = f"LazyArray[{library}]" if lazy else library
+        return new
 
     def load(self) -> Self:
         """
@@ -756,8 +835,14 @@ class Spool(NodeRepr, NamespaceOwner):
             raise InsufficientMemoryError(msg)
         from dascore.io.index.catalog import _patch_path  # noqa: PLC0415
 
+        # Reading everything is what was asked for, so nothing is read
+        # lazily first: a lazy backend's patches are read onto the library
+        # it computes on.
+        reader = self
+        if self._backend is not None:
+            reader = self.set_backend(parse_backend(self._backend)[1])
         patches, seen = [], set()
-        for patch in self:
+        for patch in reader:
             patch = _loaded(patch)
             # A spool of patches holds each instance once, and a row
             # presented twice (an explicit window given twice, say) gives
@@ -828,6 +913,8 @@ class Spool(NodeRepr, NamespaceOwner):
         up from it, is spool-wide state: the union carries whichever
         operand has one and applies it to every patch it yields, as
         attaching and enriching the union would; two different ones raise.
+        So is the backend set by `set_backend`: the union is on the one its
+        operands were set to, and two different ones raise.
 
         Examples
         --------
@@ -849,6 +936,18 @@ class Spool(NodeRepr, NamespaceOwner):
         union = PatchCatalog.union([x._as_union_member() for x in spools])
         new = Spool()
         new._catalog = union
+        # The backend the patches are handed out on is the spools' own,
+        # and two different ones have no combined answer.
+        # A spool with none set takes the other's, so spools gathered onto
+        # an empty one keep theirs.
+        backends = sorted({x._backend for x in spools if x._backend is not None})
+        if len(backends) > 1:
+            msg = (
+                f"Spools on different backends cannot be added: {backends}. "
+                "Set one backend on each before adding them."
+            )
+            raise ParameterError(msg)
+        new._backend = backends[0] if backends else None
         # An attached inventory is part of what a spool yields, so it must
         # survive the union; two different ones have no combined answer.
         new._inventory, enrichment = combine_inventories(*spools)
@@ -3428,6 +3527,8 @@ class Spool(NodeRepr, NamespaceOwner):
             refreshed._inventory = self._inventory
             refreshed._enrich_kwargs = self._enrich_kwargs
             refreshed._on_unresolved = self._on_unresolved
+            # Nor to hand its patches out on another backend.
+            refreshed._backend = self._backend
             return refreshed
         if isinstance(catalog.resolver, LiveResolver):
             return self  # in-memory contents are trivially current
@@ -3450,9 +3551,10 @@ class Spool(NodeRepr, NamespaceOwner):
             return deep_equality_check(self.__dict__, other_dict)
         # Models compare with ==; deep_equality_check walks their fields,
         # where an unset (NaT) time never equals itself.
-        if (self._inventory, self._enrichment()) != (
+        if (self._inventory, self._enrichment(), self._backend) != (
             other._inventory,
             other._enrichment(),
+            other._backend,
         ):
             return False
         # views over the same catalog state are equal without realizing

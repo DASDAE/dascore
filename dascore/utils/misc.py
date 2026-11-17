@@ -869,9 +869,14 @@ def cached_method(func):
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        if not hasattr(self, "_cache"):
-            self._cache = {}
-        cache = self._cache
+        # A model's private storage is a plain dict; reading it there skips
+        # the attribute lookup a hot path would otherwise pay on every call.
+        private = getattr(self, "__pydantic_private__", None)
+        cache = private.get("_cache") if private else None
+        if cache is None:
+            if not hasattr(self, "_cache"):
+                self._cache = {}
+            cache = self._cache
         if not (args or kwargs):
             key = id(func)
         else:

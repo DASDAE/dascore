@@ -75,6 +75,13 @@ from dascore.io.utils import (
     slice_dataset,
     validate_windows,
 )
+from dascore.lazy.array import LazyArray
+from dascore.lazy.recipe import Recipe
+from dascore.utils.array_api import (
+    decide_fallback,
+    lazy_read_backend,
+    reading_lazily,
+)
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
 from dascore.utils.identity import (
@@ -696,6 +703,25 @@ class _TypeCasterMethod(Protocol):
     def __call__(self, *args, **kwargs): ...
 
 
+def _lazy_data(fiber_io, source: ArraySource, library: str) -> LazyArray | None:
+    """
+    Return the lazy array a narrowed source names, or None; nothing is read.
+
+    None says the data are to be read into memory after all, which the
+    `numpy_fallback` setting allowed. A source is not loadable when the
+    selection was not one window of it; see `ArraySource.narrow`.
+    """
+    if source.loadable:
+        return LazyArray(Recipe.from_source(source.anchored()), backend=library)
+    decide_fallback(
+        f"A {fiber_io.name} patch cannot be read lazily here: it selects "
+        "samples which are not next to each other, or the format names no "
+        "stored array to read later",
+        "it was read into memory",
+    )
+    return None
+
+
 def _required_resource_type(method) -> type | None:
     """
     Return the resource type a FiberIO method's caster coerces its input to.
@@ -1029,7 +1055,17 @@ class FiberIO:
                     tuple(indexers.get(x, slice(None)) for x in patch.dims)
                 )
                 selected.append((patch, coords, source, windows, residual, queries))
-            for selection, data in zip(selected, load(requests), strict=True):
+            library = lazy_read_backend()
+            if library is None:
+                arrays = load(requests)
+            else:
+                # What cannot be lazy is read now, where the setting allows.
+                arrays: list[Any] = [_lazy_data(self, x[2], library) for x in selected]
+                eager = [n for n, x in enumerate(arrays) if x is None]
+                loaded = load([requests[n] for n in eager]) if eager else ()
+                for n, data in zip(eager, loaded, strict=True):
+                    arrays[n] = data
+            for selection, data in zip(selected, arrays, strict=True):
                 patch, coords, source, windows, residual, queries = selection
                 expected = (
                     tuple(stop - start for start, stop in windows)
@@ -1044,7 +1080,8 @@ class FiberIO:
                         f"metadata declared {expected}/{patch.dtype}."
                     )
                     raise InvalidFiberIOError(msg)
-                data = _apply_union_indexers(residual, data)
+                if not isinstance(data, LazyArray):
+                    data = _apply_union_indexers(residual, data)
                 attrs = _selected_read_attrs(
                     patch.attrs,
                     patch._source,
@@ -1058,7 +1095,9 @@ class FiberIO:
                 # The ids were worked out above; the read is the operation.
                 with operation_context():
                     new = patch.update(coords=coords, attrs=attrs).to_patch(data)
-                new._source = source
+                # A lazy patch keeps where its file is from wherever it was
+                # read, so making it lazy again later reads the same file.
+                new._source = source if library is None else source.anchored()
                 out.append(new)
         return dc.spool(out)
 
@@ -1861,16 +1900,28 @@ def read(
             fiber_io, file_version = _resolve_read_fiberio(
                 man, file_format, file_version
             )
-            out = fiber_io.read(
-                man,
-                file_version=file_version,
-                _provenance_source=source,
-                time=time,
-                distance=distance,
-                snap=snap,
-                _pre_cast=True,
-                **kwargs,
-            )
+            own_read = type(fiber_io).read is not FiberIO.read
+            library = lazy_read_backend()
+            if library is not None and own_read:
+                # Its own read is not known to read lazily, so it reads
+                # into memory, which the fallback setting must allow.
+                decide_fallback(
+                    f"A {fiber_io.name} patch cannot be read lazily: the format "
+                    "reads its files by a method of its own",
+                    "it was read into memory",
+                )
+            # And it does so with lazy reading off, whatever it calls.
+            with reading_lazily(None if own_read else library):
+                out = fiber_io.read(
+                    man,
+                    file_version=file_version,
+                    _provenance_source=source,
+                    time=time,
+                    distance=distance,
+                    snap=snap,
+                    _pre_cast=True,
+                    **kwargs,
+                )
             # The reader's own spelling of its format, not the caller's:
             # `dc.read(path, "netcdf_cf")` and `dc.read(path, "NETCDF_CF")`
             # resolve to one FiberIO and must name one datum.

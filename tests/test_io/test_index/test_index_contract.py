@@ -21,7 +21,7 @@ from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import UnitError
 from dascore.io.index.backend import get_backend
-from dascore.io.index.ingest import summaries_to_records
+from dascore.io.index.ingest import _to_ns, summaries_to_records
 from dascore.io.index.query import InvalidSpoolQueryError, Query, resolve_query
 from dascore.io.index.schema import INDEX_VERSION
 from dascore.units import get_quantity
@@ -149,6 +149,16 @@ def backend(tmp_path):
     back.write_sources(summaries_to_records(make_summaries()))
     yield back
     back.close()
+
+
+class TestToNs:
+    """Tests for converting index scalars to integer nanoseconds."""
+
+    def test_numpy_scalars(self):
+        """Numpy and pandas times of any unit convert to nanoseconds."""
+        assert _to_ns(np.datetime64(1, "s")) == 1_000_000_000
+        assert _to_ns(np.timedelta64(1500, "us")) == 1_500_000
+        assert _to_ns(pd.Timestamp("1970-01-01T00:00:02")) == 2_000_000_000
 
 
 class TestFlatRelation:
