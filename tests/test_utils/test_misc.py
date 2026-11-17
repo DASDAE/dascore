@@ -19,7 +19,11 @@ from upath import UPath
 
 import dascore as dc
 import dascore.utils.misc as misc
-from dascore.exceptions import MissingOptionalDependencyError, ParameterError
+from dascore.exceptions import (
+    MissingOptionalDependencyError,
+    ParameterError,
+    ScanError,
+)
 from dascore.utils.array_api import to_numpy
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -164,6 +168,27 @@ class TestIterFS:
             ) as caught:
                 out = list(_iter_filesystem(simple_dir))
             assert str(denied) in str(caught[0].message)
+            assert {Path(x) for x in out} == {simple_dir / "A.txt"}
+
+    @pytest.mark.parametrize("on_error", ["raise", "ignore"])
+    def test_permission_denied_on_error(self, simple_dir, monkeypatch, on_error):
+        """on_error raises ScanError for, or silently skips, a denied subtree."""
+        denied = simple_dir / "B"
+        scandir = os.scandir
+
+        def guarded_scandir(path):
+            if Path(path) == denied:
+                raise PermissionError(f"Permission denied: {path}")
+            return scandir(path)
+
+        monkeypatch.setattr(os, "scandir", guarded_scandir)
+        if on_error == "raise":
+            with pytest.raises(ScanError, match="Permission denied; skipping"):
+                list(_iter_filesystem(simple_dir, on_error=on_error))
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                out = list(_iter_filesystem(simple_dir, on_error=on_error))
             assert {Path(x) for x in out} == {simple_dir / "A.txt"}
 
     def test_one_subdir(self, simple_dir):

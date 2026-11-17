@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import sys
 import threading
 import warnings
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
@@ -314,12 +315,13 @@ class TestUpdateExecutor:
                 root.update(progress=False, client=client)
             failed = [w for w in caught if "Failed to scan" in str(w.message)]
             assert len(failed) == 1 and "bad.h5" in str(failed[0].message)
-            assert Path(failed[0].filename).match("dascore/io/core.py")
+            # attributed to the scan code that raised it, not to the indexer
+            assert Path(failed[0].filename).name != "indexer.py"
             # A filter naming the warning's module silences it, as it would serially.
             bad.write_bytes(data[: len(data) // 4])
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
-                warnings.filterwarnings("ignore", module=r"dascore\.io\.core")
+                warnings.filterwarnings("ignore", module=r"dascore\.(?!io\.index)")
                 root.update(progress=False, client=client)
             assert len(root) == 12
         finally:
@@ -332,10 +334,10 @@ class TestUpdateExecutor:
         bad.write_bytes(data[: len(data) // 3])
         _, records = indexer_module._scan_batch([bad], get_config(), parent_pid=-1)
         (record,) = [x for x in records if "Failed to scan" in x[0]]
-        assert record[2] == "dascore.io.core"
+        assert sys.modules[record[2]].__file__ == record[3]
         with pytest.warns(UserWarning, match="Failed to scan") as caught:
             indexer_module._replay_warning(*record)
-        assert Path(caught[0].filename).name == "core.py"
+        assert caught[0].filename == record[3]
         # A warning from no loaded module still reaches the caller's filters.
         with warnings.catch_warnings():
             warnings.simplefilter("error")

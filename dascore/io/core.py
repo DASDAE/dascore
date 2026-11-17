@@ -42,6 +42,7 @@ from dascore.compat import Progress, UPath
 from dascore.constants import (
     INDEX_NAME,
     PROGRESS_LEVELS,
+    WARN_LEVELS,
     float_select_type,
     path_types,
     snap_type,
@@ -110,6 +111,8 @@ from dascore.utils.misc import (
     _reinit_after_fork,
     cached_method,
     iterate,
+    report_skipped_source,
+    validate_warn_level,
     warn_or_raise,
 )
 from dascore.utils.paths import (
@@ -2078,7 +2081,7 @@ def scan_to_df(
     return df
 
 
-def _iterate_scan_inputs(patch_source, ext, mtime, **kwargs):
+def _iterate_scan_inputs(patch_source, ext, mtime, on_error="warn", **kwargs):
     """Yield scan candidates; send "skip" after a directory to skip its contents."""
     for el in iterate(patch_source):
         el = resolve_example_uri(el)
@@ -2092,6 +2095,7 @@ def _iterate_scan_inputs(patch_source, ext, mtime, **kwargs):
                     ext=ext,
                     timestamp=mtime,
                     include_directories=True,
+                    on_error=on_error,
                 )
                 try:
                     candidate = next(generator)
@@ -2142,13 +2146,13 @@ def _get_fiber_io_and_req_type(
     return fiber_io_hint, resource
 
 
-def _warn_permission_denied(source):
-    """Warn that an inaccessible scan source is skipped."""
-    warnings.warn(f"Permission denied; skipping {source}", UserWarning)
+def _report_permission_denied(source, on_error, cause):
+    """Report that an inaccessible scan source is skipped."""
+    report_skipped_source(f"Permission denied; skipping {source}", on_error, cause)
 
 
-def _warn_if_damaged_hdf5(manager, source):
-    """Warn that a file with an HDF5 signature which h5py cannot open is skipped."""
+def _report_if_damaged_hdf5(manager, source, on_error):
+    """Report that a file with an HDF5 signature h5py cannot open is skipped."""
     try:
         header = manager.get_resource(BinaryReader).read(8)
     except Exception:
@@ -2158,15 +2162,17 @@ def _warn_if_damaged_hdf5(manager, source):
     try:
         # Cached, so not reopened, when format detection opened the file.
         manager.get_resource(H5Reader)
-    except Exception:
+    except Exception as exc:
         msg = (
             f"Failed to scan {source}: it has an HDF5 signature but could not "
             "be opened (likely truncated or damaged)"
         )
-        warnings.warn(msg, UserWarning)
+        report_skipped_source(msg, on_error, exc)
 
 
-def _scan_candidates(path, file_format, file_version, ext, timestamp, hint) -> list:
+def _scan_candidates(
+    path, file_format, file_version, ext, timestamp, hint, on_error="warn"
+) -> list:
     """
     Return the scan inputs, each with the format and version to read it as.
 
@@ -2175,7 +2181,7 @@ def _scan_candidates(path, file_format, file_version, ext, timestamp, hint) -> l
     other directory is dropped for its contents.
     """
     out = []
-    generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
+    generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp, on_error=on_error)
     signal = None
     while True:
         try:
@@ -2191,8 +2197,8 @@ def _scan_candidates(path, file_format, file_version, ext, timestamp, hint) -> l
                 found = get_format(candidate, file_format, file_version, hint)
             except UnknownFiberFormatError:
                 continue
-            except PermissionError:
-                _warn_permission_denied(candidate)
+            except PermissionError as exc:
+                _report_permission_denied(candidate, on_error, exc)
                 continue
             signal = "skip"
         out.append((candidate, found))
@@ -2252,6 +2258,7 @@ def _iter_scan_results(
     progress: PROGRESS_LEVELS | Progress = "standard",
     *,
     snap: snap_type | None = None,
+    on_error: WARN_LEVELS = "warn",
 ) -> Generator[tuple[dc.PatchMeta, int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
@@ -2271,7 +2278,7 @@ def _iter_scan_results(
     try:
         with remote_cache_scope("metadata"):
             candidates = _scan_candidates(
-                path, file_format, file_version, ext, timestamp, fiber_io_hint
+                path, file_format, file_version, ext, timestamp, fiber_io_hint, on_error
             )
             tracker = track(
                 candidates,
@@ -2302,19 +2309,20 @@ def _iter_scan_results(
                             fiber_io_hint=fiber_io_hint,
                         )
                     except PickleFormatDisabledError as exc:
-                        warnings.warn(f"Skipping {patch_source}: {exc}", UserWarning)
+                        msg = f"Skipping {patch_source}: {exc}"
+                        report_skipped_source(msg, on_error, exc)
                         continue
                     except UnknownFiberVersionError as exc:
                         # Only a version read from the file is news to the caller.
                         if file_version is None:
                             msg = f"Skipping {patch_source}: {exc}"
-                            warnings.warn(msg, UserWarning)
+                            report_skipped_source(msg, on_error, exc)
                         continue
                     except UnknownFiberFormatError:  # skip bad entities
-                        _warn_if_damaged_hdf5(man, patch_source)
+                        _report_if_damaged_hdf5(man, patch_source, on_error)
                         continue
-                    except PermissionError:
-                        _warn_permission_denied(patch_source)
+                    except PermissionError as exc:
+                        _report_permission_denied(patch_source, on_error, exc)
                         continue
                     # Cache this fiber io to given preferential treatment next
                     # iteration. This speeds up the common case of many files
@@ -2334,7 +2342,7 @@ def _iter_scan_results(
                     # dependency/compatibility problems as warnings and keep
                     # scanning the remaining files.
                     except DependencyError as exc:
-                        warnings.warn(str(exc), UserWarning, stacklevel=2)
+                        report_skipped_source(str(exc), on_error, exc)
                         continue
                     # A caller's error, such as a snap naming no dimension or a
                     # warning filtered into an error, is not a broken file.
@@ -2346,8 +2354,8 @@ def _iter_scan_results(
                         MemoryError,
                     ):
                         raise
-                    except PermissionError:
-                        _warn_permission_denied(patch_source)
+                    except PermissionError as exc:
+                        _report_permission_denied(patch_source, on_error, exc)
                         continue
                     # A corrupt file (#346) or a reader bug on one file, such
                     # as an overflow, skips that file rather than ending the
@@ -2355,7 +2363,7 @@ def _iter_scan_results(
                     except Exception as exc:
                         error = f"{type(exc).__name__}: {exc}"
                         msg = f"Failed to scan {patch_source}: {error}"
-                        warnings.warn(msg, UserWarning)
+                        report_skipped_source(msg, on_error, exc)
                         continue
                     # Existing directory members can change without updating
                     # its mtime. Keep every member until source IDs and positional
@@ -2372,8 +2380,8 @@ def _iter_scan_results(
                                     timestamp,
                                 )
                             ]
-                        except PermissionError:
-                            _warn_permission_denied(patch_source)
+                        except PermissionError as exc:
+                            _report_permission_denied(patch_source, on_error, exc)
                             continue
                     patches = _stamp_source_ids(
                         members,
@@ -2405,6 +2413,7 @@ def scan_payloads(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     snap: snap_type | None = None,
+    on_error: WARN_LEVELS = "warn",
 ) -> list[dc.PatchMeta]:
     """
     Scan a potential patch source and return full coordinate payloads.
@@ -2433,6 +2442,14 @@ def scan_payloads(
         `dascore.config.max_shift` steps off its grid, a reader keeps the
         labels as stored and warns, naming the file. See rule 3 of the
         [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
+    on_error
+        What to do about a source that looks like fiber data but cannot be
+        scanned (damaged, truncated, inaccessible, an unsupported version,
+        or a reader error): "warn" (the default) skips it with a warning,
+        "raise" raises a [`ScanError`](`dascore.exceptions.ScanError`)
+        chained to the original error, and "ignore" skips it silently.
+        Files no reader recognizes are always skipped silently, and
+        missing optional dependencies are reported as before.
 
     Returns
     -------
@@ -2455,6 +2472,7 @@ def scan_payloads(
             timestamp=timestamp,
             progress=progress,
             snap=snap,
+            on_error=validate_warn_level(on_error, "on_error"),
         )
     ]
 
@@ -2467,11 +2485,12 @@ def scan(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     snap: snap_type | None = None,
+    on_error: WARN_LEVELS = "warn",
 ) -> list[PatchSummary]:
     """
     Scan a potential patch source and return its patch summaries.
 
-    Inaccessible files and subdirectories are skipped with a warning.
+    Inaccessible files and subdirectories are skipped as `on_error` says.
     An inaccessible root directory raises PermissionError.
     Legacy DASDAE pickled coordinates raise DASDAEUnpickleError unless
     ``allow_dasdae_format_unpickle=True`` is enabled for trusted files.
@@ -2504,6 +2523,14 @@ def scan(
         `dascore.config.max_shift` steps off its grid, a reader keeps the
         labels as stored and warns, naming the file. See rule 3 of the
         [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
+    on_error
+        What to do about a source that looks like fiber data but cannot be
+        scanned (damaged, truncated, inaccessible, an unsupported version,
+        or a reader error): "warn" (the default) skips it with a warning,
+        "raise" raises a [`ScanError`](`dascore.exceptions.ScanError`)
+        chained to the original error, and "ignore" skips it silently.
+        Files no reader recognizes are always skipped silently, and
+        missing optional dependencies are reported as before.
 
     Returns
     -------
@@ -2530,6 +2557,7 @@ def scan(
             timestamp=timestamp,
             progress=progress,
             snap=snap,
+            on_error=validate_warn_level(on_error, "on_error"),
         )
     ]
 

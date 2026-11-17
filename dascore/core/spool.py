@@ -575,6 +575,36 @@ class Spool(NodeRepr, NamespaceOwner):
         # caller's frame detaches from the cached one on its first write.
         return present_columns(self._df.copy(deep=False))
 
+    def get_unread_sources(self) -> list[Path | UPath]:
+        """
+        Get the files a directory spool's index walked but got no patches from.
+
+        These include files no reader recognizes, such as a README, as well
+        as fiber files whose scan failed (truncated, damaged, inaccessible,
+        or hitting a reader bug), which the scan skipped with a warning.
+        The reason a file was skipped is not recorded. Use
+        `update(retry_unreadable=True)` to rescan them, such as after
+        fixing a file or a reader.
+
+        Returns
+        -------
+        Sorted paths under the directory the spool derives from, read from
+        its whole index, so a selection does not narrow them. Spools not
+        backed by a directory index return an empty list.
+
+        Examples
+        --------
+        >>> import tempfile
+        >>> from pathlib import Path
+        >>> import dascore as dc
+        >>> path = Path(tempfile.mkdtemp())
+        >>> _ = dc.get_example_patch().io.write(path / "patch.h5", "dasdae")
+        >>> _ = (path / "README.txt").write_text("not fiber data")
+        >>> spool = dc.spool(path).update()
+        >>> assert spool.get_unread_sources() == [path / "README.txt"]
+        """
+        return self._catalog.unread_sources()
+
     def __len__(self) -> int:
         """Return len of spool."""
         # Ordinary counts use SQL; patch-local filters may need the relation.
@@ -3393,6 +3423,7 @@ class Spool(NodeRepr, NamespaceOwner):
         client: ExecutorType | None = None,
         paths: Sequence[str | Path] | None = None,
         retry_unreadable: bool = False,
+        on_error: WARN_LEVELS = "warn",
     ) -> Self:
         """
         Updates the contents of the spool, return the updated spool.
@@ -3428,6 +3459,16 @@ class Spool(NodeRepr, NamespaceOwner):
             no patches, whether no reader claimed them or their scan failed,
             so a reader fix takes effect. Otherwise these are rescanned only
             once they change. Other spools ignore it.
+        on_error
+            What a directory spool does about a source that looks like fiber
+            data but cannot be read (damaged, truncated, inaccessible, an
+            unsupported version, or a reader error): "warn" (the default)
+            skips it with a warning, "raise" raises a
+            [`ScanError`](`dascore.exceptions.ScanError`), and "ignore" skips
+            it silently. A raise leaves new and changed sources unrecorded,
+            so the next update scans them again. Skipped sources are listed
+            by [`get_unread_sources`](`dascore.core.spool.Spool.get_unread_sources`).
+            Other spools ignore it.
 
         Notes
         -----
@@ -3467,6 +3508,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 client=client,
                 paths=paths,
                 retry_unreadable=retry_unreadable,
+                on_error=on_error,
             )
             return self._new_from_catalog(catalog)
         if self._file_path is not None:

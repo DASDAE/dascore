@@ -35,6 +35,10 @@ class PickleFormatDisabledError(UnknownFiberFormatError):
     """Raised when reading a pickle needs the ``allow_pickle_format`` opt-in."""
 
 
+class ScanError(DASCoreError):
+    """Raised when a scan with ``on_error="raise"`` cannot read a source."""
+
+
 class UnknownExampleError(DASCoreError):
     """Raised when an unregistered example is requested."""
 

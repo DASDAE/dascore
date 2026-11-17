@@ -28,7 +28,7 @@ import pandas as pd
 import dascore as dc
 from dascore.compat import UPath
 from dascore.config import config_attr, config_context, get_config
-from dascore.constants import INDEX_NAME, PROGRESS_LEVELS, ExecutorType
+from dascore.constants import INDEX_NAME, PROGRESS_LEVELS, WARN_LEVELS, ExecutorType
 from dascore.exceptions import InvalidIndexVersionError
 from dascore.io.core import _directory_members, is_directory_format
 from dascore.io.index.backend import get_backend
@@ -38,7 +38,11 @@ from dascore.io.index.ingest import (
     summaries_to_records,
 )
 from dascore.utils.identity import _snap_names
-from dascore.utils.misc import _iter_filesystem, suppress_warnings
+from dascore.utils.misc import (
+    _iter_filesystem,
+    suppress_warnings,
+    validate_warn_level,
+)
 from dascore.utils.paths import (
     coerce_to_local_path,
     directory_writable,
@@ -91,7 +95,7 @@ def _module_name(filename: str) -> str | None:
     )
 
 
-def _scan_batch(paths, config, parent_pid, snap=None):
+def _scan_batch(paths, config, parent_pid, snap=None, on_error="warn"):
     """
     Scan a source batch using the caller's DASCore configuration.
 
@@ -104,9 +108,9 @@ def _scan_batch(paths, config, parent_pid, snap=None):
     context_local = getattr(sys.flags, "context_aware_warnings", False)
     with config_context(config):
         if os.getpid() == parent_pid and not context_local:
-            return dc.scan(paths, progress=None, snap=snap), []
+            return dc.scan(paths, progress=None, snap=snap, on_error=on_error), []
         with suppress_warnings(action="always", record=True) as caught:
-            summaries = dc.scan(paths, progress=None, snap=snap)
+            summaries = dc.scan(paths, progress=None, snap=snap, on_error=on_error)
         records = [
             (str(w.message), w.category, _module_name(w.filename), w.filename, w.lineno)
             for w in caught
@@ -129,7 +133,7 @@ def snap_text(snap) -> str:
     return json.dumps(None if snap is None else _snap_names(snap))
 
 
-def _scan_with_client(paths, client, progress, snap=None):
+def _scan_with_client(paths, client, progress, snap=None, on_error="warn"):
     """Collect ordered scan batches from a caller-owned executor."""
     # Standard-library pools expose capacity here. Map-only clients can omit
     # it; host CPU count still gives them several batches to schedule.
@@ -138,7 +142,13 @@ def _scan_with_client(paths, client, progress, snap=None):
         workers = os.cpu_count() or 1
     size = max(1, math.ceil(len(paths) / (4 * workers)))
     batches = [paths[start : start + size] for start in range(0, len(paths), size)]
-    func = partial(_scan_batch, config=get_config(), snap=snap, parent_pid=os.getpid())
+    func = partial(
+        _scan_batch,
+        config=get_config(),
+        snap=snap,
+        on_error=on_error,
+        parent_pid=os.getpid(),
+    )
     results = client.map(func, batches)
     summaries = []
     try:
@@ -390,7 +400,7 @@ class DBDirectoryIndexer:
         """Return True when a directory is itself one FiberIO scan unit."""
         return is_directory_format(path)
 
-    def _walk(self, scopes=None) -> dict[str, tuple[int, int, Path]]:
+    def _walk(self, scopes=None, on_error="warn") -> dict[str, tuple[int, int, Path]]:
         """
         Walk the spool directory (or only scopes), honoring scan units.
 
@@ -406,17 +416,19 @@ class DBDirectoryIndexer:
         files: dict[str, tuple[int, int, Path]] = {}
         if scopes is None or not self.path.is_dir():
             # A vanished root raises here rather than reading as deletions.
-            self._walk_root(self.path, files)
+            self._walk_root(self.path, files, on_error)
         for scope in scopes or ():
             # A scope that no longer exists contributes nothing, so its rows
             # are pruned as stale.
             if (root := self.path / scope).exists():
-                self._walk_root(root, files)
+                self._walk_root(root, files, on_error)
         return files
 
-    def _walk_root(self, root: Path, files: dict) -> None:
+    def _walk_root(self, root: Path, files: dict, on_error="warn") -> None:
         """Add the scan units under one root to files."""
-        gen = _iter_filesystem(root, ext=self.ext, include_directories=True)
+        gen = _iter_filesystem(
+            root, ext=self.ext, include_directories=True, on_error=on_error
+        )
         signal = None
         while True:
             try:
@@ -540,6 +552,7 @@ class DBDirectoryIndexer:
         *,
         client: ExecutorType | None = None,
         retry_unreadable: bool = False,
+        on_error: WARN_LEVELS = "warn",
     ) -> Self:
         """
         Update the index: scan new/changed sources, drop removed ones.
@@ -558,8 +571,11 @@ class DBDirectoryIndexer:
         drops its old row. None, or an index that was rebuilt or never
         finished its first update, walks everything.
         retry_unreadable also rescans walked sources that gave no patches.
+        on_error says what the walk and scan do about a source they cannot
+        read: warn and skip, raise ScanError, or skip silently.
         """
         progress = validate_progress_level(progress)
+        on_error = validate_warn_level(on_error, "on_error")
         self._check_decode()
         legacy = self.path / ".dascore_index.h5"
         if legacy.exists() and self._is_legacy_or_foreign_index(legacy):
@@ -592,7 +608,7 @@ class DBDirectoryIndexer:
             warnings.warn(msg, UserWarning, stacklevel=2)
         scoped = paths is not None and not unfinished
         scopes = self._scopes(paths, stored) if scoped else None
-        files = self._walk(scopes)
+        files = self._walk(scopes, on_error)
         if scopes is None:
             stale = [path for path in stored if path not in files]
         else:
@@ -625,9 +641,16 @@ class DBDirectoryIndexer:
             # scanned under the decode the index records, as reads are
             with config_context(max_shift=self.max_shift):
                 summaries = (
-                    dc.scan(scan_paths, progress=progress, snap=self.snap)
+                    dc.scan(
+                        scan_paths,
+                        progress=progress,
+                        snap=self.snap,
+                        on_error=on_error,
+                    )
                     if client is None
-                    else _scan_with_client(scan_paths, client, progress, self.snap)
+                    else _scan_with_client(
+                        scan_paths, client, progress, self.snap, on_error
+                    )
                 )
             # scan reports absolute source paths; stat maps use them too
             records = summaries_to_records(

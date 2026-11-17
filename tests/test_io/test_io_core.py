@@ -33,6 +33,7 @@ from dascore.exceptions import (
     ParameterError,
     PatchAttributeError,
     RemoteCacheError,
+    ScanError,
     UnknownFiberFormatError,
 )
 from dascore.io import core as io_core
@@ -1688,6 +1689,76 @@ class TestScan:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert dc.scan(tmp_path, progress=None) == []
+
+
+class TestScanOnError:
+    """Tests for the on_error policy of scan and scan_payloads."""
+
+    @pytest.fixture
+    def truncated_dir(self, tmp_path, random_patch):
+        """A directory with a good DASDAE file and a truncated one."""
+        random_patch.io.write(tmp_path / "good.h5", "dasdae")
+        truncated = tmp_path / "truncated.h5"
+        random_patch.io.write(truncated, "dasdae")
+        raw = truncated.read_bytes()
+        truncated.write_bytes(raw[: len(raw) // 2])
+        return tmp_path
+
+    @pytest.mark.parametrize("func", [dc.scan, dc.scan_payloads])
+    def test_raise_damaged(self, truncated_dir, func):
+        """A damaged file raises ScanError naming it, chained to the cause."""
+        with pytest.raises(ScanError, match=r"truncated\.h5") as info:
+            func(truncated_dir, progress=None, on_error="raise")
+        assert info.value.__cause__ is not None
+
+    def test_ignore_damaged(self, truncated_dir):
+        """A damaged file is skipped without a warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = dc.scan(truncated_dir, progress=None, on_error="ignore")
+        assert [Path(x.source_path).name for x in out] == ["good.h5"]
+
+    def test_raise_permission(self, tmp_path, random_patch, monkeypatch):
+        """An inaccessible file raises ScanError chained to PermissionError."""
+        denied = tmp_path / "denied.h5"
+        random_patch.io.write(denied, "dasdae")
+        get_resource = IOResourceManager.get_resource
+
+        def guarded_resource(manager, required_type):
+            if Path(manager.source) == denied:
+                raise PermissionError(f"Permission denied: {denied}")
+            return get_resource(manager, required_type)
+
+        monkeypatch.setattr(IOResourceManager, "get_resource", guarded_resource)
+        with pytest.raises(ScanError, match="Permission denied") as info:
+            dc.scan(denied, progress=None, on_error="raise")
+        assert isinstance(info.value.__cause__, PermissionError)
+
+    def test_raise_reader_error(self, tmp_path, random_patch, monkeypatch):
+        """A reader failing on a file raises ScanError chained to its error."""
+        path = tmp_path / "patch.h5"
+        random_patch.io.write(path, "dasdae")
+        fiber_io = type(FiberIO.manager.get_fiberio(format="DASDAE", version="2"))
+
+        def broken(*args, **kwargs):
+            raise ValueError("reader bug")
+
+        monkeypatch.setattr(fiber_io, "scan", broken)
+        with pytest.raises(ScanError, match="reader bug") as info:
+            dc.scan(path, progress=None, on_error="raise")
+        assert isinstance(info.value.__cause__, ValueError)
+
+    def test_foreign_files_do_not_raise(self, tmp_path):
+        """Files no reader recognizes are skipped even with on_error='raise'."""
+        (tmp_path / "README.txt").write_text("not fiber data")
+        with h5py.File(tmp_path / "other.h5", "w") as handle:
+            handle["data"] = [1, 2, 3]
+        assert dc.scan(tmp_path, progress=None, on_error="raise") == []
+
+    def test_bad_value(self, tmp_path):
+        """An unknown on_error value raises ParameterError."""
+        with pytest.raises(ParameterError, match="on_error"):
+            dc.scan(tmp_path, progress=None, on_error="explode")
 
     def test_unreadable_bytes_stay_silent(self, tmp_path, monkeypatch):
         """A file whose bytes cannot be read for the signature skips silently."""
