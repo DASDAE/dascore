@@ -335,8 +335,12 @@ class TestUpdateExecutor:
         assert record[2] == "dascore.io.core"
         with pytest.warns(UserWarning, match="Failed to scan") as caught:
             indexer_module._replay_warning(*record)
-            indexer_module._replay_warning(*record[:2], None, *record[3:])
-        assert {Path(w.filename).name for w in caught} == {"core.py"}
+        assert Path(caught[0].filename).name == "core.py"
+        # A warning from no loaded module still reaches the caller's filters.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(UserWarning, match="Failed to scan"):
+                indexer_module._replay_warning(*record[:2], None, *record[3:])
 
     def test_config_and_lifecycle(self, directory, client):
         """Workers inherit scoped config; changed and deleted files refresh."""
