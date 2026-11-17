@@ -809,14 +809,61 @@ class TestSpoolSetBackend:
         monkeypatch.undo()
         np.testing.assert_array_equal(to_numpy(out.data), expected.data)
 
-    def test_concatenated_on_mixed_libraries(self, spool, strict):
-        """Patches on different libraries are joined through NumPy, said."""
+    @pytest.mark.parametrize("call", ("chunk", "concatenate"))
+    def test_numpy_patches_join_another_library(self, spool, strict, call, monkeypatch):
+        """Patches in NumPy beside another library's are joined on that library."""
         held = dc.spool([spool[0].set_backend(STRICT), *list(spool)[1:]])
+        expected = getattr(spool, call)(time=None)[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            _refuse_numpy(monkeypatch)
+            out = getattr(held, call)(time=None)[0]
+        monkeypatch.undo()
+        assert out.backend == STRICT
+        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    def test_numpy_patches_beside_dask_stay_dask(self, spool):
+        """Beside dask, NumPy patches join the dask graph and nothing is computed."""
+        dask_array = pytest.importorskip("dask.array")
+        callbacks = pytest.importorskip("dask.callbacks")
+        first = spool[0]
+        lazy_first = first.new(data=dask_array.from_array(first.data, chunks=-1))
+        held = dc.spool([lazy_first, *list(spool)[1:]])
+        expected = spool.concatenate(time=None)[0]
+        computed = []
+        counter = callbacks.Callback(posttask=lambda *x: computed.append(1))
+        with counter, warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = held.concatenate(time=None)[0]
+        assert out.backend == "dask" and not computed
+        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    def test_two_other_libraries_are_joined_through_numpy(self, spool, strict):
+        """Patches on two libraries other than NumPy meet in NumPy, said."""
+        dask_array = pytest.importorskip("dask.array")
+        first = spool[0]
+        on_dask = first.new(data=dask_array.from_array(first.data, chunks=-1))
+        held = dc.spool([on_dask, *[x.set_backend(STRICT) for x in list(spool)[1:]]])
         expected = spool.concatenate(time=None)[0]
         with pytest.warns(NumpyFallbackWarning, match="cannot be joined on one"):
             out = held.concatenate(time=None)[0]
         assert out.backend == "numpy"
         np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_fill_onto_a_grid_on_another_library_is_said(self, whole, tmp_path):
+        """Placing members of another library onto a grid converts them, said."""
+        pytest.importorskip("dask.array")
+        size = whole.shape[whole.get_axis("time")]
+        parts = [
+            whole.select(time=(0, size // 4), samples=True),
+            whole.select(time=(size // 2, size), samples=True),
+        ]
+        held = dc.spool([x.set_backend("dask") for x in parts])
+        time = whole.get_coord("time")
+        # A part of the filled stretch, which is placed onto its grid.
+        window = (time[size // 10], time[3 * size // 4])
+        with pytest.warns(NumpyFallbackWarning, match="Filling onto a grid"):
+            held.fill_gaps(time=None).select(time=window)[0]
 
     def test_new_dimension_on_another_library(self, spool, strict, monkeypatch):
         """A new dimension is added by the library the data are on."""

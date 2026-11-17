@@ -280,6 +280,12 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
         # As NumPy always has: its own promotion of mixed dtypes, and speed.
         parts = [x[..., None] for x in arrays] if new_axis else arrays
         return np.concatenate(parts, axis=axis)
+    # Arrays NumPy holds join others on their library: putting them there
+    # takes nothing through NumPy, as dask's own join of them never did.
+    others = {backend_name(x) for x in arrays if not is_numpy(x)}
+    if len(others) == 1 and NUMPY_BACKEND not in others:
+        like = next(x for x in arrays if not is_numpy(x))
+        arrays = [asarray_like(x, like) if is_numpy(x) else x for x in arrays]
     libraries = {backend_name(x) for x in arrays}
     # Something NumPy takes only through `__array__`, which may read it.
     held = libraries == {NUMPY_BACKEND}

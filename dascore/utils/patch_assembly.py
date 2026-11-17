@@ -41,6 +41,7 @@ from dascore.lazy.recipe import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import (
     _as_numpy_dtype,
+    backend_name,
     decide_fallback,
     is_numpy,
     lazy_read_backend,
@@ -598,7 +599,7 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
         patch = patch.load()
     if dtype and patch.data.dtype != np.dtype(dtype):  # as its row states it
         with operation_context():
-            patch = patch.new(data=to_numpy(patch.data).astype(dtype))
+            patch = patch.new(data=cast_on_library(patch.data, np.dtype(dtype)))
     # the size `Spool.fill_gaps` gave: samples and one, every gap, or a width
     tol = merge["tolerance"]
     samples = tol.count is not None and bool(np.isfinite(tol.count))
@@ -611,6 +612,13 @@ def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     first = round(grid._samples_in((coord[0] - grid[0]) * sign)) if len(grid) else 0
     start, stop = max(-first, 0), min(len(coord), len(grid) - first)
     blocks = ((start, stop, first + start),) if stop > start else ()
+    if not is_numpy(patch.data):
+        # Placed on the grid by writing into a NumPy array.
+        decide_fallback(
+            f"Filling onto a grid has no {backend_name(patch.data)} implementation",
+            "the data were converted to numpy",
+            lazy=False,
+        )
     data = to_numpy(patch.data)
     fill = _fill_scalar(fill_value, data.dtype)
     data = _place_blocks(data, patch.get_axis(dim), len(grid), blocks, fill)
