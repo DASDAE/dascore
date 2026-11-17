@@ -61,7 +61,7 @@ A chunk is a box of the array: one slice for each axis. A contract says which bo
 | Contract | A box of the output needs | Stated by |
 |---|---|---|
 | `Pointwise` | the same box of the input | `abs`, `real`, `imag`, `angle`, `conj` |
-| `Halo` | the same box and a fixed number of samples around it, stopping at the ends of the array | `median_filter`, `gaussian_filter`, and `savgol_filter` with an edge mode other than its default |
+| `Halo` | the same box and a fixed number of samples around it, stopping at the ends of the array | `median_filter`, `gaussian_filter`, and `savgol_filter` with an edge mode other than its default; `pass_filter` and `notch_filter` called on a [`Patch.impulse_window`](`dascore.Patch.impulse_window`), by the reach their response to an impulse measures |
 | `WholeAxis` | the whole of some axes, and the same place along the others | `pass_filter`; the three above when their edge mode wraps; `savgol_filter` in its default mode, which fits a polynomial to each end of what it is given |
 | `Window` | the same box moved by where a selection starts | `select` with ranges |
 | `Tiles` | the tiles which overlap the box, each whole; along the other axes, what the operation in the window states | a patch operation called on a [`Patch.window`](`dascore.Patch.window`) |

@@ -190,6 +190,10 @@ class PatchProcessor(DascoreBaseModel):
     # a method of this name instead, `position_free(self, dims)`, given the
     # dimensions whose start may move.
     position_free: ClassVar[bool] = False
+    # Whether the operation is linear and acts the same at every position,
+    # so its response to one impulse says what it does to any data, which
+    # is what `Patch.impulse_window` measures its reach from.
+    linear: ClassVar[bool] = False
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
     # The fields a call may give positionally, in order; None for all.

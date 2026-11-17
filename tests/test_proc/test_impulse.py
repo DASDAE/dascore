@@ -1,0 +1,347 @@
+"""Tests for impulse windows: a linear operation cut by its measured reach."""
+
+from __future__ import annotations
+
+import warnings
+
+import numpy as np
+import pytest
+
+import dascore as dc
+from dascore.config import config_context
+from dascore.exceptions import ParameterError
+from dascore.lazy.contract import Halo, WholeAxis
+from dascore.lazy.execute import chunk_boxes
+from dascore.proc import impulse as impulse_module
+from dascore.proc.impulse import Impulsed, PatchImpulseWindow
+from dascore.utils.array_api import to_numpy
+from dascore.warnings import NumpyFallbackWarning
+
+
+@pytest.fixture(scope="module")
+def patch():
+    """One channel, long in time, so lazy boxes cut along time."""
+    return dc.get_example_patch("random_das", shape=(1, 40000))
+
+
+@pytest.fixture(scope="module")
+def two_rows():
+    """Two channels, to filter along distance as well."""
+    return dc.get_example_patch("random_das", shape=(40, 4000))
+
+
+def _stored(patch, tmp_path_factory, name):
+    """The patch written to a file and read back lazily."""
+    path = tmp_path_factory.mktemp(name) / f"{name}.h5"
+    dc.write(patch, path, "dasdae")
+    return dc.read(path)[0].set_backend("lazy")
+
+
+@pytest.fixture(scope="module")
+def lazy(patch, tmp_path_factory):
+    """The long patch, lazy."""
+    return _stored(patch, tmp_path_factory, "impulse")
+
+
+def _reach(operation, patch, **tolerances):
+    """The reach measured along each windowed axis, as (axis, before, after)."""
+    _, plan = Impulsed(operation, **tolerances).get_metadata(patch.drop_data())
+    return plan["halo"]
+
+
+def _loaded_in_boxes(lazy_patch, boxes=16):
+    """A lazy patch loaded with a block size which cuts it into about `boxes`."""
+    size = lazy_patch.data.dtype.itemsize * np.prod(lazy_patch.shape) // boxes
+    with config_context(lazy_block_size=int(size)):
+        assert len(chunk_boxes(lazy_patch.data)) > 1
+        return lazy_patch.load()
+
+
+def _relative_error(found, expected) -> float:
+    """The largest difference, as a fraction of the largest value."""
+    return np.abs(found - expected).max() / np.abs(expected).max()
+
+
+class TestInMemory:
+    """Data in memory are computed whole, exactly as the operation alone."""
+
+    def test_exact(self, patch):
+        """The values are those of the operation alone, to the bit."""
+        out = patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        expected = patch.pass_filter(time=(1, 20))
+        assert np.array_equal(out.data, expected.data)
+        assert out.coords == expected.coords and out.dtype == expected.dtype
+
+    def test_history_and_id(self, patch):
+        """The window is recorded, and enters the id."""
+        out = patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        again = patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        plain = patch.pass_filter(time=(1, 20))
+        history = out.attrs.history[-1]
+        assert history.startswith("impulse_window(time='1e-06').pass_filter(")
+        assert out.attrs.data_id == again.attrs.data_id != plain.attrs.data_id
+        other = patch.impulse_window(time=1e-3).pass_filter(time=(1, 20))
+        assert other.attrs.data_id != out.attrs.data_id
+
+    def test_another_library(self, patch):
+        """On another library the operation's kernel for it runs, whole."""
+        strict = pytest.importorskip("array_api_strict")
+        there = patch.set_backend("array_api_strict")
+        with pytest.warns(NumpyFallbackWarning, match="pass_filter has no"):
+            out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        assert type(out.data) is type(strict.asarray(np.zeros(1)))
+        expected = patch.pass_filter(time=(1, 20))
+        np.testing.assert_allclose(to_numpy(out.data), expected.data)
+
+
+class TestReach:
+    """The reach is what the operation's response to an impulse shows."""
+
+    def test_zero_phase_is_symmetric(self, patch):
+        """A filter run forwards and back reaches as far each way."""
+        ((axis, before, after),) = _reach(
+            dc.proc.PassFilter(time=(1, 20)), patch, time=1e-6
+        )
+        assert axis == patch.get_axis("time") and before == after > 0
+
+    def test_causal_reaches_back(self, patch):
+        """A causal filter's output reads only the input before it."""
+        operation = dc.proc.PassFilter(time=(1, 20), zerophase=False)
+        ((_, before, after),) = _reach(operation, patch, time=1e-6)
+        assert before > 0 and after == 0
+
+    def test_smaller_tolerance_reaches_further(self, patch):
+        """The less may lie beyond, the further the reach."""
+        operation = dc.proc.PassFilter(time=(1, 20))
+        reaches = [_reach(operation, patch, time=x)[0][1] for x in (1e-3, 1e-6, 1e-9)]
+        assert reaches == sorted(reaches) and len(set(reaches)) == 3
+
+    def test_tail_reach(self):
+        """The reach is the fewest samples beyond which the rest is small."""
+        response = np.array([4.0, 2.0, 1.0, 0.5, 0.25, 0.25])
+        # Beyond 2 samples: 0.5 + 0.25 + 0.25 = 1, an eighth of 8.
+        assert impulse_module._tail_reach(response, 1 / 8 + 1e-9) == 2
+        assert impulse_module._tail_reach(response, 1 / 8 - 1e-9) == 3
+        assert impulse_module._tail_reach(np.zeros(4), 0.1) == 0
+
+    def test_oldest_measurement_is_let_go(self, patch, monkeypatch):
+        """Only so many measurements are kept; the oldest goes first."""
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        monkeypatch.setattr(impulse_module, "_MEASURED_LIMIT", 2)
+        for low in (1, 2, 3):
+            _reach(dc.proc.PassFilter(time=(low, 20)), patch, time=1e-5)
+        assert len(impulse_module._MEASURED) == 2
+
+    def test_measured_once_for_a_plan(self, patch, monkeypatch):
+        """The measurement is kept for the plan, and not made again."""
+        calls = []
+        original = impulse_module._impulsed
+
+        def counted(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(impulse_module, "_impulsed", counted)
+        operation = dc.proc.PassFilter(time=(2, 30), corners=3)
+        _reach(operation, patch, time=1e-5)
+        first = len(calls)
+        _reach(operation, patch, time=1e-5)
+        assert first and len(calls) == first
+
+    def test_along_two_dimensions(self, two_rows):
+        """A filter along two dimensions has a reach along each."""
+        operation = dc.proc.NotchFilter(time=60, distance=0.2, q=30)
+        halo = _reach(operation, two_rows, time=1e-6, distance=1e-6)
+        assert {x[0] for x in halo} == {0, 1}
+        assert all(before > 0 and after > 0 for _, before, after in halo)
+
+
+class TestLazy:
+    """A lazy patch is computed a chunk at a time, within the tolerance."""
+
+    @pytest.mark.parametrize("zerophase", (True, False))
+    @pytest.mark.parametrize("tolerance", (1e-3, 1e-6, 1e-9))
+    def test_within_tolerance(self, patch, lazy, zerophase, tolerance):
+        """Cut along time, the result is the exact one to about the tolerance."""
+        expected = patch.pass_filter(time=(1, 20), zerophase=zerophase)
+        out = lazy.impulse_window(time=tolerance).pass_filter(
+            time=(1, 20), zerophase=zerophase
+        )
+        assert out.backend == "lazy"
+        loaded = _loaded_in_boxes(out)
+        assert loaded.attrs == out.attrs and loaded.dtype == expected.dtype
+        assert _relative_error(loaded.data, expected.data) < 4 * tolerance
+
+    def test_notch(self, patch, lazy):
+        """A notch filter, which cannot run lazily alone, runs in pieces."""
+        expected = patch.notch_filter(time=60, q=30)
+        out = lazy.impulse_window(time=1e-6).notch_filter(time=60, q=30)
+        assert _relative_error(_loaded_in_boxes(out).data, expected.data) < 4e-6
+
+    def test_same_id_as_in_memory(self, patch, lazy):
+        """Lazy or in memory, the call is the same and so is its id."""
+        out = lazy.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        eager = patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        assert out.attrs.data_id == eager.attrs.data_id
+
+    def test_contract(self, patch):
+        """A chunk is read with the reach around it along each axis."""
+        windowed = Impulsed(dc.proc.PassFilter(time=(1, 20)), time=1e-6)
+        _, plan = windowed.get_metadata(patch.drop_data())
+        contract = windowed.chunk_contract(patch.dtype, plan)
+        ((axis, before, after),) = plan["halo"]
+        assert contract == Halo({axis: (before, after)})
+
+    def test_integers_state_the_dtype_made(self, tmp_path_factory):
+        """The dtype stated ahead is the one the filter makes of integers."""
+        ints = dc.get_example_patch("random_das", shape=(1, 8000))
+        ints = ints.new(data=(ints.data * 100).astype(np.int16))
+        lazy = _stored(ints, tmp_path_factory, "ints")
+        out = lazy.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        expected = ints.pass_filter(time=(1, 20))
+        assert out.dtype == expected.dtype == np.dtype(np.float64)
+        loaded = _loaded_in_boxes(out, boxes=4)
+        assert _relative_error(loaded.data, expected.data) < 4e-6
+
+
+class TestDask:
+    """A dask array is computed a chunk at a time, read with the reach."""
+
+    @pytest.mark.parametrize("chunks", ((1, 500), (1, 7000), (1, 40000)))
+    def test_within_tolerance(self, patch, chunks):
+        """Whatever the chunks, nothing is computed at the call, and it is close."""
+        dask_array = pytest.importorskip("dask.array")
+        callbacks = pytest.importorskip("dask.callbacks")
+        there = patch.new(data=dask_array.from_array(patch.data, chunks=chunks))
+        computed = []
+        with callbacks.Callback(posttask=lambda *x: computed.append(1)):
+            out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        assert out.backend == "dask" and not computed
+        # In the chunks the data came in, though they are shorter than the reach.
+        assert out.data.chunks == there.data.chunks
+        expected = patch.pass_filter(time=(1, 20))
+        assert _relative_error(out.data.compute(), expected.data) < 4e-6
+
+
+class TestUnsettled:
+    """A response which does not fall under its tolerance in the longest probe."""
+
+    def test_raises_by_default(self, patch, monkeypatch):
+        """Refused, naming the tolerance and what to do."""
+        monkeypatch.setattr(impulse_module, "_LAST_PROBE", 256)
+        monkeypatch.setattr(impulse_module, "_FIRST_PROBE", 128)
+        with pytest.raises(ParameterError, match="does not fall under"):
+            patch.impulse_window(time=1e-9).pass_filter(time=(0.5, 2))
+
+    def test_whole_axis(self, patch, monkeypatch):
+        """Or the dimension is needed whole, as the operation alone needs it."""
+        monkeypatch.setattr(impulse_module, "_LAST_PROBE", 256)
+        monkeypatch.setattr(impulse_module, "_FIRST_PROBE", 128)
+        operation = dc.proc.PassFilter(time=(0.5, 2))
+        windowed = Impulsed(operation, on_unsettled="whole", time=1e-9)
+        _, plan = windowed.get_metadata(patch.drop_data())
+        assert windowed.chunk_contract(patch.dtype, plan) == WholeAxis((1,))
+        out = patch.impulse_window(on_unsettled="whole", time=1e-9).pass_filter(
+            time=(0.5, 2)
+        )
+        assert np.array_equal(out.data, patch.pass_filter(time=(0.5, 2)).data)
+
+
+class TestRefused:
+    """What an impulse window cannot run is refused when it is called."""
+
+    def test_operation_not_linear(self, patch):
+        """An operation which does not say it is linear says nothing by its response."""
+        with pytest.raises(ParameterError, match="linear and acts the same"):
+            patch.impulse_window(time=1e-6).detrend("time")
+
+    def test_dimension_without_tolerance(self, patch):
+        """Every dimension the operation reaches along needs a tolerance."""
+        with pytest.raises(ParameterError, match=r"gives no\s+tolerance"):
+            patch.impulse_window(distance=1e-6).pass_filter(time=(1, 20))
+
+    def test_dimension_not_reached(self, patch):
+        """A tolerance along a dimension it does not reach needs nothing."""
+        operation = dc.proc.PassFilter(time=(1, 20))
+        halo = _reach(operation, patch, time=1e-6, distance=1e-6)
+        assert (0, 0, 0) in halo
+
+    def test_unknown_dimension(self, patch):
+        """A dimension the patch lacks is refused."""
+        with pytest.raises(ParameterError, match="lacks"):
+            patch.impulse_window(depth=1e-6).pass_filter(time=(1, 20))
+
+    @pytest.mark.parametrize("value", (0, 1, 1.5, -1e-3, True, "small"))
+    def test_tolerance_is_a_fraction(self, patch, value):
+        """A tolerance is a fraction of the whole response."""
+        with pytest.raises(ParameterError, match="between 0 and 1"):
+            patch.impulse_window(time=value).pass_filter(time=(1, 20))
+
+    def test_no_tolerance(self, patch):
+        """At least one dimension and its tolerance."""
+        with pytest.raises(ParameterError, match="needs a dimension"):
+            patch.impulse_window().pass_filter(time=(1, 20))
+
+    def test_unsettled_option(self, patch):
+        """What to do when it does not settle is one of two."""
+        with pytest.raises(ParameterError, match="on_unsettled"):
+            Impulsed(dc.proc.PassFilter(time=(1, 20)), on_unsettled="x", time=1e-6)(
+                patch
+            )
+
+    def test_not_a_processor(self, patch):
+        """A function is not an operation."""
+        with pytest.raises(ParameterError, match="runs a PatchProcessor"):
+            Impulsed(np.abs, time=1e-6)(patch)
+
+    def test_shape_changes(self, patch):
+        """An operation which changes the shape is refused."""
+
+        class Halves(dc.PatchProcessor):
+            """A linear operation which keeps every second sample."""
+
+            name = None
+            linear = True
+            position_free = True
+
+            def get_metadata(self, meta):
+                coords, _ = meta.coords.isel(time=slice(None, None, 2))
+                return meta.new(coords=coords), {}
+
+            def kernel(self, data):
+                return data[..., ::2]
+
+        with pytest.raises(ParameterError, match="changes the patch's shape"):
+            Impulsed(Halves(), time=1e-6)(patch)
+
+    def test_takes_another_patch(self, patch):
+        """An operation given another patch is refused."""
+
+        class Adds(dc.PatchProcessor):
+            """A linear operation which adds another patch."""
+
+            name = None
+            linear = True
+            position_free = True
+            other: object = None
+
+            def kernel(self, data):
+                return data
+
+        with pytest.raises(ParameterError, match="takes another patch"):
+            Impulsed(Adds(other=patch), time=1e-6)(patch)
+
+    @pytest.mark.parametrize("name", ("not_a_method", "_private", "rolling"))
+    def test_not_an_operation(self, patch, name):
+        """Only an operation written as a processor is found on the window."""
+        window = patch.impulse_window(time=1e-6)
+        assert isinstance(window, PatchImpulseWindow)
+        with pytest.raises(AttributeError):
+            getattr(window, name)
+
+
+def test_no_warnings_in_memory(patch):
+    """Measuring says nothing of its probes."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        patch.impulse_window(time=1e-6).notch_filter(time=60, q=30)

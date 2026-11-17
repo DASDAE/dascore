@@ -179,6 +179,8 @@ class PassFilter(PatchProcessor):
 
     # The plan never reads where the coordinates start.
     position_free = True
+    # A recursive filter: its response to an impulse is what it does.
+    linear = True
 
     def get_metadata(self, meta):
         """Return the axis and the filter's second-order sections."""
@@ -409,6 +411,8 @@ class NotchFilter(PatchProcessor):
 
     # The plan never reads where the coordinates start.
     position_free = True
+    # A recursive filter: its response to an impulse is what it does.
+    linear = True
 
     def get_metadata(self, meta):
         """Return the axis and filter coefficients of each dimension."""

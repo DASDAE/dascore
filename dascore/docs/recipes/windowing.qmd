@@ -74,6 +74,20 @@ assert np.array_equal(np.isnan(energy.data), np.isnan(whole.data))
 
 For a patch operation, data on an array backend other than NumPy stay where they are. A dask array is computed a piece at a time, each from the windows which overlap it, so nothing is computed when the operation is called. On any other backend the windows are cut, run and blended there, which is several array operations for each window and so slower than NumPy; an operation with no implementation for the backend is converted through NumPy as it is outside a window.
 
+## A recursive filter in pieces
+
+`pass_filter` and `notch_filter` reach across their whole axis, so on a lazy patch they need it whole. Their response to one sample decays, though, and [`Patch.impulse_window`](`dascore.Patch.impulse_window`) measures how far it reaches before what is left is under a tolerance. A lazy or dask patch is then filtered a chunk at a time, each read with that much around it, and the result is within about the tolerance of the exact one. Data in memory are filtered whole, exactly.
+
+```{python}
+patch = dc.get_example_patch()
+exact = patch.pass_filter(time=(1, 20))
+cut = patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+assert np.array_equal(cut.data, exact.data)
+print(cut.attrs.history[-1])
+```
+
+The tolerance is the fraction of the summed absolute response which may lie beyond the reach. A causal filter (`zerophase=False`) reads only the samples before each output sample, so it reaches one way.
+
 ## Tiles, blended
 
 `apply` passes an `[n_tiles, *window]` array to a function and blends its same-shaped result with complementary tapers. An identity function reconstructs the input exactly. This example applies windowed automatic gain control:

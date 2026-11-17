@@ -24,6 +24,7 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
+from dascore.proc.impulse import PatchImpulseWindow
 from dascore.proc.window import PatchWindow
 from dascore.transform.spectral_descriptors import (
     NegativeFrequencies,
@@ -1134,6 +1135,51 @@ class Patch(NamespaceOwner, PatchMeta):
             align=align,
             fill=fill,
         )
+
+    def impulse_window(
+        self, /, *, on_unsettled: Literal["raise", "whole"] = "raise", **kwargs
+    ) -> PatchImpulseWindow:
+        """
+        Return the patch, to run a linear operation in pieces cut by its reach.
+
+        A recursive filter reaches across a whole axis in principle and a
+        short distance in practice: its response to one sample decays. An
+        operation called on what this returns measures that distance from
+        its response to an impulse and, on a lazy or dask patch, computes
+        a chunk at a time, each read with that much around it, which is
+        then discarded. The result differs from the operation's own by at
+        most about the tolerance, where the operation alone would need its
+        axis whole.
+
+        Parameters
+        ----------
+        on_unsettled
+            What to do when the response along a dimension does not fall
+            under its tolerance within the longest probe: ``"raise"``, the
+            default, or ``"whole"``, which needs that dimension whole.
+        **kwargs
+            A tolerance for each dimension the operation reaches along: the
+            fraction of the summed absolute response to an impulse which
+            may lie beyond the reach, such as ``time=1e-6``.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> out = patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        >>> assert out.equals(patch.pass_filter(time=(1, 20)))
+
+        Notes
+        -----
+        - Only an operation which is linear and acts the same at every
+          position can be run so, which its class says by `linear` and
+          `position_free`: `pass_filter` and `notch_filter`.
+        - Data in memory are computed whole, exactly as the operation
+          alone computes them: in memory nothing is gained by cutting.
+        - The measurement depends on the operation's plan alone, and is
+          kept for it.
+        """
+        return PatchImpulseWindow(self, kwargs, on_unsettled=on_unsettled)
 
     def pow_coord(self, relative: bool = True, **kwargs) -> Self:
         """Scale the data by coordinate values raised to a power."""
