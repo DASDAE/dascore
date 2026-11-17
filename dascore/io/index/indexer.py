@@ -116,14 +116,12 @@ def _scan_batch(paths, config, parent_pid, snap=None):
 
 def _replay_warning(message, category, module, filename, lineno):
     """Warn as the recorded module would, sharing its once-per-location registry."""
-    if (source := sys.modules.get(module or "")) is None:
-        # Passing module=None explicitly would drop the warning unfiltered.
-        warnings.warn_explicit(message, category, filename, lineno)
-        return
-    registry = vars(source).setdefault("__warningregistry__", {})
-    warnings.warn_explicit(
-        message, category, filename, lineno, module=module, registry=registry
-    )
+    # Passing module=None explicitly would drop the warning unfiltered.
+    options = {}
+    if (source := sys.modules.get(module or "")) is not None:
+        registry = vars(source).setdefault("__warningregistry__", {})
+        options = {"module": module, "registry": registry}
+    warnings.warn_explicit(message, category, filename, lineno, **options)
 
 
 def snap_text(snap) -> str:
