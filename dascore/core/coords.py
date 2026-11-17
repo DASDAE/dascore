@@ -51,7 +51,6 @@ from dascore.models import (
     sensible_model_equals,
     values_equal,
 )
-from dascore.models.types import _to_unit_quantity
 from dascore.units import (
     Quantity,
     Unit,
@@ -376,9 +375,6 @@ def _coord_summary(fields: dict[str, Any], update=None) -> CoordSummary:
     makes, so those are applied here; ``update`` then overrides fields.
     """
     _cast_summary_values(fields)
-    units = fields.get("units")
-    if units is not None and not isinstance(units, Quantity):
-        fields["units"] = _to_unit_quantity(units)
     fields["dims"] = tuple(fields.get("dims", ()))
     if (length := fields.get("len")) is not None:
         fields["len"] = int(length)
