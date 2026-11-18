@@ -31,7 +31,7 @@ Writers also create a one-row `patch_row_floor` table when they first need it (s
 
 Each unique coordinate is stored once in `coord_defs`; `patch_coords` links it to every patch that uses it.
 
-Matching ranges never imply matching values. Evenly spaced (range) coordinates are identified by an exact `data_id` computed from their values. Other coordinates get a value identity only when the file scan provides one; without it they are deduplicated by their summary, which saves storage but does not mark their values as equal. Units are part of the identity: the same length written in metres and in centimetres is two coordinates.
+Matching ranges never imply matching values. Evenly spaced (range) coordinates are identified by an exact `data_id` computed from their values. Other coordinates get a value identity only when the file scan provides one; without it they are deduplicated by their summary, which saves storage but does not mark their values as equal. Units are part of the identity: the same length written in metres and in centimetres is two coordinates. A row stores its identity once, as `def_key`: `fp:` followed by the coordinate's `data_id` for a value identity, or `sum:` followed by a hash of the summary otherwise, so the `data_id` is read back from the key rather than stored again. `patch_coords` is a `WITHOUT ROWID` table clustered on `(patch_row, coord_name)`, so that key is stored once rather than in the table and again in an index.
 
 A `coord_defs` row describes a coordinate the same way the coordinate describes itself (rule 12 of the [coordinate guidelines](coordinates.qmd)):
 
@@ -202,7 +202,7 @@ assert cat.resolve_row(row.to_dict()) is patch
 
 A patch whose dimensional coordinates have several segments is still one row; the index stores its runs, so reports and plans see the gaps.
 
-Patches from files are identified by `(base_uri, source_path, source_patch_key)` and loaded through their readers.
+Patches from files are identified by `(base_uri, source_path, source_patch_key)` and loaded through their readers. A source holding one patch is recorded with an empty `source_patch_key` unless the key is an HDF5 dataset path (starting with `/`), which is kept so a lazy read opens the dataset directly; `dc.scan` still reports the reader's key. A file which grows from one patch to several therefore changes its first patch's key.
 
 ## Combining spools
 

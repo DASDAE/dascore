@@ -34,6 +34,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
 # changes, not only when a column does.
+# Version 39 shrinks the index: a coordinate's data_id is read from its
+# def_key, a source of one patch is stored without a key unless the key
+# is an HDF5 dataset path, and patch_coords is clustered on its key.
 # Version 38 drops the jittered and gapped flags, offset bounds and run
 # positions, as segments share no grid. Version 37 identifies a coordinate
 # of several segments without a step, as segments state none. Version 36
@@ -74,7 +77,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 38
+INDEX_VERSION = 39
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -216,8 +219,9 @@ class CoordDefRow(NamedTuple):
     """
 
     coord_row: int
+    # "fp:{data_id}" for value identity, "sum:{hash}" for a summary; the
+    # coordinate's data_id is never stored apart (see def_key_data_id).
     def_key: str
-    data_id: str | None  # value identity from CoordSummary
     value_kind: str  # num | time | str
     dtype: str
     length: int | None
@@ -389,6 +393,10 @@ TABLE_CONSTRAINTS = MappingProxyType(
         "coord_variants": ("PRIMARY KEY (variant_key)",),
     }
 )
+
+# Tables stored clustered on their primary key: a rowid table would hold
+# the key twice, once in the table and once in its autoindex.
+WITHOUT_ROWID = frozenset({"patch_coords"})
 
 # Attr names which would collide with structural storage or flat-relation
 # columns. Attrs with these (sanitized) names stay on the patch but are
@@ -576,7 +584,9 @@ def create_table_sql(
     """Return DDL for one table from logical column types."""
     definitions = [f"{quote(col)} {TYPE_MAP[typ]}" for col, typ in columns.items()]
     definitions.extend(constraints)
-    return f"CREATE TABLE IF NOT EXISTS {quote(name)} ({', '.join(definitions)}) STRICT"
+    options = "WITHOUT ROWID, STRICT" if name in WITHOUT_ROWID else "STRICT"
+    body = ", ".join(definitions)
+    return f"CREATE TABLE IF NOT EXISTS {quote(name)} ({body}) {options}"
 
 
 def add_column_sql(table: str, column: str, logical_type: str) -> str:

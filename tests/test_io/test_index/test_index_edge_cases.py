@@ -1312,8 +1312,7 @@ class TestCoordDeduplication:
         )
         back = get_backend(tmp_path / "fp.sqlite3")
         back.write_sources(summaries_to_records([PatchSummary(**structured)]))
-        defs = back._fetch_df("SELECT def_key, data_id FROM coord_defs")
-        assert defs["data_id"].notna().all()
+        defs = back._fetch_df("SELECT def_key FROM coord_defs")
         assert defs["def_key"].str.startswith("fp:").all()
         back.close()
 

@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import contextlib
+import shutil
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
+import h5py
+import numpy as np
 import pytest
 
+import dascore as dc
+import dascore.io.silixah5.utils as silixa_utils
 from dascore.exceptions import InvalidIndexError, InvalidIndexVersionError
 from dascore.io.index.backend import get_backend
 from dascore.io.index.schema import INDEX_VERSION, TABLES, TYPE_MAP
+from dascore.utils.downloader import fetch
 
 
 class TestSchemaDeclaration:
@@ -26,6 +32,88 @@ class TestSchemaDeclaration:
             stored = {row[1]: row[2] for row in info}
             expected = {name: TYPE_MAP[logical] for name, logical in columns.items()}
             assert stored == expected
+        backend.close()
+
+
+@pytest.fixture(scope="module")
+def dasdae_spool(tmp_path_factory):
+    """A directory of a one-patch and a two-patch DASDAE file."""
+    path = tmp_path_factory.mktemp("stored_shapes")
+    dc.write(dc.get_example_patch(), path / "one.h5", "DASDAE")
+    dc.write(dc.get_example_spool("random_das", length=2), path / "two.h5", "DASDAE")
+    return dc.spool(path).update(progress=None)
+
+
+@pytest.fixture(scope="module")
+def silixa_spool(tmp_path_factory):
+    """Two consecutive gzip Silixa files, so a merge reads members."""
+    path = tmp_path_factory.mktemp("stored_shapes_silixa")
+    for num, stamp in enumerate(("26.158", "26.358")):
+        out = path / f"{num}.hdf5"
+        shutil.copy(fetch("silixa_h5_1.hdf5"), out)
+        with h5py.File(out, "a") as h5:
+            attrs, data = dict(h5["Acoustic"].attrs), h5["Acoustic"][()]
+            del h5["Acoustic"]
+            dataset = h5.create_dataset("Acoustic", data=data, compression="gzip")
+            attrs["GPSTimeStamp"] = f"22/09/2023 18:29:{stamp} (UTC)"
+            dataset.attrs.update(attrs)
+    return dc.spool(path).update(progress=None)
+
+
+def _stored_keys(spool) -> dict[str, list[str]]:
+    """The stored source_patch_key of each source, by file name."""
+    rows = spool._catalog.backend._con.execute(
+        "SELECT s.source_path, p.source_patch_key FROM patches p "
+        "JOIN sources s ON s.source_row = p.source_row"
+    )
+    out = {}
+    for path, key in rows:
+        out.setdefault(path.rsplit("/", 1)[-1], []).append(key)
+    return out
+
+
+class TestStoredShapes:
+    """The index stores nothing it can derive; pin the shapes it saves."""
+
+    def test_coord_data_id_from_def_key(self, dasdae_spool):
+        """coord_defs has no data_id column; the id still round-trips."""
+        backend = dasdae_spool._catalog.backend
+        info = backend._con.execute("PRAGMA table_info(coord_defs)")
+        assert "data_id" not in {row[1] for row in info}
+        expected = dc.get_example_patch().get_coord("time").data_id
+        records = backend.export_records()
+        ids = {c.data_id for r in records for p in r.patches for c in p.coords}
+        assert expected in ids
+
+    def test_only_several_patches_need_keys(self, dasdae_spool):
+        """A one-patch source stores no key; a two-patch source keeps both."""
+        keys = _stored_keys(dasdae_spool)
+        assert keys["one.h5"] == [""]
+        assert len(keys["two.h5"]) == 2 and all(keys["two.h5"])
+
+    def test_dataset_path_key_kept(self, silixa_spool):
+        """An HDF5 dataset path is kept, so a merge reads without rescans."""
+        assert list(_stored_keys(silixa_spool).values()) == [["/Acoustic"]] * 2
+        calls = []
+        original = silixa_utils._get_attr_dict
+
+        def counted(*args, **kwargs):
+            calls.append(args)
+            return original(*args, **kwargs)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(silixa_utils, "_get_attr_dict", counted)
+            data = np.asarray(silixa_spool.chunk(time=None)[0].data)
+        assert data.shape[0] == 200
+        assert not calls
+
+    def test_patch_coords_without_rowid(self, tmp_path):
+        """patch_coords is clustered on its key, so the key is stored once."""
+        backend = get_backend(tmp_path / "index.sqlite3")
+        (sql,) = backend._con.execute(
+            "SELECT sql FROM sqlite_schema WHERE name = 'patch_coords'"
+        ).fetchone()
+        assert "WITHOUT ROWID" in sql
         backend.close()
 
 

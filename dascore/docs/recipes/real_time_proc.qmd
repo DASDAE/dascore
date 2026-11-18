@@ -49,4 +49,4 @@ while empty_polls < 2:
     time.sleep(poll_seconds)
 ```
 
-Tracking source identities instead of row positions handles late files that sort before earlier arrivals. For a long-running service, replace the two-poll exit with monitoring and retries, and persist `processed` so restarts do not repeat work.
+Tracking source identities instead of row positions handles late files that sort before earlier arrivals. The index records a file holding one patch with an empty `source_patch_key`, so a file which grows from one patch to several changes its first patch's key; if your files grow in place, track patches by `origin_id` rather than by `source_path` plus a key. For a long-running service, replace the two-poll exit with monitoring and retries, and persist `processed` so restarts do not repeat work.
