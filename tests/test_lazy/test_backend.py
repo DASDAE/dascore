@@ -115,6 +115,9 @@ def _refuse_numpy(monkeypatch):
         if name.startswith("dascore") and getattr(module, "to_numpy", None) is to_numpy:
             monkeypatch.setattr(module, "to_numpy", refuse)
     assert array_api_module.to_numpy is refuse
+    # And by NumPy taking the strict library's arrays, as `np.asarray` does.
+    if (strict := sys.modules.get(STRICT)) is not None:
+        monkeypatch.setattr(type(strict.asarray(0)), "__array__", refuse)
 
 
 class _Doubles(dc.PatchProcessor):
@@ -758,12 +761,25 @@ class TestSpoolSetBackend:
         assert out.backend == "numpy" and len(reads) == len(spool)
         np.testing.assert_array_equal(out.data, expected.data)
 
-    @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_lazy_patches_concatenated(self, spool, policy, reads):
-        """Joining lazy patches end to end writes their data, which is said."""
+    def test_lazy_patches_concatenated(self, spool, reads):
+        """Lazy patches joined end to end stay lazy, reading nothing."""
         expected = spool.concatenate(time=None)[0]
         reads.clear()
-        joined = spool.set_backend("lazy").concatenate(time=None)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = spool.set_backend("lazy").concatenate(time=None)[0]
+        assert out.backend == "lazy" and not reads
+        assert out.attrs == expected.attrs and out.coords == expected.coords
+        # Each member read once when it is loaded, and no more.
+        assert out.load().equals(expected) and len(reads) == len(spool)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_concatenated_with_operations_pending(self, spool, policy, reads):
+        """Lazy patches with operations pending are joined only with leave."""
+        held = dc.spool([x.abs() for x in spool.set_backend("lazy")])
+        expected = dc.spool([x.abs() for x in spool]).concatenate(time=None)[0]
+        reads.clear()
+        joined = held.concatenate(time=None)
         with config_context(numpy_fallback=policy):
             if policy is None:
                 with pytest.raises(LazyOperationError, match="concatenation cannot"):
@@ -772,9 +788,203 @@ class TestSpoolSetBackend:
                 return
             with pytest.warns(NumpyFallbackWarning, match="concatenation cannot"):
                 out = joined[0]
-        # Each member read once, and no more.
-        assert out.backend == "numpy" and len(reads) == len(spool)
+        assert out.backend == "numpy"
         np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_concatenated_along_a_new_dimension(self, spool):
+        """A new dimension cannot be given to lazy data, so it asks."""
+        lazy = spool.set_backend("lazy")
+        with pytest.raises(LazyOperationError, match="new axis"):
+            lazy.concatenate(run=None)[0]
+
+    def test_concatenated_on_another_library(self, spool, strict, monkeypatch):
+        """Patches on one library are joined by it, not through NumPy."""
+        expected = spool.concatenate(time=None)[0]
+        held = dc.spool(list(spool.set_backend(STRICT)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            _refuse_numpy(monkeypatch)
+            out = held.concatenate(time=None)[0]
+        assert out.backend == STRICT
+        monkeypatch.undo()
+        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    @pytest.mark.parametrize("call", ("chunk", "concatenate"))
+    def test_numpy_patches_join_another_library(self, spool, strict, call, monkeypatch):
+        """Patches in NumPy beside another library's are joined on that library."""
+        held = dc.spool([spool[0].set_backend(STRICT), *list(spool)[1:]])
+        expected = getattr(spool, call)(time=None)[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            _refuse_numpy(monkeypatch)
+            out = getattr(held, call)(time=None)[0]
+        monkeypatch.undo()
+        assert out.backend == STRICT
+        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    def test_numpy_patches_beside_dask_stay_dask(self, spool):
+        """Beside dask, NumPy patches join the dask graph and nothing is computed."""
+        dask_array = pytest.importorskip("dask.array")
+        callbacks = pytest.importorskip("dask.callbacks")
+        first = spool[0]
+        lazy_first = first.new(data=dask_array.from_array(first.data, chunks=-1))
+        held = dc.spool([lazy_first, *list(spool)[1:]])
+        expected = spool.concatenate(time=None)[0]
+        computed = []
+        counter = callbacks.Callback(posttask=lambda *x: computed.append(1))
+        with counter, warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = held.concatenate(time=None)[0]
+        assert out.backend == "dask" and not computed
+        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    def test_two_other_libraries_are_joined_through_numpy(self, spool, strict):
+        """Patches on two libraries other than NumPy meet in NumPy, said."""
+        dask_array = pytest.importorskip("dask.array")
+        first = spool[0]
+        on_dask = first.new(data=dask_array.from_array(first.data, chunks=-1))
+        held = dc.spool([on_dask, *[x.set_backend(STRICT) for x in list(spool)[1:]]])
+        expected = spool.concatenate(time=None)[0]
+        with pytest.warns(NumpyFallbackWarning, match="cannot be joined on one"):
+            out = held.concatenate(time=None)[0]
+        assert out.backend == "numpy"
+        np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_fill_onto_a_grid_on_another_library_is_said(self, whole, tmp_path):
+        """Placing members of another library onto a grid converts them, said."""
+        pytest.importorskip("dask.array")
+        size = whole.shape[whole.get_axis("time")]
+        parts = [
+            whole.select(time=(0, size // 4), samples=True),
+            whole.select(time=(size // 2, size), samples=True),
+        ]
+        held = dc.spool([x.set_backend("dask") for x in parts])
+        time = whole.get_coord("time")
+        # A part of the filled stretch, which is placed onto its grid.
+        window = (time[size // 10], time[3 * size // 4])
+        with pytest.warns(NumpyFallbackWarning, match="Filling onto a grid"):
+            held.fill_gaps(time=None).select(time=window)[0]
+
+    def test_new_dimension_on_another_library(self, spool, strict, monkeypatch):
+        """A new dimension is added by the library the data are on."""
+        expected = spool.concatenate(run=None)[0]
+        held = dc.spool(list(spool.set_backend(STRICT)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            _refuse_numpy(monkeypatch)
+            out = held.concatenate(run=None)[0]
+        monkeypatch.undo()
+        assert out.backend == STRICT and out.shape == expected.shape
+        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+
+    @pytest.mark.parametrize("call", ("chunk", "concatenate"))
+    def test_mixed_dtypes_on_another_library(self, whole, strict, call):
+        """Members of different dtypes on one library promote as NumPy's do."""
+        size = whole.shape[whole.get_axis("time")]
+        first = whole.select(time=(0, size // 2), samples=True)
+        second = whole.select(time=(size // 2, size), samples=True)
+        parts = [
+            first.new(data=(first.data * 10).astype(np.int32)),
+            second.new(data=second.data.astype(np.float32)),
+        ]
+        expected = getattr(dc.spool(parts), call)(time=None)[0]
+        held = dc.spool([x.set_backend(STRICT) for x in parts])
+        out = getattr(held, call)(time=None)[0]
+        assert out.backend == STRICT
+        values = to_numpy(out.data)
+        assert values.dtype == expected.dtype
+        np.testing.assert_array_equal(values, expected.data)
+
+    def test_lazy_patches_with_units_concatenated(self, whole, tmp_path, reads):
+        """Members which state their units are joined lazily too."""
+        spool = _in_four_files(whole.set_units("m/s"), tmp_path)
+        expected = spool.concatenate(time=None)[0]
+        reads.clear()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = spool.set_backend("lazy").concatenate(time=None)[0]
+        assert out.backend == "lazy" and not reads
+        assert out.attrs == expected.attrs and out.load().equals(expected)
+
+    def test_private_dimension_is_not_dropped_lazily(self, patch):
+        """Dropping a private dimension is refused, as it was."""
+        lazy = patch.set_backend("lazy")
+        renamed = lazy.rename_coords(time="_time")
+        with pytest.raises(LazyOperationError, match="drop_private_coords"):
+            renamed.drop_private_coords()
+
+    def test_recipes_of_different_dtypes_are_read(self, whole, tmp_path):
+        """Recipes of different dtypes are read: a lazy join could skip a cast."""
+        size = whole.shape[whole.get_axis("time")]
+        first = whole.select(time=(0, size // 2), samples=True)
+        second = whole.select(time=(size // 2, size), samples=True)
+        dc.write(
+            first.new(data=first.data.astype(np.float32)), tmp_path / "a.h5", "dasdae"
+        )
+        dc.write(second, tmp_path / "b.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        expected = spool.concatenate(time=None)[0]
+        lazy = spool.set_backend("lazy").concatenate(time=None)
+        with pytest.raises(LazyOperationError, match="different dtypes"):
+            lazy[0]
+        with config_context(numpy_fallback="warn"):
+            with pytest.warns(NumpyFallbackWarning, match="different dtypes"):
+                out = lazy[0]
+        assert out.dtype == expected.dtype
+        np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_library_which_narrows_in_a_join(self, monkeypatch):
+        """A library which would cast to fewer bits than asked is refused."""
+        from dascore.lazy import array as lazy_array  # noqa: PLC0415
+
+        strict = pytest.importorskip("array_api_strict")
+        parts = [
+            strict.asarray(np.ones(3, np.int32)),
+            strict.asarray(np.ones(3, np.float32)),
+        ]
+        # As a library which keeps 64-bit floats in 32 bits does.
+        monkeypatch.setattr(
+            lazy_array,
+            "asarray_like",
+            lambda x, like: strict.asarray(np.asarray(x, np.float32)),
+        )
+        with pytest.raises(ParameterError, match="holds float64 data as float32"):
+            lazy_array.join(parts, axis=0)
+
+    def test_numpy_member_onto_a_narrowing_library(self, monkeypatch):
+        """A NumPy member is not narrowed as it is put on another library."""
+        from dascore.lazy import array as lazy_array  # noqa: PLC0415
+
+        strict = pytest.importorskip("array_api_strict")
+        parts = [np.array([16777217.0]), strict.asarray(np.zeros(1, np.float32))]
+
+        def narrowing(array, like):
+            """Hold the array as float32, whatever it was."""
+            return strict.asarray(np.asarray(array, np.float32))
+
+        # As a library which keeps 64-bit floats in 32 bits does.
+        monkeypatch.setattr(lazy_array, "asarray_like", narrowing)
+        with pytest.raises(ParameterError, match="holds float64 data as float32"):
+            lazy_array.join(parts, axis=0)
+
+    def test_wrapper_numpy_takes_through_its_array_method(self):
+        """Something NumPy takes only through `__array__` is converted, said."""
+        from dascore.lazy.array import join  # noqa: PLC0415
+
+        class Wrapper:
+            """An array-like which NumPy reads through `__array__`."""
+
+            def __init__(self, data):
+                self.data = data
+                self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
+
+            def __array__(self, dtype=None, copy=None):
+                return self.data
+
+        parts = [Wrapper(np.ones(2)), Wrapper(np.zeros(2))]
+        with pytest.warns(NumpyFallbackWarning, match="cannot be joined on one"):
+            out = join(parts, axis=0)
+        np.testing.assert_array_equal(out, [1, 1, 0, 0])
 
     def test_summary_of_patches_on_another_library(self, spool, strict):
         """A spool of patches on another library can still say what it holds."""
@@ -830,24 +1040,15 @@ class TestLazyMerge:
         assert out.backend == "lazy" and not reads
         assert out.load().equals(spool.chunk(time=None)[0].abs())
 
-    @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_members_the_index_cannot_describe(self, undescribed, policy, reads):
-        """A merge which must read its members is the setting's to allow."""
+    def test_members_the_index_cannot_describe(self, undescribed, reads):
+        """A merge of members read as patches is lazy still, joined by recipe."""
         expected = undescribed.chunk(time=None)[0]
         reads.clear()
-        lazy = undescribed.set_backend("lazy").chunk(time=None)
-        with config_context(numpy_fallback=policy), warnings.catch_warnings():
+        with warnings.catch_warnings():
             warnings.simplefilter("error", NumpyFallbackWarning)
-            if policy is None:
-                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
-                    lazy[0]
-                # Refused before a file is read.
-                assert not reads
-                return
-            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
-                merged = lazy[0]
-        # Read after all, whole, by the merge which reads its members.
-        assert merged.backend == "numpy" and merged.equals(expected)
+            merged = undescribed.set_backend("lazy").chunk(time=None)[0]
+        assert merged.backend == "lazy" and not reads
+        assert merged.attrs == expected.attrs and merged.load().equals(expected)
 
     def test_units_spelled_another_way_are_restated(self, tmp_path):
         """The same quantity under another name is converted still, as it was."""
@@ -927,15 +1128,73 @@ class TestLazyMerge:
         lazy = spool.set_backend("lazy").chunk(time=None, conflict="keep_first")
         with config_context(numpy_fallback=policy):
             if policy is None:
-                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                # Rescaling is arithmetic, which a lazy member cannot run.
+                with pytest.raises(LazyOperationError, match="convert_units"):
                     lazy[0]
                 return
-            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
+            with pytest.warns(NumpyFallbackWarning, match="convert_units"):
                 merged = lazy[0]
         # Rescaled, as the eager merge rescales it.
         assert merged.attrs.data_units == expected.attrs.data_units
         np.testing.assert_allclose(merged.data, expected.data)
         assert not np.allclose(merged.data, whole.transpose(*merged.dims).data)
+
+    @pytest.mark.parametrize("policy", (None, "warn"))
+    def test_dtypes_which_promote_in_order(
+        self, whole, tmp_path, policy, monkeypatch, reads
+    ):
+        """Where promoting in order differs from at once, the members are read."""
+        size = whole.shape[whole.get_axis("time")]
+        edges = [0, size // 3, 2 * size // 3, size]
+        dtypes = (np.int8, np.uint8, np.float16)
+        for index, dtype in enumerate(dtypes):
+            part = whole.select(time=(edges[index], edges[index + 1]), samples=True)
+            part = part.new(data=(part.data * 10).astype(dtype))
+            dc.write(part, tmp_path / f"part_{index}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        expected = spool.chunk(time=None)[0]
+        # From the index the merge casts as it reads, and stays lazy.
+        indexed = spool.set_backend("lazy").chunk(time=None)[0]
+        assert indexed.backend == "lazy" and indexed.dtype == expected.dtype
+        np.testing.assert_array_equal(indexed.load().data, expected.data)
+        # Members the index cannot describe are merged as patches, which a
+        # join of recipes cannot cast in order.
+        monkeypatch.setattr(
+            assembly.PatchAssembler, "_member_meta_from_index", lambda *args: None
+        )
+        lazy = spool.set_backend("lazy").chunk(time=None)
+        reads.clear()
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="different dtypes"):
+                    lazy[0]
+                # Refused before a member is read.
+                assert not reads
+                return
+            with pytest.warns(NumpyFallbackWarning, match="different dtypes"):
+                merged = lazy[0]
+        # The dtype a member at a time gives, as the eager merge gives it.
+        assert merged.dtype == expected.dtype == np.dtype(np.float32)
+        np.testing.assert_array_equal(merged.data, expected.data)
+
+    def test_dtypes_which_promote_in_order_on_a_library(self, whole):
+        """Members on another library are cast there, in the buffer's order."""
+        # dask, which holds half precision; the strict library does not.
+        pytest.importorskip("dask.array")
+        size = whole.shape[whole.get_axis("time")]
+        edges = [0, size // 3, 2 * size // 3, size]
+        parts = []
+        for index, dtype in enumerate((np.int8, np.uint8, np.float16)):
+            part = whole.select(time=(edges[index], edges[index + 1]), samples=True)
+            parts.append(part.new(data=(part.data * 10).astype(dtype)))
+        expected = dc.spool(parts).chunk(time=None)[0]
+        held = dc.spool([x.set_backend("dask") for x in parts])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            merged = held.chunk(time=None)[0]
+        assert merged.backend == "dask"
+        assert to_numpy(merged.data).dtype == expected.dtype == np.dtype(np.float32)
+        np.testing.assert_array_equal(to_numpy(merged.data), expected.data)
 
     def test_members_in_files_and_in_memory(self, spool, whole):
         """One member held in memory does not excuse reading the others."""
@@ -947,39 +1206,66 @@ class TestLazyMerge:
         with pytest.raises(LazyOperationError, match="cannot stay lazy"):
             mixed.chunk(time=None)[0]
 
+    def test_rounding_part_way_along_the_promotion(self, whole):
+        """A member rounds where the NumPy buffer rounds it, on any library."""
+        pytest.importorskip("dask.array")
+        if np.finfo(np.longdouble).nmant <= np.finfo(np.float64).nmant:
+            pytest.skip("long double is no wider than double here")
+        size = whole.shape[whole.get_axis("time")]
+        edges = [0, size // 3, 2 * size // 3, size]
+        # int64 then uint64 promote to float64, which rounds 2**53 + 1,
+        # before the long double member, which would hold it exactly.
+        parts = []
+        for index, dtype in enumerate((np.int64, np.uint64, np.longdouble)):
+            part = whole.select(time=(edges[index], edges[index + 1]), samples=True)
+            data = np.full(part.shape, 2**53 + 1).astype(dtype)
+            parts.append(part.new(data=data))
+        expected = dc.spool(parts).chunk(time=None)[0]
+        merged = dc.spool([x.set_backend("dask") for x in parts]).chunk(time=None)[0]
+        assert merged.backend == "dask"
+        np.testing.assert_array_equal(to_numpy(merged.data), expected.data)
+
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_file_changed_since_it_was_indexed(self, whole, tmp_path, policy):
-        """A merge over a file the index no longer describes reads its members."""
+    def test_member_in_memory_before_lazy_ones(self, spool, whole, policy, reads):
+        """Lazy members after one in memory are not copied into it unasked."""
+        size = whole.shape[whole.get_axis("time")]
+        # The first quarter held in memory, changed so the index cannot stand
+        # for it, before the three files after it.
+        held = whole.select(time=(0, size // 4), samples=True) * 1
+        expected = (dc.spool([held]) + spool[1:]).chunk(time=None)[0]
+        mixed = (dc.spool([held]) + spool[1:]).set_backend("lazy")
+        reads.clear()
+        with config_context(numpy_fallback=policy):
+            if policy is None:
+                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                    mixed.chunk(time=None)[0]
+                assert not reads
+                return
+            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
+                merged = mixed.chunk(time=None)[0]
+        assert merged.backend == "numpy"
+        np.testing.assert_array_equal(merged.data, expected.data)
+
+    def test_file_changed_since_it_was_indexed(self, whole, tmp_path, reads):
+        """A file the index no longer describes is read as it is now, lazily."""
         spool = _in_four_files(whole, tmp_path)
         expected = spool.chunk(time=None)[0]
         # Written again: the same samples, at another time.
         again = dc.read(tmp_path / "part_2.h5")[0]
         dc.write(again, tmp_path / "part_2.h5", "dasdae")
         os.utime(tmp_path / "part_2.h5", ns=(1, 1))
-        lazy = spool.set_backend("lazy").chunk(time=None)
-        with config_context(numpy_fallback=policy):
-            if policy is None:
-                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
-                    lazy[0]
-                return
-            with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
-                merged = lazy[0]
-        assert merged.backend == "numpy"
-        np.testing.assert_array_equal(merged.data, expected.data)
+        reads.clear()
+        merged = spool.set_backend("lazy").chunk(time=None)[0]
+        assert merged.backend == "lazy" and not reads
+        np.testing.assert_array_equal(merged.load().data, expected.data)
 
-    @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_merge_of_unknown_size(self, spool, policy, monkeypatch):
-        """Members merged as loaded patches are read, if the setting allows."""
+    def test_merge_of_unknown_size(self, spool, monkeypatch, reads):
+        """Members merged as loaded patches stay lazy, joined by recipe."""
         expected = spool.chunk(time=None)[0]
         # As for members whose merged length the index's rows do not state.
         monkeypatch.setattr(assembly, "_estimate_merge_samples", lambda *args: None)
-        lazy = spool.set_backend("lazy").chunk(time=None)
-        with config_context(numpy_fallback=policy):
-            if policy is None:
-                with pytest.raises(LazyOperationError, match="is not known until"):
-                    lazy[0]
-                return
-            with pytest.warns(NumpyFallbackWarning, match="is not known until"):
-                merged = lazy[0]
-        assert merged.backend == "numpy"
-        np.testing.assert_array_equal(merged.data, expected.data)
+        reads.clear()
+        merged = spool.set_backend("lazy").chunk(time=None)[0]
+        assert merged.backend == "lazy" and not reads
+        assert merged.attrs == expected.attrs
+        np.testing.assert_array_equal(merged.load().data, expected.data)

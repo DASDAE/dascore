@@ -29,17 +29,24 @@ Examples
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import numpy as np
 
+from dascore.exceptions import ParameterError
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
-from dascore.lazy.recipe import Recipe
+from dascore.lazy.recipe import Recipe, concat
 from dascore.utils.array_api import (
     LAZY_BACKEND,
     NUMPY_BACKEND,
+    _as_numpy_dtype,
+    array_namespace,
+    asarray_like,
+    backend_name,
     decide_fallback,
+    is_numpy,
     to_numpy,
 )
 
@@ -213,3 +220,140 @@ class LazyArray:
 # Names the backend only: the lazy backend runs operations through their
 # chunk contracts, never through an array api namespace.
 _NAMESPACE = SimpleNamespace(__name__=LAZY_BACKEND)
+
+
+def join(arrays: Sequence, axis: int, new_axis: bool = False):
+    """
+    Join arrays end to end along an axis, on the backend they are on.
+
+    Lazy arrays with nothing pending are a window of what is stored, and
+    are joined by their recipes, reading nothing: the result is lazy. Any
+    other arrays held on one library are joined there, by the library's
+    own `concat`, so they are never taken through NumPy. What cannot be
+    joined either way -- lazy arrays with operations pending, a mix of lazy
+    and in-memory arrays or of libraries, or a new axis on lazy arrays --
+    is read or converted only as the `numpy_fallback` setting allows.
+
+    Parameters
+    ----------
+    arrays
+        The arrays to join; they agree on every other axis.
+    axis
+        The axis to join along.
+    new_axis
+        Give each array a new axis of length one at the end first, and
+        join along it, as stacking does.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.lazy.array import LazyArray, join
+    >>> from dascore.lazy.recipe import Recipe
+    >>>
+    >>> full = (ArraySource.full((2, 3), x) for x in (1, 2))
+    >>> parts = [LazyArray(Recipe.from_source(x)) for x in full]
+    >>> joined = join(parts, axis=1)
+    >>> assert isinstance(joined, LazyArray) and joined.shape == (2, 6)
+    >>> assert np.array_equal(join([np.ones(2), np.zeros(2)], 0), [1, 1, 0, 0])
+    """
+    arrays = list(arrays)
+    lazy = [isinstance(x, LazyArray) for x in arrays]
+    if all(lazy) and not new_axis:
+        if (out := _joined_recipes(arrays, axis)) is not None:
+            return out
+    if any(lazy):
+        reason = (
+            "a new axis is added to lazy data"
+            if new_axis and all(lazy)
+            else (
+                "it joins lazy data with operations pending, of different "
+                "dtypes, or with data in memory"
+            )
+        )
+        decide_fallback(
+            f"This concatenation cannot stay lazy: {reason}",
+            "its members were read into memory",
+        )
+        arrays = [x.load() if is_lazy else x for x, is_lazy in zip(arrays, lazy)]
+    if all(is_numpy(x) for x in arrays):
+        # As NumPy always has: its own promotion of mixed dtypes, and speed.
+        parts = [x[..., None] for x in arrays] if new_axis else arrays
+        return np.concatenate(parts, axis=axis)
+    # Promoted as NumPy promotes the same arrays, from the dtypes they have
+    # now: a library may not do so, nor keep every dtype NumPy holds.
+    dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
+    # Arrays NumPy holds join others on their library: putting them there
+    # takes nothing through NumPy, as dask's own join of them never did.
+    others = {backend_name(x) for x in arrays if not is_numpy(x)}
+    if len(others) == 1 and NUMPY_BACKEND not in others:
+        like = next(x for x in arrays if not is_numpy(x))
+        arrays = [_moved(x, like, dtype) if is_numpy(x) else x for x in arrays]
+    libraries = {backend_name(x) for x in arrays}
+    # Something NumPy takes only through `__array__`, which may read it.
+    held = libraries == {NUMPY_BACKEND}
+    if len(libraries) > 1 or held:
+        decide_fallback(
+            f"Arrays on {sorted(libraries)} cannot be joined on one library",
+            "they were converted to numpy and joined there",
+            lazy=False,
+        )
+        parts = [to_numpy(x) for x in arrays]
+        parts = [x[..., None] for x in parts] if new_axis else parts
+        return np.concatenate(parts, axis=axis)
+    xp = array_namespace(arrays[0])
+    if any(_as_numpy_dtype(x.dtype) != dtype for x in arrays):
+        arrays = [cast_on_library(x, dtype) for x in arrays]
+    if new_axis:
+        arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
+    return xp.concat(arrays, axis=axis)
+
+
+def _moved(array: np.ndarray, like, dtype: np.dtype):
+    """Return a NumPy array in `dtype`, on the library `like` is on."""
+    out = asarray_like(array.astype(dtype, copy=False), like)
+    _check_kept(out, dtype)
+    return out
+
+
+def _check_kept(array, dtype: np.dtype) -> None:
+    """Raise if a library holds data in another dtype than they were given in."""
+    held = _as_numpy_dtype(array.dtype)
+    if held != dtype:
+        library = backend_name(array)
+        msg = (
+            f"{library} holds {dtype} data as {held}, which would change "
+            f"their values. Configure {library} to keep {dtype}, or convert "
+            "the data first."
+        )
+        raise ParameterError(msg)
+
+
+def cast_on_library(array, dtype: np.dtype):
+    """
+    Return an array cast to a NumPy dtype, on the library it is on.
+
+    A library which would hold the values in another dtype, as JAX does
+    with 64-bit numbers unless told otherwise, is refused rather than
+    trusted to keep them.
+    """
+    if is_numpy(array):
+        return array.astype(dtype, copy=False)
+    target = asarray_like(np.empty(0, dtype), array)
+    _check_kept(target, dtype)
+    return array_namespace(array).astype(array, target.dtype)
+
+
+def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:
+    """Return lazy arrays joined by their recipes, or None if they cannot be."""
+    backends = {x.backend for x in arrays}
+    if len(backends) > 1 or any(len(x.chain) for x in arrays):
+        return None
+    # Of one dtype only: a recipe joined with another of a wider dtype casts
+    # its stored samples straight to it, skipping any rounding its own
+    # dtype made, so values could differ from those joined in memory.
+    if len({x.dtype for x in arrays}) > 1:
+        return None
+    # A recipe join promotes the dtype as NumPy joins arrays in memory.
+    joined = concat([x.recipe for x in arrays], axis=axis)
+    return LazyArray(joined, backend=next(iter(backends)))

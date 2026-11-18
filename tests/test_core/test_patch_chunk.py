@@ -33,6 +33,7 @@ from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
     InvalidFiberIOError,
+    LazyOperationError,
     ParameterError,
     UnitError,
 )
@@ -939,6 +940,56 @@ class TestStreamingMerge:
         msg = "their shapes are incompatible"
         with pytest.raises(CoordMergeError, match=msg):
             samples = p1.data.shape[p1.get_axis("time")] * 2
+            assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
+
+    @staticmethod
+    def _lazy_pair(random_patch, tmp_path, second):
+        """Two lazy patches abutting in time, the second changed by `second`."""
+        p1 = random_patch.update_attrs(history=[])
+        time = p1.get_coord("time")
+        p2 = p1.update_coords(time_min=time.max() + time.step).update_attrs(history=[])
+        paths = (tmp_path / "first.h5", tmp_path / "second.h5")
+        for patch, path in zip((p1, second(p2)), paths, strict=True):
+            dc.write(patch, path, "dasdae")
+        return [dc.read(x)[0].set_backend("lazy") for x in paths]
+
+    def test_lazy_members_with_axes_reordered(
+        self, random_patch, tmp_path, monkeypatch
+    ):
+        """A lazy member is not put in the merge's axis order unasked."""
+        assembler = _bare_assembler()
+        flipped = self._lazy_pair(
+            random_patch, tmp_path, lambda x: x.transpose(*reversed(x.dims))
+        )
+        patches = iter(flipped)
+        monkeypatch.setattr(
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
+        )
+        samples = random_patch.data.shape[random_patch.get_axis("time")] * 2
+        # Transposing lazy data is refused by default, as anywhere else.
+        with pytest.raises(LazyOperationError, match="transpose cannot run"):
+            assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
+
+    def test_lazy_members_of_incompatible_shapes(
+        self, random_patch, tmp_path, monkeypatch
+    ):
+        """Lazy members which do not line up raise the merge's own error."""
+        assembler = _bare_assembler()
+
+        def shorter(patch):
+            distance = patch.get_coord("distance")
+            return patch.select(distance=(None, distance.max() - distance.step))
+
+        patches = iter(self._lazy_pair(random_patch, tmp_path, shorter))
+        monkeypatch.setattr(
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
+        )
+        samples = random_patch.data.shape[random_patch.get_axis("time")] * 2
+        with pytest.raises(CoordMergeError, match="their shapes are incompatible"):
             assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
 
     def test_unexpected_merge_dimension_raises(self, random_patch, monkeypatch):

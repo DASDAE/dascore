@@ -126,7 +126,7 @@ hour.load()                      # opens the 60 files the hour touches
 
 Three cases the eager merge settles by reading need a rule.
 
-- **Members the index cannot describe** are merged from loaded patches today. Under a lazy backend the fallback setting decides.
+- **Members the index cannot describe** are merged from loaded patches today. Under a lazy backend they are read lazily and joined by their recipes, which stays lazy when nothing is pending on them and they are of one dtype; otherwise the fallback setting decides.
 - **A file rewritten since it was indexed** is caught before the eager read. The check moves to when the lazy data are read. *Implemented so far:* the files are checked when the lazy patch is made; one rewritten between then and `load` is refused only if it no longer holds an array of the shape and dtype its row states.
 - **Members in different data units** are rescaled as they are merged. That is arithmetic on the data, so it becomes a pending step or such a merge falls back.
 
