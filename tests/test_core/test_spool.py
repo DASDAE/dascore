@@ -859,7 +859,7 @@ class TestGetUnreadSources:
         with pytest.raises(ScanError):
             spool.update(progress=None, on_error="raise")
         paths = spool.get_contents()["source_path"]
-        assert not paths.str.contains("gone").any()
+        assert [Path(x).name for x in paths] == ["keep.h5"]
 
     def test_update_on_error_ignore(self, mixed_dir):
         """on_error='ignore' is silent; the skipped file is still listed."""
