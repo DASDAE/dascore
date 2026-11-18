@@ -845,6 +845,22 @@ class TestGetUnreadSources:
                     progress=None, client=client, on_error="raise"
                 )
 
+    def test_failed_strict_update_drops_removed_sources(self, tmp_path):
+        """Sources an update removed before raising leave the cached contents."""
+        patch = dc.get_example_patch()
+        for name in ("keep.h5", "gone.h5"):
+            patch.io.write(tmp_path / name, "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        assert len(spool.get_contents()) == 2
+        (tmp_path / "gone.h5").unlink()
+        patch.io.write(tmp_path / "trunc.h5", "dasdae")
+        raw = (tmp_path / "trunc.h5").read_bytes()
+        (tmp_path / "trunc.h5").write_bytes(raw[: len(raw) // 2])
+        with pytest.raises(ScanError):
+            spool.update(progress=None, on_error="raise")
+        paths = spool.get_contents()["source_path"]
+        assert not paths.str.contains("gone").any()
+
     def test_update_on_error_ignore(self, mixed_dir):
         """on_error='ignore' is silent; the skipped file is still listed."""
         with warnings.catch_warnings():

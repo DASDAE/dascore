@@ -1705,15 +1705,18 @@ class PatchCatalog:
         """Sync a directory-backed catalog with the filesystem."""
         # The scan itself is long-running file IO; it manages its own
         # state, so only the cache invalidation needs the revision lock.
-        if self._syncer is not None:
-            self._syncer.update(
-                paths,
-                progress=progress,
-                client=client,
-                retry_unreadable=retry_unreadable,
-                on_error=on_error,
-            )
-        self._invalidate()
+        try:
+            if self._syncer is not None:
+                self._syncer.update(
+                    paths,
+                    progress=progress,
+                    client=client,
+                    retry_unreadable=retry_unreadable,
+                    on_error=on_error,
+                )
+        finally:
+            # A strict update can raise after committing removals and moves.
+            self._invalidate()
         return self
 
     def remove(self, source_paths: Sequence[str], base_uri: str = "") -> PatchCatalog:
