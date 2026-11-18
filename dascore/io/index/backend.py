@@ -1477,8 +1477,10 @@ class SQLiteIndexBackend:
         on the next reads as dimensional there; whether a name is
         associated anywhere is a question about every pair.
         """
+        # `+` keeps SQLite scanning the table, not looking up every row
+        # through idx_pcoords_name.
         sql = (
-            "SELECT DISTINCT coord_name FROM patch_coords "
+            "SELECT DISTINCT +coord_name AS coord_name FROM patch_coords "
             "WHERE coord_dims != coord_name"
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
@@ -1577,7 +1579,9 @@ class SQLiteIndexBackend:
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
-        df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
+        # `+` as in associated_coord_names: one table scan
+        sql = "SELECT DISTINCT +coord_name AS coord_name, coord_dims FROM patch_coords"
+        df = self._fetch_df(sql)
         out: dict[str, str] = {}
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))
