@@ -799,11 +799,9 @@ class SQLiteIndexBackend:
                 "  FROM patches GROUP BY source_row"
                 " ) t ON t.source_row = s2.source_row"
                 ")"
-                "UPDATE sources SET ordinal = ("
-                " SELECT rn FROM ranked WHERE sid = sources.source_row"
-                ") WHERE ordinal IS NOT ("
-                " SELECT rn FROM ranked WHERE sid = sources.source_row"
-                ")"
+                "UPDATE sources SET ordinal = ranked.rn FROM ranked"
+                " WHERE ranked.sid = sources.source_row"
+                " AND sources.ordinal IS NOT ranked.rn"
             )
 
     def _delete_by_paths(self, source_paths: list[str], base_uri: str = "") -> None:

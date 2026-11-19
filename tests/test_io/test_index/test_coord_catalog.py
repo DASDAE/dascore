@@ -275,6 +275,23 @@ class TestWorkIsBounded:
         )
         assert large < 2 * small
 
+    def test_renumber_near_linear(self, sized_backends):
+        """Renumbering every source of eight times the archive costs ~8x."""
+
+        def renumber(backend):
+            backend._con.execute("UPDATE sources SET ordinal = -1 - ordinal")
+            return _vm_steps(backend, backend.renumber_ordinals_by_time)
+
+        small, large = (renumber(b) for b in sized_backends.values())
+        assert large < 16 * small
+
+    def test_renumber_in_order_writes_nothing(self, sized_backends):
+        """A renumber which changes no ordinal rewrites no row."""
+        backend = sized_backends[400]
+        before = backend._con.total_changes
+        backend.renumber_ordinals_by_time()
+        assert backend._con.total_changes == before
+
     @pytest.mark.parametrize(
         "read", [lambda b: b.count(), lambda b: b.query(patch_rows=[1])]
     )
