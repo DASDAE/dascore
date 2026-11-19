@@ -997,12 +997,16 @@ class FiberIO:
             patches, load = _paired_hook(self, "_prepare_read")(
                 manager, snap, keys=wanted
             )
-            # Ids and positional keys use the whole-resource ordinal.
+            # Filter before validating and stamping; ids and positional keys
+            # keep the whole-resource ordinal. A bad entry fails validation.
             indices = [
                 index
                 for index, patch in enumerate(patches)
                 if not wanted
-                or ((patch._source or ArraySource()).key or str(index)) in wanted
+                or (
+                    (getattr(patch, "_source", None) or ArraySource()).key or str(index)
+                )
+                in wanted
             ]
             chosen = [_validate_metadata(patches[index]) for index in indices]
             _check_snap_names(chosen, snap, self)

@@ -14,6 +14,7 @@ from dascore.config import get_config, set_config
 from dascore.core.source import ArraySource
 from dascore.exceptions import DependencyError
 from dascore.io import FiberIO
+from dascore.io.utils import windows_to_slices
 from dascore.utils.downloader import fetch, get_registry_df
 
 
@@ -59,10 +60,10 @@ def _many_patch_metadata(count: int) -> tuple[dc.PatchMeta, ...]:
 
 class _ManyPatchBenchmarkIO(FiberIO):
     """
-    A resource of many small keyless patches, as many as its text says.
+    A reader of many small keyless patches; the file's text gives the count.
 
-    Reading a few of them should cost the same however many the resource
-    holds; what grows with the count is framework work on unread patches.
+    Beyond finding the keys, reading a few should not cost more as the count
+    grows; any growth is framework work on unread patches.
     """
 
     name = "_many_patch_benchmark_io"
@@ -78,7 +79,8 @@ class _ManyPatchBenchmarkIO(FiberIO):
 
     def read_array(self, resource: Path, windows=(), key=""):
         """Return a tiny array; the samples are not what is measured."""
-        return np.zeros((3, 4))[tuple(slice(*x) if x else slice(None) for x in windows)]
+        shape = (3, 4)
+        return np.zeros(shape)[windows_to_slices(windows, shape)]
 
 
 @pytest.fixture(scope="module")
@@ -92,7 +94,7 @@ def many_patch_path(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def many_patch_spool(many_patch_path):
-    """An indexed spool over the many-patch resource, indexed once."""
+    """An indexed spool over the many-patch resource, and the rows to read."""
     spool = dc.spool(many_patch_path.parent).update()
     keys = spool.get_contents()["source_patch_key"].astype(str).tolist()
     return spool, [keys.index(key) for key in PICKED]

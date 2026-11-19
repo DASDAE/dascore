@@ -42,6 +42,7 @@ from dascore.io.core import (
     FiberIO,
     H5ArrayMixin,
     _canonical_path,
+    _check_snap_names,
     _FiberIOManager,
     _get_missing_install_name,
     _get_reloadable_source_path,
@@ -2866,7 +2867,7 @@ class TestReadStampsSelectedPatches:
 
     @staticmethod
     def _ids_by_key(patches):
-        """Map each patch's source key to its ids and array value."""
+        """Map each patch's source key to its ids, tag and array value."""
         return {
             patch._source.key: (
                 patch.attrs.origin_id,
@@ -2896,7 +2897,7 @@ class TestReadStampsSelectedPatches:
         """A keyed read validates and derives ids for its patches alone, in order."""
         path = tmp_path / "large.manypatch"
         path.write_text("100")
-        ordinals, checked = [], []
+        ordinals, checked, snapped = [], [], []
 
         def derive(*args, **kwargs):
             ordinals.append(kwargs["ordinal"])
@@ -2907,10 +2908,16 @@ class TestReadStampsSelectedPatches:
             return _validate_metadata(patch)
 
         monkeypatch.setattr("dascore.io.core.origin_id_for", derive)
+
+        def check_snap(patches, *args):
+            snapped.extend(x.attrs.tag for x in patches)
+            return _check_snap_names(patches, *args)
+
         monkeypatch.setattr("dascore.io.core._validate_metadata", validate)
+        monkeypatch.setattr("dascore.io.core._check_snap_names", check_snap)
         out = dc.read(path, source_patch_key=["7", "99"])
         assert ordinals == [7, 99]
-        assert checked == ["7", "99"]
+        assert checked == snapped == ["7", "99"]
         assert [x._source.key for x in out] == ["7", "99"]
 
     def test_direct_read_keeps_positional_key(self, tmp_path):
