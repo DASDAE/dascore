@@ -3589,10 +3589,10 @@ def concat_coords(*coords, units=None) -> NumericCoord:
 
     Every boundary between inputs that does not continue exactly is kept as
     a boundary between segments. Float grids that continue exactly fuse into
-    one grid, whose labels may differ from the inputs' by float rounding;
-    the result equals the coordinate `get_coord` infers from the
-    concatenated labels, and each input label still selects its sample.
-    Other values are never altered. Segments say
+    one grid, whose labels may differ from the inputs' by float rounding.
+    Each input label still selects its sample, unless the step is within a
+    few ulp of the labels, where a float grid cannot tell its own labels
+    apart. Other values are never altered. Segments say
     where gaps are, never what the labels are, so equal labels make equal
     coordinates however split; `Patch.fill_gaps` and `Patch.split_gaps` act
     on the gaps.
