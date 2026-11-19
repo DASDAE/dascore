@@ -2920,6 +2920,19 @@ class TestReadStampsSelectedPatches:
         assert checked == snapped == ["7", "99"]
         assert [x._source.key for x in out] == ["7", "99"]
 
+    def test_yielded_metadata(self, tmp_path, monkeypatch):
+        """Metadata a reader yields, rather than lists, still reads by key."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("3")
+        prepare = FiberIO._prepare_read
+
+        def yielding(self, *args, **kwargs):
+            patches, load = prepare(self, *args, **kwargs)
+            return iter(patches), load
+
+        monkeypatch.setattr(FiberIO, "_prepare_read", yielding)
+        assert dc.read(path, source_patch_key="2")[0].data.flat[0] == 2
+
     def test_direct_read_keeps_positional_key(self, tmp_path):
         """A reader called directly names a lone result by its file position."""
         path = tmp_path / "large.manypatch"

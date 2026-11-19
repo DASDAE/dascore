@@ -999,6 +999,7 @@ class FiberIO:
             )
             # Filter before validating and stamping; ids and positional keys
             # keep the whole-resource ordinal. A bad entry fails validation.
+            patches = list(patches)  # a reader may yield its metadata
             indices = [
                 index
                 for index, patch in enumerate(patches)
