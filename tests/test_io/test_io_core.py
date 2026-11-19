@@ -42,6 +42,7 @@ from dascore.io.core import (
     FiberIO,
     H5ArrayMixin,
     _canonical_path,
+    _check_snap_names,
     _FiberIOManager,
     _get_missing_install_name,
     _get_reloadable_source_path,
@@ -51,6 +52,7 @@ from dascore.io.core import (
     _select_patch_from_spool,
     _size_and_mtime,
     _source_stats,
+    _validate_metadata,
     _version_sort_key,
     is_directory_format,
 )
@@ -311,6 +313,40 @@ def _misbehaving_scan_path(tmp_path, behavior: str) -> Path:
     path = tmp_path / f"{behavior}.scanbehavior"
     path.write_text("placeholder")
     return path
+
+
+class _ManyPatchIO(FiberIO):
+    """A reader of many small patches, as its file's text says: `count [keyed]`."""
+
+    name = "_many_patch_io"
+    version = "1"
+
+    def get_version(self, resource: Path, **kwargs) -> str | None:
+        """Claim only this test's files."""
+        return self.version if Path(resource).suffix == ".manypatch" else None
+
+    def get_metadata(self, resource: Path, *, snap=True, **kwargs):
+        """Describe each patch; keyless ones are told apart by ordinal."""
+        count, *keyed = Path(resource).read_text().split()
+        base = dc.get_example_patch("random_das", shape=(3, 4))
+        return [
+            dc.PatchMeta(
+                attrs=base.attrs.update(tag=str(number)),
+                coords=base.coords,
+                dims=base.dims,
+                dtype="float64",
+                source=ArraySource(key=f"band-{number}" if keyed else ""),
+            )
+            for number in range(int(count))
+        ]
+
+    def read_array(self, resource: Path, windows=(), key=""):
+        """Return an array filled with the number of the patch it belongs to."""
+        number = int(key.rsplit("-")[-1] or 0)
+        shape = (3, 4)
+        return np.full(shape, number, dtype="float64")[
+            windows_to_slices(windows, shape)
+        ]
 
 
 class _DependencyErrorFormatter(FiberIO):
@@ -2816,6 +2852,94 @@ class TestSourceIds:
         """The config which turns the ids off turns this off too."""
         with config_context(patch_provenance="disabled"):
             assert dc.read(terra15_path)[0].attrs.origin_id == ""
+
+
+class TestReadStampsSelectedPatches:
+    """Reading some patches of a resource derives ids for those patches only."""
+
+    @pytest.fixture(params=[(1, ""), (5, ""), (5, "keyed")], ids=str)
+    def many_patch_path(self, request, tmp_path):
+        """A file of keyless, or natively keyed, patches."""
+        count, keyed = request.param
+        path = tmp_path / "file.manypatch"
+        path.write_text(f"{count} {keyed}")
+        return path
+
+    @staticmethod
+    def _ids_by_key(patches):
+        """Map each patch's source key to its ids, tag and array value."""
+        return {
+            patch._source.key: (
+                patch.attrs.origin_id,
+                patch.attrs.data_id,
+                patch.attrs.tag,
+                float(patch.data.flat[0]),
+            )
+            for patch in patches
+        }
+
+    def test_key_read_matches_whole_read(self, many_patch_path):
+        """Each patch read alone is the patch a whole read returned."""
+        whole = self._ids_by_key(dc.read(many_patch_path))
+        assert all(value[0] and value[1] for value in whole.values())
+        assert len({value[0] for value in whole.values()}) == len(whole)
+        for key, expected in whole.items():
+            alone = dc.read(many_patch_path, source_patch_key=key or "0")
+            assert self._ids_by_key(alone) == {key: expected}
+
+    def test_indexed_spool_matches_whole_read(self, many_patch_path):
+        """Patches resolved one at a time through an index keep their ids."""
+        whole = self._ids_by_key(dc.read(many_patch_path))
+        spool = dc.spool(many_patch_path.parent).update()
+        assert self._ids_by_key(spool[i] for i in range(len(spool))) == whole
+
+    def test_only_returned_patches_are_checked(self, tmp_path, monkeypatch):
+        """A keyed read validates and derives ids for its patches alone, in order."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("100")
+        ordinals, checked, snapped = [], [], []
+
+        def derive(*args, **kwargs):
+            ordinals.append(kwargs["ordinal"])
+            return origin_id_for(*args, **kwargs)
+
+        def validate(patch):
+            checked.append(patch.attrs.tag)
+            return _validate_metadata(patch)
+
+        monkeypatch.setattr("dascore.io.core.origin_id_for", derive)
+
+        def check_snap(patches, *args):
+            snapped.extend(x.attrs.tag for x in patches)
+            return _check_snap_names(patches, *args)
+
+        monkeypatch.setattr("dascore.io.core._validate_metadata", validate)
+        monkeypatch.setattr("dascore.io.core._check_snap_names", check_snap)
+        out = dc.read(path, source_patch_key=["7", "99"])
+        assert ordinals == [7, 99]
+        assert checked == snapped == ["7", "99"]
+        assert [x._source.key for x in out] == ["7", "99"]
+
+    def test_yielded_metadata(self, tmp_path, monkeypatch):
+        """Metadata a reader yields, rather than lists, still reads by key."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("3")
+        prepare = FiberIO._prepare_read
+
+        def yielding(self, *args, **kwargs):
+            patches, load = prepare(self, *args, **kwargs)
+            return iter(patches), load
+
+        monkeypatch.setattr(FiberIO, "_prepare_read", yielding)
+        assert dc.read(path, source_patch_key="2")[0].data.flat[0] == 2
+
+    def test_direct_read_keeps_positional_key(self, tmp_path):
+        """A reader called directly names a lone result by its file position."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("3")
+        patch = _ManyPatchIO().read(path, source_patch_key="2")[0]
+        assert patch._source.key == "2"
+        assert patch.data.flat[0] == 2
 
 
 class TestFiberIOReadArray:

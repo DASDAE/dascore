@@ -997,26 +997,37 @@ class FiberIO:
             patches, load = _paired_hook(self, "_prepare_read")(
                 manager, snap, keys=wanted
             )
-            patches = [_validate_metadata(patch) for patch in patches]
-            _check_snap_names(patches, snap, self)
-            origins = [patch._source or ArraySource() for patch in patches]
+            # Filter before validating and stamping; ids and positional keys
+            # keep the whole-resource ordinal. A bad entry fails validation.
+            patches = list(patches)  # a reader may yield its metadata
+            indices = [
+                index
+                for index, patch in enumerate(patches)
+                if not wanted
+                or (
+                    (getattr(patch, "_source", None) or ArraySource()).key or str(index)
+                )
+                in wanted
+            ]
+            chosen = [_validate_metadata(patches[index]) for index in indices]
+            _check_snap_names(chosen, snap, self)
             if provenance_source is not None:
-                patches = _stamp_source_ids(
+                chosen = _stamp_source_ids(
                     patches,
                     self.name,
                     self.version,
                     provenance_source,
+                    indices=indices,
                     describe=self.input_type != "directory",
                     snap=snap,
                     default_snap=_default_snap(type(self)),
                     identity=identity,
                 )
             selected, requests = [], []
-            for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
+            for index, patch in zip(indices, chosen, strict=True):
+                origin = patches[index]._source or ArraySource()
                 source = patch._source or ArraySource()
                 key = source.key or (str(index) if len(patches) > 1 else "")
-                if wanted and (source.key or str(index)) not in wanted:
-                    continue
                 queries = {
                     name: value
                     for name, value in select.items()
