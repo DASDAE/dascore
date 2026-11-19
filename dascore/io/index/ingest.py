@@ -714,7 +714,13 @@ def summaries_to_records(
         for num, summary in enumerate(group):
             _warn_unstored_runs(path, summary)
             record = patch_record(summary)
-            if record.source_patch_key == "" and len(group) > 1:
+            key = record.source_patch_key
+            if len(group) == 1 and key and not key.startswith("/"):
+                # The source's only patch needs no key to be read back. An
+                # HDF5 dataset path is kept: a lazy read opens it directly
+                # rather than scanning the file again to find it.
+                record = replace(record, source_patch_key="")
+            elif not key and len(group) > 1:
                 # positional identity within the source, per design doc
                 record = replace(record, source_patch_key=str(num))
             patches.append(record)
@@ -801,6 +807,18 @@ def _py_scalar(value, as_bool: bool = False):
     return value
 
 
+def def_key_data_id(key) -> str | None:
+    """
+    Recover the coordinate's data_id from a stored def key.
+
+    Value-identity keys are ``fp:{data_id}`` (see CoordRecord.def_key);
+    any other prefix names a summary, not the values.
+    """
+    if not (isinstance(key, str) and key.startswith("fp:")):
+        return None
+    return key[3:]
+
+
 def coord_record(link, cdef, runs: tuple[tuple, ...] = ()) -> CoordRecord:
     """
     The coordinate record a stored link, its definition and its runs describe.
@@ -811,7 +829,7 @@ def coord_record(link, cdef, runs: tuple[tuple, ...] = ()) -> CoordRecord:
     return CoordRecord(
         coord_name=link.coord_name,
         coord_dims=link.coord_dims,
-        data_id=_py_scalar(cdef.data_id),
+        data_id=def_key_data_id(cdef.def_key),
         dtype=link.dtype,
         runs=runs,
         **{

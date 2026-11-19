@@ -577,12 +577,12 @@ class SQLiteIndexBackend:
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_row")
         def_rows, run_rows = [], []
-        # CoordRecord names every def column after id, key, and data_id
-        columns = CoordDefRow._fields[3:]
+        # CoordRecord names every def column after id and key
+        columns = CoordDefRow._fields[2:]
         for key in new_keys:
             c = defs_needed[key]
             values = (getattr(c, name) for name in columns)
-            def_rows.append((next_id, key, c.data_id, *values))
+            def_rows.append((next_id, key, *values))
             run_rows.extend((next_id, num, *run) for num, run in enumerate(c.runs))
             mapping[key] = next_id
             next_id += 1
@@ -1255,7 +1255,8 @@ class SQLiteIndexBackend:
             coords[out_col] = pd.Series(values, index=coords.index, dtype=object)
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
-        coords["_key"] = coords["def_key"].where(coords["data_id"].notna(), None)
+        is_value = coords["def_key"].str.startswith("fp:")
+        coords["_key"] = coords["def_key"].where(is_value, None)
         return coords
 
     def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
@@ -1301,7 +1302,6 @@ class SQLiteIndexBackend:
         ids = out["patch_row"].tolist()
         link_sql = (
             "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, cd.def_key, "
-            "cd.data_id, "
             "cd.value_kind, pc.dtype, cd.is_relative, cd.units, cd.is_exact, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
@@ -1477,8 +1477,10 @@ class SQLiteIndexBackend:
         on the next reads as dimensional there; whether a name is
         associated anywhere is a question about every pair.
         """
+        # `+` keeps SQLite scanning the table, not looking up every row
+        # through idx_pcoords_name.
         sql = (
-            "SELECT DISTINCT coord_name FROM patch_coords "
+            "SELECT DISTINCT +coord_name AS coord_name FROM patch_coords "
             "WHERE coord_dims != coord_name"
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
@@ -1556,7 +1558,7 @@ class SQLiteIndexBackend:
         fields = ", ".join(f"cd.{x}" for x in _COORD_DEF_FIELDS if x != "dtype")
         sql = (
             "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, pc.dtype, "
-            f"cd.coord_row, cd.data_id, {fields} FROM patch_coords pc "
+            f"cd.coord_row, cd.def_key, {fields} FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
             "WHERE cd.run_count > 1 "
             "AND pc.patch_row IN (SELECT value FROM json_each(?))"
@@ -1577,7 +1579,9 @@ class SQLiteIndexBackend:
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
-        df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
+        # `+` as in associated_coord_names: one table scan
+        sql = "SELECT DISTINCT +coord_name AS coord_name, coord_dims FROM patch_coords"
+        df = self._fetch_df(sql)
         out: dict[str, str] = {}
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))

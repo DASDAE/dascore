@@ -65,17 +65,18 @@ def legacy_residual_source(tmp_path):
             dc.write(patch, tmp_path / f"{index}.h5", file_format="DASDAE")
         source = dc.spool(tmp_path).update(progress=None)
         records = source._catalog.backend.export_records()
-        assert all(record.patches[0].source_patch_key for record in records)
+        # single-patch sources are stored without a key
+        assert not any(record.patches[0].source_patch_key for record in records)
         legacy = replace(
             records[1],
             patches=tuple(
-                replace(patch, source_patch_key="") for patch in records[1].patches
+                replace(patch, source_patch_key="/gone") for patch in records[1].patches
             ),
         )
         source._catalog.backend.write_sources([records[0], legacy])
         source._catalog._invalidate()
         # Replaying this shared-dimension residual requires source metadata:
-        # the native-key first file has it, the blank-key second file does not.
+        # the first file has it, the second's key names no patch in it.
         return source.select(distance=(0, second_start + 4))
 
     return make

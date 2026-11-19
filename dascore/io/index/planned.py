@@ -47,6 +47,7 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
+    def_key_data_id,
     index_runs,
     stored_runs,
     typed_value,
@@ -95,17 +96,6 @@ def _source_units_column(name: str) -> str:
     ``_source`` instead can never be one.
     """
     return f"_{name}_units_source"
-
-
-def _def_key_data_id(key) -> str | None:
-    """Recover the coordinate's data_id from a stored def key.
-
-    Value-identity keys are ``fp:{data_id}`` (see CoordRecord.def_key);
-    any other prefix names a summary, not the values.
-    """
-    if not (isinstance(key, str) and key.startswith("fp:")):
-        return None
-    return key[3:]
 
 
 def _ns(value) -> int | None:
@@ -193,7 +183,7 @@ def _coord_record_from_row(
         # the same way, matching another output only when the members it
         # joined were the same.
         key = row.get(f"_{name}_def_key")
-        data_id = _def_key_data_id(key)
+        data_id = def_key_data_id(key)
         if data_id is None and isinstance(key, str) and key.startswith("cat:"):
             data_id = key[4:]
         if data_id is None and not name_is_held:
@@ -216,7 +206,7 @@ def _coord_record_from_row(
         # string coords have no range representation; store the
         # lexicographic envelope directly
         key = row.get(f"_{name}_def_key")
-        data_id = _def_key_data_id(key)
+        data_id = def_key_data_id(key)
         return CoordRecord(
             coord_name=name,
             value_kind="str",
@@ -268,7 +258,7 @@ def _coord_record_from_row(
         span = (hi - lo) / step  # ty: ignore[unsupported-operator]
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
-    data_id = _def_key_data_id(key)
+    data_id = def_key_data_id(key)
     # the grid is the source's; once the def key (value identity) is gone,
     # so are the values it described
     grid = row.get(f"_{name}_grid")

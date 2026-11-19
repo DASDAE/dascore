@@ -123,7 +123,9 @@ def file_source_coords(resolver, row, files=None):
         files[key] = (payloads, by_key)
     payloads, by_key = files[key]
     source_key = str(row.get("source_patch_key") or "")
-    payload = by_key.get(source_key)
+    # The index stores no key for most sources of one patch.
+    alone = payloads[0] if not source_key and len(payloads) == 1 else None
+    payload = by_key.get(source_key, alone)
     return None if payload is None else payload.coords
 
 

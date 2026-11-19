@@ -74,7 +74,7 @@ A track groups patches with the same configured kind attributes and measures the
 dc.get_example_spool("diverse_das")
 ```
 
-[`Spool.get_contents`](`dascore.core.spool.Spool.get_contents`) returns one metadata row per patch without loading its data array. File-backed rows include `source_path`, `source_format`, and `source_patch_key`.
+[`Spool.get_contents`](`dascore.core.spool.Spool.get_contents`) returns one metadata row per patch without loading its data array. File-backed rows include `source_path`, `source_format`, and `source_patch_key`. A source holding one patch is recorded with an empty `source_patch_key` unless its key is an HDF5 dataset path; `dc.scan` still reports the reader's key.
 
 ```{python}
 contents = diverse.get_contents()
