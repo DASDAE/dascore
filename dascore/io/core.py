@@ -997,16 +997,12 @@ class FiberIO:
             patches, load = _paired_hook(self, "_prepare_read")(
                 manager, snap, keys=wanted
             )
-            # Only the patches asked for are checked and stamped, in place:
-            # ids and positional keys depend on a patch's place in the whole
-            # resource, and a keyed read should not pay for unread patches.
-            patches = list(patches)
+            # Ids and positional keys use the whole-resource ordinal.
             indices = [
                 index
                 for index, patch in enumerate(patches)
                 if not wanted
-                or (getattr(getattr(patch, "_source", None), "key", "") or str(index))
-                in wanted
+                or ((patch._source or ArraySource()).key or str(index)) in wanted
             ]
             chosen = [_validate_metadata(patches[index]) for index in indices]
             _check_snap_names(chosen, snap, self)

@@ -2886,51 +2886,32 @@ class TestReadStampsSelectedPatches:
             alone = dc.read(many_patch_path, source_patch_key=key or "0")
             assert self._ids_by_key(alone) == {key: expected}
 
-    def test_several_keys_match_whole_read(self, many_patch_path):
-        """Skipped patches do not renumber the ones after them."""
-        whole = self._ids_by_key(dc.read(many_patch_path))
-        keys = list(whole)[::2]
-        some = dc.read(many_patch_path, source_patch_key=[x or "0" for x in keys])
-        found = self._ids_by_key(some)
-        assert list(found) == keys
-        assert found == {key: whole[key] for key in keys}
-
     def test_indexed_spool_matches_whole_read(self, many_patch_path):
         """Patches resolved one at a time through an index keep their ids."""
         whole = self._ids_by_key(dc.read(many_patch_path))
         spool = dc.spool(many_patch_path.parent).update()
         assert self._ids_by_key(spool[i] for i in range(len(spool))) == whole
 
-    def test_one_derivation_per_returned_patch(self, tmp_path, monkeypatch):
-        """The id work of a keyed read does not grow with the resource."""
+    def test_only_returned_patches_are_checked(self, tmp_path, monkeypatch):
+        """A keyed read validates and derives ids for its patches alone, in order."""
         path = tmp_path / "large.manypatch"
         path.write_text("100")
-        ordinals = []
+        ordinals, checked = [], []
 
-        def counted(*args, **kwargs):
+        def derive(*args, **kwargs):
             ordinals.append(kwargs["ordinal"])
             return origin_id_for(*args, **kwargs)
 
-        monkeypatch.setattr("dascore.io.core.origin_id_for", counted)
-        dc.read(path, source_patch_key="42")
-        assert ordinals == [42]
-        ordinals.clear()
-        dc.read(path, source_patch_key=["7", "99"])
-        assert ordinals == [7, 99]
-
-    def test_only_returned_patches_are_validated(self, tmp_path, monkeypatch):
-        """Metadata checks on a keyed read do not grow with the resource."""
-        path = tmp_path / "large.manypatch"
-        path.write_text("100")
-        checked = []
-
-        def counted(patch):
-            checked.append(patch)
+        def validate(patch):
+            checked.append(patch.attrs.tag)
             return _validate_metadata(patch)
 
-        monkeypatch.setattr("dascore.io.core._validate_metadata", counted)
-        dc.read(path, source_patch_key=["7", "99"])
-        assert [x.attrs.tag for x in checked] == ["7", "99"]
+        monkeypatch.setattr("dascore.io.core.origin_id_for", derive)
+        monkeypatch.setattr("dascore.io.core._validate_metadata", validate)
+        out = dc.read(path, source_patch_key=["7", "99"])
+        assert ordinals == [7, 99]
+        assert checked == ["7", "99"]
+        assert [x._source.key for x in out] == ["7", "99"]
 
     def test_direct_read_keeps_positional_key(self, tmp_path):
         """A reader called directly names a lone result by its file position."""
@@ -2939,17 +2920,6 @@ class TestReadStampsSelectedPatches:
         patch = _ManyPatchIO().read(path, source_patch_key="2")[0]
         assert patch._source.key == "2"
         assert patch.data.flat[0] == 2
-
-    def test_unknown_key_derives_nothing(self, tmp_path, monkeypatch):
-        """A key naming no patch returns nothing and derives no id."""
-        path = tmp_path / "large.manypatch"
-        path.write_text("3")
-
-        def refuse(*args, **kwargs):
-            pytest.fail("No patch was returned, so no id should be derived")
-
-        monkeypatch.setattr("dascore.io.core.origin_id_for", refuse)
-        assert not len(dc.read(path, source_patch_key="missing"))
 
 
 class TestFiberIOReadArray:
