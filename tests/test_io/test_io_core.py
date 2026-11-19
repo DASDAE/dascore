@@ -51,6 +51,7 @@ from dascore.io.core import (
     _select_patch_from_spool,
     _size_and_mtime,
     _source_stats,
+    _validate_metadata,
     _version_sort_key,
     is_directory_format,
 )
@@ -311,6 +312,40 @@ def _misbehaving_scan_path(tmp_path, behavior: str) -> Path:
     path = tmp_path / f"{behavior}.scanbehavior"
     path.write_text("placeholder")
     return path
+
+
+class _ManyPatchIO(FiberIO):
+    """A reader of many small patches, as its file's text says: `count [keyed]`."""
+
+    name = "_many_patch_io"
+    version = "1"
+
+    def get_version(self, resource: Path, **kwargs) -> str | None:
+        """Claim only this test's files."""
+        return self.version if Path(resource).suffix == ".manypatch" else None
+
+    def get_metadata(self, resource: Path, *, snap=True, **kwargs):
+        """Describe each patch; keyless ones are told apart by ordinal."""
+        count, *keyed = Path(resource).read_text().split()
+        base = dc.get_example_patch("random_das", shape=(3, 4))
+        return [
+            dc.PatchMeta(
+                attrs=base.attrs.update(tag=str(number)),
+                coords=base.coords,
+                dims=base.dims,
+                dtype="float64",
+                source=ArraySource(key=f"band-{number}" if keyed else ""),
+            )
+            for number in range(int(count))
+        ]
+
+    def read_array(self, resource: Path, windows=(), key=""):
+        """Return an array filled with the number of the patch it belongs to."""
+        number = int(key.rsplit("-")[-1] or 0)
+        shape = (3, 4)
+        return np.full(shape, number, dtype="float64")[
+            windows_to_slices(windows, shape)
+        ]
 
 
 class _DependencyErrorFormatter(FiberIO):
@@ -2816,6 +2851,105 @@ class TestSourceIds:
         """The config which turns the ids off turns this off too."""
         with config_context(patch_provenance="disabled"):
             assert dc.read(terra15_path)[0].attrs.origin_id == ""
+
+
+class TestReadStampsSelectedPatches:
+    """Reading some patches of a resource derives ids for those patches only."""
+
+    @pytest.fixture(params=[(1, ""), (5, ""), (5, "keyed")], ids=str)
+    def many_patch_path(self, request, tmp_path):
+        """A file of keyless, or natively keyed, patches."""
+        count, keyed = request.param
+        path = tmp_path / "file.manypatch"
+        path.write_text(f"{count} {keyed}")
+        return path
+
+    @staticmethod
+    def _ids_by_key(patches):
+        """Map each patch's source key to its ids and array value."""
+        return {
+            patch._source.key: (
+                patch.attrs.origin_id,
+                patch.attrs.data_id,
+                patch.attrs.tag,
+                float(patch.data.flat[0]),
+            )
+            for patch in patches
+        }
+
+    def test_key_read_matches_whole_read(self, many_patch_path):
+        """Each patch read alone is the patch a whole read returned."""
+        whole = self._ids_by_key(dc.read(many_patch_path))
+        assert all(value[0] and value[1] for value in whole.values())
+        assert len({value[0] for value in whole.values()}) == len(whole)
+        for key, expected in whole.items():
+            alone = dc.read(many_patch_path, source_patch_key=key or "0")
+            assert self._ids_by_key(alone) == {key: expected}
+
+    def test_several_keys_match_whole_read(self, many_patch_path):
+        """Skipped patches do not renumber the ones after them."""
+        whole = self._ids_by_key(dc.read(many_patch_path))
+        keys = list(whole)[::2]
+        some = dc.read(many_patch_path, source_patch_key=[x or "0" for x in keys])
+        found = self._ids_by_key(some)
+        assert list(found) == keys
+        assert found == {key: whole[key] for key in keys}
+
+    def test_indexed_spool_matches_whole_read(self, many_patch_path):
+        """Patches resolved one at a time through an index keep their ids."""
+        whole = self._ids_by_key(dc.read(many_patch_path))
+        spool = dc.spool(many_patch_path.parent).update()
+        assert self._ids_by_key(spool[i] for i in range(len(spool))) == whole
+
+    def test_one_derivation_per_returned_patch(self, tmp_path, monkeypatch):
+        """The id work of a keyed read does not grow with the resource."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("100")
+        ordinals = []
+
+        def counted(*args, **kwargs):
+            ordinals.append(kwargs["ordinal"])
+            return origin_id_for(*args, **kwargs)
+
+        monkeypatch.setattr("dascore.io.core.origin_id_for", counted)
+        dc.read(path, source_patch_key="42")
+        assert ordinals == [42]
+        ordinals.clear()
+        dc.read(path, source_patch_key=["7", "99"])
+        assert ordinals == [7, 99]
+
+    def test_only_returned_patches_are_validated(self, tmp_path, monkeypatch):
+        """Metadata checks on a keyed read do not grow with the resource."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("100")
+        checked = []
+
+        def counted(patch):
+            checked.append(patch)
+            return _validate_metadata(patch)
+
+        monkeypatch.setattr("dascore.io.core._validate_metadata", counted)
+        dc.read(path, source_patch_key=["7", "99"])
+        assert [x.attrs.tag for x in checked] == ["7", "99"]
+
+    def test_direct_read_keeps_positional_key(self, tmp_path):
+        """A reader called directly names a lone result by its file position."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("3")
+        patch = _ManyPatchIO().read(path, source_patch_key="2")[0]
+        assert patch._source.key == "2"
+        assert patch.data.flat[0] == 2
+
+    def test_unknown_key_derives_nothing(self, tmp_path, monkeypatch):
+        """A key naming no patch returns nothing and derives no id."""
+        path = tmp_path / "large.manypatch"
+        path.write_text("3")
+
+        def refuse(*args, **kwargs):
+            pytest.fail("No patch was returned, so no id should be derived")
+
+        monkeypatch.setattr("dascore.io.core.origin_id_for", refuse)
+        assert not len(dc.read(path, source_patch_key="missing"))
 
 
 class TestFiberIOReadArray:
