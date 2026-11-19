@@ -89,7 +89,7 @@ patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
 
 Plain `pass_filter` stays exact and needs its axis whole. The user chooses to accept a result equal to a tolerance.
 
-*Implemented so far:* an operation says it is linear by `linear = True` beside `position_free`; `pass_filter` and `notch_filter` do. Data in memory are computed whole, exactly as the operation alone computes them, since in memory nothing is gained by cutting; a lazy patch is computed a chunk at a time by a `Halo` contract of the measured reach, and a dask array by `map_overlap`. Every dimension the operation reaches along must be given a tolerance. The longest probe is about four million samples; `on_unsettled="whole"` needs a dimension whole where the response has not fallen under its tolerance by then.
+*Implemented so far:* an operation says it is linear by `linear = True` beside `position_free`; `pass_filter` and `notch_filter` do. Data in memory are computed whole, exactly as the operation alone computes them, since in memory nothing is gained by cutting; a lazy patch is computed a chunk at a time by a `Halo` contract of the measured reach, and a dask array by `map_overlap`. Every dimension the operation reaches along must be given a tolerance. A probe holds at most about eight million samples (64 MB), and never grows past four times its axis, a reach that long standing for the whole axis; `on_unsettled="whole"` needs a dimension whole where the response has not fallen under its tolerance by then.
 
 ## Backends
 

@@ -19,6 +19,7 @@ from typing import Any
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import PatchConversionError
+from dascore.proc.impulse import PatchImpulseWindow
 from dascore.proc.window import PatchWindow
 from dascore.utils.array_api import is_foreign
 from dascore.utils.misc import available_memory, optional_import
@@ -92,7 +93,7 @@ def _as_patch(value):
 class _Windowed:
     """A window over a DataArray's patch, whose results come back as DataArrays."""
 
-    def __init__(self, accessor, patch, window: PatchWindow):
+    def __init__(self, accessor, patch, window: PatchWindow | PatchImpulseWindow):
         self._accessor, self._patch, self._window = accessor, patch, window
 
     def __getattr__(self, name: str):
@@ -214,7 +215,7 @@ class _PatchMethods:
             patches = [patch, *(x for x in (*args, *kwargs.values()))]
             size = _largest_to_materialize(patches)
             out = run() if size is None else _guarded(run, name, size)
-            if isinstance(out, PatchWindow):
+            if isinstance(out, PatchWindow | PatchImpulseWindow):
                 # A window computes nothing; what it does is a patch method
                 # like any other, weighed and converted as one.
                 return _Windowed(self, patch, out)

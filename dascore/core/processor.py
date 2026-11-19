@@ -145,7 +145,10 @@ class PatchProcessor(DascoreBaseModel):
     A class which writes `get_metadata` runs in the windows of
     [`Patch.window`](`dascore.Patch.window`), where one plan is worked out
     and run in every window, only if it says so; one which plans nothing
-    need not.
+    need not. A class which is linear as well, as a recursive filter is,
+    sets `linear = True`: its response to one impulse then says what it
+    does to any data, and it runs in an
+    [`Patch.impulse_window`](`dascore.Patch.impulse_window`).
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that

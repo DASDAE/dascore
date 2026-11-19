@@ -10,9 +10,12 @@ operation called on that is run by
 
 from __future__ import annotations
 
+import math
+import threading
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from numbers import Real
 from typing import Any
 
@@ -69,6 +72,8 @@ def _tail_reach(response: np.ndarray, tolerance: float) -> int:
 # What `_measured` has found, by what it depends on; bounded, oldest out.
 _MEASURED: dict[tuple, Any] = {}
 _MEASURED_LIMIT = 256
+# Taken to read or change what is kept, which several threads may share.
+_MEASURED_TURN = threading.Lock()
 # How long an axis the operation also reaches along is made in a probe of
 # another axis: long enough for a filter's own padding of its ends.
 _ACROSS = 64
@@ -76,11 +81,15 @@ _ACROSS = 64
 
 def _kept(key, compute):
     """Return what `compute` gives, kept by `key` for the next ask."""
-    if key in _MEASURED:
-        return _MEASURED[key]
-    if len(_MEASURED) >= _MEASURED_LIMIT:
-        _MEASURED.pop(next(iter(_MEASURED)))
-    _MEASURED[key] = out = compute()
+    with _MEASURED_TURN:
+        if key in _MEASURED:
+            return _MEASURED[key]
+    # Computed outside the lock: two threads may both measure, alike.
+    out = compute()
+    with _MEASURED_TURN:
+        while len(_MEASURED) >= _MEASURED_LIMIT:
+            _MEASURED.pop(next(iter(_MEASURED)))
+        _MEASURED[key] = out
     return out
 
 
@@ -90,11 +99,20 @@ def _impulsed(operation, plan, shape, dtype, room=None) -> np.ndarray:
 
     A filter may need an axis longer than the probe gives it, to pad its
     ends: the axes `room` names are then lengthened, up to their length in
-    the patch, until the kernel runs or none can be lengthened further.
+    the patch, until the kernel runs or none can be lengthened further. No
+    probe holds more than the budget allows.
     """
     kernel = type(operation).kernel_for("numpy")
     shape = list(shape)
     while True:
+        if math.prod(shape) > _PROBE_BUDGET:
+            name = operation.name or type(operation).__name__
+            msg = (
+                f"Measuring the reach of {name} needs a probe of more than "
+                f"{_PROBE_BUDGET} samples, which an impulse window does not "
+                "make; run the operation without one."
+            )
+            raise ParameterError(msg)
         probe = np.zeros(shape, dtype)
         probe[tuple(n // 2 for n in shape)] = 1
         try:
@@ -126,43 +144,92 @@ def _response(operation, plan, shape, axis, dtype, room=None) -> np.ndarray:
 
 def _made_dtype(operation, plan, meta) -> np.dtype:
     """Return the dtype the operation's kernel makes of data of the patch's."""
-    lengths = tuple(min(n, 2 * _ACROSS + 1) for n in meta.shape)
     dtype = _as_numpy_dtype(meta.dtype)
     room = dict(enumerate(meta.shape))
+    ones = (1,) * len(meta.shape)
 
     def compute():
-        return _impulsed(operation, plan, lengths, dtype, room).dtype
+        return _impulsed(operation, plan, ones, dtype, room).dtype
 
     key = ("dtype", type(operation), repr(operation), _plan_key(plan))
-    return _kept((*key, lengths, dtype.str), compute)
+    return _kept((*key, tuple(meta.shape), dtype.str), compute)
 
 
 def _reached(operation, plan, meta) -> tuple[int, ...]:
     """
     Return the axes the operation reaches along: those it spreads an impulse on.
 
-    Every axis is a few dozen samples long, or its own length if shorter,
-    and longer where a filter along it needs more to pad its ends; the
-    impulse spreads to a neighbour along an axis the operation reaches.
+    Each axis is probed a few dozen samples long, or its own length if
+    shorter, beside the others one sample long, each lengthened as far as
+    a filter needs to pad its ends; an axis is reached if the impulse
+    spreads anywhere along it.
     """
-    lengths = [min(n, 2 * _ACROSS + 1) for n in meta.shape]
     dtype = _as_numpy_dtype(meta.dtype)
     room = dict(enumerate(meta.shape))
 
     def compute():
         out = []
-        for axis, length in enumerate(lengths):
-            if length < 3:
+        for axis, n in enumerate(meta.shape):
+            if n < 2:
                 continue
-            response = _response(operation, plan, tuple(lengths), axis, dtype, room)
+            shape = [1] * len(meta.shape)
+            shape[axis] = min(n, 2 * _ACROSS + 1)
+            response = _response(operation, plan, tuple(shape), axis, dtype, room)
             middle = len(response) // 2
-            spread = response[middle - 1] + response[middle + 1]
+            spread = response.sum() - response[middle]
             if spread > 1e-12 * max(response[middle], 1e-300):
                 out.append(axis)
         return tuple(out)
 
     key = ("reached", type(operation), repr(operation), _plan_key(plan))
-    return _kept((*key, tuple(lengths), dtype.str), compute)
+    return _kept((*key, tuple(meta.shape), dtype.str), compute)
+
+
+def _fits(operation, plan, meta, axis, reached) -> int:
+    """
+    Return the shortest length along an axis the operation's kernel runs on.
+
+    A filter pads the ends of what it is given; a chunk shorter than that
+    cannot be filtered, so the reach around a chunk is never less.
+    """
+    dtype = _as_numpy_dtype(meta.dtype)
+    room = {x: n for x, n in enumerate(meta.shape) if x in reached and x != axis}
+
+    def compute():
+        length = 1
+        while True:
+            shape = [1] * len(meta.shape)
+            shape[axis] = length
+            try:
+                _impulsed(operation, plan, tuple(shape), dtype, room)
+            except ValueError:
+                if length >= meta.shape[axis]:
+                    raise
+                length = min(2 * length, meta.shape[axis])
+                continue
+            return length
+
+    key = ("fits", type(operation), repr(operation), _plan_key(plan))
+    return _kept((*key, axis, tuple(meta.shape), dtype.str), compute)
+
+
+def _beyond(side: np.ndarray, total: float) -> float:
+    """
+    Return what a response is likely to hold past the end of the probe.
+
+    The last two eighths of one side of the probe are compared: a response
+    which decays there decays past it geometrically, as a recursive
+    filter's does, and one which does not may hold anything.
+    """
+    eighth = len(side) // 8
+    if not eighth:
+        return np.inf
+    near, far = side[-2 * eighth : -eighth].sum(), side[-eighth:].sum()
+    # Below what double precision can tell from nothing.
+    if far <= 1e-15 * total:
+        return 0.0
+    ratio = far / near if near else np.inf
+    return far * ratio / (1 - ratio) if ratio < 1 else np.inf
 
 
 def _measured(operation, plan, meta, axis, reached, tolerance):
@@ -172,34 +239,39 @@ def _measured(operation, plan, meta, axis, reached, tolerance):
     Kept for the plan and everything else it depends on: the reach of a
     linear operation which acts the same at every position is its
     response to one impulse, whatever the data. The probe grows along
-    `axis`; the other axes the operation reaches along are a few dozen
-    samples long, longer where a filter needs more to pad its ends, and
-    the rest one.
+    `axis`, beside the other axes one sample long, or as long as a filter
+    along them needs to pad its ends. The reach is settled once it sits
+    well inside the probe and what the response holds past the probe,
+    judged from how it decays there, is under the tolerance too.
 
     A reach as long as the axis is the whole axis, which a chunk then
     needs, so the probe never grows past four times the axis. None says
-    the response did not fall under the tolerance before the probe grew
-    past what memory allows it.
+    the response did not settle before the probe grew past what memory
+    allows it.
     """
     dtype = _as_numpy_dtype(meta.dtype)
-    across = [min(n, _ACROSS) if x in reached else 1 for x, n in enumerate(meta.shape)]
     room = {x: n for x, n in enumerate(meta.shape) if x in reached and x != axis}
     whole = meta.shape[axis]
 
     def compute():
         length = _FIRST_PROBE
         while True:
-            shape = list(across)
+            shape = [1] * len(meta.shape)
             shape[axis] = length
-            if np.prod(shape) > _PROBE_BUDGET:
+            if math.prod(shape) > _PROBE_BUDGET:
                 return None
             response = _response(operation, plan, tuple(shape), axis, dtype, room)
-            middle = length // 2
+            middle = len(response) // 2
+            before_side = response[: middle + 1][::-1]
+            after_side = response[middle:]
+            total = response.sum()
+            past = _beyond(before_side, total) + _beyond(after_side, total)
             # A response after the impulse is output which reads input
             # before it, so the reach is the response turned round.
-            spread_before = _tail_reach(response[: middle + 1][::-1], tolerance)
-            spread_after = _tail_reach(response[middle:], tolerance)
-            if max(spread_before, spread_after) <= _WELL_INSIDE * length:
+            spread_before = _tail_reach(before_side, tolerance)
+            spread_after = _tail_reach(after_side, tolerance)
+            inside = max(spread_before, spread_after) <= _WELL_INSIDE * length
+            if inside and past <= tolerance * total:
                 return min(spread_after, whole), min(spread_before, whole)
             if length >= 4 * whole:
                 # It reaches past the axis: a chunk needs all of it.
@@ -207,7 +279,7 @@ def _measured(operation, plan, meta, axis, reached, tolerance):
             length *= 2
 
     key = ("reach", type(operation), repr(operation), _plan_key(plan))
-    return _kept((*key, axis, whole, tuple(across), dtype.str, tolerance), compute)
+    return _kept((*key, axis, tuple(meta.shape), dtype.str, tolerance), compute)
 
 
 class Impulsed(PatchProcessor):
@@ -348,7 +420,12 @@ class Impulsed(PatchProcessor):
                 raise ParameterError(msg)
             # Unsettled, it needs the whole axis: a reach as long as it.
             whole = meta.shape[axis]
-            widths[axis] = (whole, whole) if reach is None else reach
+            if reach is None:
+                widths[axis] = (whole, whole)
+                continue
+            # Never less than the kernel needs to run on what a chunk reads.
+            least = _fits(operation, inner, meta, axis, reached)
+            widths[axis] = (max(reach[0], least), max(reach[1], least))
         # A plan holds no int-keyed dicts: the reach of each axis as a row,
         # a reach as long as its axis standing for all of it.
         halo = tuple((x, *r) for x, r in widths.items())
@@ -377,7 +454,6 @@ class Impulsed(PatchProcessor):
         operation = self.operation
         if backend_name(data) == "dask":
             array = optional_import("dask.array")
-            kernel = type(operation).kernel_for("numpy")
             depth, whole = {}, {}
             for axis, before, after in halo:
                 if max(before, after) >= data.shape[axis]:
@@ -388,7 +464,7 @@ class Impulsed(PatchProcessor):
                     depth[axis] = (before, after)
             joined = data.rechunk(whole) if whole else data
             out = array.map_overlap(
-                lambda block: kernel(operation, block, **inner),
+                partial(_filtered_block, operation, inner),
                 joined,
                 depth=depth,
                 boundary="none",
@@ -401,6 +477,21 @@ class Impulsed(PatchProcessor):
             return out.rechunk(data.chunks)
         kernel = type(operation).kernel_for(backend_name(data))
         return kernel(operation, data, **inner)
+
+
+def _filtered_block(operation, inner, block):
+    """
+    Return one dask block filtered by the operation's kernel for its library.
+
+    Blocks take turns in a process, as those of a window do: not every
+    kernel may be run from two threads at once.
+    """
+    # Imported here: the window module imports the processors.
+    from dascore.proc.window import _DASK_TURN  # noqa: PLC0415
+
+    kernel = type(operation).kernel_for(backend_name(block))
+    with _DASK_TURN:
+        return kernel(operation, block, **inner)
 
 
 @dataclass(frozen=True)

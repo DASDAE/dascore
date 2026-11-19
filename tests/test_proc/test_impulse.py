@@ -126,8 +126,17 @@ class TestReach:
     def test_causal_reaches_back(self, patch):
         """A causal filter's output reads only the input before it."""
         operation = dc.proc.PassFilter(time=(1, 20), zerophase=False)
-        ((_, before, after),) = _reach(operation, patch, time=1e-6)
-        assert before > 0 and after == 0
+        ((axis, before, after),) = _reach(operation, patch, time=1e-6)
+        # What follows a sample is only the least a chunk needs for the
+        # filter to run at all, which is nothing beside what precedes it.
+        least = impulse_module._fits(
+            operation,
+            operation.get_metadata(patch.drop_data())[1],
+            patch.drop_data(),
+            axis,
+            (axis,),
+        )
+        assert after == least and before > 50 * after
 
     def test_smaller_tolerance_reaches_further(self, patch):
         """The less may lie beyond, the further the reach."""
@@ -238,6 +247,19 @@ class TestLazy:
         assert _relative_error(loaded.data, expected.data) < 4e-6
 
 
+class TestXarray:
+    """On a DataArray an impulse window gives back a DataArray."""
+
+    def test_comes_back_a_data_array(self, patch):
+        """The window is forwarded through the accessor, as a window is."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("dascore.xarray")
+        array = patch.io.to_xarray()
+        out = array.dc.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        assert isinstance(out, xr.DataArray)
+        np.testing.assert_array_equal(out.values, patch.pass_filter(time=(1, 20)).data)
+
+
 class TestDask:
     """A dask array is computed a chunk at a time, read with the reach."""
 
@@ -338,12 +360,109 @@ class TestReviewedLimits:
         assert np.array_equal(in_memory.data, expected.data)
         assert _relative_error(out.load().data, expected.data) < 4e-6
 
+    def test_many_dimensions_within_the_budget(self, monkeypatch):
+        """Probes of a patch of many dimensions stay within the budget."""
+        sizes = []
+        original = impulse_module._impulsed
+
+        def recorded(operation, plan, shape, *args, **kwargs):
+            sizes.append(int(np.prod(shape)))
+            return original(operation, plan, shape, *args, **kwargs)
+
+        monkeypatch.setattr(impulse_module, "_impulsed", recorded)
+        data = np.zeros((40, 40, 40, 400))
+        coords = {
+            "a": np.arange(40.0),
+            "b": np.arange(40.0),
+            "c": np.arange(40.0),
+            "time": dc.to_datetime64(np.arange(400) / 250),
+        }
+        many = dc.Patch(data=data, coords=coords, dims=("a", "b", "c", "time"))
+        many.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        # One axis at a time, the rest one sample long: never the four.
+        assert max(sizes) <= 8 * 400
+
+    def test_shortest_length_longer_than_the_axis(self):
+        """A filter which cannot run on the whole axis is not looked for forever."""
+        short = dc.get_example_patch("random_das", shape=(1, 60))
+        operation = dc.proc.PassFilter(time=(1, 20), corners=22)
+        meta = short.drop_data()
+        plan = operation.get_metadata(meta)[1]
+        with pytest.raises(ValueError, match="padlen"):
+            impulse_module._fits(operation, plan, meta, 1, (1,))
+
+    def test_probe_past_the_budget_is_refused(self, patch, monkeypatch):
+        """A probe which would pass the budget is refused, not made."""
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        monkeypatch.setattr(impulse_module, "_PROBE_BUDGET", 1)
+        with pytest.raises(ParameterError, match="needs a probe of more than"):
+            patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+
+    def test_decay_past_the_probe(self):
+        """A response decaying at the probe's end is extrapolated past it."""
+        beyond = impulse_module._beyond
+        decaying = 0.5 ** np.arange(64.0)
+        assert beyond(decaying, decaying.sum()) < 1e-12
+        flat = np.ones(64)
+        assert beyond(flat, flat.sum()) == np.inf
+        assert beyond(np.ones(4), 4.0) == np.inf
+        # Nothing at all near the end, then something: not decaying.
+        rising = np.r_[np.ones(48), np.zeros(8), np.ones(8)]
+        assert beyond(rising, rising.sum()) == np.inf
+
+    def test_kept_across_threads(self, patch, monkeypatch):
+        """Measurements shared by threads are kept and let go safely."""
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        monkeypatch.setattr(impulse_module, "_MEASURED_LIMIT", 4)
+
+        def reach(low):
+            operation = dc.proc.PassFilter(time=(1 + low % 7, 20))
+            return _reach(operation, patch, time=1e-5)
+
+        with ThreadPoolExecutor(8) as pool:
+            list(pool.map(reach, range(64)))
+        assert len(impulse_module._MEASURED) <= 4
+
     def test_filter_too_long_for_the_patch(self):
         """A filter which cannot run on the patch at all says why, in the probe."""
         short = dc.get_example_patch("random_das", shape=(1, 60))
         # Its own padding of the ends is longer than the whole axis.
         with pytest.raises(ValueError, match="padlen"):
             short.impulse_window(time=1e-6).pass_filter(time=(1, 20), corners=22)
+
+    def test_response_at_even_lags_only(self, patch, tmp_path_factory):
+        """An impulse spreading past its neighbours is found to reach."""
+        # At 250 Hz, a notch at 62.5 Hz answers at even lags alone.
+        step = dc.to_timedelta64(1 / 250)
+        sampled = patch.update_coords(time_step=step)
+        operation = dc.proc.NotchFilter(time=62.5, q=30)
+        ((_, before, after),) = _reach(operation, sampled, time=1e-6)
+        assert before > 10 and after > 10
+        lazy = _stored(sampled, tmp_path_factory, "even_lags")
+        out = lazy.impulse_window(time=1e-6).notch_filter(time=62.5, q=30)
+        expected = sampled.notch_filter(time=62.5, q=30)
+        assert _relative_error(_loaded_in_boxes(out).data, expected.data) < 4e-6
+
+    def test_response_too_slow_to_settle(self, patch):
+        """A response which does not decay inside the probe reads its axis whole."""
+        step = dc.to_timedelta64(1 / 250)
+        sampled = patch.update_coords(time_step=step)
+        operation = dc.proc.NotchFilter(time=60, q=1e9)
+        ((_, before, after),) = _reach(operation, sampled, time=1e-6)
+        # Decaying too slowly to tell inside four axis lengths: all of it.
+        assert before == after == sampled.shape[1]
+
+    def test_shortest_chunk_the_filter_runs_on(self, patch):
+        """Chunks shorter than the filter's padding are read with enough around them."""
+        dask_array = pytest.importorskip("dask.array")
+        short = patch.select(time=(0, 4000), samples=True)
+        there = short.new(data=dask_array.from_array(short.data, chunks=(1, 1)))
+        out = there.impulse_window(time=0.1).pass_filter(time=(None, 100))
+        expected = short.pass_filter(time=(None, 100))
+        assert np.isfinite(out.data.compute()).all()
+        assert _relative_error(out.data.compute(), expected.data) < 1
 
     def test_probe_memory_is_bounded(self, monkeypatch):
         """However long the response, a probe holds no more than the budget."""
