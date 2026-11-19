@@ -199,7 +199,7 @@ CALLS = {
 GRIDS = (((7, 150), (500,)), ((1, 2, 3), (1, 2, 1000)), ((), (3, 4, 5, 1999)))
 # Operations whose chunks differ from the eager result by design, each
 # with the largest difference allowed, as a fraction of its largest value.
-APPROXIMATE = {"Impulsed": 1e-7}
+APPROXIMATE = {"Impulsed": 2e-9}
 
 
 class TestContractsHold:

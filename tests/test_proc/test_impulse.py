@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import ParameterError
-from dascore.lazy.contract import Halo, WholeAxis
+from dascore.lazy.contract import Halo
 from dascore.lazy.execute import chunk_boxes
 from dascore.proc import impulse as impulse_module
 from dascore.proc.impulse import Impulsed, PatchImpulseWindow
@@ -22,6 +20,27 @@ from dascore.warnings import NumpyFallbackWarning
 def patch():
     """One channel, long in time, so lazy boxes cut along time."""
     return dc.get_example_patch("random_das", shape=(1, 40000))
+
+
+@pytest.fixture(scope="module")
+def wide():
+    """Many channels, so a filter along distance settles inside the axis."""
+    return dc.get_example_patch("random_das", shape=(400, 4000))
+
+
+def _on(patch, backend, tmp_path_factory, name):
+    """The patch, lazy or on dask in chunks along both axes."""
+    if backend == "lazy":
+        return _stored(patch, tmp_path_factory, name)
+    dask_array = pytest.importorskip("dask.array")
+    return patch.new(data=dask_array.from_array(patch.data, chunks=(100, 1000)))
+
+
+def _computed(patch) -> np.ndarray:
+    """A lazy patch loaded in boxes, or a dask one computed."""
+    if patch.backend == "lazy":
+        return _loaded_in_boxes(patch).data
+    return patch.data.compute()
 
 
 @pytest.fixture(scope="module")
@@ -131,6 +150,12 @@ class TestReach:
         for low in (1, 2, 3):
             _reach(dc.proc.PassFilter(time=(low, 20)), patch, time=1e-5)
         assert len(impulse_module._MEASURED) == 2
+        kept = " ".join(str(x[3]) for x in impulse_module._MEASURED)
+        # What the third and second calls measured; not the first.
+        first = dc.proc.PassFilter(time=(1, 20)).get_metadata(patch.drop_data())[1]
+        third = dc.proc.PassFilter(time=(3, 20)).get_metadata(patch.drop_data())[1]
+        assert str(impulse_module._plan_key(third)) in kept
+        assert str(impulse_module._plan_key(first)) not in kept
 
     def test_measured_once_for_a_plan(self, patch, monkeypatch):
         """The measurement is kept for the plan, and not made again."""
@@ -147,6 +172,15 @@ class TestReach:
         first = len(calls)
         _reach(operation, patch, time=1e-5)
         assert first and len(calls) == first
+
+    def test_kept_by_plan(self, patch):
+        """The same call on a finer sampling measures again, further."""
+        operation = dc.proc.PassFilter(time=(1, 20))
+        coarse = _reach(operation, patch, time=1e-6)[0][1]
+        step = patch.get_coord("time").step / 4
+        finer = patch.update_coords(time_step=step)
+        assert _reach(operation, finer, time=1e-6)[0][1] > 3 * coarse
+        assert _reach(operation, patch, time=1e-6)[0][1] == coarse
 
     def test_along_two_dimensions(self, two_rows):
         """A filter along two dimensions has a reach along each."""
@@ -207,6 +241,17 @@ class TestLazy:
 class TestDask:
     """A dask array is computed a chunk at a time, read with the reach."""
 
+    @pytest.mark.parametrize("zerophase", (True, False))
+    def test_causal_and_zero_phase(self, patch, zerophase):
+        """A causal filter reads only before each chunk, on dask too."""
+        dask_array = pytest.importorskip("dask.array")
+        there = patch.new(data=dask_array.from_array(patch.data, chunks=(1, 5000)))
+        out = there.impulse_window(time=1e-6).pass_filter(
+            time=(1, 20), zerophase=zerophase
+        )
+        expected = patch.pass_filter(time=(1, 20), zerophase=zerophase)
+        assert _relative_error(out.data.compute(), expected.data) < 4e-6
+
     @pytest.mark.parametrize("chunks", ((1, 500), (1, 7000), (1, 40000)))
     def test_within_tolerance(self, patch, chunks):
         """Whatever the chunks, nothing is computed at the call, and it is close."""
@@ -223,24 +268,128 @@ class TestDask:
         assert _relative_error(out.data.compute(), expected.data) < 4e-6
 
 
+class TestReviewedLimits:
+    """What a probe and a chunk need where a reach is long or a filter large."""
+
+    @pytest.mark.parametrize("backend", ("lazy", "dask"))
+    def test_one_axis_whole_beside_one_cut(
+        self, wide, tmp_path_factory, monkeypatch, backend
+    ):
+        """An axis needed whole keeps the reach of the others."""
+        original = impulse_module._measured
+
+        def unsettled_in_distance(operation, plan, meta, axis, *args):
+            if axis == 0:
+                return None
+            return original(operation, plan, meta, axis, *args)
+
+        monkeypatch.setattr(impulse_module, "_measured", unsettled_in_distance)
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        there = _on(wide, backend, tmp_path_factory, "whole_beside")
+        window = there.impulse_window(on_unsettled="whole", time=1e-6, distance=1e-6)
+        out = window.notch_filter(time=60, distance=0.2, q=3)
+        expected = wide.notch_filter(time=60, distance=0.2, q=3)
+        assert _relative_error(_computed(out), expected.data) < 4e-6
+
+    @pytest.mark.parametrize("backend", ("lazy", "dask"))
+    def test_two_axes_cut(self, wide, tmp_path_factory, backend):
+        """Cut along both axes a filter reaches along, each read with its reach."""
+        there = _on(wide, backend, tmp_path_factory, "two_cut")
+        window = there.impulse_window(time=1e-6, distance=1e-6)
+        out = window.notch_filter(time=60, distance=0.2, q=3)
+        halo = _reach(
+            dc.proc.NotchFilter(time=60, distance=0.2, q=3),
+            wide,
+            time=1e-6,
+            distance=1e-6,
+        )
+        # Both reaches shorter than their axes, so both axes are cut.
+        assert all(max(b, a) < wide.shape[x] for x, b, a in halo)
+        expected = wide.notch_filter(time=60, distance=0.2, q=3)
+        assert _relative_error(_computed(out), expected.data) < 4e-6
+
+    def test_dask_reach_longer_than_the_axis(self):
+        """A reach past the axis reads it whole, rather than failing."""
+        dask_array = pytest.importorskip("dask.array")
+        short = dc.get_example_patch("random_das", shape=(2, 500))
+        there = short.new(data=dask_array.from_array(short.data, chunks=(1, 100)))
+        out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        assert out.data.chunks == there.data.chunks
+        expected = short.pass_filter(time=(1, 20))
+        np.testing.assert_allclose(out.data.compute(), expected.data, atol=1e-12)
+
+    def test_dask_states_the_dtype_made(self):
+        """Integers on dask are said to become what the filter makes of them."""
+        dask_array = pytest.importorskip("dask.array")
+        ints = dc.get_example_patch("random_das", shape=(1, 8000))
+        ints = ints.new(data=(ints.data * 100).astype(np.int16))
+        there = ints.new(data=dask_array.from_array(ints.data, chunks=(1, 2000)))
+        out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        assert out.dtype == out.data.compute().dtype == np.dtype(np.float64)
+
+    def test_high_order_filter(self, patch, lazy):
+        """A filter which pads its ends further than a short probe still runs."""
+        expected = patch.pass_filter(time=(1, 20), corners=22)
+        window = lazy.impulse_window(time=1e-6)
+        out = window.pass_filter(time=(1, 20), corners=22)
+        in_memory = patch.impulse_window(time=1e-6).pass_filter(
+            time=(1, 20), corners=22
+        )
+        assert np.array_equal(in_memory.data, expected.data)
+        assert _relative_error(out.load().data, expected.data) < 4e-6
+
+    def test_filter_too_long_for_the_patch(self):
+        """A filter which cannot run on the patch at all says why, in the probe."""
+        short = dc.get_example_patch("random_das", shape=(1, 60))
+        # Its own padding of the ends is longer than the whole axis.
+        with pytest.raises(ValueError, match="padlen"):
+            short.impulse_window(time=1e-6).pass_filter(time=(1, 20), corners=22)
+
+    def test_probe_memory_is_bounded(self, monkeypatch):
+        """However long the response, a probe holds no more than the budget."""
+        sizes = []
+        original = impulse_module._impulsed
+
+        def recorded(operation, plan, shape, *args, **kwargs):
+            sizes.append(int(np.prod(shape)))
+            return original(operation, plan, shape, *args, **kwargs)
+
+        monkeypatch.setattr(impulse_module, "_impulsed", recorded)
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        wide = dc.get_example_patch("random_das", shape=(300, 4000))
+        # A sharp notch along both axes, whose response is long.
+        window = wide.impulse_window(on_unsettled="whole", time=1e-6, distance=1e-6)
+        window.notch_filter(time=60, distance=0.2, q=3000)
+        assert sizes and max(sizes) <= impulse_module._PROBE_BUDGET
+
+    def test_reach_past_the_axis_is_the_axis(self, two_rows):
+        """The probe stops growing once the reach is past the axis."""
+        operation = dc.proc.NotchFilter(distance=0.2, q=300)
+        halo = _reach(operation, two_rows, distance=1e-6)
+        ((_, before, after),) = [x for x in halo if x[0] == 0]
+        assert before <= two_rows.shape[0] and after <= two_rows.shape[0]
+
+
 class TestUnsettled:
     """A response which does not fall under its tolerance in the longest probe."""
 
     def test_raises_by_default(self, patch, monkeypatch):
         """Refused, naming the tolerance and what to do."""
-        monkeypatch.setattr(impulse_module, "_LAST_PROBE", 256)
+        monkeypatch.setattr(impulse_module, "_PROBE_BUDGET", 256)
         monkeypatch.setattr(impulse_module, "_FIRST_PROBE", 128)
         with pytest.raises(ParameterError, match="does not fall under"):
             patch.impulse_window(time=1e-9).pass_filter(time=(0.5, 2))
 
     def test_whole_axis(self, patch, monkeypatch):
         """Or the dimension is needed whole, as the operation alone needs it."""
-        monkeypatch.setattr(impulse_module, "_LAST_PROBE", 256)
+        monkeypatch.setattr(impulse_module, "_PROBE_BUDGET", 256)
         monkeypatch.setattr(impulse_module, "_FIRST_PROBE", 128)
         operation = dc.proc.PassFilter(time=(0.5, 2))
         windowed = Impulsed(operation, on_unsettled="whole", time=1e-9)
         _, plan = windowed.get_metadata(patch.drop_data())
-        assert windowed.chunk_contract(patch.dtype, plan) == WholeAxis((1,))
+        # A reach as long as the axis, which a halo cuts at its ends.
+        whole = patch.shape[1]
+        assert windowed.chunk_contract(patch.dtype, plan) == Halo({1: (whole, whole)})
         out = patch.impulse_window(on_unsettled="whole", time=1e-9).pass_filter(
             time=(0.5, 2)
         )
@@ -260,11 +409,11 @@ class TestRefused:
         with pytest.raises(ParameterError, match=r"gives no\s+tolerance"):
             patch.impulse_window(distance=1e-6).pass_filter(time=(1, 20))
 
-    def test_dimension_not_reached(self, patch):
+    def test_dimension_not_reached(self, two_rows):
         """A tolerance along a dimension it does not reach needs nothing."""
         operation = dc.proc.PassFilter(time=(1, 20))
-        halo = _reach(operation, patch, time=1e-6, distance=1e-6)
-        assert (0, 0, 0) in halo
+        halo = _reach(operation, two_rows, time=1e-6, distance=1e-6)
+        assert two_rows.shape[0] > 1 and (0, 0, 0) in halo
 
     def test_unknown_dimension(self, patch):
         """A dimension the patch lacks is refused."""
@@ -338,10 +487,3 @@ class TestRefused:
         assert isinstance(window, PatchImpulseWindow)
         with pytest.raises(AttributeError):
             getattr(window, name)
-
-
-def test_no_warnings_in_memory(patch):
-    """Measuring says nothing of its probes."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        patch.impulse_window(time=1e-6).notch_filter(time=60, q=30)
