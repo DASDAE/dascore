@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import sys
+from typing import ClassVar
+
 import numpy as np
 import pytest
+from pydantic import Field
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, PatchDataError
 from dascore.lazy.contract import Halo
 from dascore.lazy.execute import chunk_boxes
 from dascore.proc import impulse as impulse_module
@@ -410,6 +414,9 @@ class TestReviewedLimits:
         rising = np.r_[np.ones(48), np.zeros(8), np.ones(8)]
         assert beyond(rising, rising.sum()) == np.inf
 
+    @pytest.mark.skipif(
+        sys.platform == "emscripten", reason="emscripten does not support threads"
+    )
     def test_kept_across_threads(self, patch, monkeypatch):
         """Measurements shared by threads are kept and let go safely."""
         from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
@@ -514,9 +521,174 @@ class TestUnsettled:
         )
         assert np.array_equal(out.data, patch.pass_filter(time=(0.5, 2)).data)
 
+    @pytest.mark.parametrize("on_unsettled", ("raise", "whole"))
+    def test_budget_passed_while_padding(self, patch, monkeypatch, on_unsettled):
+        """A probe lengthened past the budget for padding is unsettled, too."""
+        original = impulse_module._response
+
+        def padded_past(operation, plan, shape, axis, *args):
+            if shape[axis] >= impulse_module._FIRST_PROBE:
+                raise impulse_module._OverBudgetError("lengthened past the budget")
+            return original(operation, plan, shape, axis, *args)
+
+        monkeypatch.setattr(impulse_module, "_response", padded_past)
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        windowed = Impulsed(
+            dc.proc.PassFilter(time=(1, 20)), on_unsettled=on_unsettled, time=1e-6
+        )
+        if on_unsettled == "raise":
+            with pytest.raises(ParameterError, match="does not fall under"):
+                windowed.get_metadata(patch.drop_data())
+            return
+        _, plan = windowed.get_metadata(patch.drop_data())
+        whole = patch.shape[1]
+        assert windowed.chunk_contract(patch.dtype, plan) == Halo({1: (whole, whole)})
+
+    def test_probe_never_past_four_axes(self, monkeypatch):
+        """A short axis is never probed longer than four times itself."""
+        lengths = []
+        original = impulse_module._response
+
+        def recorded(operation, plan, shape, axis, *args):
+            lengths.append(shape[axis])
+            return original(operation, plan, shape, axis, *args)
+
+        monkeypatch.setattr(impulse_module, "_response", recorded)
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        short = dc.get_example_patch("random_das", shape=(1, 100))
+        short.impulse_window(time=1e-9).pass_filter(time=(1, 20))
+        assert max(lengths) <= 400
+
+
+class TestNonFinite:
+    """A NaN carried along a filtered axis is never cut short."""
+
+    @pytest.fixture(scope="class")
+    def holed(self, patch):
+        """The long trace with one NaN early on."""
+        data = patch.data.copy()
+        data[0, 100] = np.nan
+        return patch.new(data=data)
+
+    def test_in_memory_as_the_filter(self, holed):
+        """In memory the NaN goes where the filter alone takes it."""
+        out = holed.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        expected = holed.pass_filter(time=(1, 20))
+        np.testing.assert_array_equal(out.data, expected.data)
+
+    def test_lazy_cut_refused(self, holed, tmp_path_factory):
+        """A lazy patch cut along the filtered axis refuses it."""
+        lazy = _stored(holed, tmp_path_factory, "holed")
+        out = lazy.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        with pytest.raises(PatchDataError, match="NaN or infinity"):
+            _loaded_in_boxes(out)
+
+    def test_dask_cut_refused(self, holed):
+        """A dask array cut along the filtered axis refuses it."""
+        dask_array = pytest.importorskip("dask.array")
+        there = holed.new(data=dask_array.from_array(holed.data, chunks=(1, 5000)))
+        out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        with pytest.raises(PatchDataError, match="NaN or infinity"):
+            out.data.compute()
+
+    def test_dask_whole_as_the_filter(self, holed):
+        """In one chunk along the filtered axis the NaN goes as the filter takes it."""
+        dask_array = pytest.importorskip("dask.array")
+        there = holed.new(data=dask_array.from_array(holed.data, chunks=-1))
+        out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
+        expected = holed.pass_filter(time=(1, 20))
+        np.testing.assert_array_equal(out.data.compute(), expected.data)
+
 
 class TestRefused:
     """What an impulse window cannot run is refused when it is called."""
+
+    def test_settles_from_its_data(self, patch):
+        """An operation which settles its result from the data is refused."""
+
+        class Settled(dc.proc.PassFilter):
+            """A filter which settles its result afterwards."""
+
+            name = None
+
+            def reconcile(self, data, out, meta):
+                return out
+
+        with pytest.raises(ParameterError, match="settles its result"):
+            Impulsed(Settled(time=(1, 20)), time=1e-6)(patch)
+
+    def test_kernel_replaced_by_a_subclass(self, patch):
+        """A subclass with a kernel of its own must say again it is linear."""
+
+        class Squared(dc.proc.PassFilter):
+            """A filter whose result is squared."""
+
+            name = None
+
+            def numpy_kernel(self, data, **kwargs):
+                return super().numpy_kernel(data, **kwargs) ** 2
+
+        class Kept(dc.proc.PassFilter):
+            """A filter which only renames itself."""
+
+            name = None
+
+        with pytest.raises(ParameterError, match="says is linear"):
+            Impulsed(Squared(time=(1, 20)), time=1e-6)(patch)
+        out = Impulsed(Kept(time=(1, 20)), time=1e-6)(patch)
+        assert np.array_equal(out.data, patch.pass_filter(time=(1, 20)).data)
+
+    def test_computes_no_data(self, patch):
+        """An operation without a kernel has nothing to measure."""
+
+        class Renamed(dc.PatchProcessor):
+            """A linear operation on metadata alone."""
+
+            name = None
+            linear = True
+            position_free = True
+
+        with pytest.raises(ParameterError, match="computes no data"):
+            Impulsed(Renamed(), time=1e-6).get_metadata(patch.drop_data())
+
+    def test_inner_checks_run(self, patch):
+        """What the operation requires of a patch is asked of it."""
+
+        class Calibrated(dc.proc.PassFilter):
+            """A filter which needs an attribute."""
+
+            name = None
+            linear = True
+            required_attrs: ClassVar[dict] = {"calibrated_by": "someone"}
+
+        with pytest.raises(Exception, match="calibrated_by"):
+            Impulsed(Calibrated(time=(1, 20)), time=1e-6)(patch)
+
+    def test_dimension_named_like_a_parameter(self, patch):
+        """A dimension named like one of its parameters is refused clearly."""
+        renamed = patch.rename_coords(distance="operation")
+        with pytest.raises(ParameterError, match="names one of its own"):
+            renamed.impulse_window(operation=1e-6, time=1e-6)
+
+    def test_kept_by_every_field(self, patch, monkeypatch):
+        """A field the repr does not show still tells two operations apart."""
+
+        class Gained(dc.proc.PassFilter):
+            """A filter with a gain its repr hides."""
+
+            name = None
+            linear = True
+            gain: float = Field(1.0, repr=False)
+
+        monkeypatch.setattr(impulse_module, "_MEASURED", {})
+        one, two = Gained(time=(1, 20), gain=1.0), Gained(time=(1, 20), gain=2.0)
+        assert repr(one) == repr(two)
+        # One with no faithful id is matched by nothing, not even itself.
+        unkeyed = Gained(time=(1, 20), gain=1.0)
+        object.__setattr__(unkeyed, "gain", object())
+        key = impulse_module._operation_key
+        assert key(unkeyed) != key(unkeyed)
+        assert impulse_module._operation_key(one) != impulse_module._operation_key(two)
 
     def test_operation_not_linear(self, patch):
         """An operation which does not say it is linear says nothing by its response."""

@@ -148,7 +148,12 @@ class PatchProcessor(DascoreBaseModel):
     need not. A class which is linear as well, as a recursive filter is,
     sets `linear = True`: its response to one impulse then says what it
     does to any data, and it runs in an
-    [`Patch.impulse_window`](`dascore.Patch.impulse_window`).
+    [`Patch.impulse_window`](`dascore.Patch.impulse_window`). It promises
+    too that the response spreads from the impulse along each axis on its
+    own and decays away from it, as a filter's does; a probe of finite
+    length cannot see a response which starts far from the impulse, or off
+    the lines through it. The word is for the kernel of the class which
+    says it: a subclass with a kernel of its own says it again.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that

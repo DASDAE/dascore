@@ -23,9 +23,9 @@ import numpy as np
 from pydantic import ConfigDict
 
 from dascore.core.processor import PatchProcessor, captured_operation
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, PatchDataError
 from dascore.lazy.contract import Halo
-from dascore.utils.array_api import _as_numpy_dtype, backend_name
+from dascore.utils.array_api import _as_numpy_dtype, array_namespace, backend_name
 from dascore.utils.misc import optional_import
 from dascore.utils.patch import _call_str
 
@@ -39,6 +39,23 @@ _PROBE_BUDGET = 1 << 23
 # the impulse, so the probe's own ends play no part in what is measured.
 _WELL_INSIDE = 0.25
 _UNSETTLED = ("raise", "whole")
+
+
+class _OverBudgetError(ParameterError):
+    """A probe would hold more samples than the budget allows."""
+
+
+def _operation_key(operation) -> tuple:
+    """
+    Return what tells one operation from another, for what is kept.
+
+    Its id, which every field it was given enters, whether or not its
+    repr shows it; an operation with no faithful id is never matched.
+    """
+    try:
+        return type(operation), operation.operation_id
+    except Exception:
+        return type(operation), object(), id(operation)
 
 
 def _plan_key(value) -> Any:
@@ -112,7 +129,7 @@ def _impulsed(operation, plan, shape, dtype, room=None) -> np.ndarray:
                 f"{_PROBE_BUDGET} samples, which an impulse window does not "
                 "make; run the operation without one."
             )
-            raise ParameterError(msg)
+            raise _OverBudgetError(msg)
         probe = np.zeros(shape, dtype)
         probe[tuple(n // 2 for n in shape)] = 1
         try:
@@ -151,7 +168,7 @@ def _made_dtype(operation, plan, meta) -> np.dtype:
     def compute():
         return _impulsed(operation, plan, ones, dtype, room).dtype
 
-    key = ("dtype", type(operation), repr(operation), _plan_key(plan))
+    key = ("dtype", *_operation_key(operation), _plan_key(plan))
     return _kept((*key, tuple(meta.shape), dtype.str), compute)
 
 
@@ -181,7 +198,7 @@ def _reached(operation, plan, meta) -> tuple[int, ...]:
                 out.append(axis)
         return tuple(out)
 
-    key = ("reached", type(operation), repr(operation), _plan_key(plan))
+    key = ("reached", *_operation_key(operation), _plan_key(plan))
     return _kept((*key, tuple(meta.shape), dtype.str), compute)
 
 
@@ -209,7 +226,7 @@ def _fits(operation, plan, meta, axis, reached) -> int:
                 continue
             return length
 
-    key = ("fits", type(operation), repr(operation), _plan_key(plan))
+    key = ("fits", *_operation_key(operation), _plan_key(plan))
     return _kept((*key, axis, tuple(meta.shape), dtype.str), compute)
 
 
@@ -254,13 +271,17 @@ def _measured(operation, plan, meta, axis, reached, tolerance):
     whole = meta.shape[axis]
 
     def compute():
-        length = _FIRST_PROBE
+        length = min(_FIRST_PROBE, 4 * whole)
         while True:
             shape = [1] * len(meta.shape)
             shape[axis] = length
             if math.prod(shape) > _PROBE_BUDGET:
                 return None
-            response = _response(operation, plan, tuple(shape), axis, dtype, room)
+            try:
+                response = _response(operation, plan, tuple(shape), axis, dtype, room)
+            except _OverBudgetError:
+                # Lengthened for a filter's padding past what memory allows.
+                return None
             middle = len(response) // 2
             before_side = response[: middle + 1][::-1]
             after_side = response[middle:]
@@ -276,9 +297,9 @@ def _measured(operation, plan, meta, axis, reached, tolerance):
             if length >= 4 * whole:
                 # It reaches past the axis: a chunk needs all of it.
                 return whole, whole
-            length *= 2
+            length = min(2 * length, 4 * whole)
 
-    key = ("reach", type(operation), repr(operation), _plan_key(plan))
+    key = ("reach", *_operation_key(operation), _plan_key(plan))
     return _kept((*key, axis, tuple(meta.shape), dtype.str, tolerance), compute)
 
 
@@ -348,6 +369,12 @@ class Impulsed(PatchProcessor):
         spelled = spelled if spelled.endswith(")") else f"{spelled}()"
         return f"{_call_str('impulse_window', given)}.{spelled}"
 
+    def check(self, patch):
+        """Check the patch for the operation run, then for the window."""
+        if isinstance(self.operation, PatchProcessor):
+            self.operation.check(patch)
+        return super().check(patch)
+
     def _refuse(self, why: str):
         """Raise for an operation which cannot run in an impulse window."""
         operation = self.operation
@@ -371,6 +398,15 @@ class Impulsed(PatchProcessor):
                 "position, which its class says by `linear` and "
                 "`position_free`."
             )
+        if type(operation).kernel_for("numpy") is None:
+            self._refuse("it computes no data, so it has no response to measure.")
+        if not _linear_kernel(type(operation)):
+            self._refuse(
+                "its kernel is not the one its class, or the class it comes "
+                "from, says is linear."
+            )
+        if type(operation).reconcile is not PatchProcessor.reconcile:
+            self._refuse("it settles its result from the data it computed.")
         if operation._inputs()[1]:
             self._refuse("it takes another patch.")
         tolerances = dict(self.model_extra or {})
@@ -432,18 +468,20 @@ class Impulsed(PatchProcessor):
         made = _made_dtype(operation, inner, meta)
         # In the dtype the kernel makes, which a lazy patch states ahead.
         out = out.new(dtype=made)
-        return out, {"inner": inner, "halo": halo, "like": np.empty(0, made)}
+        plan = {"inner": inner, "halo": halo, "like": np.empty(0, made)}
+        return out, {**plan, "shape": tuple(meta.shape)}
 
     def chunk_contract(self, dtype, plan):
         """Return the measured reach around a chunk; it may be its whole axis."""
         return Halo({axis: (before, after) for axis, before, after in plan["halo"]})
 
-    def numpy_kernel(self, data, *, inner, halo, like):
+    def numpy_kernel(self, data, *, inner, halo, like, shape):
         """Return the operation's result on the data, computed as it computes it."""
+        _refuse_cut_nonfinite(data, halo, shape)
         kernel = type(self.operation).kernel_for("numpy")
         return kernel(self.operation, data, **inner)
 
-    def kernel(self, data, *, inner, halo, like):
+    def kernel(self, data, *, inner, halo, like, shape):
         """
         Return the operation's result on the data's own backend.
 
@@ -464,7 +502,7 @@ class Impulsed(PatchProcessor):
                     depth[axis] = (before, after)
             joined = data.rechunk(whole) if whole else data
             out = array.map_overlap(
-                partial(_filtered_block, operation, inner),
+                partial(_filtered_block, operation, inner, halo, shape),
                 joined,
                 depth=depth,
                 boundary="none",
@@ -479,7 +517,50 @@ class Impulsed(PatchProcessor):
         return kernel(operation, data, **inner)
 
 
-def _filtered_block(operation, inner, block):
+def _refuse_cut_nonfinite(data, halo, shape):
+    """
+    Refuse a NaN or infinity in a chunk cut along an axis the filter reaches.
+
+    A recursive filter carries a NaN on to the end of its axis, which a
+    chunk read with a finite reach around it cannot: the result would
+    differ by more than any tolerance, so it is refused. Data read whole
+    along every axis the filter reaches are filtered as they are.
+    """
+    cut = any(
+        data.shape[axis] < shape[axis]
+        for axis, before, after in halo
+        if max(before, after) > 0
+    )
+    if not cut:
+        return
+    xp = array_namespace(data)
+    if not bool(xp.all(xp.isfinite(data))):
+        msg = (
+            "An impulse window cannot cut data holding NaN or infinity: a "
+            "recursive filter carries them to the end of its axis. Fill them "
+            "first, or filter without an impulse window."
+        )
+        raise PatchDataError(msg)
+
+
+def _linear_kernel(cls) -> bool:
+    """
+    Return whether the class which says it is linear wrote the kernel it runs.
+
+    A subclass which replaces its parent's kernel must say so again; the
+    parent's word is for the parent's kernel.
+    """
+    said = next(k for k in cls.__mro__ if "linear" in k.__dict__)
+    # Only asked of a class with a kernel, so one class in it wrote it.
+    wrote = next(
+        k
+        for k in cls.__mro__
+        if {"numpy_kernel", "kernel"} & set(k.__dict__) or k.__dict__.get("_kernels")
+    )
+    return issubclass(said, wrote)
+
+
+def _filtered_block(operation, inner, halo, shape, block):
     """
     Return one dask block filtered by the operation's kernel for its library.
 
@@ -489,6 +570,7 @@ def _filtered_block(operation, inner, block):
     # Imported here: the window module imports the processors.
     from dascore.proc.window import _DASK_TURN  # noqa: PLC0415
 
+    _refuse_cut_nonfinite(block, halo, shape)
     kernel = type(operation).kernel_for(backend_name(block))
     with _DASK_TURN:
         return kernel(operation, block, **inner)
@@ -507,6 +589,16 @@ class PatchImpulseWindow:
     patch: Any
     tolerances: Mapping[str, float] = field(default_factory=dict)
     on_unsettled: str = "raise"
+
+    def __post_init__(self):
+        """Refuse a tolerance which would be taken for one of its own fields."""
+        taken = sorted(set(self.tolerances) & set(Impulsed.model_fields))
+        if taken:
+            msg = (
+                f"An impulse window cannot give a tolerance along {taken}, "
+                "which names one of its own parameters."
+            )
+            raise ParameterError(msg)
 
     def __getattr__(self, name: str):
         """Return a patch operation which runs with the measured reach."""

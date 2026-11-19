@@ -1174,6 +1174,9 @@ class Patch(NamespaceOwner, PatchMeta):
         - Only an operation which is linear and acts the same at every
           position can be run so, which its class says by `linear` and
           `position_free`: `pass_filter` and `notch_filter`.
+        - A NaN or infinity in data cut along an axis the operation reaches
+          is refused when that chunk is computed: a recursive filter carries
+          it to the end of the axis, which no finite reach can.
         - Data in memory are computed whole, exactly as the operation
           alone computes them: in memory nothing is gained by cutting.
         - The measurement depends on the operation's plan alone, and is
