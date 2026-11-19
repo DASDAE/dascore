@@ -185,6 +185,8 @@ CALLS = {
         _hidden=("time", np.arange(x.shape[x.get_axis("time")]))
     ).drop_private_coords(),
     "PassFilter": lambda x: x.pass_filter(time=(10, 100)),
+    # Approximate by design, to its tolerance; see APPROXIMATE.
+    "Impulsed": lambda x: x.impulse_window(time=1e-9).pass_filter(time=(10, 100)),
     "MedianFilter": lambda x: x.median_filter(time=5, distance=3, samples=True),
     "SavgolFilter": lambda x: x.savgol_filter(
         polyorder=2, time=7, distance=5, samples=True, mode="mirror"
@@ -195,6 +197,9 @@ CALLS = {
 
 # Cuts of the two axes: uneven ones, and pieces shorter than any halo.
 GRIDS = (((7, 150), (500,)), ((1, 2, 3), (1, 2, 1000)), ((), (3, 4, 5, 1999)))
+# Operations whose chunks differ from the eager result by design, each
+# with the largest difference allowed, as a fraction of its largest value.
+APPROXIMATE = {"Impulsed": 2e-9}
 
 
 class TestContractsHold:
@@ -235,4 +240,10 @@ class TestContractsHold:
             for low, high in grid(lazy.shape, inside):
                 box = tuple(slice(int(a), int(b)) for a, b in zip(low, high))
                 out[box] = compute(lazy.data, box)
-            _assert_close(out, eager.data)
+            if (allowed := APPROXIMATE.get(cls.__name__)) is not None:
+                # Or the rounding of the dtype, where it is the coarser.
+                rounding = 32 * np.finfo(np.result_type(eager.dtype, np.float16)).eps
+                scale = np.abs(eager.data).max() * max(allowed, rounding)
+                np.testing.assert_allclose(out, eager.data, rtol=0, atol=scale)
+            else:
+                _assert_close(out, eager.data)

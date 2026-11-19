@@ -2,7 +2,7 @@
 title: Windowed and Lazy Processing
 ---
 
-This note is a plan: it states the API DASCore is building for processing a patch in windows and for processing data larger than memory, and the rules both keep. The first three steps of the [order of work](#order-of-work) are implemented, the third but for one check, and each section says where what exists differs from the plan. The rest is not, and the code blocks are not executed. [Lazy Operations](lazy_operations.qmd) describes what exists today: the lazy array, the chunk contracts, and the executor which runs a chain a box at a time.
+This note is a plan: it states the API DASCore is building for processing a patch in windows and for processing data larger than memory, and the rules both keep. The first four steps of the [order of work](#order-of-work) are implemented, the third but for one check, and each section says where what exists differs from the plan. The rest is not, and the code blocks are not executed. [Lazy Operations](lazy_operations.qmd) describes what exists today: the lazy array, the chunk contracts, and the executor which runs a chain a box at a time.
 
 The two subjects are one design. A lazy chain can be split into boxes only where each operation says how far it reaches, and a window is how a user says that for an operation which would otherwise need a whole axis.
 
@@ -89,6 +89,8 @@ patch.impulse_window(time=1e-6).pass_filter(time=(1, 20))
 
 Plain `pass_filter` stays exact and needs its axis whole. The user chooses to accept a result equal to a tolerance.
 
+*Implemented so far:* an operation says it is linear by `linear = True` beside `position_free`; `pass_filter` and `notch_filter` do. Data in memory are computed whole, exactly as the operation alone computes them, since in memory nothing is gained by cutting; a lazy patch is computed a chunk at a time by a `Halo` contract of the measured reach, and a dask array by `map_overlap`. Every dimension the operation reaches along must be given a tolerance. A probe holds at most about eight million samples (64 MB), and never grows past four times its axis, a reach that long standing for the whole axis; `on_unsettled="whole"` needs a dimension whole where the response has not fallen under its tolerance by then.
+
 ## Backends
 
 A spool or a patch is moved to a backend by name.
@@ -164,7 +166,7 @@ These land before the public API is frozen for 1.0.
 1. `window` on in-memory patches: `apply`, reductions, the `ends` option, and `rolling` deprecated for it. Useful with no lazy code at all. *Done.*
 2. Operations which honour a window, and the window contract in the executor. *Done for operations which keep a window's shape, or every n-th sample of it, and take no other patch.*
 3. `set_backend`, the lazy reader, and the merge which stays lazy. *Done, but for the check of a changed file, which is made when the lazy patch is made and not when it is read.*
-4. `impulse_window`.
+4. `impulse_window`. *Done, for `pass_filter` and `notch_filter`.*
 5. Writing in one pass, and zarr chunks.
 6. Reading ahead of the computation on a thread pool, driven by the read schedule.
 
