@@ -50,6 +50,7 @@ from dascore.io.index.query import (
     build_sql,
 )
 from dascore.io.index.schema import (
+    COUNT_VARIANTS_ADDED,
     GRID_NEEDED,
     INDEX_VERSION,
     INDEXES,
@@ -289,19 +290,22 @@ class SQLiteIndexBackend:
         """
         Run the wrapped body inside one transaction.
 
-        Commits on normal (or early-return) exit; on any error rolls back
-        without letting a failed rollback mask the original exception.
+        Commits on normal (or early-return) exit; on any error, an
+        interrupt included, rolls back without letting a failed rollback
+        mask the original exception.
         The statement lock is held for the whole transaction, so readers
         sharing the connection can never observe a half-applied write;
         being reentrant, it keeps the statement helpers inside the body
         working unchanged.
         """
         with self._lock:
-            self._begin()
             try:
+                # inside the try: an interrupt raised as a busy BEGIN
+                # finally returns would otherwise leave it open
+                self._begin()
                 yield
                 self._commit()
-            except Exception:
+            except BaseException:
                 with suppress(Exception):
                     self._rollback()
                 raise
@@ -339,6 +343,28 @@ class SQLiteIndexBackend:
     def _create_triggers(self) -> None:
         for name, body in TRIGGERS.items():
             self._execute(f"CREATE TRIGGER IF NOT EXISTS {name} {body}")
+
+    @contextmanager
+    def _counted_inserts(self, first: int, end: int):
+        """
+        Insert patch rows first..end-1 with triggers muted, then count them.
+
+        The insert triggers would count each row; this counts the block's
+        rows with one statement per table instead. Muting is a connection
+        setting, not DDL: other connections keep their triggers, and TEMP
+        triggers still fire. The counts land in the caller's transaction,
+        so a rollback discards the rows and their counts together.
+        """
+        option = sqlite3.SQLITE_DBCONFIG_ENABLE_TRIGGER
+        try:
+            self._con.setconfig(option, False)
+            yield
+            self._execute(
+                "UPDATE meta_data SET patch_count = patch_count + ?", (end - first,)
+            )
+            self._execute(COUNT_VARIANTS_ADDED, (first, end))
+        finally:
+            self._con.setconfig(option, True)
 
     def _validate_schema(self, tables: set[str]) -> None:
         """
@@ -635,7 +661,7 @@ class SQLiteIndexBackend:
             max_df = self._fetch_df("SELECT max(ordinal) AS m FROM sources")
             max_ordinal = max_df["m"].iloc[0]
             next_ordinal = 0 if pd.isnull(max_ordinal) else int(max_ordinal) + 1
-            patch_row = self._patch_row_floor()
+            patch_row = first_row = self._patch_row_floor()
             for base_uri, paths in by_base.items():
                 self._delete_by_paths(paths, base_uri=base_uri)
             column_map, skip_units = self._ensure_attr_columns(records)
@@ -719,19 +745,20 @@ class SQLiteIndexBackend:
                     patch_row += 1
                 source_row += 1
             self._execute("UPDATE patch_row_floor SET next_row = ?", (patch_row,))
-            self._bulk_insert("sources", SourceRow._fields, source_rows)
-            self._bulk_insert("patches", PatchRow._fields, patch_rows)
-            for columns, rows in attr_groups.items():
-                self._bulk_insert("attrs", ("patch_row", *columns), rows)
-            def_ids = self._ensure_coord_defs(defs_needed)
-            self._bulk_insert(
-                "patch_coords",
-                PatchCoordRow._fields,
-                [
-                    (pid, name, dims, def_ids[key], dtype)
-                    for pid, name, dims, key, dtype in link_rows
-                ],
-            )
+            with self._counted_inserts(first_row, patch_row):
+                self._bulk_insert("sources", SourceRow._fields, source_rows)
+                self._bulk_insert("patches", PatchRow._fields, patch_rows)
+                for columns, rows in attr_groups.items():
+                    self._bulk_insert("attrs", ("patch_row", *columns), rows)
+                def_ids = self._ensure_coord_defs(defs_needed)
+                self._bulk_insert(
+                    "patch_coords",
+                    PatchCoordRow._fields,
+                    [
+                        (pid, name, dims, def_ids[key], dtype)
+                        for pid, name, dims, key, dtype in link_rows
+                    ],
+                )
             # meta_data.last_indexed_ns is the initial-update-complete
             # marker; only mark_initial_update_done (after renumbering
             # succeeds) may set it, or an interruption here would defeat
@@ -799,11 +826,9 @@ class SQLiteIndexBackend:
                 "  FROM patches GROUP BY source_row"
                 " ) t ON t.source_row = s2.source_row"
                 ")"
-                "UPDATE sources SET ordinal = ("
-                " SELECT rn FROM ranked WHERE sid = sources.source_row"
-                ") WHERE ordinal IS NOT ("
-                " SELECT rn FROM ranked WHERE sid = sources.source_row"
-                ")"
+                "UPDATE sources SET ordinal = ranked.rn FROM ranked"
+                " WHERE ranked.sid = sources.source_row"
+                " AND sources.ordinal IS NOT ranked.rn"
             )
 
     def _delete_by_paths(self, source_paths: list[str], base_uri: str = "") -> None:

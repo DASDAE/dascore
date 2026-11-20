@@ -87,6 +87,24 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
     return status.st_mtime_ns, status.st_size
 
 
+def _per_directory(parse):
+    """
+    Wrap a parser of a source's hive path attrs to run once per directory.
+
+    Only the directories holding a source name its hive keys, so sources
+    sharing a directory (a renamed folder's files) share the result.
+    """
+    cache = {}
+
+    def parsed(rel: str):
+        parent = rel.rpartition("/")[0]
+        if parent not in cache:
+            cache[parent] = parse(rel)
+        return cache[parent]
+
+    return parsed
+
+
 def _module_name(filename: str) -> str | None:
     """The name of the loaded module defined in a file, if any."""
     modules = list(sys.modules.items())
@@ -506,14 +524,14 @@ class DBDirectoryIndexer:
             if rel in stored:
                 continue
             new_by_stats.setdefault((mtime, size), []).append(rel)
+        keys = _per_directory(lambda rel: set(hive_path_attrs(rel, warn=False)))
         moves: dict[str, str] = {}
         for stats, olds in old_by_stats.items():
             news = new_by_stats.get(stats, ())
             if len(olds) != 1 or len(news) != 1:
                 continue  # ambiguous match: fall back to rescan
             old, new = olds[0], news[0]
-            old_keys = set(hive_path_attrs(old, warn=False))
-            if old_keys - set(hive_path_attrs(new, warn=False)):
+            if keys(old) - keys(new):
                 continue
             moves[old] = new
         return moves
@@ -624,7 +642,8 @@ class DBDirectoryIndexer:
         # new path, instead of carrying the empty row across.
         moves = {old: new for old, new in moves.items() if old not in retry}
         if moves:
-            new_attrs = {old: hive_path_attrs(new) for old, new in moves.items()}
+            attrs = _per_directory(hive_path_attrs)
+            new_attrs = {old: attrs(new) for old, new in moves.items()}
             self._backend.move_sources(moves, new_attrs)
             moved_targets = set(moves.values())
             stale = [rel for rel in stale if rel not in moves]

@@ -99,9 +99,19 @@ class TestMaintainedCounts:
     """Every write keeps the variant and patch counts equal to a recount."""
 
     def test_insert(self, backend, records):
-        """Appending sources adds their links."""
+        """Appending sources adds their links, counted once, not per row."""
+        fired = []
+        con = backend._con
+        con.create_function("fired", 1, fired.append)
+        # not TEMP: muting a connection's triggers still fires TEMP ones
+        for table in ("patches", "patch_coords"):
+            con.execute(
+                f"CREATE TRIGGER spy_{table} AFTER INSERT ON {table} "
+                f"BEGIN SELECT fired('{table}'); END"
+            )
         _assert_consistent(backend)
         backend.write_sources(records[40:])
+        assert not fired
         _assert_consistent(backend)
 
     def test_replace(self, backend):
@@ -131,8 +141,9 @@ class TestMaintainedCounts:
         assert _rows(backend, "SELECT * FROM coord_variants") == before
         _assert_consistent(backend)
 
-    def test_rollback(self, backend, records, monkeypatch):
-        """A write which fails after replacing and adding rows changes no count."""
+    @pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+    def test_rollback(self, backend, records, monkeypatch, error):
+        """A write failing after replacing and adding rows changes no count."""
         before = (
             _rows(backend, "SELECT * FROM coord_variants"),
             backend.get_metadata()["patch_count"],
@@ -143,17 +154,34 @@ class TestMaintainedCounts:
         def failing(table, columns, rows):
             insert(table, columns, rows)
             if table == "patch_coords":
-                raise RuntimeError("interrupted")
+                raise error("interrupted")
 
         monkeypatch.setattr(backend, "_bulk_insert", failing)
-        with pytest.raises(RuntimeError, match="interrupted"):
+        with pytest.raises(error, match="interrupted"):
             backend.write_sources([*replacing, *records[40:]])
+        assert not backend._con.in_transaction
         after = (
             _rows(backend, "SELECT * FROM coord_variants"),
             backend.get_metadata()["patch_count"],
         )
         assert after == before
         _assert_consistent(backend)
+        # the triggers are back on for writes which bypass the backend
+        backend._con.execute("DELETE FROM sources WHERE source_row = 1")
+        _assert_consistent(backend)
+
+    def test_interrupt_as_begin_returns(self, backend, monkeypatch):
+        """An interrupt raised as the transaction begins still ends it."""
+        begin = backend._begin
+
+        def interrupted():
+            begin()
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(backend, "_begin", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            backend.set_decode('"null"', 1.0)
+        assert not backend._con.in_transaction
 
     def test_reopen(self, backend, tmp_path):
         """The counts persist with the file."""
@@ -274,6 +302,23 @@ class TestWorkIsBounded:
             _vm_steps(b, lambda b=b: read(b)) for b in sized_backends.values()
         )
         assert large < 2 * small
+
+    def test_renumber_near_linear(self, sized_backends):
+        """Renumbering every source of eight times the archive costs ~8x."""
+
+        def renumber(backend):
+            backend._con.execute("UPDATE sources SET ordinal = -1 - ordinal")
+            return _vm_steps(backend, backend.renumber_ordinals_by_time)
+
+        small, large = (renumber(b) for b in sized_backends.values())
+        assert large < 16 * small
+
+    def test_renumber_in_order_writes_nothing(self, sized_backends):
+        """A renumber which changes no ordinal rewrites no row."""
+        backend = sized_backends[400]
+        before = backend._con.total_changes
+        backend.renumber_ordinals_by_time()
+        assert backend._con.total_changes == before
 
     @pytest.mark.parametrize(
         "read", [lambda b: b.count(), lambda b: b.query(patch_rows=[1])]
