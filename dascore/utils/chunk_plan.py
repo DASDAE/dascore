@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from fractions import Fraction
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -1705,9 +1706,9 @@ def _own_label_at(
     return np.where(stride > 0, found * forward, guess)
 
 
-def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
+def _cell_seams(sub, name, tolerance, max_shift, cells=None) -> pd.DataFrame:
     """
-    Judge every seam in one cell, trimming overlaps (rules 5 and 6).
+    Judge every seam in each cell, trimming overlaps (rules 5 and 6).
 
     Rows are taken in coordinate order. The furthest label reached so far
     is the earlier patch's end, and its step the seam's step. A row
@@ -1719,23 +1720,38 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     ``sub``): the stretch number, the kept envelope, how the row joined,
     the samples it dropped and keeps, its first position on its stretch,
     and the forward numbers the grid fit needs.
+
+    ``cells`` gives each row's cell as a dense code 0..n-1, every code
+    present (one cell when omitted). Each cell is judged as if alone,
+    with stretch numbers running on across cells, and a list
+    ``tolerance`` holds one per code.
     """
     start, stop, step = get_interval_columns(sub, name)
     ticks = _counts_ticks(start.dtype)
     lattice = _sample_lattices(sub, name)
     own = _own_steps(lattice)
-    signs = np.sign(to_float(step.to_numpy()))
-    forward = -1 if np.nanmin(np.r_[signs, 1]) < 0 else 1
+    cells = np.zeros(len(sub), np.intp) if cells is None else np.asarray(cells)
+    # a cell holding a descending row is taken descending
+    signs = pd.Series(np.sign(to_float(step.to_numpy())) < 0)
+    forward = np.where(signs.groupby(cells).transform("any"), -1, 1)
     low, high = _numbers(start.to_numpy()), _numbers(stop.to_numpy())
-    first, last = (low, high) if forward > 0 else (-high, -low)
-    order = np.lexsort((sub["_patch_row"].to_numpy(), first))
+    first = np.where(forward > 0, low, -high)
+    last = np.where(forward > 0, high, -low)
+    order = np.lexsort((sub["_patch_row"].to_numpy(), first, cells))
     first, last, own_o = first[order], last[order], own[order]
-    reach = np.r_[last[:1], np.maximum.accumulate(last)[:-1]]
+    forward, cells = forward[order], cells[order]
+    heads = np.flatnonzero(np.diff(cells, prepend=-1))  # where each cell starts
+    bounds = np.r_[heads, len(order)]
+    reach = np.empty_like(last)
+    for a, b in pairwise(bounds):
+        reach[a:b] = np.r_[last[a : a + 1], np.maximum.accumulate(last[a:b])[:-1]]
     # the row ending furthest so far owns the seam; a row only reaching
     # that end again adds nothing to it
     extends = np.r_[True, last[1:] > reach[1:]]
+    extends[heads] = True
     owner = np.maximum.accumulate(np.where(extends, np.arange(len(order)), 0))
     owner = np.r_[0, owner[:-1]]
+    owner[heads] = heads
     seam_step = own_o[owner]
     narrow = _narrow(sub, name)[order]
     prec = _precision(ticks, seam_step, narrow | narrow[owner], reach, first)
@@ -1753,14 +1769,15 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
         delta = (eff - reach).astype(np.float64)
         has = (eff <= last) & ~stepless
         by_shift = has & (np.abs(delta - seam_step) <= max_shift * seam_step + prec)
-        by_tolerance = has & _tolerance_joins(delta, seam_step, tolerance, prec)
+        by_tolerance = has & _tolerance_joins(delta, seam_step, tolerance, prec, bounds)
         # A row with no step has no labels to trim or step to judge: it
         # joins where it overlaps, and across a seam only a distance does.
         spaced = (first - reach).astype(np.float64)
-        width_joins = _tolerance_joins(spaced, np.nan * spaced, tolerance, prec)
+        unknown = np.nan * spaced
+        width_joins = _tolerance_joins(spaced, unknown, tolerance, prec, bounds)
         by_tolerance = np.where(stepless, (first <= reach) | width_joins, by_tolerance)
         joins = by_shift | by_tolerance
-        joins[:1] = False
+        joins[heads] = False
         past = behind + (1 if ticks else prec)
         beyond = _own_label_at(past, lattice, order, ticks, forward, first, own_o)
         # labels with no step lose what an earlier row already reached
@@ -1768,10 +1785,10 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
         unstepped = np.where(first > reach, first, next_up)
         fresh = np.where(stepless, unstepped, np.where(first > reach, first, beyond))
     lo = np.where(joins & ~stepless, eff, fresh)
-    lo[:1] = first[:1]
+    lo[heads] = first[heads]
     keep = lo <= last
     opens = ~joins & keep
-    opens[:1] = True
+    opens[heads] = True
     stretch = np.cumsum(opens) - 1
     with np.errstate(invalid="ignore"):
         dropped = np.where(stepless, 0, np.rint((lo - first) / own_o))
@@ -1781,9 +1798,10 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     position = pd.Series(kept_count).groupby(stretch).cumsum().to_numpy() - kept_count
     how = np.where(by_shift, "seam", "tolerance").astype(object)
     how[opens] = "gap"
-    how[:1] = "stretch"
-    lo_v, hi_v = (lo, last) if forward > 0 else (-last, -lo)
-    gap_edges = (reach, lo) if forward > 0 else (-lo, -reach)
+    how[heads] = "stretch"
+    ahead = forward > 0
+    lo_v, hi_v = np.where(ahead, lo, -last), np.where(ahead, last, -lo)
+    gap_edges = np.where(ahead, reach, -lo), np.where(ahead, lo, -reach)
     out = pd.DataFrame(
         {
             "_stretch": stretch,
@@ -1811,13 +1829,21 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     return out.loc[sub.index]
 
 
-def _tolerance_joins(delta, step, tolerance, prec) -> np.ndarray:
+def _tolerance_joins(delta, step, tolerance, prec, bounds=None) -> np.ndarray:
     """
     Whether ``tolerance`` joins each seam: up to so many steps, a seam
     width, or one step (counting nothing where unknown) plus an excess.
+
+    A list ``tolerance`` holds one per cell, whose rows ``bounds`` delimits.
     """
     if tolerance is None:
         return np.zeros(len(delta), dtype=bool)
+    if isinstance(tolerance, list):
+        assert bounds is not None, "a tolerance per cell needs the cells' rows"
+        out = np.zeros(len(delta), dtype=bool)
+        for tol, (a, b) in zip(tolerance, pairwise(bounds), strict=True):
+            out[a:b] = _tolerance_joins(delta[a:b], step[a:b], tol, prec[a:b])
+        return out
     with np.errstate(invalid="ignore"):
         if (count := tolerance.count) is not None:
             reach, whole = count * step + prec, count - 1
@@ -1840,13 +1866,18 @@ def _seams(df, name, group, tolerance, max_shift) -> pd.DataFrame:
 
 def _stretch_frame(df, name, cells, tolerance, max_shift) -> pd.DataFrame:
     """`_cell_seams` over every cell; ``_stretch`` labels rows that may combine."""
-    frames = []
-    for label, index in df.groupby(cells, sort=False).groups.items():
-        sub = df.loc[index]
-        seams = _cell_seams(sub, name, _cell_tolerance(tolerance, sub, name), max_shift)
-        seams["_stretch"] = f"{label}_" + seams["_stretch"].astype(str)
-        frames.append(seams)
-    return df.join(pd.concat(frames))
+    # the seam test reads the dimension's own columns and the row's identity,
+    # so a cell is cut from those alone rather than from every attr
+    prefixes = (f"{name}_", f"_{name}_")
+    own = [x for x in df.columns if isinstance(x, str) and x.startswith(prefixes)]
+    own += [x for x in ("_patch_row", "_modified") if x in df.columns]
+    codes, _ = pd.factorize(cells.to_numpy())
+    rows = np.flatnonzero(codes >= 0)  # a row in no cell is judged in none
+    sub, codes = df[own].take(rows), codes[rows]
+    if tolerance is not None:  # each cell's own, in its own units
+        heads = pd.Series(np.arange(len(sub))).groupby(codes).first()
+        tolerance = [_cell_tolerance(tolerance, sub.iloc[[x]], name) for x in heads]
+    return df.join(_cell_seams(sub, name, tolerance, max_shift, codes))
 
 
 def _roundness(step: float) -> int:
