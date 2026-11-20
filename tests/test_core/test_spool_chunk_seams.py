@@ -235,6 +235,13 @@ class TestCellsAtOnce:
         steps = dict(zip(contents["station"], contents["distance_step"], strict=True))
         assert steps == {"A": 1.0, "B": -1.0}
 
+    def test_dimension_named_patch(self):
+        """A dimension named patch, whose columns share _patch_row's prefix, joins."""
+        first = dc.get_example_patch().rename_coords(distance="patch")
+        end = first.get_coord("patch").max() + 1
+        second = first.update_coords(patch_min=end)
+        assert len(dc.spool([first, second]).chunk(patch=None)) == 1
+
     @pytest.mark.parametrize("reverse", [False, True])
     def test_tolerance_in_each_cells_units(self, reverse):
         """A tolerance in metres is refused by a unitless cell beside a metre one."""

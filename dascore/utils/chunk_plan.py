@@ -1870,7 +1870,7 @@ def _stretch_frame(df, name, cells, tolerance, max_shift) -> pd.DataFrame:
     # so a cell is cut from those alone rather than from every attr
     prefixes = (f"{name}_", f"_{name}_")
     own = [x for x in df.columns if isinstance(x, str) and x.startswith(prefixes)]
-    own += [x for x in ("_patch_row", "_modified") if x in df.columns]
+    own += [x for x in ("_patch_row", "_modified") if x in df.columns and x not in own]
     codes, _ = pd.factorize(cells.to_numpy())
     rows = np.flatnonzero(codes >= 0)  # a row in no cell is judged in none
     sub, codes = df[own].take(rows), codes[rows]

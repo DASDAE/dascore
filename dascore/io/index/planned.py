@@ -319,9 +319,12 @@ def _extrema(values: pd.Series, keys: pd.Series, how: str) -> np.ndarray:
         zero = raw == 0
         signs = pd.DataFrame({"neg": negative, "pos": zero & ~negative})
         held = signs.groupby(keys.to_numpy(), sort=True).any()
-        for index in np.flatnonzero((held["neg"] & held["pos"]).to_numpy()):
-            group = values[(keys == result.index[index]).to_numpy()]
-            out[index] = _group_extreme(group, how)
+        mixed = np.flatnonzero((held["neg"] & held["pos"]).to_numpy())
+        if len(mixed):
+            where = pd.Series(np.arange(len(values))).groupby(keys.to_numpy()).indices
+            for index in mixed:
+                group = values.iloc[where[result.index[index]]]
+                out[index] = _group_extreme(group, how)
     return out
 
 
