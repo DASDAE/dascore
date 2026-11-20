@@ -512,8 +512,10 @@ _OLD_KEY = (
     f"(SELECT json_array({_OLD}) FROM coord_defs cd WHERE cd.coord_row = OLD.coord_row)"
 )
 # Triggers keeping the patch and coordinate variant counts. Living in the
-# database, they count every write however it arrives, including cascaded
-# deletes and rows written straight through SQL.
+# database, they count writes however they arrive, including cascaded
+# deletes and rows written straight through SQL; write_sources alone mutes
+# them and counts its inserts itself (COUNT_VARIANTS_ADDED).
+# Changing a trigger needs an INDEX_VERSION bump; files keep their stored ones.
 TRIGGERS = MappingProxyType(
     {
         "count_patch_added": (
@@ -539,6 +541,17 @@ TRIGGERS = MappingProxyType(
             f"WHERE variant_key = {_OLD_KEY} AND patch_count = 0; END"
         ),
     }
+)
+# What count_variant_added does for the patch rows ? to ? (end excluded),
+# in one statement, for a writer which inserted them with triggers off.
+# Copies count_variant_added's key; changing either needs an INDEX_VERSION bump.
+_PC = VARIANT_COLUMNS.format("pc")
+COUNT_VARIANTS_ADDED = (
+    f"INSERT INTO coord_variants SELECT json_array({_PC}), {_PC}, count(*) "
+    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
+    "WHERE pc.patch_row >= ? AND pc.patch_row < ? GROUP BY 1 "
+    "ON CONFLICT (variant_key) "
+    "DO UPDATE SET patch_count = patch_count + excluded.patch_count"
 )
 INDEXES = (
     ("idx_pcoords_name", "patch_coords", "coord_name", None),

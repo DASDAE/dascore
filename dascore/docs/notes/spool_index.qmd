@@ -23,7 +23,7 @@ The index splits its metadata across several tables so nothing is stored more th
 Two notes on these:
 
 - `attrs` gains columns as new attribute names appear, since nobody can list every attribute in advance. `attr_meta` records how to read each column.
-- `coord_variants` and `meta_data.patch_count` are running totals. Database triggers update them in the same transaction as the rows they count, so they stay exact even when something writes to the database directly. Asking an unfiltered spool for its length, or any spool for its coordinate names, is therefore just as fast on a huge archive as on a small one.
+- `coord_variants` and `meta_data.patch_count` are running totals. Database triggers update them in the same transaction as the rows they count, so they stay exact even when something writes to the database directly. Asking an unfiltered spool for its length, or any spool for its coordinate names, is therefore just as fast on a huge archive as on a small one. DASCore's own bulk inserts turn the triggers off on their connection only and add the new rows' counts with one statement per table, in the same transaction.
 
 Writers also create a one-row `patch_row_floor` table when they first need it (see [Updating the index](#updating-the-index)). Because it is created on demand, older indexes work without a rebuild.
 

@@ -99,9 +99,19 @@ class TestMaintainedCounts:
     """Every write keeps the variant and patch counts equal to a recount."""
 
     def test_insert(self, backend, records):
-        """Appending sources adds their links."""
+        """Appending sources adds their links, counted once, not per row."""
+        fired = []
+        con = backend._con
+        con.create_function("fired", 1, fired.append)
+        # not TEMP: muting a connection's triggers still fires TEMP ones
+        for table in ("patches", "patch_coords"):
+            con.execute(
+                f"CREATE TRIGGER spy_{table} AFTER INSERT ON {table} "
+                f"BEGIN SELECT fired('{table}'); END"
+            )
         _assert_consistent(backend)
         backend.write_sources(records[40:])
+        assert not fired
         _assert_consistent(backend)
 
     def test_replace(self, backend):
@@ -155,6 +165,9 @@ class TestMaintainedCounts:
             backend.get_metadata()["patch_count"],
         )
         assert after == before
+        _assert_consistent(backend)
+        # the triggers are back on for writes which bypass the backend
+        backend._con.execute("DELETE FROM sources WHERE source_row = 1")
         _assert_consistent(backend)
 
     def test_interrupt_as_begin_returns(self, backend, monkeypatch):
