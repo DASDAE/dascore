@@ -84,6 +84,20 @@ class TestConstruction:
         assert out.evenly_sampled
         assert out == get_coord(start=0.0, stop=20.0, step=1.0)
 
+    def test_float_fuse_matches_labels(self):
+        """Fused float grids restate their labels within float rounding."""
+        pieces, start = [], -10.0
+        for length in (2, 3, 4):
+            pieces.append(get_coord(start=start, step=0.1, stop=start + 0.1 * length))
+            start = start + 0.1 * length
+        out = concat_coords(*pieces)
+        labels = np.concatenate([x.values for x in pieces])
+        assert out.evenly_sampled
+        assert out == get_coord(start=-10.0, step=0.1, shape=len(labels))
+        assert np.allclose(out.values, labels, rtol=0, atol=2e-6 * 0.1)
+        index = [out.get_next_index(x) for x in labels]
+        assert index == list(range(len(labels)))
+
     def test_uniform_array_segments_promoted(self):
         """Exactly evenly sampled array segments become ranges."""
         c1 = get_coord(data=np.arange(5.0))
