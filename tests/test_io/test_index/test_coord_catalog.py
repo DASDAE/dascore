@@ -131,8 +131,9 @@ class TestMaintainedCounts:
         assert _rows(backend, "SELECT * FROM coord_variants") == before
         _assert_consistent(backend)
 
-    def test_rollback(self, backend, records, monkeypatch):
-        """A write which fails after replacing and adding rows changes no count."""
+    @pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+    def test_rollback(self, backend, records, monkeypatch, error):
+        """A write failing after replacing and adding rows changes no count."""
         before = (
             _rows(backend, "SELECT * FROM coord_variants"),
             backend.get_metadata()["patch_count"],
@@ -143,17 +144,31 @@ class TestMaintainedCounts:
         def failing(table, columns, rows):
             insert(table, columns, rows)
             if table == "patch_coords":
-                raise RuntimeError("interrupted")
+                raise error("interrupted")
 
         monkeypatch.setattr(backend, "_bulk_insert", failing)
-        with pytest.raises(RuntimeError, match="interrupted"):
+        with pytest.raises(error, match="interrupted"):
             backend.write_sources([*replacing, *records[40:]])
+        assert not backend._con.in_transaction
         after = (
             _rows(backend, "SELECT * FROM coord_variants"),
             backend.get_metadata()["patch_count"],
         )
         assert after == before
         _assert_consistent(backend)
+
+    def test_interrupt_as_begin_returns(self, backend, monkeypatch):
+        """An interrupt raised as the transaction begins still ends it."""
+        begin = backend._begin
+
+        def interrupted():
+            begin()
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(backend, "_begin", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            backend.set_decode('"null"', 1.0)
+        assert not backend._con.in_transaction
 
     def test_reopen(self, backend, tmp_path):
         """The counts persist with the file."""

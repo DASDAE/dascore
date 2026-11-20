@@ -289,19 +289,22 @@ class SQLiteIndexBackend:
         """
         Run the wrapped body inside one transaction.
 
-        Commits on normal (or early-return) exit; on any error rolls back
-        without letting a failed rollback mask the original exception.
+        Commits on normal (or early-return) exit; on any error, an
+        interrupt included, rolls back without letting a failed rollback
+        mask the original exception.
         The statement lock is held for the whole transaction, so readers
         sharing the connection can never observe a half-applied write;
         being reentrant, it keeps the statement helpers inside the body
         working unchanged.
         """
         with self._lock:
-            self._begin()
             try:
+                # inside the try: an interrupt raised as a busy BEGIN
+                # finally returns would otherwise leave it open
+                self._begin()
                 yield
                 self._commit()
-            except Exception:
+            except BaseException:
                 with suppress(Exception):
                     self._rollback()
                 raise
