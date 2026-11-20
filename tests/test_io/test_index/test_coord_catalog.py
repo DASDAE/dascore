@@ -270,8 +270,13 @@ class TestWorkIsBounded:
     def test_flat_across_sizes(self, sized_backends, name):
         """Eight times the patches costs well under twice the VM work."""
         read = _SMALL_READS[name]
+
+        def uncached(backend):
+            backend._meta_cache.clear()  # the SQL's work, not a cache hit
+            return read(backend)
+
         small, large = (
-            _vm_steps(b, lambda b=b: read(b)) for b in sized_backends.values()
+            _vm_steps(b, lambda b=b: uncached(b)) for b in sized_backends.values()
         )
         assert large < 2 * small
 

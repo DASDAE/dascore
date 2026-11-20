@@ -93,8 +93,8 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     Selectors on non-numeric coordinates (time ranges, string ranges)
     pass through unchanged.
     """
-    meta = backend.coord_meta(set(coords))
-    numeric = set(meta.loc[meta["value_kind"] == "num", "coord_name"])
+    meta = backend._coord_rows(coords)
+    numeric = {x for x in coords if "num" in meta.named(x)["value_kind"]}
     query_coords, residual_coords = {}, {}
     for name, value in coords.items():
         canonical = _canonical_range(value) if name in numeric else None
@@ -110,9 +110,9 @@ def _reject_string_coords(backend, coords: dict) -> None:
     could only raise at load. The index records each definition's kind,
     and a name spelled as a string everywhere can be answered now.
     """
-    meta = backend.coord_meta(set(coords))
+    meta = backend._coord_rows(coords)
     for name in coords:
-        kinds = set(meta.loc[meta["coord_name"] == name, "value_kind"])
+        kinds = set(meta.named(name)["value_kind"])
         if kinds and kinds <= {"str"}:
             msg = f"String coordinate {name!r} does not support relative selection."
             raise InvalidSpoolQueryError(msg)

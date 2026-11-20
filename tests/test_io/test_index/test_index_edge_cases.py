@@ -558,7 +558,7 @@ class TestAdaptAndBackendBasics:
     def test_flatten_skips_absent_columns(self, backend):
         """attr_meta rows without a matching result column are skipped."""
         df = backend._fetch_df("SELECT patch_row FROM patches LIMIT 2")
-        out = backend._flatten(df, backend._attr_meta())
+        out = backend._flatten(df, backend._attr_rows())
         assert len(out) == 2
 
     def test_duration_attr_roundtrip(self, backend):
