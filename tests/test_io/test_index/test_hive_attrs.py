@@ -21,6 +21,7 @@ import pytest
 import dascore as dc
 from dascore.core.spool import Spool
 from dascore.examples import inventory_patch_pair, spool_to_directory
+from dascore.io.index import indexer as indexer_mod
 from dascore.io.index import ingest
 from dascore.io.index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
@@ -385,6 +386,42 @@ class TestMoveDetection:
             assert set(updated.get_contents()["tag"]) == {"x"}
         finally:
             spool.indexer.close()
+
+    def test_moves_parse_each_directory_once(self, tmp_path, monkeypatch, scan_calls):
+        """Splitting a folder in two parses each directory, not each file."""
+        patch = dc.get_example_patch()
+        for name in ("A", "B", "C"):
+            (tmp_path / f"station={name}").mkdir()
+        for i in range(4):
+            path = tmp_path / "station=A" / f"f{i}.h5"
+            patch.io.write(path, "dasdae")
+            os.utime(path, ns=(i * 10**9, i * 10**9))
+        dc.spool(tmp_path).update(progress=None)
+        scan_calls.clear()
+        parsed = []
+        real = indexer_mod.hive_path_attrs
+
+        def counted(rel, *args, **kwargs):
+            parsed.append(rel)
+            return real(rel, *args, **kwargs)
+
+        monkeypatch.setattr(indexer_mod, "hive_path_attrs", counted)
+        for i in range(4):
+            target = "B" if i < 2 else "C"
+            (tmp_path / "station=A" / f"f{i}.h5").rename(
+                tmp_path / f"station={target}" / f"f{i}.h5"
+            )
+        df = dc.spool(tmp_path).update(progress=None).get_contents()
+        assert not scan_calls  # moved, not rescanned
+        stations = dict(zip(df["source_path"], df["station"], strict=True))
+        assert stations == {
+            "station=B/f0.h5": "B",
+            "station=B/f1.h5": "B",
+            "station=C/f2.h5": "C",
+            "station=C/f3.h5": "C",
+        }
+        # keys of the old folder and both new ones, then both new ones' attrs
+        assert len(parsed) == 5
 
     def test_plain_rename_without_hive_keys(self, tmp_path, scan_calls):
         """A rename with no hive keys anywhere is still a cheap move."""
