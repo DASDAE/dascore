@@ -93,8 +93,8 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     Selectors on non-numeric coordinates (time ranges, string ranges)
     pass through unchanged.
     """
-    meta = backend.coord_meta(set(coords))
-    numeric = set(meta.loc[meta["value_kind"] == "num", "coord_name"])
+    meta = backend._coord_rows(coords)
+    numeric = {x for x in coords if "num" in meta.named(x)["value_kind"]}
     query_coords, residual_coords = {}, {}
     for name, value in coords.items():
         canonical = _canonical_range(value) if name in numeric else None
@@ -110,9 +110,9 @@ def _reject_string_coords(backend, coords: dict) -> None:
     could only raise at load. The index records each definition's kind,
     and a name spelled as a string everywhere can be answered now.
     """
-    meta = backend.coord_meta(set(coords))
+    meta = backend._coord_rows(coords)
     for name in coords:
-        kinds = set(meta.loc[meta["coord_name"] == name, "value_kind"])
+        kinds = set(meta.named(name)["value_kind"])
         if kinds and kinds <= {"str"}:
             msg = f"String coordinate {name!r} does not support relative selection."
             raise InvalidSpoolQueryError(msg)
@@ -221,6 +221,26 @@ def resolve_against_root(
     if root is None or "://" in text or os.path.isabs(text):
         return path
     return root / path
+
+
+def resolve_texts_against_root(paths: pd.Series, root: Path) -> list[str]:
+    """
+    Apply `resolve_against_root` to a column of paths under a local root.
+
+    The index stores relative paths in POSIX form, which join the root as
+    text just as pathlib prints the joined path, so a whole index resolves
+    without a path object per row; "." (a source that is the root itself)
+    is the root. Other platforms join through pathlib.
+    """
+    if os.sep != "/":
+        return [str(resolve_against_root(x, root)) for x in paths]
+    base = str(root)
+    prefix = "" if base == "." else base if base.endswith("/") else f"{base}/"
+    texts = (str(x) for x in paths)
+    return [
+        x if "://" in x or x.startswith("/") else base if x == "." else prefix + x
+        for x in texts
+    ]
 
 
 def _patch_path(patch: dc.Patch) -> str:
@@ -425,10 +445,14 @@ def directory_decodes(resolver, sources) -> dict:
     """
     if not isinstance(resolver, FileResolver) or resolver._root is None:
         return {}
-    out = {}
+    out, by_format = {}, {}
     for path, file_format, version in sources:
-        fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=version)
-        out[str(path)] = (_resolve_snap(fiber_io, resolver._snap), resolver._max_shift)
+        # a format's decode is the same for every one of its sources
+        if (decode := by_format.get((file_format, version))) is None:
+            io = FiberIO.manager.get_fiberio(format=file_format, version=version)
+            decode = (_resolve_snap(io, resolver._snap), resolver._max_shift)
+            by_format[(file_format, version)] = decode
+        out[str(path)] = decode
     return out
 
 

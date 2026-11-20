@@ -19,7 +19,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Mapping
 from dataclasses import replace
-from functools import cached_property, partial
+from functools import cache, cached_property, partial
 from typing import Any
 
 import numpy as np
@@ -40,12 +40,14 @@ from dascore.io.index.catalog import (
     _row_source_patch_key,
     apply_exact_residuals,
     directory_decodes,
+    resolve_texts_against_root,
 )
 from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.index.ingest import (
     CoordRecord,
     PatchRecord,
     SourceRecord,
+    TypedValue,
     _coord_record,
     def_key_data_id,
     index_runs,
@@ -282,23 +284,48 @@ def _coord_record_from_row(
     return _coord_record(name, summary)
 
 
-def _extrema(grouped, how: str) -> np.ndarray:
+def _group_extreme(group: pd.Series, how: str):
+    """One end of one group's envelope, None where the values do not compare."""
+    stated = group.dropna()
+    try:
+        return getattr(stated, how)() if len(stated) else None
+    except TypeError:
+        # even within the output the values do not compare
+        return None
+
+
+def _extrema(values: pd.Series, keys: pd.Series, how: str) -> np.ndarray:
     """
     One end of each group's envelope, None where the values do not compare.
 
-    Groups are taken one at a time because the column may hold more than
-    one kind of value (a name numeric in one output and text in another),
-    which pandas cannot aggregate whole.
+    A float, signed-integer or time column aggregates whole. Any other
+    may hold more than one kind of value (a name numeric in one output
+    and text in another), which pandas cannot aggregate whole, so its
+    groups are taken one at a time.
     """
-    values: list = []
-    for _, group in grouped:
-        stated = group.dropna()
-        try:
-            values.append(getattr(stated, how)() if len(stated) else None)
-        except TypeError:
-            # even within the output the values do not compare
-            values.append(None)
-    return np.array(values, dtype=object)
+    grouped = values.groupby(keys, sort=True)
+    dtype = values.dtype
+    if not (isinstance(dtype, np.dtype) and dtype.kind in "fiMm"):
+        return np.array([_group_extreme(x, how) for _, x in grouped], dtype=object)
+    result = getattr(grouped, how)()
+    # tolist boxes as the reduction of one group does (floats, Timestamps)
+    out = np.array(result.tolist(), dtype=object)
+    out[result.isna().to_numpy()] = None
+    raw = values.to_numpy()
+    if dtype.kind == "f" and (negative := np.signbit(raw) & (raw == 0)).any():
+        # 0.0 and -0.0 tie, and which one wins is the reduction's own
+        # order (a def key spells which), so a group holding both is
+        # reduced as one group alone is
+        zero = raw == 0
+        signs = pd.DataFrame({"neg": negative, "pos": zero & ~negative})
+        held = signs.groupby(keys.to_numpy(), sort=True).any()
+        mixed = np.flatnonzero((held["neg"] & held["pos"]).to_numpy())
+        if len(mixed):
+            where = pd.Series(np.arange(len(values))).groupby(keys.to_numpy()).indices
+            for index in mixed:
+                group = values.iloc[where[result.index[index]]]
+                out[index] = _group_extreme(group, how)
+    return out
 
 
 def _trim_to_member_windows(
@@ -332,8 +359,12 @@ def _trim_to_member_windows(
         planned = members.get(f"_{name}_units")
         same = np.ones(len(joined), dtype=bool)
         if native is not None and planned is not None:
-            pairs = zip(native.to_numpy(), planned.to_numpy(), strict=True)
-            same = np.array([_is_missing(a) or a == b for a, b in pairs], dtype=bool)
+            # positional, as the frames' indexes differ. A member stating no
+            # unit (stored as null, never "") takes the window as planned;
+            # a stated one only in the plan's own unit.
+            native = pd.Series(native.to_numpy(), dtype=object)
+            planned = pd.Series(planned.to_numpy(), dtype=object)
+            same = (native.isna() | native.eq(planned)).to_numpy()
         for end in ("min", "max"):
             column = f"{name}_{end}"
             window = pd.Series(members[column].to_numpy(), index=joined.index)
@@ -425,8 +456,8 @@ def _aux_coord_info(
         trimmed = bool(set(dims) & trimmed_dims)
         key_col, step_col = f"_{name}_def_key", f"{name}_step"
         unit_col, grid_col = f"_{name}_units", f"_{name}_grid"
-        lows = _extrema(grouped[cmin], "min")
-        highs = _extrema(grouped[cmax], "max")
+        lows = _extrema(joined[cmin], joined["output_id"], "min")
+        highs = _extrema(joined[cmax], joined["output_id"], "max")
         # the *_first arrays are only read where their gate is True, and
         # a gate can only be True when its column exists
         no_gate = np.zeros(len(output_ids), dtype=bool)
@@ -560,6 +591,14 @@ def _cell_key(value):
     return value.hex() if isinstance(value, float) else (type(value), value)
 
 
+@cache
+def _record_cells(name: str) -> tuple[str, ...]:
+    """The row cells `_coord_record_from_row` reads for coordinate ``name``."""
+    ends = tuple(f"{name}_{x}" for x in ("min", "max", "step"))
+    private = ("units", "coord_dtype", "def_key", "grid")
+    return ends + tuple(f"_{name}_{x}" for x in private)
+
+
 def _record_once(cache: dict, row: Mapping, name: str, **kwargs):
     """
     `_coord_record_from_row`, built once per distinct coordinate.
@@ -568,10 +607,8 @@ def _record_once(cache: dict, row: Mapping, name: str, **kwargs):
     rebuilding a range's identity is the costly part. Records are frozen,
     so outputs can share one. The key is every cell the record reads.
     """
-    cells = [row.get(f"{name}_{x}") for x in ("min", "max", "step")]
-    cells += [row.get(f"_{name}_{x}") for x in ("units", "coord_dtype", "def_key")]
-    cells += [row.get(f"_{name}_grid")]
-    key = (name, *sorted(kwargs.items()), *map(_cell_key, cells))
+    cells = [_cell_key(row.get(x)) for x in _record_cells(name)]
+    key = (name, *sorted(kwargs.items()), *cells)
     if key not in cache:
         cache[key] = _coord_record_from_row(row, name, **kwargs)
     return cache[key]
@@ -597,15 +634,17 @@ def _output_records(
     # an attr that merely looks envelope-shaped (channel_step with no
     # channel coord) is ordinary metadata and must be preserved. The
     # def-key columns are frame-wide, so the envelope-key sets repeat
-    # across rows and are cached by (dims, aux coord names).
+    # across rows and the attr columns are cached by (dims, aux coord names).
     base_names = {
         key[1 : -len("_def_key")]
         for key in outputs.columns
         if key.startswith("_") and key.endswith("_def_key")
     }
     base_names |= {"time", "distance"}  # fixed patches-table envelopes
-    envelope_cache: dict[tuple, set[str]] = {}
+    public = [x for x in outputs.columns if not (x in _NON_ATTR or x.startswith("_"))]
+    attr_cache: dict[tuple, list[str]] = {}
     coord_cache: dict[tuple, CoordRecord | None] = {}
+    texts: dict[str, TypedValue | None] = {}  # typed values are frozen
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
         dims = str(row.get("dims") or "")
@@ -627,26 +666,27 @@ def _output_records(
             if record is not None:
                 coords.append(record)
         cache_key = (dims, tuple(aux))
-        envelope_keys = envelope_cache.get(cache_key)
-        if envelope_keys is None:
+        attr_keys = attr_cache.get(cache_key)
+        if attr_keys is None:
             coord_names = set(dim_names) | set(aux) | base_names
             envelope_keys = {
                 f"{name}_{sfx}"
                 for name in coord_names
                 for sfx in ("min", "max", "step", "units")
             }
-            envelope_cache[cache_key] = envelope_keys
+            attr_keys = [x for x in public if x not in envelope_keys]
+            attr_cache[cache_key] = attr_keys
         attrs = {}
-        for key, value in row.items():
-            if (
-                key in _NON_ATTR
-                or key.startswith("_")
-                or key in envelope_keys
-                or value is None
-                or (np.isscalar(value) and pd.isnull(value))
-            ):
+        for key in attr_keys:
+            value = row[key]
+            if type(value) is str:  # the common attr, typed once per spelling
+                if value not in texts:
+                    texts[value] = typed_value(value)
+                typed = texts[value]
+            elif value is None or (np.isscalar(value) and pd.isnull(value)):
                 continue
-            typed = typed_value(value)
+            else:
+                typed = typed_value(value)
             if typed is not None:
                 attrs[key] = typed
         patch = PatchRecord(
@@ -1251,7 +1291,7 @@ def derived_catalog(
     # Resolve source paths once before deriving both members and fill anchors.
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
     upaths = {}
-    if root is not None and "source_path" in sources.columns:
+    if isinstance(root, UPath) and "source_path" in sources.columns:
         file_resolver = FileResolver(root)
         resolved = [file_resolver.resolve_path(x) for x in sources["source_path"]]
         sources = sources.assign(source_path=[str(x) for x in resolved])
@@ -1260,6 +1300,10 @@ def derived_catalog(
         upaths = {
             str(x): x for x in resolved if isinstance(x, UPath) and not is_local_path(x)
         }
+    elif root is not None and "source_path" in sources.columns:
+        # a local root joins plain paths, which reopen without a UPath
+        texts = resolve_texts_against_root(sources["source_path"], root)
+        sources = sources.assign(source_path=texts)
     member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_row",
@@ -1269,15 +1313,17 @@ def derived_catalog(
     member_rows = member_rows.drop(columns=["_patch_row"])
     loader = CompositeResolver()
     if parent is not None:
-        member_paths = set(
-            member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
-        )
+        paths = member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
+        # live patches and plans are named by URIs; a file path names neither
+        member_paths = set(paths[paths.str.contains("://", regex=False)])
         loader.absorb(parent.resolver, paths=member_paths)
         loader.file._upaths.update(upaths)
         # a directory's members read under the decode it scanned them with
         columns = ["source_path", "source_format", "source_version"]
         if set(columns) <= set(member_rows.columns):
-            stated = member_rows[columns].drop_duplicates().itertuples(index=False)
+            stated = member_rows[columns].drop_duplicates()
+            # whole columns as lists: a row at a time is slow for text
+            stated = zip(*(stated[x].tolist() for x in columns), strict=True)
             loader.file.hold_decodes(directory_decodes(parent.resolver, stated))
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # a coordinate riding a dimension it is not named for, on any member,
@@ -1371,9 +1417,13 @@ def _with_parent_runs(
     except a concatenation's, which keeps each member's runs as segments.
     Members find their runs through the parent's patch rows (``_index_row``).
     """
-    index_rows = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
+    # whole columns as lists, which box as iterating them does, only faster
+    index_rows = dict(
+        zip(sources["_patch_row"].tolist(), sources["_index_row"].tolist(), strict=True)
+    )
     members: dict[str, list] = {}
-    for output_id, patch_row in zip(trims["output_id"], trims["_patch_row"]):
+    pairs = zip(trims["output_id"].tolist(), trims["_patch_row"].tolist(), strict=True)
+    for output_id, patch_row in pairs:
         members.setdefault(str(int(output_id)), []).append(index_rows.get(patch_row))
     known = {x for ids in members.values() for x in ids if pd.notna(x)}
     runs = parent_backend.patch_runs(known)

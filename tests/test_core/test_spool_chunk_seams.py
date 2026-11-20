@@ -15,7 +15,7 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.coords import get_coord
-from dascore.exceptions import ChunkError, CoordError, ParameterError
+from dascore.exceptions import ChunkError, CoordError, ParameterError, UnitError
 from dascore.units import get_quantity
 from dascore.units import s as seconds
 from dascore.utils.chunk_plan import build_chunk_plan, stretch_coordinate
@@ -190,6 +190,71 @@ class TestSeamTest:
         labels = T0 + np.array([200.5, 201.2, 202.6, 203.5, 204.2, 205.1]) * STEP
         assert np.array_equal(second.get_array("time"), labels)
         assert np.array_equal(second.data, _joined(one, two, skip=1))
+
+
+class TestCellsAtOnce:
+    """Each cell's seams are judged on its own rows alone."""
+
+    @staticmethod
+    def _patches():
+        """Two 1 kHz then two 500 Hz patches, end to end in one second each."""
+        base = dc.get_example_patch()
+        start, out = np.datetime64("2020-01-01T00:00:00"), []
+        for step_ms in (1, 1, 2, 2):
+            size = 1000 // step_ms
+            step = np.timedelta64(step_ms, "ms")
+            time = get_coord(start=start, step=step, shape=(size,))
+            coords = {"distance": base.get_coord("distance"), "time": time}
+            data = np.zeros((base.shape[0], size), dtype=np.float32)
+            out.append(dc.Patch(data=data, coords=coords, dims=base.dims))
+            start = start + np.timedelta64(1, "s")
+        return out
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_one_output_per_sampling(self, reverse):
+        """Each sampling joins into one output with its own step, in any order."""
+        patches = self._patches()[::-1] if reverse else self._patches()
+        contents = dc.spool(patches).chunk(time=None).get_contents()
+        steps = sorted(contents["time_step"])
+        assert steps == [np.timedelta64(1, "ms"), np.timedelta64(2, "ms")]
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_each_cell_keeps_its_direction(self, reverse):
+        """An ascending station beside a descending one keeps its own step sign."""
+        base = dc.get_example_patch()
+        size = base.shape[base.get_axis("distance")]
+        patches = []
+        for station, step in (("A", 1.0), ("B", -1.0)):
+            for num in range(2):
+                start = num * size * step + (0.0 if step > 0 else 1000.0)
+                coord = get_coord(start=start, step=step, shape=(size,), units="m")
+                patch = base.update_coords(distance=coord)
+                patches.append(patch.update_attrs(station=station))
+        spool = dc.spool(patches[::-1] if reverse else patches)
+        contents = spool.chunk(distance=None).get_contents()
+        steps = dict(zip(contents["station"], contents["distance_step"], strict=True))
+        assert steps == {"A": 1.0, "B": -1.0}
+
+    def test_dimension_named_patch(self):
+        """A dimension named patch, whose columns share _patch_row's prefix, joins."""
+        first = dc.get_example_patch().rename_coords(distance="patch")
+        end = first.get_coord("patch").max() + 1
+        second = first.update_coords(patch_min=end)
+        assert len(dc.spool([first, second]).chunk(patch=None)) == 1
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_tolerance_in_each_cells_units(self, reverse):
+        """A tolerance in metres is refused by a unitless cell beside a metre one."""
+        base = dc.get_example_patch()
+        size = base.shape[base.get_axis("distance")]
+        patches = []
+        for units in ("m", None):
+            for start in (0.0, size + 3.0):
+                coord = get_coord(start=start, step=1.0, shape=(size,), units=units)
+                patches.append(base.update_coords(distance=coord))
+        spool = dc.spool(patches[::-1] if reverse else patches)
+        with pytest.raises(UnitError, match="has no units"):
+            spool.chunk(distance=None, tolerance=5 * get_quantity("m"))
 
 
 class TestMaxShift:

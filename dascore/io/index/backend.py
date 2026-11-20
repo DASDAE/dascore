@@ -43,6 +43,7 @@ from dascore.io.index.ingest import (
     index_runs,
 )
 from dascore.io.index.query import (
+    MetaRows,
     Query,
     _as_query_list,
     _normalize_unit,
@@ -204,6 +205,10 @@ class SQLiteIndexBackend:
         self._lock = threading.RLock()
         # collision name-sets already warned about (see _apply_attr_columns)
         self._warned_attr_clobber: set[frozenset] = set()
+        # cached metadata reads and the state they were read at (see `_cached`)
+        self._writes = 0
+        self._meta_state: tuple | None = None
+        self._meta_cache: dict = {}
         try:
             self._ensure_schema()
         except Exception:
@@ -235,12 +240,14 @@ class SQLiteIndexBackend:
 
     def _execute(self, sql: str, params=()) -> None:
         with self._lock:
+            self._writes += 1
             self._con.execute(sql, _adapt(params))
 
     def _executemany(self, sql: str, seq_of_params) -> None:
         # sqlite3.executemany consumes an iterator, so adapt lazily rather
         # than materializing a second copy of each already-built batch.
         with self._lock:
+            self._writes += 1
             self._con.executemany(sql, (_adapt(p) for p in seq_of_params))
 
     def _fetch_df(self, sql: str, params=()) -> pd.DataFrame:
@@ -265,7 +272,28 @@ class SQLiteIndexBackend:
         self._con.execute("COMMIT")
 
     def _rollback(self) -> None:
+        self._writes += 1
         self._con.execute("ROLLBACK")
+
+    def _cached(self, key, compute):
+        """
+        Return ``compute()``, kept until what this connection reads may differ.
+
+        Any change to this connection's `_writes` (bumped by each write
+        statement and rollback), its `total_changes`, or `PRAGMA
+        data_version` (moved by another connection's commit) drops every
+        entry. Rollbacks count because they undo rows without moving
+        `total_changes`.
+        """
+        with self._lock:
+            version = self._con.execute("PRAGMA data_version").fetchone()[0]
+            state = (self._writes, self._con.total_changes, version)
+            if state != self._meta_state:
+                self._meta_cache.clear()
+                self._meta_state = state
+            if key not in self._meta_cache:
+                self._meta_cache[key] = compute()
+            return self._meta_cache[key]
 
     def _existing_tables(self) -> set[str]:
         rows = self._con.execute(
@@ -446,7 +474,17 @@ class SQLiteIndexBackend:
             return self._con.execute("SELECT patch_count FROM meta_data").fetchone()[0]
 
     def _attr_meta(self) -> pd.DataFrame:
-        return self._fetch_df("SELECT * FROM attr_meta")
+        # a frame of its own, copied under the lock: a shared frame is not
+        # safe for pandas to work on from several threads at once
+        with self._lock:
+            return self._attr_rows().frame.copy()
+
+    def _attr_rows(self) -> MetaRows:
+        """Return the attr_meta table as rows grouped by attr name (cached)."""
+        return self._cached(
+            ("attr_meta",),
+            lambda: MetaRows(self._fetch_df("SELECT * FROM attr_meta"), "attr_name"),
+        )
 
     def coord_meta(self, names=None) -> pd.DataFrame:
         """
@@ -456,6 +494,18 @@ class SQLiteIndexBackend:
         Public because the catalog asks: deciding which selectors are
         numeric (and so unit-convertible) needs the stored kinds.
         """
+        with self._lock:  # a frame of its own, as `_attr_meta` gives
+            return self._coord_rows(names).frame.copy()
+
+    def _coord_rows(self, names=None) -> MetaRows:
+        """Return `coord_meta` as rows grouped by coord name (cached)."""
+        names = None if names is None else tuple(sorted(names))
+        return self._cached(
+            ("coord_meta", names),
+            lambda: MetaRows(self._coord_meta_frame(names), "coord_name"),
+        )
+
+    def _coord_meta_frame(self, names) -> pd.DataFrame:
         sql = (
             "SELECT DISTINCT coord_name, value_kind, units, is_relative "
             "FROM coord_variants"
@@ -877,14 +927,9 @@ class SQLiteIndexBackend:
         }
         with self._transaction():
             column_map, _ = self._ensure_attr_columns_for(attrs_by_old.values())
-            # attr name -> [(kind, column)] once; per-move dataframe
-            # filtering dominated large renames.
-            kinds_by_name: dict[str, list[tuple[str, str]]] = {}
-            meta = self._attr_meta()
-            for name, kind, column in zip(
-                meta["attr_name"], meta["value_kind"], meta["column_name"], strict=True
-            ):
-                kinds_by_name.setdefault(name, []).append((kind, column))
+            # each attr name's (kind, column) rows, read once; per-move
+            # dataframe filtering dominated large renames.
+            meta = self._attr_rows()
             now = time.time_ns()
             ids: dict[str, int] = {}
             for chunk, marks in self._iter_in_batches(list(moves)):
@@ -922,11 +967,9 @@ class SQLiteIndexBackend:
                 sig = []
                 for name, typed in attrs.items():
                     sig.append((column_map[(name, typed.kind)], typed.value))
-                    sig.extend(
-                        (column, None)
-                        for kind, column in kinds_by_name.get(name, ())
-                        if kind != typed.kind
-                    )
+                    rows = meta.named(name)
+                    kinds = zip(rows["value_kind"], rows["column_name"], strict=True)
+                    sig.extend((col, None) for kind, col in kinds if kind != typed.kind)
                 groups.setdefault(tuple(sorted(sig)), []).append(ids[old])
             for sig, source_rows in groups.items():
                 assignments = ", ".join(f"{quote(col)} = ?" for col, _ in sig)
@@ -968,8 +1011,7 @@ class SQLiteIndexBackend:
 
     def _attr_kinds(self, name: str) -> list[tuple[str, str]]:
         """Return the (kind, column) pairs an attr name is stored under."""
-        meta = self._attr_meta()
-        rows = meta[meta["attr_name"] == name]
+        rows = self._attr_rows().named(name)
         return list(zip(rows["value_kind"], rows["column_name"], strict=True))
 
     # --- queries -----------------------------------------------------
@@ -984,11 +1026,14 @@ class SQLiteIndexBackend:
         queries.
         """
         queries = _as_query_list(query if query is not None else Query())
-        attr_meta = self._attr_meta()
+        attr_meta = self._attr_rows()
         coord_names = {name for q in queries for name in q.coords}
         if order_by is not None and order_by[0] == "coord":
             coord_names.add(order_by[1])
-        coord_meta = self.coord_meta(coord_names) if coord_names else pd.DataFrame()
+        if coord_names:
+            coord_meta = self._coord_rows(coord_names)
+        else:
+            coord_meta = MetaRows(pd.DataFrame(), "coord_name")
         return queries, attr_meta, coord_meta
 
     def query(self, query=None, order_by=None, patch_rows=None) -> pd.DataFrame:
@@ -1058,7 +1103,8 @@ class SQLiteIndexBackend:
             patch_rows=patch_rows,
         )
         if not residuals:
-            return int(self._fetch_df(sql, params)["n"].iloc[0])
+            with self._lock:  # one integer: no frame needed
+                return int(self._con.execute(sql, _adapt(params)).fetchone()[0])
         # A regex residual must inspect string values, so a database count
         # cannot resolve it; the full relation already applies the residual.
         return len(self.query(queries, patch_rows=patch_rows))
@@ -1109,7 +1155,7 @@ class SQLiteIndexBackend:
         )
 
     def _flatten(
-        self, df: pd.DataFrame, attr_meta: pd.DataFrame
+        self, df: pd.DataFrame, attr_meta: MetaRows
     ) -> tuple[pd.DataFrame, dict[str, pd.Series]]:
         """
         Post-process raw SQL output into the flat-relation contract.
@@ -1140,7 +1186,7 @@ class SQLiteIndexBackend:
         # the attr stays queryable through the _attrs namespace.
         cols_to_drop: list[str] = []
         new_columns: dict[str, pd.Series] = {}
-        for name, rows in attr_meta.groupby("attr_name", sort=False):
+        for name, rows in attr_meta.items():
             kinds = set(rows["value_kind"])
             multi_kind = len(rows) > 1
             series = None
@@ -1163,7 +1209,7 @@ class SQLiteIndexBackend:
                 series = col if series is None else series.where(series.notna(), col)
                 cols_to_drop.append(column)
             if series is not None:
-                if kinds == {"str"}:
+                if kinds == {"str"} and series.hasnans:
                     # flat-contract convention: missing strings are ""
                     series = series.fillna("")
                 new_columns[str(name)] = series
@@ -1427,7 +1473,7 @@ class SQLiteIndexBackend:
 
     def attr_names(self) -> set[str]:
         """Return original attr names known to the index."""
-        return set(self._attr_meta()["attr_name"])
+        return set(self._attr_rows().all.get("attr_name", ()))
 
     def coord_names(self) -> set[str]:
         """Return the coord names a query may select on.
@@ -1438,15 +1484,19 @@ class SQLiteIndexBackend:
         nothing. `coord_dims_map` still reports it -- what a patch holds
         and what a query can reach are different questions.
         """
+        return set(self._cached(("coord_names",), self._coord_names))
+
+    def _coord_names(self) -> frozenset[str]:
         sql = "SELECT DISTINCT coord_name, dtype FROM coord_variants"
         with self._lock:
             rows = self._con.execute(sql).fetchall()
-        return {name for name, dtype in rows if coord_dtype_is_stateable(dtype)}
+        return frozenset(
+            name for name, dtype in rows if coord_dtype_is_stateable(dtype)
+        )
 
     def attr_units(self, name: str) -> dict[str, str | None]:
         """Return the canonical units the index stores one attr's kinds in."""
-        rows = self._attr_meta()
-        rows = rows[rows["attr_name"] == name]
+        rows = self._attr_rows().named(name)
         return {
             str(kind): _normalize_unit(unit)
             for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
@@ -1461,9 +1511,8 @@ class SQLiteIndexBackend:
         This answers without projecting the relation, so a caller can
         tell whether it needs to look anywhere else for the rest.
         """
-        rows = self._attr_meta()
-        columns = rows[rows["attr_name"] == name]["column_name"].unique()
-        if not len(columns):
+        columns = list(dict.fromkeys(self._attr_rows().named(name)["column_name"]))
+        if not columns:
             return set()
         stated = " OR ".join(f"{quote(x)} IS NOT NULL" for x in columns)
         sql = f"SELECT patch_row FROM attrs WHERE ({stated})"
@@ -1508,7 +1557,11 @@ class SQLiteIndexBackend:
             "SELECT DISTINCT +coord_name AS coord_name FROM patch_coords "
             "WHERE coord_dims != coord_name"
         )
-        return set(self._fetch_df(sql)["coord_name"].astype(str))
+        names = self._cached(
+            ("associated_coord_names",),
+            lambda: frozenset(self._fetch_df(sql)["coord_name"].astype(str)),
+        )
+        return set(names)
 
     def patch_ids_by_key(self) -> dict[str, int]:
         """Each patch's row, by its source patch key (a plan's output id)."""
@@ -1604,6 +1657,9 @@ class SQLiteIndexBackend:
 
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
+        return dict(self._cached(("coord_dims_map",), self._coord_dims_map))
+
+    def _coord_dims_map(self) -> dict[str, str]:
         # `+` as in associated_coord_names: one table scan
         sql = "SELECT DISTINCT +coord_name AS coord_name, coord_dims FROM patch_coords"
         df = self._fetch_df(sql)

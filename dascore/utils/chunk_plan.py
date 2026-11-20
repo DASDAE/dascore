@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from fractions import Fraction
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -337,13 +338,14 @@ def _adjust_absolute_envelopes(df, coords):
         # being null for one with no data id.
         column = df.get(f"_{name}_coord_dtype")
         missing = np.zeros(len(df), bool) if column is None else column.isna().values
-        held, lacking = df[~missing], df[missing]
+        lacking = df[missing] if missing.any() else None
+        held = df if lacking is None else df[~missing]
         if isinstance(value, _CanonicalRange):
             held = _adjust_unit_segments(held, name, value)
         elif is_range(value):
             held = adjust_segments(held, ignore_bad_kwargs=True, **{name: value})
         df = held
-        if len(lacking):
+        if lacking is not None:
             lacking = lacking.assign(_modified=lacking.get("_modified", False))
             df = pd.concat([held, lacking]).sort_index(kind="stable")
     return df
@@ -842,8 +844,11 @@ class _SampleTracker:
             others = (self.dims[x] for x in self.names if x != name)
             shared = any((x[held] == mine[held]).any() for x in others)
             several = any("," in str(x) for x in pd.unique(mine[held]))
-            grid = self.source.get(f"_{name}_grid", ())
-            exact = any(isinstance(x, tuple) for x in grid)
+            grid = self.source.get(f"_{name}_grid")
+            # most rows state no grid, so only the stated cells are tested
+            exact = grid is not None and any(
+                isinstance(x, tuple) for x in grid[grid.notna()]
+            )
             self._watched[name] = shared or several or exact
         return self._watched[name]
 
@@ -1419,6 +1424,18 @@ def _validate_on_missing_dim(on_missing_dim) -> None:
         raise ParameterError(msg)
 
 
+def _names_dim(dims: pd.Series, name: str) -> np.ndarray:
+    """
+    Whether each comma-joined dims cell names ``name``; never a non-text one.
+
+    Decided once per distinct cell: a relation repeats a few signatures.
+    """
+    codes, distinct = pd.factorize(dims)
+    names = [isinstance(x, str) and name in x.split(",") for x in distinct]
+    # a null cell's code is -1, which picks the trailing False
+    return np.array([*names, False], dtype=bool)[codes]
+
+
 def _prepare_relation(
     df: pd.DataFrame,
     name: str,
@@ -1446,8 +1463,7 @@ def _prepare_relation(
     df = _normalize_chunk_units(df, name)
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
     if "dims" in df.columns:
-        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
-        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
+        not_a_dim = pd.Series(~_structural(df, name), index=df.index)
     else:
         not_a_dim = pd.Series(False, index=df.index)
     unusable = null_rows | not_a_dim
@@ -1523,7 +1539,12 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
         lone &= stated.transform("nunique") == 1
         lone &= ~_inside_stated(start, stop, step, base, lone)
         samp = samp.mask(lone, stated.transform("first")).astype(np.int64)
-    return base.astype(str) + "_" + samp.astype(str)
+    # spelled once per distinct pair: there are few, and rows many
+    # both are labels counted from zero, so one integer names the pair
+    width = int(samp.max()) + 1 if len(samp) else 1
+    codes, distinct = pd.factorize(base.to_numpy(np.int64) * width + samp.to_numpy())
+    spelled = np.array([f"{x // width}_{x % width}" for x in distinct.tolist()])
+    return pd.Series(spelled[codes], index=df.index, dtype="str")
 
 
 def _inside_stated(start, stop, step, base, rows) -> pd.Series:
@@ -1685,9 +1706,9 @@ def _own_label_at(
     return np.where(stride > 0, found * forward, guess)
 
 
-def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
+def _cell_seams(sub, name, tolerance, max_shift, cells=None) -> pd.DataFrame:
     """
-    Judge every seam in one cell, trimming overlaps (rules 5 and 6).
+    Judge every seam in each cell, trimming overlaps (rules 5 and 6).
 
     Rows are taken in coordinate order. The furthest label reached so far
     is the earlier patch's end, and its step the seam's step. A row
@@ -1699,23 +1720,38 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     ``sub``): the stretch number, the kept envelope, how the row joined,
     the samples it dropped and keeps, its first position on its stretch,
     and the forward numbers the grid fit needs.
+
+    ``cells`` gives each row's cell as a dense code 0..n-1, every code
+    present (one cell when omitted). Each cell is judged as if alone,
+    with stretch numbers running on across cells, and a list
+    ``tolerance`` holds one per code.
     """
     start, stop, step = get_interval_columns(sub, name)
     ticks = _counts_ticks(start.dtype)
     lattice = _sample_lattices(sub, name)
     own = _own_steps(lattice)
-    signs = np.sign(to_float(step.to_numpy()))
-    forward = -1 if np.nanmin(np.r_[signs, 1]) < 0 else 1
+    cells = np.zeros(len(sub), np.intp) if cells is None else np.asarray(cells)
+    # a cell holding a descending row is taken descending
+    signs = pd.Series(np.sign(to_float(step.to_numpy())) < 0)
+    forward = np.where(signs.groupby(cells).transform("any"), -1, 1).astype(np.int64)
     low, high = _numbers(start.to_numpy()), _numbers(stop.to_numpy())
-    first, last = (low, high) if forward > 0 else (-high, -low)
-    order = np.lexsort((sub["_patch_row"].to_numpy(), first))
+    first = np.where(forward > 0, low, -high)
+    last = np.where(forward > 0, high, -low)
+    order = np.lexsort((sub["_patch_row"].to_numpy(), first, cells))
     first, last, own_o = first[order], last[order], own[order]
-    reach = np.r_[last[:1], np.maximum.accumulate(last)[:-1]]
+    forward, cells = forward[order], cells[order]
+    heads = np.flatnonzero(np.diff(cells, prepend=-1))  # where each cell starts
+    bounds = np.r_[heads, len(order)]
+    reach = np.empty_like(last)
+    for a, b in pairwise(bounds):
+        reach[a:b] = np.r_[last[a : a + 1], np.maximum.accumulate(last[a:b])[:-1]]
     # the row ending furthest so far owns the seam; a row only reaching
     # that end again adds nothing to it
     extends = np.r_[True, last[1:] > reach[1:]]
+    extends[heads] = True
     owner = np.maximum.accumulate(np.where(extends, np.arange(len(order)), 0))
     owner = np.r_[0, owner[:-1]]
+    owner[heads] = heads
     seam_step = own_o[owner]
     narrow = _narrow(sub, name)[order]
     prec = _precision(ticks, seam_step, narrow | narrow[owner], reach, first)
@@ -1733,14 +1769,15 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
         delta = (eff - reach).astype(np.float64)
         has = (eff <= last) & ~stepless
         by_shift = has & (np.abs(delta - seam_step) <= max_shift * seam_step + prec)
-        by_tolerance = has & _tolerance_joins(delta, seam_step, tolerance, prec)
+        by_tolerance = has & _tolerance_joins(delta, seam_step, tolerance, prec, bounds)
         # A row with no step has no labels to trim or step to judge: it
         # joins where it overlaps, and across a seam only a distance does.
         spaced = (first - reach).astype(np.float64)
-        width_joins = _tolerance_joins(spaced, np.nan * spaced, tolerance, prec)
+        unknown = np.nan * spaced
+        width_joins = _tolerance_joins(spaced, unknown, tolerance, prec, bounds)
         by_tolerance = np.where(stepless, (first <= reach) | width_joins, by_tolerance)
         joins = by_shift | by_tolerance
-        joins[:1] = False
+        joins[heads] = False
         past = behind + (1 if ticks else prec)
         beyond = _own_label_at(past, lattice, order, ticks, forward, first, own_o)
         # labels with no step lose what an earlier row already reached
@@ -1748,10 +1785,10 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
         unstepped = np.where(first > reach, first, next_up)
         fresh = np.where(stepless, unstepped, np.where(first > reach, first, beyond))
     lo = np.where(joins & ~stepless, eff, fresh)
-    lo[:1] = first[:1]
+    lo[heads] = first[heads]
     keep = lo <= last
     opens = ~joins & keep
-    opens[:1] = True
+    opens[heads] = True
     stretch = np.cumsum(opens) - 1
     with np.errstate(invalid="ignore"):
         dropped = np.where(stepless, 0, np.rint((lo - first) / own_o))
@@ -1761,9 +1798,10 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     position = pd.Series(kept_count).groupby(stretch).cumsum().to_numpy() - kept_count
     how = np.where(by_shift, "seam", "tolerance").astype(object)
     how[opens] = "gap"
-    how[:1] = "stretch"
-    lo_v, hi_v = (lo, last) if forward > 0 else (-last, -lo)
-    gap_edges = (reach, lo) if forward > 0 else (-lo, -reach)
+    how[heads] = "stretch"
+    ahead = forward > 0
+    lo_v, hi_v = np.where(ahead, lo, -last), np.where(ahead, last, -lo)
+    gap_edges = np.where(ahead, reach, -lo), np.where(ahead, lo, -reach)
     out = pd.DataFrame(
         {
             "_stretch": stretch,
@@ -1791,13 +1829,21 @@ def _cell_seams(sub, name, tolerance, max_shift) -> pd.DataFrame:
     return out.loc[sub.index]
 
 
-def _tolerance_joins(delta, step, tolerance, prec) -> np.ndarray:
+def _tolerance_joins(delta, step, tolerance, prec, bounds=None) -> np.ndarray:
     """
     Whether ``tolerance`` joins each seam: up to so many steps, a seam
     width, or one step (counting nothing where unknown) plus an excess.
+
+    A list ``tolerance`` holds one per cell, whose rows ``bounds`` delimits.
     """
     if tolerance is None:
         return np.zeros(len(delta), dtype=bool)
+    if isinstance(tolerance, list):
+        assert bounds is not None, "a tolerance per cell needs the cells' rows"
+        out = np.zeros(len(delta), dtype=bool)
+        for tol, (a, b) in zip(tolerance, pairwise(bounds), strict=True):
+            out[a:b] = _tolerance_joins(delta[a:b], step[a:b], tol, prec[a:b])
+        return out
     with np.errstate(invalid="ignore"):
         if (count := tolerance.count) is not None:
             reach, whole = count * step + prec, count - 1
@@ -1820,13 +1866,18 @@ def _seams(df, name, group, tolerance, max_shift) -> pd.DataFrame:
 
 def _stretch_frame(df, name, cells, tolerance, max_shift) -> pd.DataFrame:
     """`_cell_seams` over every cell; ``_stretch`` labels rows that may combine."""
-    frames = []
-    for label, index in df.groupby(cells, sort=False).groups.items():
-        sub = df.loc[index]
-        seams = _cell_seams(sub, name, _cell_tolerance(tolerance, sub, name), max_shift)
-        seams["_stretch"] = f"{label}_" + seams["_stretch"].astype(str)
-        frames.append(seams)
-    return df.join(pd.concat(frames))
+    # the seam test reads the dimension's own columns and the row's identity,
+    # so a cell is cut from those alone rather than from every attr
+    prefixes = (f"{name}_", f"_{name}_")
+    own = [x for x in df.columns if isinstance(x, str) and x.startswith(prefixes)]
+    own += [x for x in ("_patch_row", "_modified") if x in df.columns and x not in own]
+    codes, _ = pd.factorize(cells.to_numpy())
+    rows = np.flatnonzero(codes >= 0)  # a row in no cell is judged in none
+    sub, codes = df[own].take(rows), codes[rows]
+    if tolerance is not None:  # each cell's own, in its own units
+        heads = pd.Series(np.arange(len(sub))).groupby(codes).first()
+        tolerance = [_cell_tolerance(tolerance, sub.iloc[[x]], name) for x in heads]
+    return df.join(_cell_seams(sub, name, tolerance, max_shift, codes))
 
 
 def _roundness(step: float) -> int:
@@ -2402,7 +2453,7 @@ def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
     for coord in _identified_coords(df) - {name}:
         if (dims := df.get(f"_{coord}_dims")) is None:
             continue
-        rides = dims.map(lambda x: isinstance(x, str) and name in x.split(","))
+        rides = pd.Series(_names_dim(dims, name), index=dims.index)
         if not rides.any():
             continue
         for suffix in ("_min", "_max", "_step"):
@@ -2950,7 +3001,8 @@ def build_chunk_plan(
     stop_all = sorted_df[max_name].to_numpy()
     ticks = _counts_ticks(start_all.dtype)
     # a grid labels in the dtype every source stores its labels in
-    stored = {str(x) for x in sorted_df.get(f"_{name}_coord_dtype", [""])}
+    stated_dtypes = sorted_df.get(f"_{name}_coord_dtype", pd.Series([""]))
+    stored = {str(x) for x in stated_dtypes.unique()}
     stated = len(stored) == 1 and min(stored).startswith(("int", "uint", "float"))
     label_dtype = np.dtype(min(stored)) if stated else start_all.dtype
     mod_after = (
@@ -3742,8 +3794,7 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
     """Per row, whether `coord` is one of the row's dimensions."""
     if "dims" not in df.columns:
         return np.zeros(len(df), dtype=bool)
-    dims = df["dims"].astype(str).str.split(",")
-    return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
+    return _names_dim(df["dims"], coord)
 
 
 def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
@@ -4122,6 +4173,8 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
         steps = steps.astype("m8[ns]")
     exact = list(outputs[grid_col]) if grid_col in outputs else [None] * len(outputs)
     specs = [None] * len(outputs)
+    spelled = str(dtype)
+    grid_steps = {}  # a slice keeps its grid's spacing
     for out, (part, first, size) in enumerate(slices):
         first, size = int(first), int(size)  # Python ints: grid terms are big
         if not grids or (part >= 0 and not relabel[part]):
@@ -4130,14 +4183,15 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
         if grid is None:
             specs[out], exact[out] = "labels", None
             continue
-        piece = grid.sliced(first, 1, size)
-        steps[out] = piece.step(dtype)
-        fraction = piece.step_den > 1
-        exact[out] = (
-            (piece.step_num, piece.step_den, piece.phase, size) if fraction else None
-        )
+        if parts[out] not in grid_steps:
+            grid_steps[parts[out]] = grid.sliced(first, 1, size).step(dtype)
+        steps[out] = grid_steps[parts[out]]
+        exact[out] = None
+        # only a fractional grid has slices whose terms a step cannot restate
+        if grid.step_den > 1 and (piece := grid.sliced(first, 1, size)).step_den > 1:
+            exact[out] = (piece.step_num, piece.step_den, piece.phase, size)
         terms = (grid.origin, grid.step_num, grid.step_den, grid.count, grid.phase)
-        specs[out] = (*terms, first, size, str(dtype))
+        specs[out] = (*terms, first, size, spelled)
     stretch_col = f"_{name}_stretch"
     steps = _published(steps, np.array([x == "labels" for x in specs], dtype=bool))
     outputs = outputs.assign(**{step_col: steps, grid_col: exact, stretch_col: specs})

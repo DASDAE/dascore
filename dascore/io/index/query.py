@@ -216,7 +216,7 @@ def _range_bounds(
 
 
 def _compatible_coord_units(
-    rows: pd.DataFrame, typed_values: list, name: str
+    rows: _Rows, typed_values: list, name: str
 ) -> set[str] | None:
     """
     Return stored units compatible with quantity-valued coord selectors.
@@ -268,9 +268,63 @@ class _Where:
         return " AND ".join(self.clauses) if self.clauses else "TRUE"
 
 
+class _Rows:
+    """One name's metadata rows, column by column, as the builders read them."""
+
+    __slots__ = ("columns",)
+
+    def __init__(self, columns: dict[str, list]):
+        self.columns = columns
+
+    def __getitem__(self, column: str) -> list:
+        return self.columns[column]
+
+    def get(self, column: str, default=()):
+        return self.columns.get(column, default)
+
+    def __len__(self) -> int:
+        return len(next(iter(self.columns.values()), ()))
+
+    @property
+    def empty(self) -> bool:
+        return not len(self)
+
+
+class MetaRows:
+    """
+    A metadata frame (attr_meta, coord_meta) as plain rows grouped by name.
+
+    The clause builders look rows up by name many times per query, and the
+    frames hold a handful of rows: a pandas selection costs far more than
+    the rows do. ``frame`` is the frame they came from.
+    """
+
+    def __init__(self, frame: pd.DataFrame, key: str):
+        self.frame = frame
+        self.all = {str(c): frame[c].tolist() for c in frame.columns}
+        self._names = list(self.all)
+        groups: dict = {}
+        for i, name in enumerate(self.all.get(key, ())):
+            groups.setdefault(name, []).append(i)
+        self._groups = {
+            name: _Rows({c: [self.all[c][i] for i in rows] for c in self._names})
+            for name, rows in groups.items()
+        }
+
+    def items(self):
+        """Each name with its rows, in the order the names first appear."""
+        return self._groups.items()
+
+    def named(self, name) -> _Rows:
+        """The rows whose key column is ``name`` (none: empty columns)."""
+        if (rows := self._groups.get(name)) is not None:
+            return rows
+        return _Rows({c: [] for c in self._names})
+
+
 def build_attr_clause(
     where: _Where,
-    attr_meta: pd.DataFrame,
+    attr_meta: MetaRows,
     name: str,
     value,
 ) -> re.Pattern | None:
@@ -278,7 +332,7 @@ def build_attr_clause(
     Add SQL for one attr predicate; return a residual pattern if the
     predicate must be re-applied in pandas (regex).
     """
-    rows = attr_meta[attr_meta["attr_name"] == name]
+    rows = attr_meta.named(name)
     kinds, columns, units = {"str"}, {"str": _SOURCE_PATH_SQL}, {}
     if name not in SOURCE_ATTRS:
         if rows.empty:
@@ -477,7 +531,7 @@ def _dimensional_bounds(value) -> list[_UnitBound]:
 
 
 def _add_exists_clause(
-    where: _Where, rows: pd.DataFrame, name: str, value: CoordExists
+    where: _Where, rows: _Rows, name: str, value: CoordExists
 ) -> None:
     """Add an existence clause, narrowed to dimensionally usable units."""
     conditions = ["pc.coord_name = ?"]
@@ -510,7 +564,7 @@ def _add_exists_clause(
 
 def build_coord_clause(
     where: _Where,
-    coord_meta: pd.DataFrame,
+    coord_meta: MetaRows,
     name: str,
     value,
 ) -> None:
@@ -521,7 +575,7 @@ def build_coord_clause(
     Candidacy only: envelope overlap, never false negatives. Exact
     membership/boolean masks are applied at patch load, above this layer.
     """
-    rows = coord_meta[coord_meta["coord_name"] == name]
+    rows = coord_meta.named(name)
     if isinstance(value, CoordExists):
         _add_exists_clause(where, rows, name, value)
         return
@@ -617,8 +671,8 @@ def build_coord_clause(
 
 def _build_where(
     queries: list[Query],
-    attr_meta: pd.DataFrame,
-    coord_meta: pd.DataFrame,
+    attr_meta: MetaRows,
+    coord_meta: MetaRows,
 ) -> tuple[_Where, list[tuple[str, re.Pattern]]]:
     """Compose the shared WHERE clause and any regex residuals."""
     where = _Where()
@@ -640,7 +694,7 @@ _HOT_COORDS = ("time", "distance")
 
 
 def _order_clause(
-    order_by, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
+    order_by, attr_meta: MetaRows, coord_meta: MetaRows
 ) -> tuple[str, list]:
     """
     Resolve an order spec into an ORDER BY clause and its parameters.
@@ -658,9 +712,9 @@ def _order_clause(
     # (expression, parameters) of each sort key
     if kind == "coord" and name in _HOT_COORDS:
         column = f"p.{quote(f'{name}_min')}"
-        rows = coord_meta[coord_meta["coord_name"] == name]
+        rows = coord_meta.named(name)
         if name == "time" and (
-            rows["value_kind"].ne("time").any() or rows["is_relative"].any()
+            any(x != "time" for x in rows["value_kind"]) or any(rows["is_relative"])
         ):
             # Only absolute times populate the hot column. Other time
             # coordinate kinds sort by their own minimum after absolute times.
@@ -675,7 +729,7 @@ def _order_clause(
             missing_time = "p.time_min IS NULL, "
         keys = [(column, params)]
     elif kind == "coord":
-        rows = coord_meta[coord_meta["coord_name"] == name]
+        rows = coord_meta.named(name)
         # one key per kind the coord is stated under, so each kind's values
         # sort among themselves in any view, kinds in coord_meta's order
         keys = [
@@ -688,7 +742,7 @@ def _order_clause(
             for value_kind in dict.fromkeys(rows["value_kind"])
         ]
     else:
-        rows = attr_meta[attr_meta["attr_name"] == name]
+        rows = attr_meta.named(name)
         columns = [quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
         keys = [(f"a.{columns[0]}", params)]
@@ -702,8 +756,8 @@ def _order_clause(
 
 def build_sql(
     query: Query | Sequence[Query],
-    attr_meta: pd.DataFrame,
-    coord_meta: pd.DataFrame,
+    attr_meta: MetaRows,
+    coord_meta: MetaRows,
     count: bool = False,
     order_by=None,
     patch_rows=None,
@@ -751,7 +805,7 @@ def build_sql(
     # attr columns selected explicitly: `a.*` would duplicate patch_row,
     # and the duplicate's spelling in the result is not worth relying on.
     attr_cols = "".join(
-        f", a.{quote(col)}" for col in attr_meta["column_name"].unique()
+        f", a.{quote(col)}" for col in dict.fromkeys(attr_meta.all["column_name"])
     )
     sql = (
         "SELECT s.source_path, s.base_uri, s.source_format, s.format_version, "
