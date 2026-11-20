@@ -1733,7 +1733,7 @@ def _cell_seams(sub, name, tolerance, max_shift, cells=None) -> pd.DataFrame:
     cells = np.zeros(len(sub), np.intp) if cells is None else np.asarray(cells)
     # a cell holding a descending row is taken descending
     signs = pd.Series(np.sign(to_float(step.to_numpy())) < 0)
-    forward = np.where(signs.groupby(cells).transform("any"), -1, 1)
+    forward = np.where(signs.groupby(cells).transform("any"), -1, 1).astype(np.int64)
     low, high = _numbers(start.to_numpy()), _numbers(stop.to_numpy())
     first = np.where(forward > 0, low, -high)
     last = np.where(forward > 0, high, -low)
