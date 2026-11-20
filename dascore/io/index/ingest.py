@@ -22,7 +22,7 @@ import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
 from functools import lru_cache
-from typing import SupportsInt, TypedDict, cast
+from typing import SupportsInt, TypedDict, TypeVar, cast
 
 import numpy as np
 import pandas as pd
@@ -789,6 +789,22 @@ _COORD_DEF_BOOLS = frozenset(
 )
 
 
+_Row = TypeVar("_Row")
+
+
+def _rows_by(frame: pd.DataFrame, row_type: type[_Row], column: str) -> dict:
+    """
+    A frame's rows grouped by an integral column, as `groupby` groups them.
+
+    One pass over the whole frame: iterating each group's own frame costs
+    a namedtuple class and a column lookup per group.
+    """
+    out: dict[int, list[_Row]] = {}
+    for row in iter_rows(frame, row_type):
+        out.setdefault(_int_key(getattr(row, column)), []).append(row)
+    return out
+
+
 def _int_key(key: Hashable) -> int:
     """Return a groupby key as an int; the row columns grouped on are integral."""
     return int(cast("SupportsInt", key))
@@ -899,23 +915,15 @@ def assemble_source_records(
         if not attrs.empty
         else {}
     )
-    link_groups = (
-        {_int_key(k): v for k, v in links.groupby("patch_row")}
-        if not links.empty
-        else {}
-    )
-    patches_by_source = (
-        {_int_key(k): v for k, v in patches.groupby("source_row")}
-        if not patches.empty
-        else {}
-    )
+    link_groups = _rows_by(links, PatchCoordRow, "patch_row")
+    patches_by_source = _rows_by(patches, PatchRow, "source_row")
     out = []
     for src in iter_rows(sources, SourceRow):
         sub = patches_by_source.get(int(src.source_row))
         if sub is None:
             continue
         patch_records = []
-        for patch in iter_rows(sub, PatchRow):
+        for patch in sub:
             pid = int(patch.patch_row)
             typed = {}
             for col, value in attr_rows.get(pid, {}).items():
@@ -925,7 +933,7 @@ def assemble_source_records(
                         kind=kind, value=_py_scalar(value), units=units
                     )
             coords = []
-            for link in iter_rows(link_groups.get(pid, pd.DataFrame()), PatchCoordRow):
+            for link in link_groups.get(pid, ()):
                 row = int(link.coord_row)
                 coords.append(coord_record(link, def_map[row], def_runs.get(row, ())))
             patch_records.append(
