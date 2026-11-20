@@ -356,8 +356,12 @@ def _trim_to_member_windows(
         planned = members.get(f"_{name}_units")
         same = np.ones(len(joined), dtype=bool)
         if native is not None and planned is not None:
-            pairs = zip(native.to_numpy(), planned.to_numpy(), strict=True)
-            same = np.array([_is_missing(a) or a == b for a, b in pairs], dtype=bool)
+            # positional, as the frames' indexes differ. A member stating no
+            # unit (stored as null, never "") takes the window as planned;
+            # a stated one only in the plan's own unit.
+            native = pd.Series(native.to_numpy(), dtype=object)
+            planned = pd.Series(planned.to_numpy(), dtype=object)
+            same = (native.isna() | native.eq(planned)).to_numpy()
         for end in ("min", "max"):
             column = f"{name}_{end}"
             window = pd.Series(members[column].to_numpy(), index=joined.index)
@@ -1306,9 +1310,9 @@ def derived_catalog(
     member_rows = member_rows.drop(columns=["_patch_row"])
     loader = CompositeResolver()
     if parent is not None:
-        member_paths = set(
-            member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
-        )
+        paths = member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
+        # live patches and plans are named by URIs; a file path names neither
+        member_paths = set(paths[paths.str.contains("://", regex=False)])
         loader.absorb(parent.resolver, paths=member_paths)
         loader.file._upaths.update(upaths)
         # a directory's members read under the decode it scanned them with
@@ -1410,9 +1414,13 @@ def _with_parent_runs(
     except a concatenation's, which keeps each member's runs as segments.
     Members find their runs through the parent's patch rows (``_index_row``).
     """
-    index_rows = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
+    # whole columns as lists, which box as iterating them does, only faster
+    index_rows = dict(
+        zip(sources["_patch_row"].tolist(), sources["_index_row"].tolist(), strict=True)
+    )
     members: dict[str, list] = {}
-    for output_id, patch_row in zip(trims["output_id"], trims["_patch_row"]):
+    pairs = zip(trims["output_id"].tolist(), trims["_patch_row"].tolist(), strict=True)
+    for output_id, patch_row in pairs:
         members.setdefault(str(int(output_id)), []).append(index_rows.get(patch_row))
     known = {x for ids in members.values() for x in ids if pd.notna(x)}
     runs = parent_backend.patch_runs(known)

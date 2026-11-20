@@ -42,6 +42,19 @@ def indexed(exact_path):
     return dc.spool(exact_path.parent).update()
 
 
+@pytest.fixture(scope="module")
+def split_spool(hz_1024_patch, tmp_path_factory):
+    """The 1024 Hz patch in two files, end to end on its one grid."""
+    path = tmp_path_factory.mktemp("split")
+    halves = (
+        hz_1024_patch.select(time=(None, 1000), samples=True),
+        hz_1024_patch.select(time=(1000, None), samples=True),
+    )
+    for num, half in enumerate(halves):
+        half.update_attrs(history=[]).io.write(path / f"{num}.h5", "dasdae")
+    return dc.spool(path).update()
+
+
 class TestSchema:
     """The stored rows carry the grid."""
 
@@ -139,19 +152,13 @@ class TestFlatRelation:
         direct = dc.read(exact_path)[0].select(time=window)
         assert out.attrs.data_id == direct.attrs.data_id
 
-    def test_merge_through_index(self, hz_1024_patch, tmp_path):
+    def test_merge_through_index(self, hz_1024_patch, split_spool):
         """Two files merged by their rows alone keep the grid.
 
         A two-member merge reads arrays and builds coordinates from the
         index rows, the path a whole-tick rebuild would send off the grid.
         """
-        halves = (
-            hz_1024_patch.select(time=(None, 1000), samples=True),
-            hz_1024_patch.select(time=(1000, None), samples=True),
-        )
-        for num, half in enumerate(halves):
-            half.update_attrs(history=[]).io.write(tmp_path / f"{num}.h5", "dasdae")
-        (merged,) = dc.spool(tmp_path).update().chunk(time=None)
+        (merged,) = split_spool.chunk(time=None)
         assert merged.get_coord("time").step_exact == Fraction(1, 1024)
         assert merged.get_coord("time") == hz_1024_patch.get_coord("time")
 
@@ -214,6 +221,45 @@ class TestPlannedRows:
         record = _coord_record_from_row(row, "time")
         assert record is not None
         assert record.step_numerator is None
+
+    @staticmethod
+    def _assert_rows_rebuild(chunked):
+        """Every output row rebuilds the time coordinate its patch loads with."""
+        rows = chunked._catalog.to_df()
+        assert len(rows) == len(chunked) > 1
+        for patch, (_, row) in zip(chunked, rows.iterrows(), strict=True):
+            coord = patch.get_coord("time")
+            assert row["_time_grid"][::3] == (1953125, len(coord))
+            assert coord_from_row(row.to_dict(), "time", units="s") == coord
+
+    def test_stretch_slice_states_grid(self, split_spool):
+        """A chunk across files on one fractional grid states its slice of it.
+
+        Its row then rebuilds the coordinate the loaded patch holds, which
+        the whole-tick envelope alone cannot, from any position on the grid.
+        """
+        self._assert_rows_rebuild(split_spool.chunk(time=0.6, keep_partial=True))
+
+    def test_selected_stretch_slice_states_grid(self, split_spool):
+        """A selection's samples are followed onto the grid of each chunk."""
+        selected = split_spool.select(time=(3, 1990), samples=True)
+        self._assert_rows_rebuild(selected.chunk(time=0.6))
+
+    def test_grids_half_a_tick_apart(self, hz_1024_patch):
+        """Outputs alike but for the grid their labels floor from stay apart.
+
+        Two stations start on the same tick, one on a grid half a tick
+        later, so some windows share every envelope cell but the grid.
+        """
+        time = hz_1024_patch.get_coord("time")
+        start = time.min() - np.timedelta64(976562, "ns")
+        later = get_coord(start=start, step=(1, 1024), shape=(len(time) + 1,))[1:]
+        assert later.min() == time.min() and later.max() != time.max()
+        patches = [
+            hz_1024_patch.update_attrs(station="A"),
+            hz_1024_patch.update_coords(time=later).update_attrs(station="B"),
+        ]
+        self._assert_rows_rebuild(dc.spool(patches).chunk(time=0.6))
 
 
 class TestRecordsRoundTrip:

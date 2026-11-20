@@ -337,13 +337,14 @@ def _adjust_absolute_envelopes(df, coords):
         # being null for one with no data id.
         column = df.get(f"_{name}_coord_dtype")
         missing = np.zeros(len(df), bool) if column is None else column.isna().values
-        held, lacking = df[~missing], df[missing]
+        lacking = df[missing] if missing.any() else None
+        held = df if lacking is None else df[~missing]
         if isinstance(value, _CanonicalRange):
             held = _adjust_unit_segments(held, name, value)
         elif is_range(value):
             held = adjust_segments(held, ignore_bad_kwargs=True, **{name: value})
         df = held
-        if len(lacking):
+        if lacking is not None:
             lacking = lacking.assign(_modified=lacking.get("_modified", False))
             df = pd.concat([held, lacking]).sort_index(kind="stable")
     return df
@@ -842,8 +843,11 @@ class _SampleTracker:
             others = (self.dims[x] for x in self.names if x != name)
             shared = any((x[held] == mine[held]).any() for x in others)
             several = any("," in str(x) for x in pd.unique(mine[held]))
-            grid = self.source.get(f"_{name}_grid", ())
-            exact = any(isinstance(x, tuple) for x in grid)
+            grid = self.source.get(f"_{name}_grid")
+            # most rows state no grid, so only the stated cells are tested
+            exact = grid is not None and any(
+                isinstance(x, tuple) for x in grid[grid.notna()]
+            )
             self._watched[name] = shared or several or exact
         return self._watched[name]
 
@@ -1419,6 +1423,18 @@ def _validate_on_missing_dim(on_missing_dim) -> None:
         raise ParameterError(msg)
 
 
+def _names_dim(dims: pd.Series, name: str) -> np.ndarray:
+    """
+    Whether each comma-joined dims cell names ``name``; never a non-text one.
+
+    Decided once per distinct cell: a relation repeats a few signatures.
+    """
+    codes, distinct = pd.factorize(dims)
+    names = [isinstance(x, str) and name in x.split(",") for x in distinct]
+    # a null cell's code is -1, which picks the trailing False
+    return np.array([*names, False], dtype=bool)[codes]
+
+
 def _prepare_relation(
     df: pd.DataFrame,
     name: str,
@@ -1446,8 +1462,7 @@ def _prepare_relation(
     df = _normalize_chunk_units(df, name)
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
     if "dims" in df.columns:
-        dim_lists = df["dims"].fillna("").astype(str).str.split(",")
-        not_a_dim = ~dim_lists.map(lambda dims: name in dims)
+        not_a_dim = pd.Series(~_structural(df, name), index=df.index)
     else:
         not_a_dim = pd.Series(False, index=df.index)
     unusable = null_rows | not_a_dim
@@ -1523,7 +1538,12 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
         lone &= stated.transform("nunique") == 1
         lone &= ~_inside_stated(start, stop, step, base, lone)
         samp = samp.mask(lone, stated.transform("first")).astype(np.int64)
-    return base.astype(str) + "_" + samp.astype(str)
+    # spelled once per distinct pair: there are few, and rows many
+    # both are labels counted from zero, so one integer names the pair
+    width = int(samp.max()) + 1 if len(samp) else 1
+    codes, distinct = pd.factorize(base.to_numpy(np.int64) * width + samp.to_numpy())
+    spelled = np.array([f"{x // width}_{x % width}" for x in distinct.tolist()])
+    return pd.Series(spelled[codes], index=df.index, dtype="str")
 
 
 def _inside_stated(start, stop, step, base, rows) -> pd.Series:
@@ -2402,7 +2422,7 @@ def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
     for coord in _identified_coords(df) - {name}:
         if (dims := df.get(f"_{coord}_dims")) is None:
             continue
-        rides = dims.map(lambda x: isinstance(x, str) and name in x.split(","))
+        rides = pd.Series(_names_dim(dims, name), index=dims.index)
         if not rides.any():
             continue
         for suffix in ("_min", "_max", "_step"):
@@ -2950,7 +2970,8 @@ def build_chunk_plan(
     stop_all = sorted_df[max_name].to_numpy()
     ticks = _counts_ticks(start_all.dtype)
     # a grid labels in the dtype every source stores its labels in
-    stored = {str(x) for x in sorted_df.get(f"_{name}_coord_dtype", [""])}
+    stated_dtypes = sorted_df.get(f"_{name}_coord_dtype", pd.Series([""]))
+    stored = {str(x) for x in stated_dtypes.unique()}
     stated = len(stored) == 1 and min(stored).startswith(("int", "uint", "float"))
     label_dtype = np.dtype(min(stored)) if stated else start_all.dtype
     mod_after = (
@@ -3742,8 +3763,7 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
     """Per row, whether `coord` is one of the row's dimensions."""
     if "dims" not in df.columns:
         return np.zeros(len(df), dtype=bool)
-    dims = df["dims"].astype(str).str.split(",")
-    return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
+    return _names_dim(df["dims"], coord)
 
 
 def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
@@ -4122,6 +4142,8 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
         steps = steps.astype("m8[ns]")
     exact = list(outputs[grid_col]) if grid_col in outputs else [None] * len(outputs)
     specs = [None] * len(outputs)
+    spelled = str(dtype)
+    grid_steps = {}  # a slice keeps its grid's spacing
     for out, (part, first, size) in enumerate(slices):
         first, size = int(first), int(size)  # Python ints: grid terms are big
         if not grids or (part >= 0 and not relabel[part]):
@@ -4130,14 +4152,15 @@ def _describe_pieces(outputs, members, pieces, rows, src, name, dtype):
         if grid is None:
             specs[out], exact[out] = "labels", None
             continue
-        piece = grid.sliced(first, 1, size)
-        steps[out] = piece.step(dtype)
-        fraction = piece.step_den > 1
-        exact[out] = (
-            (piece.step_num, piece.step_den, piece.phase, size) if fraction else None
-        )
+        if parts[out] not in grid_steps:
+            grid_steps[parts[out]] = grid.sliced(first, 1, size).step(dtype)
+        steps[out] = grid_steps[parts[out]]
+        exact[out] = None
+        # only a fractional grid has slices whose terms a step cannot restate
+        if grid.step_den > 1 and (piece := grid.sliced(first, 1, size)).step_den > 1:
+            exact[out] = (piece.step_num, piece.step_den, piece.phase, size)
         terms = (grid.origin, grid.step_num, grid.step_den, grid.count, grid.phase)
-        specs[out] = (*terms, first, size, str(dtype))
+        specs[out] = (*terms, first, size, spelled)
     stretch_col = f"_{name}_stretch"
     steps = _published(steps, np.array([x == "labels" for x in specs], dtype=bool))
     outputs = outputs.assign(**{step_col: steps, grid_col: exact, stretch_col: specs})
