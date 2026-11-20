@@ -10,6 +10,7 @@ renumbers after each sync).
 from __future__ import annotations
 
 import copy
+import os
 import sqlite3
 
 import numpy as np
@@ -113,6 +114,17 @@ class TestDirectoryOrder:
         assert len(df) == 3
         assert df["time_min"].is_monotonic_increasing
         assert df["time_min"].iloc[0] == early.get_coord("time").min()
+
+    def test_rename_reorders_sources_tied_in_time(self, tmp_path):
+        """A renamed source takes its new path's place among time ties."""
+        patch = dc.get_example_patch()
+        for i, name in enumerate(["a.h5", "c.h5"]):
+            dc.write(patch, tmp_path / name, "dasdae")
+            os.utime(tmp_path / name, ns=(i * 10**9, i * 10**9))
+        dc.spool(tmp_path).update(progress=None)
+        (tmp_path / "a.h5").rename(tmp_path / "d.h5")
+        df = dc.spool(tmp_path).update(progress=None).get_contents()
+        assert list(df["source_path"]) == ["c.h5", "d.h5"]
 
 
 class TestIndexVersionRebuild:
