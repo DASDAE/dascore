@@ -5,6 +5,7 @@ from __future__ import annotations
 import pickle
 import re
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -17,6 +18,8 @@ from dascore.io.index.catalog import (
     _extremes_coord,
     _forget_what_a_trim_invalidates,
     _source_envelopes,
+    resolve_against_root,
+    resolve_texts_against_root,
 )
 from dascore.io.index.query import InvalidSpoolQueryError, glob_to_regex
 from dascore.units import m
@@ -34,6 +37,18 @@ def patches():
 def live_catalog(patches):
     """A catalog over live patches."""
     return PatchCatalog.from_patches(patches)
+
+
+class TestResolveTextsAgainstRoot:
+    """A column of stored paths resolves as each path does on its own."""
+
+    @pytest.mark.parametrize("root", [Path("/data/index"), Path("."), Path("/")])
+    def test_matches_one_at_a_time(self, root):
+        """Relative paths join the root; absolute paths and URIs pass through."""
+        paths = ["a.h5", "sub/b.h5", ".", "/abs/c.h5", "s3://bucket/d.h5"]
+        out = resolve_texts_against_root(pd.Series(paths), root)
+        assert out == [str(resolve_against_root(x, root)) for x in paths]
+        assert out[:4] == [str(root / x) for x in paths[:4]]
 
 
 class TestLaziness:

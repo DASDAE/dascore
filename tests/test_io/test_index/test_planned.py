@@ -18,6 +18,8 @@ from dascore.io.index.planned import (
     PlanResolver,
     _aux_coord_info,
     _coord_record_from_row,
+    _extrema,
+    _group_extreme,
     _ns,
     _record_once,
     _stated_units,
@@ -477,6 +479,19 @@ class TestRecordOnce:
         _record_once(cache, row, "distance")
         _record_once(cache, {**row, "distance_min": -0.0}, "distance")
         assert len(cache) == 2
+
+
+class TestExtrema:
+    """Whole-column envelope ends agree with each group reduced alone."""
+
+    @pytest.mark.parametrize("how", ["min", "max"])
+    def test_signed_zeros(self, how):
+        """A group holding 0.0 and -0.0 keeps the zero its own reduction picks."""
+        values = pd.Series([0.0, -0.0, 1.0, -0.0, 0.0])
+        keys = pd.Series([1, 1, 2, 2, 2])
+        out = _extrema(values, keys, how)
+        alone = [_group_extreme(x, how) for _, x in values.groupby(keys)]
+        assert [float(x).hex() for x in out] == [float(x).hex() for x in alone]
 
 
 class TestAuxInfoEdges:

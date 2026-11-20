@@ -223,6 +223,26 @@ def resolve_against_root(
     return root / path
 
 
+def resolve_texts_against_root(paths: pd.Series, root: Path) -> list[str]:
+    """
+    Apply `resolve_against_root` to a column of paths under a local root.
+
+    The index stores relative paths in POSIX form, which join the root as
+    text just as pathlib prints the joined path, so a whole index resolves
+    without a path object per row; "." (a source that is the root itself)
+    is the root. Other platforms join through pathlib.
+    """
+    if os.sep != "/":
+        return [str(resolve_against_root(x, root)) for x in paths]
+    base = str(root)
+    prefix = "" if base == "." else base if base.endswith("/") else f"{base}/"
+    texts = (str(x) for x in paths)
+    return [
+        x if "://" in x or x.startswith("/") else base if x == "." else prefix + x
+        for x in texts
+    ]
+
+
 def _patch_path(patch: dc.Patch) -> str:
     """Return the synthetic source path identifying a live patch."""
     return f"memorypatch://{patch._instance_id}"
@@ -425,10 +445,14 @@ def directory_decodes(resolver, sources) -> dict:
     """
     if not isinstance(resolver, FileResolver) or resolver._root is None:
         return {}
-    out = {}
+    out, by_format = {}, {}
     for path, file_format, version in sources:
-        fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=version)
-        out[str(path)] = (_resolve_snap(fiber_io, resolver._snap), resolver._max_shift)
+        # a format's decode is the same for every one of its sources
+        if (decode := by_format.get((file_format, version))) is None:
+            io = FiberIO.manager.get_fiberio(format=file_format, version=version)
+            decode = (_resolve_snap(io, resolver._snap), resolver._max_shift)
+            by_format[(file_format, version)] = decode
+        out[str(path)] = decode
     return out
 
 
