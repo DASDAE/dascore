@@ -278,6 +278,17 @@ class TestRemainingEdges:
 class TestAuxiliaryCoords:
     """Derived catalogs keep non-dimension coords (2026-07-18 F2)."""
 
+    @pytest.mark.parametrize("held_first", [False, True])
+    def test_envelopes_are_not_attrs(self, held_first):
+        """An aux coord's envelope is no attr, beside outputs without it."""
+        p = dc.get_example_patch()
+        lat = np.arange(p.shape[p.get_axis("distance")], dtype=float)
+        held = p.update_attrs(station="B").update_coords(lat=("distance", lat))
+        patches = [held, p.update_attrs(station="A")]
+        chunked = dc.spool(patches if held_first else patches[::-1]).chunk(time=2)
+        names = chunked._catalog.backend.attr_names()
+        assert len(chunked) and not {x for x in names if x.startswith("lat")}
+
     @pytest.fixture()
     def sensor_spool(self):
         """Two contiguous patches carrying an aux coord on distance."""

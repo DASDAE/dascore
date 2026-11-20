@@ -19,7 +19,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Mapping
 from dataclasses import replace
-from functools import cached_property, partial
+from functools import cache, cached_property, partial
 from typing import Any
 
 import numpy as np
@@ -47,6 +47,7 @@ from dascore.io.index.ingest import (
     CoordRecord,
     PatchRecord,
     SourceRecord,
+    TypedValue,
     _coord_record,
     def_key_data_id,
     index_runs,
@@ -583,6 +584,14 @@ def _cell_key(value):
     return value.hex() if isinstance(value, float) else (type(value), value)
 
 
+@cache
+def _record_cells(name: str) -> tuple[str, ...]:
+    """The row cells `_coord_record_from_row` reads for coordinate ``name``."""
+    ends = tuple(f"{name}_{x}" for x in ("min", "max", "step"))
+    private = ("units", "coord_dtype", "def_key", "grid")
+    return ends + tuple(f"_{name}_{x}" for x in private)
+
+
 def _record_once(cache: dict, row: Mapping, name: str, **kwargs):
     """
     `_coord_record_from_row`, built once per distinct coordinate.
@@ -591,10 +600,8 @@ def _record_once(cache: dict, row: Mapping, name: str, **kwargs):
     rebuilding a range's identity is the costly part. Records are frozen,
     so outputs can share one. The key is every cell the record reads.
     """
-    cells = [row.get(f"{name}_{x}") for x in ("min", "max", "step")]
-    cells += [row.get(f"_{name}_{x}") for x in ("units", "coord_dtype", "def_key")]
-    cells += [row.get(f"_{name}_grid")]
-    key = (name, *sorted(kwargs.items()), *map(_cell_key, cells))
+    cells = [_cell_key(row.get(x)) for x in _record_cells(name)]
+    key = (name, *sorted(kwargs.items()), *cells)
     if key not in cache:
         cache[key] = _coord_record_from_row(row, name, **kwargs)
     return cache[key]
@@ -620,15 +627,17 @@ def _output_records(
     # an attr that merely looks envelope-shaped (channel_step with no
     # channel coord) is ordinary metadata and must be preserved. The
     # def-key columns are frame-wide, so the envelope-key sets repeat
-    # across rows and are cached by (dims, aux coord names).
+    # across rows and the attr columns are cached by (dims, aux coord names).
     base_names = {
         key[1 : -len("_def_key")]
         for key in outputs.columns
         if key.startswith("_") and key.endswith("_def_key")
     }
     base_names |= {"time", "distance"}  # fixed patches-table envelopes
-    envelope_cache: dict[tuple, set[str]] = {}
+    public = [x for x in outputs.columns if not (x in _NON_ATTR or x.startswith("_"))]
+    attr_cache: dict[tuple, list[str]] = {}
     coord_cache: dict[tuple, CoordRecord | None] = {}
+    texts: dict[str, TypedValue | None] = {}  # typed values are frozen
     for row in outputs.to_dict("records"):
         output_id = int(row["output_id"])
         dims = str(row.get("dims") or "")
@@ -650,26 +659,27 @@ def _output_records(
             if record is not None:
                 coords.append(record)
         cache_key = (dims, tuple(aux))
-        envelope_keys = envelope_cache.get(cache_key)
-        if envelope_keys is None:
+        attr_keys = attr_cache.get(cache_key)
+        if attr_keys is None:
             coord_names = set(dim_names) | set(aux) | base_names
             envelope_keys = {
                 f"{name}_{sfx}"
                 for name in coord_names
                 for sfx in ("min", "max", "step", "units")
             }
-            envelope_cache[cache_key] = envelope_keys
+            attr_keys = [x for x in public if x not in envelope_keys]
+            attr_cache[cache_key] = attr_keys
         attrs = {}
-        for key, value in row.items():
-            if (
-                key in _NON_ATTR
-                or key.startswith("_")
-                or key in envelope_keys
-                or value is None
-                or (np.isscalar(value) and pd.isnull(value))
-            ):
+        for key in attr_keys:
+            value = row[key]
+            if type(value) is str:  # the common attr, typed once per spelling
+                if value not in texts:
+                    texts[value] = typed_value(value)
+                typed = texts[value]
+            elif value is None or (np.isscalar(value) and pd.isnull(value)):
                 continue
-            typed = typed_value(value)
+            else:
+                typed = typed_value(value)
             if typed is not None:
                 attrs[key] = typed
         patch = PatchRecord(
