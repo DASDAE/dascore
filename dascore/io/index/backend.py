@@ -1033,7 +1033,8 @@ class SQLiteIndexBackend:
             patch_rows=patch_rows,
         )
         if not residuals:
-            return int(self._fetch_df(sql, params)["n"].iloc[0])
+            with self._lock:  # one integer: no frame needed
+                return int(self._con.execute(sql, _adapt(params)).fetchone()[0])
         # A regex residual must inspect string values, so a database count
         # cannot resolve it; the full relation already applies the residual.
         return len(self.query(queries, patch_rows=patch_rows))
@@ -1138,7 +1139,7 @@ class SQLiteIndexBackend:
                 series = col if series is None else series.where(series.notna(), col)
                 cols_to_drop.append(column)
             if series is not None:
-                if kinds == {"str"}:
+                if kinds == {"str"} and series.hasnans:
                     # flat-contract convention: missing strings are ""
                     series = series.fillna("")
                 new_columns[str(name)] = series
