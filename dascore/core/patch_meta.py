@@ -81,8 +81,8 @@ class PatchMeta(NodeRepr):
     """
     Everything a patch is apart from its data.
 
-    A `PatchMeta` states the coordinates, attributes, dtype and array
-    backend of data it does not hold, so an operation can work out what a
+    A `PatchMeta` states the coordinates, attributes and dtype of data it
+    does not hold, so an operation can work out what a
     result would look like before anything is read or computed.
     [`to_patch`](`dascore.PatchMeta.to_patch`) gives it data, making the
     [`Patch`](`dascore.Patch`) it describes; `new` and `update` change the
@@ -102,10 +102,6 @@ class PatchMeta(NodeRepr):
         [PatchAttrs](`dascore.core.attrs.PatchAttrs`).
     dtype
         The dtype of the described data.
-    backend
-        The array backend the data are in, as
-        [`backend_name`](`dascore.utils.array_api.backend_name`) spells it.
-        Kept so an operation can resolve its kernel without the data.
     source
         Internal source metadata supplied by the I/O framework.
 
@@ -126,7 +122,10 @@ class PatchMeta(NodeRepr):
     attrs: PatchAttrs
     dims: tuple[str, ...]
     dtype: Any
-    backend: str
+    # The array backend the described data are in, as `backend_name` spells
+    # it, so an operation can resolve its kernel without the data. Set by
+    # `Patch.drop_data`.
+    _backend: str = "numpy"
     # The class default also covers objects restored from older pickles.
     _source: ArraySource | None = None
     # The class `to_patch` builds; None means a plain `Patch`. Set by
@@ -139,7 +138,6 @@ class PatchMeta(NodeRepr):
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
         dtype: Any = None,
-        backend: str = "numpy",
         source: ArraySource | None = None,
     ):
         if dims is None and isinstance(coords, CoordManager):
@@ -151,7 +149,6 @@ class PatchMeta(NodeRepr):
             )
             raise ValueError(msg)
         self._dtype = _as_dtype(dtype)
-        self._backend = backend
         self._set_state(get_coord_manager(coords, dims=dims), attrs, source)
 
     def _set_state(self, coords, attrs, source) -> None:
@@ -223,11 +220,6 @@ class PatchMeta(NodeRepr):
     def dtype(self) -> np.dtype:
         """Return the dtype of the described data."""
         return self._dtype
-
-    @property
-    def backend(self) -> str:
-        """Return the array backend the described data are in."""
-        return self._backend
 
     @property
     def ndim(self) -> int:
@@ -321,9 +313,9 @@ class PatchMeta(NodeRepr):
             coords=coords,
             attrs=attrs,
             dtype=self.dtype if dtype is None else dtype,
-            backend=self.backend,
             source=self._source,
         )
+        out._backend = self._backend
         out._patch_type = self._patch_type
         return out
 

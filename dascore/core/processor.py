@@ -42,11 +42,8 @@ import inspect
 import numbers
 import sys
 import textwrap
-import warnings
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
-from importlib.metadata import entry_points
-from pathlib import Path
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
 
@@ -96,7 +93,7 @@ from dascore.utils.patch_registry import (
     register_patch_function,
     resolve_patch_function,
 )
-from dascore.utils.plugins import KERNEL_GROUP
+from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
@@ -395,7 +392,7 @@ class PatchProcessor(DascoreBaseModel):
         `numpy_fallback` setting lets the data be read into memory.
         """
         if backend != "numpy":
-            _load_kernel_plugin(backend)
+            load_backend_plugins(backend)
         for klass in cls.__mro__:
             contents = klass.__dict__
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
@@ -531,14 +528,14 @@ class PatchProcessor(DascoreBaseModel):
         """Run the operation; `record=False` writes no history or ids."""
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
         # Before the check, which asks whether the class has any kernel.
-        if meta.backend != "numpy":
-            _load_kernel_plugin(meta.backend)
+        if meta._backend != "numpy":
+            load_backend_plugins(meta._backend)
         self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
         # settled before anything asks the patch for its data.
-        kernel = self.kernel_for(meta.backend)
+        kernel = self.kernel_for(meta._backend)
         if kernel is None:
             if out is meta:
                 return self._finished(patch, self._unchanged(patch, record), record)
@@ -571,7 +568,7 @@ class PatchProcessor(DascoreBaseModel):
             # gets them as any other result does, below.
             attrs = _unrecorded_attrs(attrs)
         out = out.update(attrs=attrs)
-        if meta.backend == LAZY_BACKEND:
+        if meta._backend == LAZY_BACKEND:
             result = self._settled(result, out)
         new = out if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
@@ -944,22 +941,6 @@ def _processor_named(name: str) -> type[PatchProcessor]:
         msg = f"{name!r} is a patch function, not a PatchProcessor, so takes no kernel."
         raise ParameterError(msg)
     return owner
-
-
-@functools.cache
-def _load_kernel_plugin(backend: str) -> None:
-    """Load every `dascore.kernels` entry point named for a backend, once."""
-    for entry_point in entry_points(group=KERNEL_GROUP, name=backend):
-        # The error is caught inside the cache, so a broken plugin warns once.
-        try:
-            entry_point.load()
-        except Exception as error:
-            msg = (
-                f"Kernel plugin {entry_point.value!r} for backend {backend!r} "
-                f"failed to load, so its kernels are not used: {error!r}"
-            )
-            prefix = str(Path(__file__).parent.parent)
-            warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
 
 
 def _method_for(cls: type[PatchProcessor], host: type):

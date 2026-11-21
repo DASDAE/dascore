@@ -41,6 +41,7 @@ from dascore.lazy.contract import ChunkContract, Pointwise, Unchanged
 from dascore.lazy.kernels import lazy_kernel
 from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs, Normalize, Real, _known_real
+from dascore.utils import plugins as plugins_module
 from dascore.utils.array_api import backend_name
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import encode
@@ -1227,10 +1228,10 @@ def kernel_plugins(monkeypatch):
         found = loaders.get(name, [])
         return [SimpleNamespace(value="fake.module", load=x) for x in found]
 
-    processor_module._load_kernel_plugin.cache_clear()
-    monkeypatch.setattr(processor_module, "entry_points", _entry_points)
+    plugins_module.load_backend_plugins.cache_clear()
+    monkeypatch.setattr(plugins_module, "entry_points", _entry_points)
     yield loaders
-    processor_module._load_kernel_plugin.cache_clear()
+    plugins_module.load_backend_plugins.cache_clear()
 
 
 class TestKernelPlugins:
@@ -1309,9 +1310,9 @@ class TestKernelPlugins:
             lambda: register_kernel(Local, "meta_backend")(lambda processor, data: data)
         ]
         patch = dc.get_example_patch()
-        meta = dc.PatchMeta(
-            patch.coords, attrs=patch.attrs, dtype=patch.dtype, backend="meta_backend"
-        )
+        meta = dc.PatchMeta(patch.coords, attrs=patch.attrs, dtype=patch.dtype)
+        # As the description of data on that backend says, once dropped.
+        meta._backend = "meta_backend"
         with pytest.raises(PatchDataError):
             Local().run(meta)
 

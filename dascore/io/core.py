@@ -38,6 +38,7 @@ import pandas as pd
 from h5py import Dataset as H5pyDataset
 
 import dascore as dc
+from dascore.backends import ArrayBackend, read_backend, reading_onto
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     INDEX_NAME,
@@ -79,8 +80,6 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.utils.array_api import (
     decide_fallback,
-    lazy_read_backend,
-    reading_lazily,
 )
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
@@ -703,22 +702,24 @@ class _TypeCasterMethod(Protocol):
     def __call__(self, *args, **kwargs): ...
 
 
-def _lazy_data(fiber_io, source: ArraySource, library: str) -> LazyArray | None:
+def _backend_data(fiber_io, source: ArraySource, backend: ArrayBackend):
     """
-    Return the lazy array a narrowed source names, or None; nothing is read.
+    Return the array a backend makes of a narrowed source, or None.
 
-    None says the data are to be read into memory after all, which the
-    `numpy_fallback` setting allowed. A source is not loadable when the
-    selection was not one window of it; see `ArraySource.narrow`.
+    None says the data are to be read into memory after all, which for a
+    lazy backend the `numpy_fallback` setting allowed. A source is not
+    loadable when the selection was not one window of it; see
+    `ArraySource.narrow`.
     """
     if source.loadable:
-        return LazyArray(Recipe.from_source(source.anchored()), backend=library)
-    decide_fallback(
-        f"A {fiber_io.name} patch cannot be read lazily here: it selects "
-        "samples which are not next to each other, or the format names no "
-        "stored array to read later",
-        "it was read into memory",
-    )
+        return backend.from_recipe(Recipe.from_source(source.anchored()))
+    if backend.lazy:
+        decide_fallback(
+            f"A {fiber_io.name} patch cannot be read lazily here: it selects "
+            "samples which are not next to each other, or the format names "
+            "no stored array to read later",
+            "it was read into memory",
+        )
     return None
 
 
@@ -1067,12 +1068,15 @@ class FiberIO:
                 selected.append(
                     (patch, coords, source, windows, residual, queries, index)
                 )
-            library = lazy_read_backend()
-            if library is None:
+            backend = read_backend()
+            if backend is None:
                 arrays = load(requests)
             else:
-                # What cannot be lazy is read now, where the setting allows.
-                arrays: list[Any] = [_lazy_data(self, x[2], library) for x in selected]
+                # What the backend cannot make of a stored array is read
+                # now, where the setting allows a lazy one to.
+                arrays: list[Any] = [
+                    _backend_data(self, x[2], backend) for x in selected
+                ]
                 eager = [n for n, x in enumerate(arrays) if x is None]
                 loaded = load([requests[n] for n in eager]) if eager else ()
                 for n, data in zip(eager, loaded, strict=True):
@@ -1108,9 +1112,9 @@ class FiberIO:
                 # The ids were worked out above; the read is the operation.
                 with operation_context():
                     new = patch.update(coords=coords, attrs=attrs).to_patch(data)
-                # A lazy patch keeps where its file is from wherever it was
-                # read, so making it lazy again later reads the same file.
-                new._source = source if library is None else source.anchored()
+                # A patch whose array a backend made keeps where its file
+                # is from wherever it was read, as the array itself does.
+                new._source = source if backend is None else source.anchored()
                 out.append(new)
         return dc.spool(out)
 
@@ -1925,8 +1929,8 @@ def read(
                 man, file_format, file_version
             )
             own_read = type(fiber_io).read is not FiberIO.read
-            library = lazy_read_backend()
-            if library is not None and own_read:
+            backend = read_backend()
+            if backend is not None and backend.lazy and own_read:
                 # Its own read is not known to read lazily, so it reads
                 # into memory, which the fallback setting must allow.
                 decide_fallback(
@@ -1935,7 +1939,7 @@ def read(
                     "it was read into memory",
                 )
             # And it does so with lazy reading off, whatever it calls.
-            with reading_lazily(None if own_read else library):
+            with reading_onto(None if own_read else backend):
                 out = fiber_io.read(
                     man,
                     file_version=file_version,

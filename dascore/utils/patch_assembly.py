@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.backends import read_backend
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.source import ArraySource
@@ -45,7 +46,6 @@ from dascore.utils.array_api import (
     backend_name,
     decide_fallback,
     is_numpy,
-    lazy_read_backend,
     to_numpy,
 )
 from dascore.utils.attrs import (
@@ -977,19 +977,16 @@ class PatchAssembler:
             return None
         if self.sources_unchanged is not None and not self.sources_unchanged(joined):
             return None
-        library = lazy_read_backend()
-        if library is not None:
+        backend = read_backend()
+        try:
             # Under a lazy backend the recipe is the patch's data: nothing
             # is read, and a file which does not hold the array its row
             # described says so when the data are asked for.
-            data = LazyArray(recipe, backend=library)
-        else:
-            try:
-                data = recipe.load()
-            except (InvalidFiberIOError, ParameterError):
-                # the resource did not hold the array its row described: a
-                # different shape, or fewer axes than the windows name
-                return None
+            data = recipe.load() if backend is None else backend.from_recipe(recipe)
+        except (InvalidFiberIOError, ParameterError):
+            # the resource did not hold the array its row described: a
+            # different shape, or fewer axes than the windows name
+            return None
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])

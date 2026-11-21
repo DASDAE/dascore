@@ -42,7 +42,12 @@ from dascore.proc.window import PatchWindow, Windowed, WindowReduce
 from dascore.transform.hilbert import Envelope
 from dascore.units import percent
 from dascore.utils import array_api as array_api_module
-from dascore.utils.array_api import array_namespace, device, to_numpy
+from dascore.utils.array_api import (
+    array_namespace,
+    backend_name,
+    device,
+    to_numpy,
+)
 from dascore.warnings import NumpyFallbackWarning
 
 REDUCERS = ("mean", "median", "min", "max", "std", "sum")
@@ -1724,7 +1729,7 @@ class TestOtherBackends:
             else:
                 out = self.CASES[name](there)
         # On dask the windows are a graph still: no block was computed.
-        assert out.backend == library and not computed
+        assert backend_name(out.data) == library and not computed
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
         assert out.attrs.data_id != patch.attrs.data_id
 
@@ -1748,7 +1753,7 @@ class TestOtherBackends:
             # Said once, at the call: not again as each piece is computed.
             warnings.simplefilter("error")
             values = _values(out)
-        assert out.backend == library and values.dtype == expected.dtype
+        assert backend_name(out.data) == library and values.dtype == expected.dtype
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
 
     def test_operation_without_the_library(self, patch, library, monkeypatch):
@@ -1776,7 +1781,7 @@ class TestOtherBackends:
         else:
             # Once, not once for each of the 39 windows.
             assert len(calls) == 1 and len(said) == 1 and "detrend has no" in said[0]
-        assert out.backend == library
+        assert backend_name(out.data) == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
 
     @pytest.mark.parametrize("step", (None, 0.02), ids=("every", "stepped"))
@@ -1797,7 +1802,7 @@ class TestOtherBackends:
                     out = there.fbe(**options)
             else:
                 out = there.fbe(**options)
-        assert out.backend == library and not computed
+        assert backend_name(out.data) == library and not computed
         assert out.shape == expected.shape and out.coords == expected.coords
         values = _values(out)
         assert values.dtype == expected.dtype
@@ -2031,7 +2036,7 @@ class TestOtherBackends:
         expected = small.window(**window).demean("time")
         plain = small.window(time=100, samples=True).demean("time")
         out = _on(small, library).window(**window).demean("time")
-        assert out.backend == library
+        assert backend_name(out.data) == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-3)
         assert not np.allclose(_values(out), plain.data, atol=1e-3)
 
@@ -2040,7 +2045,7 @@ class TestOtherBackends:
         expected = patch.window(time=100, samples=True).abs()
         there = _on(patch, library)
         out = Windowed(_NumpyAnswer(), time=100, samples=True)(there)
-        assert out.backend == library
+        assert backend_name(out.data) == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
 
     def test_numpy_only_operation_is_converted_for(self, patch, library):
@@ -2054,7 +2059,7 @@ class TestOtherBackends:
         said = [x for x in caught if x.category is NumpyFallbackWarning]
         # On dask each piece is NumPy when it is blended, with nothing to say.
         assert len(said) == (0 if library == "dask" else 1)
-        assert out.backend == library
+        assert backend_name(out.data) == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-10)
 
     @pytest.mark.parametrize(

@@ -16,7 +16,7 @@ from dascore.lazy.contract import Halo
 from dascore.lazy.execute import chunk_boxes
 from dascore.proc import impulse as impulse_module
 from dascore.proc.impulse import Impulsed, PatchImpulseWindow
-from dascore.utils.array_api import to_numpy
+from dascore.utils.array_api import backend_name, to_numpy
 from dascore.warnings import NumpyFallbackWarning
 
 
@@ -42,7 +42,7 @@ def _on(patch, backend, tmp_path_factory, name):
 
 def _computed(patch) -> np.ndarray:
     """A lazy patch loaded in boxes, or a dask one computed."""
-    if patch.backend == "lazy":
+    if backend_name(patch.data) == "lazy":
         return _loaded_in_boxes(patch).data
     return patch.data.compute()
 
@@ -57,7 +57,7 @@ def _stored(patch, tmp_path_factory, name):
     """The patch written to a file and read back lazily."""
     path = tmp_path_factory.mktemp(name) / f"{name}.h5"
     dc.write(patch, path, "dasdae")
-    return dc.read(path)[0].set_backend("lazy")
+    return dc.spool(path).set_backend("lazy")[0]
 
 
 @pytest.fixture(scope="module")
@@ -109,7 +109,7 @@ class TestInMemory:
     def test_another_library(self, patch):
         """On another library the operation's kernel for it runs, whole."""
         strict = pytest.importorskip("array_api_strict")
-        there = patch.set_backend("array_api_strict")
+        there = patch.new(data=strict.asarray(patch.data))
         with pytest.warns(NumpyFallbackWarning, match="pass_filter has no"):
             out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
         assert type(out.data) is type(strict.asarray(np.zeros(1)))
@@ -214,7 +214,7 @@ class TestLazy:
         out = lazy.impulse_window(time=tolerance).pass_filter(
             time=(1, 20), zerophase=zerophase
         )
-        assert out.backend == "lazy"
+        assert backend_name(out.data) == "lazy"
         loaded = _loaded_in_boxes(out)
         assert loaded.attrs == out.attrs and loaded.dtype == expected.dtype
         assert _relative_error(loaded.data, expected.data) < 4 * tolerance
@@ -287,7 +287,7 @@ class TestDask:
         computed = []
         with callbacks.Callback(posttask=lambda *x: computed.append(1)):
             out = there.impulse_window(time=1e-6).pass_filter(time=(1, 20))
-        assert out.backend == "dask" and not computed
+        assert backend_name(out.data) == "dask" and not computed
         # In the chunks the data came in, though they are shorter than the reach.
         assert out.data.chunks == there.data.chunks
         expected = patch.pass_filter(time=(1, 20))

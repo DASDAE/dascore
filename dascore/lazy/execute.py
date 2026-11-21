@@ -47,7 +47,6 @@ from dascore.utils.array_api import (
     _as_numpy_dtype,
     array_namespace,
     fallbacks_decided,
-    to_backend,
 )
 
 if TYPE_CHECKING:
@@ -174,7 +173,7 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     Read what one box of a lazy array needs, and compute it.
 
     Each step runs the kernel its processor has for the array's
-    `backend`, and what it makes is
+    backend, and what it makes is
     checked against the dtype its metadata stated and the shape of the box.
     An empty box is returned without running anything.
 
@@ -185,10 +184,10 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         or dtype than its metadata stated.
     """
     if 0 in _sizes(box):
-        return to_backend(np.empty(_sizes(box), array.dtype), array.backend)
+        return array._backend.from_array(np.empty(_sizes(box), array.dtype))
     needed = _needs(array, box)
-    backend = array.backend
-    data = to_backend(array.recipe[needed[0]].load(), backend)
+    backend = array._backend.name
+    data = array._backend.from_array(array.recipe[needed[0]].load())
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
         stated_shape, stated_dtype, _ = node.made()
@@ -222,7 +221,7 @@ def load(array: LazyArray) -> np.ndarray:
     boxes = chunk_boxes(array)
     if len(boxes) == 1:
         return compute(array, boxes[0])
-    if array.backend != NUMPY_BACKEND:
+    if array._backend.name != NUMPY_BACKEND:
         return _joined([compute(array, box) for box in boxes], boxes)
     out = np.empty(array.shape, array.dtype)
     for box in boxes:

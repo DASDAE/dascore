@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, Literal, Self, cast
+from typing import Any, Final, Literal, Self
 
 import numpy as np
 from numpy.typing import NDArray
@@ -19,7 +19,6 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.patch_meta import PatchMeta, _as_dtype
 from dascore.core.processor import check_patch_listings
 from dascore.core.source import ArraySource
-from dascore.exceptions import ParameterError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
@@ -37,12 +36,7 @@ from dascore.utils.array import (
     patch_array_function,
     patch_array_ufunc,
 )
-from dascore.utils.array_api import (
-    backend_name,
-    parse_backend,
-    to_backend,
-    to_numpy,
-)
+from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.display import (
     Repr,
     array_to_text,
@@ -346,8 +340,8 @@ class Patch(NamespaceOwner, PatchMeta):
         return self._data.dtype
 
     @property
-    def backend(self) -> str:
-        """Return the array backend the data are in."""
+    def _backend(self) -> str:
+        """Return the name of the array backend the data are in."""
         return backend_name(self._data)
 
     def drop_data(self) -> PatchMeta:
@@ -372,9 +366,9 @@ class Patch(NamespaceOwner, PatchMeta):
             coords=self.coords,
             attrs=self.attrs,
             dtype=self.dtype,
-            backend=self.backend,
             source=self._source,
         )
+        out._backend = self._backend
         # What `to_patch` builds: this patch's class, so an operation which
         # drops the data and fills them again keeps a subclass.
         out._patch_type = type(self)
@@ -391,6 +385,7 @@ class Patch(NamespaceOwner, PatchMeta):
 
         Examples
         --------
+        >>> import numpy as np
         >>> import dascore as dc
         >>> from dascore.core.source import ArraySource
         >>> from dascore.lazy.recipe import Recipe
@@ -400,7 +395,8 @@ class Patch(NamespaceOwner, PatchMeta):
         ...                 dims=("x", "y"))
         >>> loaded = lazy.load()
         >>> assert loaded.attrs.data_id == lazy.attrs.data_id
-        >>> assert loaded.backend == "numpy" and loaded.load() is loaded
+        >>> assert isinstance(loaded.data, np.ndarray)
+        >>> assert loaded.load() is loaded
         """
         data = self._data
         if not _is_lazy(data):
@@ -411,98 +407,6 @@ class Patch(NamespaceOwner, PatchMeta):
             # is the one raised.
             lazy = isinstance(data, LazyArray)
             return self.update(data=data.load() if lazy else to_numpy(data))
-
-    def set_backend(self, backend: str) -> Self:
-        """
-        Return the patch with its data on another array backend.
-
-        The values, attrs and `data_id` are the patch's own: only where the
-        array lives, and when it is read, changes.
-
-        Parameters
-        ----------
-        backend
-            An array library by name, such as ``"numpy"``, ``"jax"`` or
-            ``"cupy"``, which reads lazy data into memory on it. Or a lazy
-            backend, under which nothing is read until
-            [`load`](`dascore.Patch.load`): ``"LazyArray"``, or its alias
-            ``"lazy"``, computes each chunk on NumPy, and
-            ``"LazyArray[jax]"`` names another library to compute on.
-
-        Raises
-        ------
-        ParameterError
-            If the name is no backend, the array library cannot be
-            imported, or the patch is asked to be lazy and its data are not
-            what a stored array holds: a lazy patch is a promise to read,
-            and a patch made or changed in memory has nothing to read.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> from dascore.utils.downloader import fetch
-        >>>
-        >>> patch = dc.read(fetch("example_dasdae_event_1.h5"))[0]
-        >>> lazy = patch.set_backend("lazy")
-        >>> assert lazy.backend == "lazy" and lazy.shape == patch.shape
-        >>> # An operation on it computes nothing until the data are asked for.
-        >>> out = lazy.abs().set_backend("numpy")
-        >>> assert out.backend == "numpy" and out.equals(patch.abs())
-
-        Notes
-        -----
-        - ``set_backend("numpy")`` is what `load` does to a lazy patch
-          computed on NumPy. `load` leaves a ``"LazyArray[jax]"`` patch on
-          JAX, where this computes it on NumPy.
-        - Data in memory on one array library are moved to another through
-          NumPy, since that is what every library takes an array from.
-        - A step already pending on a lazy patch is asked for its kernel
-          on the library named, and one with none is the `numpy_fallback`
-          setting's to allow, as it is when a step is chained. What was
-          allowed when a step was chained is not asked again at `load`.
-        """
-        lazy, library = parse_backend(backend)
-        # Refused here and not when the data are asked for, if the library
-        # cannot be used.
-        to_backend(np.empty(0), library)
-        data = self._data
-        if isinstance(data, LazyArray):
-            # Computed on the library asked for, so nothing is converted
-            # but for a pending step with no kernel for it, which the
-            # numpy_fallback setting decides.
-            new = data.with_backend(library)
-            new = new if lazy else new.load()
-        elif lazy:
-            new = LazyArray(Recipe.from_source(self._lazy_source()), backend=library)
-        else:
-            new = to_backend(data, library)
-        if new is data:
-            return self
-        # Inside an operation, so the attrs are taken to describe the array.
-        with operation_context():
-            # `update` is typed for an array in memory; a lazy one is data too.
-            out = self.update(data=cast(Any, new))
-        # Made lazy, it keeps where its file is from wherever it was made,
-        # so moving it back and forth reads the same file.
-        out._source = (
-            self._lazy_source()
-            if lazy and not isinstance(data, LazyArray)
-            else self._source
-        )
-        return out
-
-    def _lazy_source(self):
-        """Return the source a lazy patch reads this patch's data from."""
-        source = self._source
-        if source is None or not source.loadable:
-            msg = (
-                "Only a patch whose data are what a stored array holds can be "
-                "made lazy: this one was made or changed in memory, so there "
-                "is nothing to read later. Set the backend on the spool the "
-                "data are read from, before they are read."
-            )
-            raise ParameterError(msg)
-        return source.anchored()
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

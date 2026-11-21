@@ -175,7 +175,7 @@ def _abs_shared(processor, data):
     return np.abs(data)
 ```
 
-Kernels are registered when their module is imported. To have DASCore import it, rather than asking users to, declare the module as a `dascore.kernels` entry point for each backend it serves, named exactly as [`backend_name`](`dascore.utils.array_api.backend_name`) spells that backend. DASCore imports it the first time data of that backend meet a processor:
+Kernels are registered when their module is imported. To have DASCore import it, rather than asking users to, declare the module as a `dascore.kernels` entry point for each backend it serves, named exactly as [`backend_name`](`dascore.utils.array_api.backend_name`) spells that backend. DASCore imports it the first time data of that backend meet a processor, or the first time a spool is set to a backend of that name, so the same module can define the package's [`ArrayBackend`](`dascore.backends.ArrayBackend`) subclass:
 
 ```toml
 [project.entry-points."dascore.kernels"]

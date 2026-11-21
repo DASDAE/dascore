@@ -953,7 +953,7 @@ class TestStreamingMerge:
         paths = (tmp_path / "first.h5", tmp_path / "second.h5")
         for patch, path in zip((p1, second(p2)), paths, strict=True):
             dc.write(patch, path, "dasdae")
-        return [dc.read(x)[0].set_backend("lazy") for x in paths]
+        return [dc.spool(x).set_backend("lazy")[0] for x in paths]
 
     def test_lazy_members_with_axes_reordered(
         self, random_patch, tmp_path, monkeypatch
