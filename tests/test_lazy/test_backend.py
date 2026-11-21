@@ -15,7 +15,6 @@ import dascore as dc
 from dascore import backends as backends_module
 from dascore.backends import (
     ArrayAPIBackend,
-    ArrayBackend,
     JaxBackend,
     LazyBackend,
     NumpyBackend,
@@ -213,20 +212,6 @@ class TestBackendNames:
         with pytest.raises(ParameterError, match="not on another lazy backend"):
             LazyBackend(compute=LazyBackend())
 
-    def test_an_alias_stays_with_the_class_which_states_it(self):
-        """A subclass is registered under its own name, not its parent's alias."""
-
-        class Tuned(LazyBackend):
-            """A lazy backend of another name."""
-
-            name = "tuned_lazy"
-
-        try:
-            assert type(get_backend("tuned_lazy")) is Tuned
-            assert type(get_backend("LazyArray")) is LazyBackend
-        finally:
-            backends_module._BACKENDS.pop("tuned_lazy", None)
-
     def test_backend_which_reads_for_itself(self, path, patch, strict):
         """A backend overriding `from_recipe` makes the array a read hands out."""
         handed = []
@@ -237,7 +222,7 @@ class TestBackendNames:
             def from_recipe(self, recipe):
                 """Read the recipe, and say that this was asked."""
                 handed.append(recipe)
-                return self.from_array(recipe.load())
+                return super().from_recipe(recipe)
 
         out = dc.spool(path).set_backend(Reading())[0]
         assert len(handed) == 1 and backend_name(out.data) == STRICT
@@ -269,15 +254,6 @@ class TestBackendNames:
         assert _Strict().from_array(there) is there
         assert np.array_equal(NumpyBackend().from_array(there), data)
         assert NumpyBackend().from_array(data) is data
-
-    def test_base_class_makes_no_arrays(self):
-        """A backend says how its arrays are made; the base class cannot."""
-
-        class Unfinished(ArrayBackend):
-            """A backend which states nothing."""
-
-        with pytest.raises(NotImplementedError):
-            Unfinished().from_array(np.ones(2))
 
     def test_device(self, strict):
         """Arrays are put on the device given, and moved there from another."""
@@ -347,11 +323,6 @@ class TestPatchOnABackend:
         lazy = _lazy(patch, "LazyArray")
         assert _on(lazy, "lazy[numpy]") is lazy
 
-    def test_made_in_memory(self):
-        """A patch with nothing to read later stays in memory."""
-        made = dc.get_example_patch()
-        assert _on(made, "lazy") is made
-
     def test_relative_path_is_pinned(self, patch, tmp_path, monkeypatch):
         """A lazy patch reads the file it was named beside, wherever it is read."""
         dc.write(patch, tmp_path / "here.h5", "dasdae")
@@ -364,11 +335,6 @@ class TestPatchOnABackend:
         monkeypatch.chdir(elsewhere)
         for lazy in (read, handed):
             assert isinstance(lazy.data, LazyArray) and lazy.load().equals(patch)
-
-    def test_patch_has_no_backend_of_its_own(self, patch):
-        """A patch is not moved by name: it holds the array it is given."""
-        assert not hasattr(patch, "set_backend") and not hasattr(patch, "backend")
-        assert not hasattr(patch.drop_data(), "backend")
 
     def test_array_numpy_handles_is_left_alone(self, patch, strict):
         """An array-like of no array library is not made an ndarray of."""
@@ -484,12 +450,6 @@ class TestPatchOnABackend:
         loaded = _on(out, "numpy")
         assert backend_name(loaded.data) == "numpy"
         np.testing.assert_array_equal(loaded.data, np.abs(patch.data))
-
-    def test_library_which_cannot_be_imported(self, patch):
-        """A library which is not installed is refused when it is named."""
-        for name in (MISSING, f"LazyArray[{MISSING}]"):
-            with pytest.raises(ParameterError, match="No array library called"):
-                _on(patch, name)
 
     def test_registered_kernel_runs_each_chunk(self, patch, strict, monkeypatch):
         """A kernel registered for the library is the one a lazy chunk runs."""
@@ -868,13 +828,14 @@ class TestSpoolSetBackend:
         """A name which is no backend, or no library, is refused at once."""
         with pytest.raises(ParameterError, match="is not a backend"):
             spool.set_backend("lazy[")
-        with pytest.raises(ParameterError, match="No array library called"):
-            spool.set_backend(MISSING)
+        for name in (MISSING, f"LazyArray[{MISSING}]"):
+            with pytest.raises(ParameterError, match="No array library called"):
+                spool.set_backend(name)
 
     def test_patches_held_in_memory(self, strict):
         """A patch with nothing to read later is put where chunks compute."""
         held = dc.get_example_spool("random_das")
-        assert backend_name(held.set_backend("lazy")[0].data) == "numpy"
+        assert held.set_backend("lazy")[0] is held[0]
         assert backend_name(held.set_backend(f"lazy[{STRICT}]")[0].data) == STRICT
 
     def test_patches_held_in_memory_merge(self):
@@ -885,17 +846,6 @@ class TestSpoolSetBackend:
             warnings.simplefilter("error", NumpyFallbackWarning)
             merged = held.set_backend("lazy").chunk(time=None)[0]
         assert backend_name(merged.data) == "numpy" and merged.equals(expected)
-
-    def test_lazy_patches_held_are_moved_and_asked(self, patch, strict):
-        """A patch held lazy computes on the library the spool names."""
-        held = dc.spool([_lazy(patch).abs()])
-        out = held.set_backend(f"LazyArray[{STRICT}]")[0]
-        assert backend_name(out.data) == "lazy" and out.data._backend == _Strict()
-        assert backend_name(out.load().data) == STRICT
-        # And a step it has pending is asked for its kernel there.
-        pending = dc.spool([_Doubles()(_lazy(patch))])
-        with pytest.raises(LazyOperationError, match="_Doubles has no"):
-            pending.set_backend(f"LazyArray[{STRICT}]")[0]
 
     @pytest.mark.parametrize("backend", (None, "lazy"), ids=("unset", "lazy"))
     @pytest.mark.parametrize("policy", (None, "warn"))

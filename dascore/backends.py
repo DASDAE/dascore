@@ -16,27 +16,12 @@ arrays, which is also what kernels are registered under. A package can have
 DASCore import its backend the first time the name is asked for, by
 declaring the module as a `dascore.kernels` entry point named for the
 backend.
-
-Examples
---------
->>> import numpy as np
->>> from dascore.backends import ArrayAPIBackend, LazyBackend, get_backend
->>>
->>> # A name is the backend with its default options.
->>> assert get_backend("numpy").from_array(np.ones(2)).shape == (2,)
->>> # A lazy backend names the one it computes on in brackets.
->>> assert get_backend("lazy[numpy]") == LazyBackend()
->>>
->>> # Another library which follows the array API standard takes a name.
->>> class Strict(ArrayAPIBackend):
-...     '''Arrays of array_api_strict.'''
-...
-...     name = "array_api_strict"
 """
 
 from __future__ import annotations
 
 import re
+from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -71,7 +56,7 @@ __all__ = [
     "get_backend",
 ]
 
-# The registered backend classes, by name and alias in lower case.
+# The registered backend classes, by name in lower case.
 _BACKENDS: dict[str, type[ArrayBackend]] = {}
 # A backend's name, and in brackets what it is handed to make itself from.
 _SPELLING = re.compile(r"\s*(\w+)\s*(?:\[(.*)\])?\s*")
@@ -82,7 +67,7 @@ _READING: ContextVar[ArrayBackend | None] = ContextVar(
 )
 
 
-class ArrayBackend(BaseModel):
+class ArrayBackend(BaseModel, ABC):
     """
     How the array a patch holds is made.
 
@@ -95,8 +80,6 @@ class ArrayBackend(BaseModel):
         What [`backend_name`](`dascore.utils.array_api.backend_name`)
         reports for the backend's arrays. A string names the backend by it,
         whatever the case.
-    aliases
-        Other names a string may use for the backend.
     lazy
         Whether `from_recipe` returns an array which is not read yet.
     """
@@ -104,7 +87,6 @@ class ArrayBackend(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     name: ClassVar[str]
-    aliases: ClassVar[tuple[str, ...]] = ()
     lazy: ClassVar[bool] = False
 
     @classmethod
@@ -112,9 +94,7 @@ class ArrayBackend(BaseModel):
         """Register a class which names itself."""
         super().__pydantic_init_subclass__(**kwargs)
         if "name" in cls.__dict__:
-            # Only the aliases the class states: one it inherits is its parent's.
-            for key in (cls.name, *cls.__dict__.get("aliases", ())):
-                _BACKENDS[key.lower()] = cls
+            _BACKENDS[cls.name.lower()] = cls
 
     @classmethod
     def from_string(cls, argument: str | None = None) -> Self:
@@ -151,6 +131,7 @@ class ArrayBackend(BaseModel):
         """
         return self.from_array(recipe.load())
 
+    @abstractmethod
     def from_array(self, array: Any) -> Any:
         """
         Return an array which is held already as one of this backend's.
@@ -161,7 +142,6 @@ class ArrayBackend(BaseModel):
             An array of any backend. One of this backend's own is handed
             back as it is.
         """
-        raise NotImplementedError
 
     def owns(self, array: Any) -> bool:
         """Return True if an array is one this backend would have made."""
@@ -324,7 +304,6 @@ class LazyBackend(ArrayBackend):
     """
 
     name = LAZY_BACKEND
-    aliases = ("lazyarray",)
     lazy = True
 
     compute: ArrayBackend = NumpyBackend()
@@ -346,7 +325,11 @@ class LazyBackend(ArrayBackend):
 
     def from_recipe(self, recipe: Recipe) -> Any:
         """Return the recipe as a lazy array; nothing is read."""
-        return _lazy_array_class()(recipe, backend=self.compute)
+        # Imported here: a lazy array holds the backend it computes on, so
+        # its module imports this one.
+        from dascore.lazy.array import LazyArray  # noqa: PLC0415
+
+        return LazyArray(recipe, backend=self.compute)
 
     def from_array(self, array: Any) -> Any:
         """
@@ -356,7 +339,7 @@ class LazyBackend(ArrayBackend):
         the chunks of a lazy one are computed. A dask array is another kind
         of promise, and is left to whoever holds it.
         """
-        if isinstance(array, _lazy_array_class()):
+        if backend_name(array) == self.name:
             return array._with_backend(self.compute)
         if backend_name(array) == "dask":
             return array
@@ -368,12 +351,8 @@ class LazyBackend(ArrayBackend):
         return self.name if inner == NUMPY_BACKEND else f"{self.name}[{inner}]"
 
 
-def _lazy_array_class():
-    """Return `LazyArray`, whose module imports this one for its backend."""
-    # Imported here: a lazy array holds the backend it computes on.
-    from dascore.lazy.array import LazyArray  # noqa: PLC0415
-
-    return LazyArray
+# The class's own name is a spelling of the backend too.
+_BACKENDS["lazyarray"] = LazyBackend
 
 
 def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
@@ -383,9 +362,9 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
     Parameters
     ----------
     backend
-        A backend, handed back as it is, or a string: the name or an alias
-        of a registered backend, which gives it with default options, and
-        after it in square brackets whatever that backend takes there.
+        A backend, handed back as it is, or a string: the name of a
+        registered backend, which gives it with default options, and after
+        it in square brackets whatever that backend takes there.
 
     Raises
     ------
