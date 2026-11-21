@@ -78,9 +78,7 @@ from dascore.io.utils import (
 )
 from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
-from dascore.utils.array_api import (
-    decide_fallback,
-)
+from dascore.utils.array_api import _as_numpy_dtype, decide_fallback
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
 from dascore.utils.identity import (
@@ -1088,9 +1086,9 @@ class FiberIO:
                     if patch.dims
                     else patch.shape
                 )
-                if data.shape != expected or np.dtype(data.dtype) != np.dtype(
-                    patch.dtype
-                ):
+                # A backend which reads for itself states its library's dtype.
+                made = _as_numpy_dtype(data.dtype)
+                if data.shape != expected or made != np.dtype(patch.dtype):
                     msg = (
                         f"{self.name}.read_array returned {data.shape}/{data.dtype}; "
                         f"metadata declared {expected}/{patch.dtype}."

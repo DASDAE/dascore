@@ -56,8 +56,8 @@ def load_backend_plugins(backend: str) -> None:
             entry_point.load()
         except Exception as error:
             msg = (
-                f"Kernel plugin {entry_point.value!r} for backend {backend!r} "
-                f"failed to load, so its kernels are not used: {error!r}"
+                f"Plugin {entry_point.value!r} for backend {backend!r} failed "
+                f"to load, so its backend and kernels are not used: {error!r}"
             )
             prefix = str(Path(__file__).parent.parent)
             warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))

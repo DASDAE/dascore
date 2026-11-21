@@ -210,6 +210,38 @@ class TestBackendNames:
         """A lazy backend computing on a lazy one would never read."""
         with pytest.raises(ParameterError, match="not on another lazy backend"):
             get_backend("lazy[lazy]")
+        with pytest.raises(ParameterError, match="not on another lazy backend"):
+            LazyBackend(compute=LazyBackend())
+
+    def test_an_alias_stays_with_the_class_which_states_it(self):
+        """A subclass is registered under its own name, not its parent's alias."""
+
+        class Tuned(LazyBackend):
+            """A lazy backend of another name."""
+
+            name = "tuned_lazy"
+
+        try:
+            assert type(get_backend("tuned_lazy")) is Tuned
+            assert type(get_backend("LazyArray")) is LazyBackend
+        finally:
+            backends_module._BACKENDS.pop("tuned_lazy", None)
+
+    def test_backend_which_reads_for_itself(self, path, patch, strict):
+        """A backend overriding `from_recipe` makes the array a read hands out."""
+        handed = []
+
+        class Reading(_Strict):
+            """The strict library, reading each recipe itself."""
+
+            def from_recipe(self, recipe):
+                """Read the recipe, and say that this was asked."""
+                handed.append(recipe)
+                return self.from_array(recipe.load())
+
+        out = dc.spool(path).set_backend(Reading())[0]
+        assert len(handed) == 1 and backend_name(out.data) == STRICT
+        assert np.array_equal(to_numpy(out.data), patch.data)
 
     def test_an_instance_is_handed_back(self):
         """An instance is the backend it is, options and all."""

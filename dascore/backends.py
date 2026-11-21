@@ -43,7 +43,7 @@ from contextvars import ContextVar
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from dascore.exceptions import ParameterError
 from dascore.utils.array_api import (
@@ -112,7 +112,8 @@ class ArrayBackend(BaseModel):
         """Register a class which names itself."""
         super().__pydantic_init_subclass__(**kwargs)
         if "name" in cls.__dict__:
-            for key in (cls.name, *cls.aliases):
+            # Only the aliases the class states: one it inherits is its parent's.
+            for key in (cls.name, *cls.__dict__.get("aliases", ())):
                 _BACKENDS[key.lower()] = cls
 
     @classmethod
@@ -328,8 +329,9 @@ class LazyBackend(ArrayBackend):
 
     compute: ArrayBackend = NumpyBackend()
 
-    def model_post_init(self, context: Any) -> None:
+    def __init__(self, **options: Any) -> None:
         """Refuse a lazy backend to compute on: nothing would ever be read."""
+        super().__init__(**options)
         if self.compute.lazy:
             msg = (
                 "A lazy backend computes on an array library, not on another "
@@ -414,11 +416,7 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
             "brackets, as in 'lazy[jax]'."
         )
         raise ParameterError(msg)
-    try:
-        return _BACKENDS[name].from_string(found.group(2))
-    except ValidationError as error:
-        # The options a string gave are a parameter like any other.
-        raise ParameterError(str(error)) from error
+    return _BACKENDS[name].from_string(found.group(2))
 
 
 @contextmanager
