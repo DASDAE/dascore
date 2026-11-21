@@ -192,17 +192,26 @@ class TestBackendNames:
 
     @pytest.mark.parametrize(
         "name",
-        ("", "lazy[", "nu mpy", "a-b", "a.b", "lazy[a.b]", "not_an_array_library"),
+        (
+            "",
+            "lazy[",
+            "nu mpy",
+            "a-b",
+            "a.b",
+            "lazy[a.b]",
+            "LazyArray[a][b]",
+            "not_an_array_library",
+        ),
     )
     def test_not_a_backend(self, name):
         """What names no registered backend is refused, and says which are."""
         with pytest.raises(ParameterError, match=r"is not a backend.*numpy"):
             get_backend(name)
 
-    @pytest.mark.parametrize("name", ("numpy[jax]", "jax[gpu]", "LazyArray[a][b]"))
+    @pytest.mark.parametrize("name", ("numpy[jax]", "jax[gpu]"))
     def test_brackets_a_backend_does_not_take(self, name):
         """Only a backend which says so takes anything in brackets."""
-        with pytest.raises(ParameterError, match=r"square brackets|is not a backend"):
+        with pytest.raises(ParameterError, match="nothing in square brackets"):
             get_backend(name)
 
     def test_lazy_computes_on_an_array_library(self):
@@ -224,9 +233,45 @@ class TestBackendNames:
                 handed.append(recipe)
                 return super().from_recipe(recipe)
 
+        # A subclass which states no name is not registered in its parent's place.
+        assert type(get_backend(STRICT)) is _Strict
         out = dc.spool(path).set_backend(Reading())[0]
         assert len(handed) == 1 and backend_name(out.data) == STRICT
         assert np.array_equal(to_numpy(out.data), patch.data)
+        # What it cannot make of one stored window is read as usual, with
+        # nothing to refuse: it never promised not to read.
+        wanted = np.array([3, 40, 41, 300])
+        expected = dc.read(path, time=wanted, samples=True)[0]
+        with warnings.catch_warnings(), reading_onto(Reading()):
+            warnings.simplefilter("error")
+            apart = dc.read(path, time=wanted, samples=True)[0]
+        assert len(handed) == 1 and apart.equals(expected)
+
+    def test_backend_which_reads_for_itself_and_a_format_which_does(
+        self, path, patch, monkeypatch
+    ):
+        """A format with its own `read` reads, and only a lazy backend objects."""
+
+        class Reading(NumpyBackend):
+            """NumPy, reading each recipe itself."""
+
+            def from_recipe(self, recipe):
+                """Fail: a format which reads its own way hands out no recipe."""
+                raise AssertionError("the format's own read was not used")
+
+        manager = io_core.FiberIO.manager
+        name, version = dc.get_format(path)
+        fiber_io = type(manager.get_fiberio(format=name, version=version))
+
+        def own_read(self, *args, **kwargs):
+            """Read as the base class does, from a method of the format's."""
+            return io_core.FiberIO.read(self, *args, **kwargs)
+
+        monkeypatch.setattr(fiber_io, "read", own_read)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = dc.spool(path).set_backend(Reading())[0]
+        assert out.equals(patch)
 
     def test_an_instance_is_handed_back(self):
         """An instance is the backend it is, options and all."""
@@ -255,7 +300,7 @@ class TestBackendNames:
         assert np.array_equal(NumpyBackend().from_array(there), data)
         assert NumpyBackend().from_array(data) is data
 
-    def test_device(self, strict):
+    def test_device(self, strict, monkeypatch):
         """Arrays are put on the device given, and moved there from another."""
         device = strict.Device("device1")
         backend = _Strict(device=device)
@@ -263,14 +308,35 @@ class TestBackendNames:
         assert there.device == device and backend.from_array(there) is there
         elsewhere = _Strict().from_array(np.arange(3.0))
         assert not backend.owns(elsewhere) and _Strict().owns(elsewhere)
+        # Moved by its own library, with nothing taken through NumPy.
+        _refuse_numpy(monkeypatch)
         moved = backend.from_array(elsewhere)
         assert moved.device == device and bool(strict.all(moved == there))
+
+    def test_options_reach_the_arrays_a_spool_hands_out(self, spool, strict):
+        """An instance's options are the spool's, in memory and lazily."""
+        device = strict.Device("device1")
+        backend = _Strict(device=device)
+        assert spool.set_backend(backend)[0].data.device == device
+        lazy = spool.set_backend(LazyBackend(compute=backend))[0]
+        assert lazy.data._backend == backend
+        assert lazy.abs().load().data.device == device
+
+    def test_pending_steps_are_not_asked_again_for_a_device(self, patch, strict):
+        """The same library on another device runs the kernels it ran."""
+        with config_context(numpy_fallback="ignore"):
+            pending = _Doubles()(_lazy(patch, f"lazy[{STRICT}]"))
+        device = strict.Device("device1")
+        # Under the default setting, which would refuse were it asked.
+        moved = _on(pending, LazyBackend(compute=_Strict(device=device)))
+        assert moved.data._backend == _Strict(device=device)
 
     def test_plugin_registers_the_backend(self, monkeypatch):
         """A name nothing registered loads the entry points named for it."""
 
-        def load(name):
+        def load(asked):
             """Register a backend, as importing a plugin's module does."""
+            assert asked == "plugged_backend"
 
             class Plugged(ArrayAPIBackend):
                 """A backend a plugin supplies."""
@@ -781,6 +847,12 @@ class TestSpoolSetBackend:
         assert {backend_name(x.data) for x in both} == {"lazy"} and not reads
         with pytest.raises(ParameterError, match="different backends"):
             lazy[:2] + spool[2:].set_backend("numpy")
+        # Equal backends are one backend, and the same class with other
+        # options is another.
+        equal = lazy[:2] + spool[2:].set_backend(LazyBackend())
+        assert equal == both
+        with pytest.raises(ParameterError, match="different backends"):
+            lazy[:2] + spool[2:].set_backend(LazyBackend(compute=_Strict()))
         # A spool with none set takes the other's, so spools gathered onto
         # an empty one keep theirs.
         gathered = sum([lazy[:2], spool[2:]], dc.spool([]))
@@ -817,6 +889,7 @@ class TestSpoolSetBackend:
         """An array library by name, lazily or in memory."""
         there = spool.set_backend(STRICT)[0]
         assert backend_name(there.data) == STRICT
+        assert there._source == spool[0]._source
         lazy = spool.set_backend(f"lazy[{STRICT}]")[0]
         assert (
             backend_name(lazy.data) == "lazy"
