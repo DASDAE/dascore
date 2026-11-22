@@ -1117,6 +1117,46 @@ class _SampleTracker:
         return after
 
 
+def _kind_parts(df: pd.DataFrame) -> list[pd.DataFrame]:
+    """
+    Split rows stating a coordinate in different kinds, each in its own dtype.
+
+    A frame holds such a coordinate's envelope, durations beside numbers
+    say, as objects, which arithmetic over the whole column refuses or
+    misreads. Empty where no coordinate is held as objects of several kinds.
+    """
+    # a name may hold a suffix itself, as `lag_max` does
+    names = (str(x)[: -len("_min")] for x in df.columns if str(x).endswith("_min"))
+    groups = ([f"{x}_{end}" for end in ("min", "max", "step")] for x in names)
+    groups = [
+        x
+        for x in groups
+        if set(x).issubset(df.columns)
+        and any(
+            df[y].dtype == object
+            and pd.api.types.infer_dtype(df[y]) in ("mixed", "mixed-integer")
+            for y in x
+        )
+    ]
+    if not groups:
+        return []
+    # a row's kind is that of the first value its envelope states
+    families = [df[x].map(_value_family).to_numpy() for x in groups]
+    kinds = [x[np.arange(len(x)), (x != "").argmax(axis=1)] for x in families]
+    codes, firsts = _alike(kinds)
+    parts = []
+    for code, first in enumerate(firsts):
+        part = df[codes == code]
+        for columns, kind in zip(groups, kinds, strict=True):
+            kind = kind[first]
+            if kind in ("datetime", "timedelta", "number"):
+                step = "timedelta" if kind == "datetime" else kind
+                ends = zip(columns, (kind, kind, step), strict=True)
+                part = part.assign(**{x: _coerce(part[x], y) for x, y in ends})
+        parts.append(part)
+    return parts
+
+
 def patch_local_adjusted_envelopes(
     df: pd.DataFrame, residuals, drop_empty: bool = True, riders: bool = True
 ) -> pd.DataFrame:
@@ -1144,6 +1184,18 @@ def patch_local_adjusted_envelopes(
     def _usable_index(value) -> bool:
         return value is None or isinstance(value, int | np.integer)
 
+    if residuals and len(parts := _kind_parts(df)) > 1:
+        # each kind replays alone, as a spool of that kind would
+        outs = [
+            patch_local_adjusted_envelopes(x, residuals, drop_empty, riders)
+            for x in parts
+        ]
+        # a kind left alone keeps its dtype
+        out = pd.concat([x for x in outs if len(x)] or outs[:1])
+        if (empty := out.get(_PATCH_LOCAL_EMPTY)) is not None:
+            # a kind whose replay marked no row empty has none
+            out[_PATCH_LOCAL_EMPTY] = empty.fillna(False).astype(bool)
+        return out.sort_index(kind="stable")
     source = df
     df = df.copy(deep=False)
     tracker = _SampleTracker(source)

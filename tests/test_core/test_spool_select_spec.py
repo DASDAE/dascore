@@ -12,6 +12,7 @@ from __future__ import annotations
 import pickle
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -639,6 +640,68 @@ class TestRelative:
         out = spool.select(distance=(500, 600), relative=True)
         out = out.select(distance=(0, 10))
         assert len(out) == len(out.get_contents()) == len(list(out))
+
+
+class TestTwoKinds:
+    """Patches stating a coordinate in two kinds each select as alone."""
+
+    @pytest.fixture(params=("plain", "rider", "stepless"))
+    def patches(self, request):
+        """
+        Patches timed in durations, plain numbers, then durations again.
+
+        A rider rides time on each; stepless numbers have no step.
+        """
+        numbers = np.array([0, 1, 3, 4, 6.0])
+        numbers = numbers if request.param == "stepless" else np.arange(5.0)
+        durations = np.arange(5) * np.timedelta64(1, "s")
+        out = []
+        for time in (durations, numbers, durations + np.timedelta64(10, "s")):
+            coords = {"time": time}
+            if request.param == "rider":
+                coords["label"] = ("time", np.arange(5.0))
+            out.append(dc.Patch(data=np.zeros(5), coords=coords, dims=("time",)))
+        return out
+
+    @pytest.mark.parametrize(
+        "selections",
+        [
+            [{"time": (1, None), "samples": True}],
+            [{"time": (-2, None), "samples": True}],
+            [{"time": (1, None), "relative": True}],
+            [{"time": (None, -1), "relative": True}],
+            [{"time": (np.inf, None), "relative": True}],
+            [
+                {"time": (1, None), "relative": True},
+                {"time": (1, None), "samples": True},
+            ],
+            [
+                {"time": (1, None), "samples": True},
+                {"time": (1, None), "relative": True},
+            ],
+        ],
+    )
+    def test_rows_as_alone(self, patches, selections):
+        """Contents and loaded patches match each patch's spool alone (#1632, #1633)."""
+        mixed, alone = dc.spool(patches), [dc.spool([x]) for x in patches]
+        for kwargs in selections:
+            mixed = mixed.select(**kwargs)
+            alone = [x.select(**kwargs) for x in alone]
+        got = mixed.get_contents()
+        # a kind left alone keeps its dtype, as a spool of it would
+        contents = [x.get_contents() for x in alone]
+        contents = [x for x in contents if len(x)] or contents[:1]
+        expected = pd.concat(contents, ignore_index=True)
+        columns = [x for x in expected if x.endswith(("_min", "_max", "data_size"))]
+        for column in columns:
+            assert got[column].dtype == expected[column].dtype
+            values = [
+                [None if pd.isna(y) else y for y in x[column]] for x in (got, expected)
+            ]
+            assert values[0] == values[1]
+        expected = [y for x in alone for y in x]
+        assert len(mixed) == len(expected)
+        assert all(x.equals(y) for x, y in zip(mixed, expected, strict=True))
 
 
 class TestMaterializedNamespaces:

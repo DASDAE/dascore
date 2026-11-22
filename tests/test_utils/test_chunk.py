@@ -13,6 +13,7 @@ from dascore.core import get_coord
 from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import (
+    _PATCH_LOCAL_EMPTY,
     _carry_grids,
     _held_coord,
     _normalize_chunk_units,
@@ -962,6 +963,26 @@ class TestSharedDimensionEnvelopes:
         assert (out["xy_min"].iloc[0], out["xy_max"].iloc[0]) == (2, 4)
         assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
         assert (out["sensor_min"].iloc[0], out["sensor_max"].iloc[0]) == (1000, 1598)
+
+
+class TestTwoKindEnvelopes:
+    """Replaying selections onto rows stating a coordinate in two kinds."""
+
+    @pytest.mark.parametrize("name", ["time", "lag_max"])
+    def test_unset_marker_marks_no_row(self, name):
+        """A kind whose replay never marks an emptied row marks none."""
+        frame = pd.DataFrame(
+            {
+                f"{name}_min": [pd.Timedelta(0, "s"), 0.0],
+                f"{name}_max": [pd.Timedelta(4, "s"), 6.0],
+                f"{name}_step": [pd.Timedelta(1, "s"), np.nan],
+            },
+            dtype=object,
+        )
+        residuals = (({name: (9, None)}, True, False),)
+        out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
+        # the numbers have no step to count by, so only the durations empty
+        assert out[_PATCH_LOCAL_EMPTY].tolist() == [True, False]
 
 
 class TestBuildGapFrame:
