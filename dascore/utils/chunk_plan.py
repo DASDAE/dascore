@@ -1404,6 +1404,19 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                 steps = df.loc[idx, step_name].to_numpy(dtype=float)
                 stepped = convert_units(mins + steps, to_units=target, from_units=unit)
                 df.loc[idx, step_name] = stepped - new_min
+            if (origin := f"_{name}_source_envelope") in df.columns:
+                # where a trimmed row's grid starts is a label, as its min is
+                held = df.loc[idx, origin].tolist()
+                firsts = [
+                    x.get(min_name) if isinstance(x, dict) else None for x in held
+                ]
+                firsts = np.array(firsts, dtype=float)
+                firsts = convert_units(firsts, to_units=target, from_units=unit)
+                moved = [
+                    x if np.isnan(y) else {**x, min_name: y}
+                    for x, y in zip(held, firsts, strict=True)
+                ]
+                df.loc[idx, origin] = pd.Series(moved, index=idx, dtype=object)
             if f"_{name}_coord_dtype" in df.columns:  # converted labels are floats
                 df.loc[idx, f"_{name}_coord_dtype"] = "float64"
         df.loc[rows, unit_col] = target

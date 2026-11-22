@@ -185,6 +185,63 @@ class TestChunkPlanContract:
             assert np.array_equal(data, np.concatenate(expected, axis=1))
             assert [p.coords for p in chunked] == [p.coords for p in once]
 
+    @pytest.mark.parametrize("on_disk", [True, False])
+    def test_replan_after_other_selection_keeps_samples(
+        self, numbered, tmp_path, on_disk
+    ):
+        """Re-chunking after a selection on another dimension keeps every sample."""
+        source = numbered
+        if on_disk:
+            directory = dc.examples.spool_to_directory(numbered, path=tmp_path)
+            source = dc.spool(directory).update(progress=None)
+        spool, distance = dc.spool(source), {"distance": (1, 2)}
+        expected = dc.spool(numbered).chunk(time=None)[0].select(**distance)
+        step = expected.get_coord("time").step
+
+        def chunk(spool, *lengths):
+            for length in lengths:
+                spool = spool.chunk(time=length * step, keep_partial=True)
+            return spool.chunk(time=None)
+
+        selected = spool.select(**distance)
+        chains = (
+            chunk(selected, 3),
+            chunk(selected, 3, 5),
+            chunk(chunk(spool, 3).select(**distance), 5, 2),
+        )
+        for chunked in chains:
+            (patch,) = chunked
+            # a memory spool's re-chunk also loads the other channels (#1637)
+            patch = patch.select(**distance)
+            assert patch.get_coord("time") == expected.get_coord("time")
+            assert np.array_equal(patch.data, expected.data)
+
+    def test_replan_after_other_selection_mixed_units(self):
+        """Patches in metres and feet keep every sample when re-chunked."""
+        metres = dc.Patch(
+            data=np.ones((6, 2)),
+            coords={"distance": np.arange(6.0), "time": np.arange(2.0)},
+            dims=("distance", "time"),
+        ).set_units(distance="m")
+        feet = metres.update_coords(distance_min=6.0).convert_units(distance="ft")
+        selected = dc.spool([metres, feet]).select(time=(1, 1))
+        chunked = selected.chunk(distance=3, keep_partial=True)
+        assert [p.shape[0] for p in chunked] == [3, 3, 3, 3]
+        (patch,) = chunked.chunk(distance=None)
+        assert np.allclose(patch.get_array("distance"), np.arange(12.0))
+
+    def test_replan_after_other_selection_of_planned_rows(self):
+        """Re-chunking a selected plan's outputs keeps the samples they hold."""
+        patch = dc.Patch(
+            data=np.arange(24.0).reshape(2, 12),
+            coords={"distance": np.arange(2.0), "time": np.arange(12.0)},
+            dims=("distance", "time"),
+        )
+        planned = dc.spool([patch]).select(time=(2.5, 10.5)).chunk(distance=None)
+        chunked = planned.select(distance=(1, 1)).chunk(time=3, keep_partial=True)
+        (out,) = chunked.chunk(time=None)
+        assert np.array_equal(out.get_array("time"), np.arange(3.0, 11.0))
+
     def test_planned_state_is_derived(self, patches):
         """A chunked spool is a fresh derived catalog, not a mode flag."""
         spool = dc.spool(patches)
