@@ -32,6 +32,48 @@ def _edited(path, edits=(), size=None):
     return path
 
 
+# struct formats of the fixed-size property types the example files hold
+_PROPERTY_FORMATS = {0x03: "i", 0x05: "B", 0x06: "H", 0x07: "I", 0x0A: "d", 0x21: "?"}
+
+
+def _big_endian(raw):
+    """The one-segment int16 TDMS file `raw`, written as a big-endian file."""
+    src, out = io.BytesIO(raw), bytearray()
+
+    def copy(fmt):
+        """Copy one number, swapping its bytes, and return it."""
+        (value,) = struct.unpack("<" + fmt, src.read(struct.calcsize("<" + fmt)))
+        out.extend(struct.pack(">" + fmt, value))
+        return value
+
+    def text():
+        out.extend(src.read(copy("I")))
+
+    tag, toc = struct.unpack("<4si", src.read(8))
+    # The ToC itself is always little-endian.
+    out.extend(struct.pack("<4si", tag, toc | tdms_utils.BIG_ENDIAN_MASK))
+    copy("i"), copy("Q")
+    raw_data = 28 + copy("Q")
+    for _ in range(copy("I")):  # objects
+        text()
+        if copy("I") != 0xFFFFFFFF:  # a raw data index
+            assert copy("I") == 0x02, "an int16 file"
+            copy("I"), copy("Q")
+        for _ in range(copy("I")):  # properties
+            text()
+            kind = copy("I")
+            if kind == 0x20:
+                text()
+            elif kind == 0x44:  # a timestamp's halves swap places
+                fractions, seconds = struct.unpack("<Qq", src.read(16))
+                out.extend(struct.pack(">qQ", seconds, fractions))
+            else:
+                copy(_PROPERTY_FORMATS[kind])
+    out.extend(src.read(raw_data - src.tell()))
+    out.extend(np.frombuffer(src.read(), "<i2").astype(">i2").tobytes())
+    return bytes(out)
+
+
 class _FakeTDMSFile(io.BytesIO):
     """A BytesIO object with the minimum file API TDMS utils expect."""
 
@@ -125,6 +167,22 @@ class TestStatedVersion:
             dc.read(path)
 
 
+class TestByteOrder:
+    """Every field is read in the byte order the ToC states."""
+
+    def test_big_endian(self, tmp_path):
+        """A big-endian file reads as the little-endian one it was made from."""
+        path = tmp_path / "big_endian.tdms"
+        path.write_bytes(_big_endian(Path(fetch(IDAS)).read_bytes()))
+        assert dc.get_format(path) == ("TDMS", "4713")
+        patch, expected = dc.read(path)[0], dc.read(fetch(IDAS))[0]
+        assert patch.coords == expected.coords == dc.scan_payloads(path)[0].coords
+        assert patch.dtype == expected.dtype == np.dtype("int16")
+        np.testing.assert_array_equal(patch.data, expected.data)
+        ids = {"origin_id": "", "data_id": ""}
+        assert patch.attrs.update(**ids) == expected.attrs.update(**ids)
+
+
 class TestTDMSUtils:
     """Tests for TDMS utility functions."""
 
@@ -204,6 +262,7 @@ class TestTDMSUtils:
             "raw_data_offset": 0,
             "n_channels": 1,
             "next_segment_offset": 12,
+            "order": "<",
         }
         attrs = {"tag": "example"}
         data = bytearray(52)
@@ -229,6 +288,7 @@ class TestTDMSUtils:
             "raw_data_offset": 0,
             "n_channels": 1,
             "next_segment_offset": 8,
+            "order": "<",
         }
         attrs = {"tag": "example"}
         data = np.array([1.0, 2.0], dtype=np.float32).tobytes()
@@ -272,6 +332,7 @@ class TestSampleOrder:
             "raw_data_offset": 0,
             "next_segment_offset": len(payload),
             "file_size": len(payload),
+            "order": "<",
         }
         start, stop = bounds
         with path.open("rb") as resource:
@@ -328,6 +389,7 @@ class TestMultiSegment:
             "file_size": 200,
             "n_channels": 1,
             "data_type": "float32",
+            "order": "<",
         }
         buffer = bytearray(200)
         buffer[52:68] = struct.pack("<QQ", 0xFFFFFFFFFFFFFFFF, 0)
@@ -443,8 +505,8 @@ class TestTDMSInterrogator:
         """A canonical property already named in the header survives filtering."""
         read_attr = tdms_utils._read_attr
 
-        def canonical_attr(resource):
-            name, value = read_attr(resource)
+        def canonical_attr(*args):
+            name, value = read_attr(*args)
             if name == "GaugeLength":
                 name = "gauge_length"
             return name, value

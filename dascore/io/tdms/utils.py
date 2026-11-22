@@ -18,7 +18,7 @@ from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64
 
 
-def type_not_supported(vargin):
+def type_not_supported(*args):
     """Function raises a NotImplementedException."""
     raise NotImplementedError("Reading of this tdsDataType is not implemented")
 
@@ -49,35 +49,35 @@ TDS_DATA_TYPE = dict(
     }
 )
 
-# Function mapping for reading TDMS data types
+# Function mapping for reading TDMS data types, in the byte order given.
 # Values differ by type, so the readers are only typed as callables.
 TDS_READ_VAL: dict[str, Callable] = dict(
     {
-        "void": lambda f: None,  # tdsTypeVoid
-        "int8": lambda f: struct.unpack("<b", f.read(1))[0],
-        "int16": lambda f: struct.unpack("<h", f.read(2))[0],
-        "int32": lambda f: struct.unpack("<i", f.read(4))[0],
-        "int64": lambda f: struct.unpack("<q", f.read(8))[0],
-        "uint8": lambda f: struct.unpack("<B", f.read(1))[0],
-        "uint16": lambda f: struct.unpack("<H", f.read(2))[0],
-        "uint32": lambda f: struct.unpack("<I", f.read(4))[0],
-        "uint64": lambda f: struct.unpack("<Q", f.read(8))[0],
-        "float32": lambda f: struct.unpack("<f", f.read(4))[0],
-        "float64": lambda f: struct.unpack("<d", f.read(8))[0],
+        "void": lambda f, e: None,  # tdsTypeVoid
+        "int8": lambda f, e: struct.unpack(e + "b", f.read(1))[0],
+        "int16": lambda f, e: struct.unpack(e + "h", f.read(2))[0],
+        "int32": lambda f, e: struct.unpack(e + "i", f.read(4))[0],
+        "int64": lambda f, e: struct.unpack(e + "q", f.read(8))[0],
+        "uint8": lambda f, e: struct.unpack(e + "B", f.read(1))[0],
+        "uint16": lambda f, e: struct.unpack(e + "H", f.read(2))[0],
+        "uint32": lambda f, e: struct.unpack(e + "I", f.read(4))[0],
+        "uint64": lambda f, e: struct.unpack(e + "Q", f.read(8))[0],
+        "float32": lambda f, e: struct.unpack(e + "f", f.read(4))[0],
+        "float64": lambda f, e: struct.unpack(e + "d", f.read(8))[0],
         "float128": type_not_supported,
         "singleFloatWithUnit": type_not_supported,
         "doubleFloatWithUnit": type_not_supported,
         "extendedFloatWithUnit": type_not_supported,
-        "str": lambda f: f.read(struct.unpack("<i", f.read(4))[0]),
-        "bool": lambda f: struct.unpack("<?", f.read(1))[0],
-        "datetime": lambda f: parse_time_stamp(
-            struct.unpack("<Q", f.read(8))[0], struct.unpack("<q", f.read(8))[0]
-        ),
+        "str": lambda f, e: f.read(struct.unpack(e + "i", f.read(4))[0]),
+        "bool": lambda f, e: struct.unpack(e + "?", f.read(1))[0],
+        "datetime": lambda f, e: _read_time_stamp(f, e),
         "raw": type_not_supported,
     }
 )
 
 DECIMATE_MASK = 0b00100000
+# The ToC flag stating the segment's numbers are big-endian.
+BIG_ENDIAN_MASK = 0b01000000
 # The version the reader follows; a file may state another.
 READ_VERSION = 4713
 # What parsing a layout the reader does not follow raises.
@@ -114,16 +114,34 @@ def parse_time_stamp(fractions, seconds):
         return None
 
 
+def _read_time_stamp(tdms_file, order):
+    """Read a timestamp, whose two halves swap places in a big-endian file."""
+    if order == "<":
+        fractions, seconds = struct.unpack("<Qq", tdms_file.read(16))
+    else:
+        seconds, fractions = struct.unpack(">qQ", tdms_file.read(16))
+    return parse_time_stamp(fractions, seconds)
+
+
+def _read_lead_in(lead_in) -> dict[str, Any]:
+    """
+    Return the fields of a 28 byte lead-in and the byte order it states.
+
+    The ToC is always little-endian; the numbers after it are big-endian
+    where its flag says so, as is the rest of the segment.
+    """
+    tag, toc = struct.unpack("<4si", lead_in[:8])
+    order = ">" if toc & BIG_ENDIAN_MASK else "<"
+    numbers = struct.unpack(order + "iQQ", lead_in[8:28])
+    return dict(zip(FILEINFO_NAMES, (tag, toc, *numbers)), order=order)
+
+
 def _get_version_str(tdms_file, lead_in_length=28) -> str | Literal[False]:
     """Return the version string for a TDMS file, else False."""
-    lead_in = tdms_file.read(lead_in_length)
-    # lead_in is 28 bytes:
-    # [string of length 4][int32][int32][int64][int64]
-    fields = struct.unpack("<4siiQQ", lead_in)
+    fields = _read_lead_in(tdms_file.read(lead_in_length))
     # TODO: validate file
-    if fields[0].decode() in "TDSm":
-        version_str = str(fields[2])
-        return version_str
+    if fields["file_tag"].decode() in "TDSm":
+        return str(fields["version"])
     else:
         return False
 
@@ -149,17 +167,17 @@ def _get_time_coord(attrs, num_samps):
     return get_coord(start=t_min, step=dt, shape=(num_samps,), units="s")
 
 
-def _read_attr(tdms_file):
+def _read_attr(tdms_file, order):
     """
-    Read a single property from the TDMS file.
+    Read a single property from the TDMS file, in its byte order.
     Return the name, type and value of the property as a list.
     """
     # Read length of object path:
-    var = struct.unpack("<i", tdms_file.read(4))[0]
+    var = struct.unpack(order + "i", tdms_file.read(4))[0]
     # Read property name and type:
-    name, data_type = struct.unpack(f"<{var}si", tdms_file.read(var + 4))
+    name, data_type = struct.unpack(f"{order}{var}si", tdms_file.read(var + 4))
     # Lookup function to read and parse property value based on type:
-    value = TDS_READ_VAL[TDS_DATA_TYPE[data_type]](tdms_file)
+    value = TDS_READ_VAL[TDS_DATA_TYPE[data_type]](tdms_file, order)
     name = name.decode()
     if data_type == 32:
         value = value.decode()
@@ -194,6 +212,8 @@ def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
     rdo = int(fileinfo["raw_data_offset"])
     nso = int(fileinfo["next_segment_offset"])
     file_size = fileinfo["file_size"]
+    # A file's segments share the byte order its first states.
+    offsets = fileinfo["order"] + "QQ"
     while True:
         yield rdo, nso
         if nso >= file_size:
@@ -202,7 +222,7 @@ def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
         # Unsigned, as the lead-in reader above also reads them: TDMS writes
         # all ones for a file it never got to close, meaning the segment runs
         # to the end of the file, and clamping is what says so.
-        (next_seg_nso, next_seg_rdo) = struct.unpack("<QQ", tdms_file.read(2 * 8))
+        (next_seg_nso, next_seg_rdo) = struct.unpack(offsets, tdms_file.read(2 * 8))
         start = nso + lead_in_length
         rdo = min(file_size, start + next_seg_rdo)
         # Each segment starts a whole lead-in past the one before it, so this
@@ -230,12 +250,8 @@ def _get_sample_count(tdms_file, fileinfo, lead_in_length=28):
 
 def _get_all_attrs(tdms_file, lead_in_length=28):
     """Return all the attributes which can be fetched from attributes."""
-    # read lead-in information into fileinfo
-    lead_in = tdms_file.read(lead_in_length)
-    # lead_in is 28 bytes:
-    fields = struct.unpack("<4siiQQ", lead_in)
-    # Keep track of information about file in fileinfo
-    fileinfo: dict[str, Any] = dict(zip(FILEINFO_NAMES, fields))
+    # Keep track of information about file in fileinfo, from the lead-in
+    fileinfo = _read_lead_in(tdms_file.read(lead_in_length))
     fileinfo["decimated"] = not bool(fileinfo["toc"] & DECIMATE_MASK)
     # Make offsets relative to beginning of file:
     fileinfo["next_segment_offset"] += lead_in_length
@@ -250,19 +266,20 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
 
 def _read_header(tdms_file, fileinfo, lead_in_length):
     """Read the properties and data layout following the lead-in."""
+    order = fileinfo["order"]
     # navigate pointer to immediately after lead in data
     tdms_file.seek(lead_in_length, 0)
     # Read number of channels
-    n_channels = struct.unpack("i", tdms_file.read(4))[0] - 2
+    n_channels = struct.unpack(order + "i", tdms_file.read(4))[0] - 2
     fileinfo["n_channels"] = n_channels
     # Read length of object path:
-    var = struct.unpack("<i", tdms_file.read(4))[0]
+    var = struct.unpack(order + "i", tdms_file.read(4))[0]
     # skip over object path and raw data index:
     tdms_file.seek(var + 4, 1)
     # Read number of properties in this group:
-    var = struct.unpack("<i", tdms_file.read(4))[0]
+    var = struct.unpack(order + "i", tdms_file.read(4))[0]
     # loop through and read each property
-    out = [_read_attr(tdms_file) for _ in range(var)]
+    out = [_read_attr(tdms_file, order) for _ in range(var)]
     # Returns a pandas dataframe that we convert to dictionary
     out = dict(out)
     # Add other attributes not yet included
@@ -280,12 +297,14 @@ def _read_header(tdms_file, fileinfo, lead_in_length):
     fileinfo["end_of_properties_offset"] = tdms_file.tell()
     tdms_file.seek(fileinfo["end_of_properties_offset"], 0)
     # skip over Group Information:
-    var = struct.unpack("<i", tdms_file.read(4))[0]
+    var = struct.unpack(order + "i", tdms_file.read(4))[0]
     tdms_file.seek(var + 8, 1)
     # skip over first channel path and length of index information:
-    var = struct.unpack("<i", tdms_file.read(4))[0]
+    var = struct.unpack(order + "i", tdms_file.read(4))[0]
     tdms_file.seek(var + 4, 1)
-    fileinfo["data_type"] = TDS_DATA_TYPE.get(struct.unpack("<i", tdms_file.read(4))[0])
+    fileinfo["data_type"] = TDS_DATA_TYPE.get(
+        struct.unpack(order + "i", tdms_file.read(4))[0]
+    )
     if fileinfo["data_type"] not in ("int16", "float32"):
         msg = f"Unsupported TDMS data type: {fileinfo['data_type']}"
         raise NotImplementedError(msg)
@@ -301,9 +320,10 @@ def _get_fileinfo(tdms_file, lead_in_length=28):
     """Get info about file not included in the attributes."""
     attrs, fileinfo = _get_all_attrs(tdms_file)
     with _naming_version(fileinfo["version"], "header"):
-        # Read Dimension of the raw data array (has to be 1):
-        _ = struct.unpack("<i", tdms_file.read(4))[0]
-        fileinfo["chunk_size"] = struct.unpack("<i", tdms_file.read(4))[0]
+        # Skip the raw data array's dimension (has to be 1) to its length.
+        tdms_file.seek(4, 1)
+        order = fileinfo["order"]
+        fileinfo["chunk_size"] = struct.unpack(order + "Q", tdms_file.read(8))[0]
     return fileinfo, attrs
 
 
@@ -319,10 +339,12 @@ def _get_segment_data(fileinfo, nch, dmap, nso, rdo):
     else:
         n_complete_blk = 0
         ax_ord = "F"
+    # Samples are stored in the file's byte order.
+    dtype = np.dtype(fileinfo["data_type"]).newbyteorder(fileinfo["order"])
     # use data from mapped file to fill variable raw_data
     raw_data = np.ndarray(
         (n_complete_blk, nch, fileinfo["chunk_size"]),
-        dtype=fileinfo["data_type"],
+        dtype=dtype,
         buffer=dmap,
         offset=rdo,
     )
@@ -342,7 +364,7 @@ def _get_segment_data(fileinfo, nch, dmap, nso, rdo):
         )
         raw_last_chunk = np.ndarray(
             (nch, additional_samples),
-            dtype=fileinfo["data_type"],
+            dtype=dtype,
             buffer=dmap,
             offset=additional_samples_offset,
             order=ax_ord,
@@ -380,11 +402,11 @@ def _read_sample_range(tdms_file, fileinfo, start=0, stop=None, lead_in_length=2
         parts.append(segment[low:high])
     if not parts:
         return np.empty((0, nch), dtype=fileinfo["data_type"])
-    if len(parts) == 1:
-        # a decoded segment owns its data, so one part needs no copy
-        return parts[0]
-    # segments stack along time, the first axis of (samples, channels)
-    return np.concatenate(parts, axis=0)
+    # a decoded segment owns its data, so one part needs no copy; segments
+    # stack along time, the first axis of (samples, channels)
+    data = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
+    # in the machine's byte order, which copies only a file stored in the other
+    return data.astype(fileinfo["data_type"], copy=False)
 
 
 def _get_data(tdms_file, lead_in_length=28):
