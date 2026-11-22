@@ -720,18 +720,6 @@ def _output_records(
     return records
 
 
-def _trim_loaded_member(patch: dc.Patch, trim: Mapping) -> dc.Patch:
-    """Apply the plan's window to a member the reader loaded whole."""
-    ranges = {
-        key: tuple(value)
-        for key, value in trim.items()
-        if key in set(patch.dims)
-        and isinstance(value, list | tuple | np.ndarray)
-        and len(value) == 2
-    }
-    return patch.select(**ranges) if ranges else patch
-
-
 class PlanResolver(PatchResolver):
     """
     Assemble plan-output rows from their member source patches.
@@ -988,18 +976,15 @@ class PlanResolver(PatchResolver):
             )
             if plan_units is not None and source_units != plan_units:
                 trim.pop(self.dim, None)
-        patch_local = any(s or r for _, s, r in self.parent_residuals)
-        if trim and patch_local:
+        if any(s or r for _, s, r in self.parent_residuals):
             # A patch-local residual resolves against the source patch, so
-            # the plan's window cannot narrow the member before it runs;
-            # otherwise select(time=(1, -1), relative=True).chunk(time=2)
-            # would trim a second off each chunk instead of each file.
-            patch = self.loader.resolve(kwargs)
-            patch = apply_exact_residuals(patch, self.parent_residuals)
-            patch = _trim_loaded_member(patch, trim)
-        else:
-            patch = self.loader.resolve(kwargs, **trim)
-            patch = apply_exact_residuals(patch, self.parent_residuals)
+            # no hint may narrow the member before it runs; otherwise
+            # select(time=(1, -1), relative=True).chunk(time=2) would trim
+            # a second off each chunk instead of each file. The assembler
+            # cuts the plan's window afterwards, on the plan's dimensions.
+            trim = {}
+        patch = self.loader.resolve(kwargs, **trim)
+        patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
     def _array_read_info(self, row: Mapping):
