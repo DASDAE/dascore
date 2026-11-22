@@ -7,6 +7,7 @@ extensive.
 
 from __future__ import annotations
 
+import gc
 import os
 import pickle
 import random
@@ -4598,6 +4599,45 @@ class TestStaleSourceCheck:
         out = pickle.loads(blob)[0]
         assert route.counts["patch"] == 2, "the changed file abandons the recipe"
         assert out.shape[0] == 20
+
+    @pytest.fixture
+    def selected_plan(self, tmp_path):
+        """A plan of a selection, whose members only its index names."""
+        data, index = tmp_path / "data", tmp_path / "index.sqlite"
+        data.mkdir()
+        _archive(data, indexed=False)
+        spool = dc.spool(data, index=index).update()
+        # a member a selection trims states no id; its index row names it
+        window = (ORIGIN + STEP, ORIGIN + STEP * 12)
+        planned = spool.select(time=window).chunk(time=None)
+        del spool
+        gc.collect()
+        return planned, index
+
+    def test_a_plan_holds_no_handle_on_its_index(self, selected_plan):
+        """Equality opens the index a plan was made from only to look it up."""
+        psutil = pytest.importorskip("psutil")
+        planned, index = selected_plan
+
+        def held():
+            return {os.path.realpath(x.path) for x in psutil.Process().open_files()}
+
+        assert os.path.realpath(index) not in held()
+        # the index was read again: other data with its metadata differs
+        assert planned == dc.spool(list(planned))
+        assert planned != dc.spool([x * 2 for x in planned])
+        assert os.path.realpath(index) not in held()
+        index.unlink()
+
+    @pytest.mark.parametrize("change", ["removed", "garbled"])
+    def test_a_plan_whose_index_is_gone(self, selected_plan, change):
+        """Without the index to name its members by, a plan compares as before."""
+        planned, index = selected_plan
+        if change == "removed":
+            index.unlink()
+        else:
+            index.write_bytes(b"not an index")
+        assert planned == dc.spool(list(planned))
 
     def test_a_plan_unpickles_with_the_index_directory_gone(self, plan_and_index):
         """Nothing reopens the index, so its parent need not exist."""

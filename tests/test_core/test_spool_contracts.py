@@ -189,9 +189,11 @@ class TestEqualityComparesLoads:
         assert selected.chunk(time=None) == selected
         assert selected != twos.select(**window).chunk(time=None)
 
-    def test_plan_of_selected_files(self, directories, no_reads):
+    @pytest.mark.parametrize("combined", [False, True])
+    def test_plan_of_selected_files(self, directories, no_reads, combined):
         """A member a selection trimmed is its file's id and window."""
-        ones, twos = directories
+        # combined with nothing, the files are indexed in memory
+        ones, twos = (x + dc.spool([]) if combined else x for x in directories)
         window = {"time": (1, 4)}
         planned = ones.select(**window).chunk(time=2)
         assert planned == ones.select(**window).chunk(time=2)

@@ -1050,12 +1050,14 @@ class PatchAssembler:
         one the rows cannot place.
         """
         dim, stored = self.plan_dim, stored or [None] * len(rows)
-        frame = pd.DataFrame(list(rows))
         if len({_stated_unit(x.get("data_units")) for x in rows}) > 1:
             return None  # loading converts the later members
-        descending = bool((to_float(frame[f"{dim}_step"].values) < 0).all())
-        order = frame[f"{dim}_min"].sort_values(ascending=not descending, kind="stable")
-        members = [self._member_layout(rows[x], stored[x]) for x in order.index]
+        # members in the output coordinate's order, as assembly sorts them
+        descending = all(to_float(_as_numpy(x[f"{dim}_step"])) < 0 for x in rows)
+        order = sorted(
+            range(len(rows)), key=lambda x: rows[x][f"{dim}_min"], reverse=descending
+        )
+        members = [self._member_layout(rows[x], stored[x]) for x in order]
         if None in members:
             return None
         ids, coords = zip(*members, strict=True)
@@ -1064,7 +1066,7 @@ class PatchAssembler:
             offsets = [0, *accumulate(len(x) for x in coords)][:-1]
             conflict = self.merge_kwargs.get("conflict") or "raise"
             data_id = derive(ids, merge_operation(merge_layout(dim, offsets, conflict)))
-        first = rows[order.index[0]]
+        first = rows[order[0]]
         if not isinstance(first.get(f"_{dim}_stretch"), tuple):
             return data_id  # only a stretch's grid moves labels
         each = [get_coord_manager({dim: x}, dims=(dim,)) for x in coords]
