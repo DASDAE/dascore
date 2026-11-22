@@ -1017,9 +1017,11 @@ class _SampleTracker:
         ]
         mins = np.array([x.min() for x in kept])[codes]
         maxs = np.array([x.max() for x in kept])[codes]
+        # a row's own labels say whether it needs the allowance, not the array's
+        floats = np.array([x.dtype.kind == "f" for x in kept], dtype=bool)[codes]
         if held.shift is not None:
             mins, maxs = mins + held.shift[rows], maxs + held.shift[rows]
-        elif mins.dtype.kind == "f":
+        elif floats.any():
             steps = to_float(source[f"{name}_step"].to_numpy()[rows])
             dtypes = source.get(f"_{name}_coord_dtype", pd.Series(index=source.index))
             dtypes = dtypes.to_numpy(dtype=object)[rows]
@@ -1030,8 +1032,8 @@ class _SampleTracker:
             low = np.minimum(source[f"{name}_min"].to_numpy()[rows], mins)
             high = np.maximum(source[f"{name}_max"].to_numpy()[rows], maxs)
             scales = np.maximum(np.abs(low), np.abs(high))
-            out_min = _outward(mins, steps, scales, dtypes, -1)
-            out_max = _outward(maxs, steps, scales, dtypes, 1)
+            out_min = np.where(floats, _outward(mins, steps, scales, dtypes, -1), mins)
+            out_max = np.where(floats, _outward(maxs, steps, scales, dtypes, 1), maxs)
             mins = np.where(np.where(down, last, first), low, out_min)
             maxs = np.where(np.where(down, first, last), high, out_max)
         return mins, maxs, kept, codes
