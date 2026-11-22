@@ -35,7 +35,8 @@ def _get_attrs_coords_and_data(h5, snap):
     # carrying either would otherwise pass it on as a patch attr -- and
     # only scan used to drop them, so scan and read disagreed.
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
-    attr_names = set(attrs) - skip
+    # Sorted, as a set's order changes with the process's hash seed.
+    attr_names = sorted(set(attrs) - skip)
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
     # Taken before filtering, which would skip a dims array as a coordinate.
     dims = attr_dict.pop("dims", None)
@@ -115,8 +116,9 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     Get the dims tuple, and the coord nodes any filling added.
 
     The format does not have to state its dimensions; when it does not,
-    each is named by the node whose length matches that axis. Only node
-    shapes are read here, never their values.
+    each is named by a node whose length matches that axis: one the format
+    names as a coordinate if any, else the first by name. Only node shapes
+    are read here, never their values.
     """
     if dims is not None and len(dims):  # text, or an array of names
         names = dims.split(",") if isinstance(dims, str) else dims
@@ -124,8 +126,11 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     can_guess_shape = len(data_node.shape) == len(set(data_node.shape))
     assert can_guess_shape, "Cant determine dims; shape values not unique!"
     assert len(time_node.shape) == 1, "time node has more than one dimension!"
-    # get a dict of {coord_name: shape} for 1d coords.
-    coord_shape_dict = {len(v): x for x, v in other_nodes.items() if len(v.shape) == 1}
+    # get a dict of {shape: coord_name} for 1d coords.
+    coord_shape_dict = {}
+    for name in sorted(other_nodes, key=lambda x: x not in OTHER_COORD_ARRAY_NAMES):
+        if len(other_nodes[name].shape) == 1:
+            coord_shape_dict.setdefault(len(other_nodes[name]), name)
     coord_shape_dict[len(time_node)] = "time"
     # need to fill some dims
     if len(coord_shape_dict) != len(data_node.shape):
@@ -144,10 +149,15 @@ def _get_coords_and_dims(
         length = data_node.shape[dims.index("channel")]
         other_nodes["channel"] = np.arange(length)
     where = data_node.file
-    coords = {
-        name: _get_coord(node, snap if name in dims else False, name, where, relative)
-        for name, node in other_nodes.items()
-    }
+    sizes = dict(zip(dims, data_node.shape))
+    coords = {}
+    for name, node in other_nodes.items():
+        coord = _get_coord(node, snap if name in dims else False, name, where, relative)
+        # Another array as long as one dimension is a coordinate along it.
+        along = [dim for dim, size in sizes.items() if node.shape == (size,)]
+        if name not in dims and len(along) == 1:
+            coord = (along[0], coord)
+        coords[name] = coord
     return dims, coords
 
 
@@ -165,7 +175,7 @@ def _get_nodes(h5):
     return (
         root_nodes[next(iter(data_node_name))],
         root_nodes[next(iter(time_node_name))],
-        {x: root_nodes[x] for x in other_node_names},
+        {x: root_nodes[x] for x in sorted(other_node_names)},
     )
 
 

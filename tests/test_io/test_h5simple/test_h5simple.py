@@ -5,7 +5,11 @@ from __future__ import annotations
 import copy
 import io
 import itertools
+import json
+import os
 import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
@@ -333,6 +337,19 @@ class TestH5Simple:
             patch = dc.read(path, file_format="h5simple")[0]
         assert patch.dims == ("distance", "time") and "pair" not in dict(patch.attrs)
 
+    @pytest.mark.parametrize("dims", [None, "distance,time"])
+    def test_array_along_a_dimension(self, tmp_path, dims):
+        """An array as long as one dimension is a coordinate along it."""
+        path = shutil.copy(fetch("h5_simple_2.h5"), tmp_path / "depth.h5")
+        with h5py.File(path, "a") as h5:
+            h5["depth"] = np.arange(100.0) * 2
+            if dims:
+                h5.attrs["dims"] = dims
+        patch = dc.read(path)[0]
+        assert patch.dims == ("distance", "time")
+        assert patch.coords.dim_map["depth"] == ("distance",)
+        np.testing.assert_array_equal(patch.get_array("depth"), np.arange(100.0) * 2)
+
     def test_provenance_in_file_is_not_a_patch_attr(self, h5simple_path, tmp_path):
         """A root attr naming where the bytes live is the spool's, not the patch's.
 
@@ -408,6 +425,67 @@ class TestH5Simple:
             h5.attrs["format"] = "other"
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(path)
+
+
+@pytest.mark.skipif(
+    sys.platform == "emscripten", reason="emscripten does not support processes"
+)
+class TestHashSeed:
+    """A file reads the same whatever the process's hash seed."""
+
+    _code = (
+        "import json, sys, dascore as dc;"
+        "patch = dc.read(sys.argv[1])[0];"
+        "coords = {x: list(y) for x, y in patch.coords.dim_map.items()};"
+        "print(json.dumps([list(dict(patch.attrs)), coords, list(patch.dims)]))"
+    )
+
+    def _read(self, path):
+        """The attr names, coordinate dims and dims of a read, in two processes."""
+        out = []
+        for seed in ("1", "2"):
+            result = subprocess.run(
+                [sys.executable, "-c", self._code, str(path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=os.environ | {"PYTHONHASHSEED": seed},
+            )
+            out.append(json.loads(result.stdout))
+        assert out[0] == out[1]
+        return out[0]
+
+    def test_names_sorted(self, tmp_path):
+        """Root attrs and the arrays beside time come in name order."""
+        names = ["zeta", "alpha", "mid", "beta", "gamma", "omega", "site"]
+        path = tmp_path / "cube.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.zeros((4, 5, 6, 30), dtype=np.float32)
+            h5["time"] = 1.7e9 + np.arange(30) / 50
+            for name, size in zip(("d", "a", "c"), (4, 5, 6)):
+                h5[name] = np.arange(size)
+            h5.attrs.update({x: x for x in names})
+        attrs, coords, _ = self._read(path)
+        assert [x for x in attrs if x in names] == sorted(names)
+        assert list(coords) == ["a", "c", "d", "time"]
+
+    @pytest.mark.parametrize(
+        "names, dim", [(("depth", "distance"), "distance"), (("b", "a"), "a")]
+    )
+    def test_same_length_arrays(self, tmp_path, names, dim):
+        """
+        Of two arrays one axis long, the one the format names a coordinate,
+        else the first by name, is the dimension; the other runs along it.
+        """
+        path = tmp_path / "same_length.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.zeros((5, 30), dtype=np.float32)
+            h5["time"] = 1.7e9 + np.arange(30) / 50
+            for name in names:
+                h5[name] = np.arange(5.0)
+        _, coords, dims = self._read(path)
+        assert dims == [dim, "time"]
+        assert all(coords[x] == [dim] for x in names)
 
 
 class TestSingletonCoordinates:

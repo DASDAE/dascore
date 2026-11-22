@@ -13,7 +13,7 @@ import pandas as pd
 import dascore as dc
 from dascore import to_float
 from dascore.core import get_coord_manager
-from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.exceptions import InvalidFiberFileError, InvalidSpoolError, PatchError
 from dascore.io.utils import require_grid
 from dascore.utils.misc import optional_import
 
@@ -67,24 +67,19 @@ def _parse_binary_header(fp):
         return None
     major, minor = header[300:302]
     for endian in ("big", "little"):
-        traces, auxiliary, interval, _, samples, _, code = (
-            twos_comp(header[i : i + 2], endian) for i in range(12, 26, 2)
+        # The trace and sample counts and the sample interval are unsigned,
+        # so none can be negative and only the sample count is checked;
+        # the extended header count is signed, -1 meaning a variable number.
+        samples, code, fixed_length = (
+            int.from_bytes(header[i : i + 2], endian) for i in (20, 24, 302)
         )
-        fixed_length, extended = (
-            twos_comp(header[i : i + 2], endian) for i in (302, 304)
-        )
+        extended = twos_comp(header[304:306], endian)
         checks = (
             # First check that some samples are defined.
             samples > 0,
-            # The interval may be 0 (defined in the trace headers) but not
-            # negative.
-            interval >= 0,
             # Ensure the data sample format code is valid (2.1 standard range).
             1 <= code <= 16,
             major in {0, 1, 2, 3},
-            # Sanity checks for other values.
-            traces >= 0,
-            auxiliary >= 0,
             fixed_length in {0, 1},
         )
         if all(checks):
@@ -115,6 +110,43 @@ def _open_segy(path, segyio):
     return segyio.open(str(path), ignore_geometry=True, endian=endian), text
 
 
+def _sample_count(fi, warn=True) -> int:
+    """
+    Return the number of samples per trace.
+
+    segyio lays traces out with the binary header's count. Where every
+    trace header states one smaller count, that count is used, with a
+    warning; trace headers disagreeing among themselves, or stating more
+    samples than a trace holds, raise.
+    """
+    segyio = optional_import("segyio")
+    stored = len(fi.samples)
+    # Unsigned two-byte counts, which segyio returns signed (40000 as -25536).
+    stated = fi.attributes(segyio.TraceField.TRACE_SAMPLE_COUNT)[:] & 0xFFFF
+    counts = np.unique(stated)
+    if len(counts) > 1:
+        stated = ", ".join(str(x) for x in counts)
+        msg = (
+            f"SEG-Y trace headers state different sample counts ({stated}); "
+            f"the binary header states {stored}."
+        )
+        raise InvalidFiberFileError(msg)
+    count = int(counts[0])
+    if count > stored:
+        msg = (
+            f"Every SEG-Y trace header states {count} samples, more than the "
+            f"{stored} the binary header lays each trace out with."
+        )
+        raise InvalidFiberFileError(msg)
+    if count < stored and warn:
+        msg = (
+            f"The SEG-Y binary header states {stored} samples per trace, but "
+            f"every trace header states {count}; reading {count}."
+        )
+        warnings.warn(msg, UserWarning)
+    return count
+
+
 def _get_coords(fi, text):
     """
     Get coordinates of the segy file.
@@ -137,9 +169,10 @@ def _get_coords(fi, text):
 
     # Get time array from SEGY headers.
     starttime = _get_time_from_text(text, _get_time_from_header(header_0))
-    dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
-    ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
-    time_array = starttime + dt * np.arange(ns)
+    # An unsigned two-byte interval, which segyio returns signed.
+    interval = int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]) & 0xFFFF
+    dt = np.timedelta64(interval, "us")
+    time_array = starttime + dt * np.arange(_sample_count(fi))
 
     # Get distance array from SEGY header
     channel = np.arange(len(fi.header))

@@ -407,11 +407,17 @@ def _detect_mseed_v2_header(header: bytes) -> bool:
         return False
     if not _is_seed_code(header[18:20]):
         return False
+    # The numbers are big-endian or, as some writers store them, little-endian.
+    return any(_v2_numbers_valid(header, order) for order in "><")
+
+
+def _v2_numbers_valid(header: bytes, order: str) -> bool:
+    """Return True if a fixed MiniSEED 2 header's numbers look valid in order."""
     try:
-        year, day = unpack(">HH", header[20:24])
+        year, day = unpack(f"{order}HH", header[20:24])
         hour, minute, second = header[24:27]
-        _unused, frac_seconds, sample_count = unpack(">BHH", header[27:32])
-        data_offset, blockette_offset = unpack(">HH", header[44:48])
+        _unused, frac_seconds, sample_count = unpack(f"{order}BHH", header[27:32])
+        data_offset, blockette_offset = unpack(f"{order}HH", header[44:48])
     except struct.error:
         return False
     valid_time = (

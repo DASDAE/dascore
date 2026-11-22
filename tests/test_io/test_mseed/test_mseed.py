@@ -340,6 +340,19 @@ class TestMiniSeedGetFormat:
         assert MSeedV2().get_format(v2_path) == ("MSEED", "2")
         assert MSeedV2().get_format(v3_path) == ("MSEED", "3")
 
+    def test_little_endian_v2(self, tmp_path):
+        """A MiniSEED 2 file with little-endian headers is detected and read."""
+        obspy = pytest.importorskip("obspy")
+        pytest.importorskip("pymseed")
+        data = np.arange(100, dtype=np.int32)
+        start = obspy.UTCDateTime(2024, 1, 1)
+        header = dict(network="XX", station="STA", channel="HSF", starttime=start)
+        trace = obspy.Trace(data, header=header | {"sampling_rate": 10.0})
+        path = tmp_path / "little.mseed"
+        obspy.Stream([trace]).write(str(path), format="MSEED", byteorder="<")
+        assert dc.get_format(path) == ("MSEED", "2")
+        np.testing.assert_array_equal(dc.read(path)[0].data.ravel(), data)
+
     def test_get_format_too_small(self, tmp_path):
         """Small invalid files return False."""
         path = tmp_path / "bad.mseed"

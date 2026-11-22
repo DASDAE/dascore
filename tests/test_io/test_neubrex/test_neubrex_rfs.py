@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.neubrex import NeubrexRFSV1
+from dascore.io.neubrex.core import NeubrexRFSPatchAttrs
 from dascore.utils.downloader import fetch
 
 
@@ -46,3 +47,29 @@ class TestNeubrexRFSDepthUnits:
         with h5py.File(rfs_path, "a") as h5:
             h5["depth"].attrs["unit"] = "not_a_unit"
         assert _distance_units(rfs_path) == {None}
+
+
+class TestNeubrexRFSAttrs:
+    """Tests for the attrs read from the data node."""
+
+    @pytest.mark.parametrize("name", [None, "WellBoreID", "wellboreid"])
+    def test_well_bore_id(self, rfs_path, name):
+        """The well bore id is read whatever the case of its name."""
+        if name is not None:
+            with h5py.File(rfs_path, "a") as h5:
+                attrs = h5["data"].attrs
+                attrs[name] = attrs.pop("WellboreID")
+        attrs = NeubrexRFSV1().read(rfs_path)[0].attrs
+        assert attrs.well_bore_id == "16B(78)-32"
+
+    def test_field_name(self, rfs_path):
+        """The file's field name is the one attr naming it."""
+        attrs = dict(NeubrexRFSV1().read(rfs_path)[0].attrs)
+        assert "filed_name" not in attrs
+        assert attrs["field_name"] == "Beaver"
+
+    def test_old_field_name_accepted(self):
+        """The name the field had before is taken as it."""
+        attrs = NeubrexRFSPatchAttrs(filed_name="Beaver")
+        assert attrs.field_name == "Beaver"
+        assert "filed_name" not in dict(attrs)

@@ -1,12 +1,14 @@
 """Tests for SEGY format."""
 
 import tracemalloc
+import warnings
 
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.exceptions import (
+    InvalidFiberFileError,
     InvalidSpoolError,
     PatchError,
 )
@@ -315,6 +317,84 @@ class TestSegyCompatibility:
             time=patch.get_coord("time") + dc.to_datetime64(start)
         )
         assert new.get_coord("time").min() == np.datetime64(start)
+
+
+def _write_unsigned_segy_file(path, samples=100, interval=500, ensemble=2):
+    """
+    Write a 2-trace SEG-Y file whose binary header states these samples per
+    trace, sample interval (us) and traces per ensemble, any above 32767.
+    """
+    segyio = pytest.importorskip("segyio")
+    data = np.arange(2 * samples, dtype=np.float32).reshape(2, samples)
+    spec = segyio.spec()
+    spec.format, spec.samples, spec.tracecount = 5, range(samples), 2
+    field = segyio.TraceField
+    header = {field.TRACE_SAMPLE_COUNT: samples, field.TRACE_SAMPLE_INTERVAL: interval}
+    header |= {field.YearDataRecorded: 2021, field.DayOfYear: 63}
+    with segyio.create(str(path), spec) as fi:
+        bin_field = segyio.BinField
+        fi.bin.update({bin_field.Interval: interval, bin_field.Traces: ensemble})
+        fi.bin.update({bin_field.SEGYRevision: 1, bin_field.SEGYRevisionMinor: 0})
+        for num, trace in enumerate(data):
+            fi.header[num], fi.trace[num] = header, trace
+    return path, data
+
+
+class TestSegyUnsignedHeader:
+    """Binary header counts and intervals are unsigned."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"samples": 40_000}, {"interval": 50_000}, {"ensemble": 40_000}],
+        ids=["samples", "interval", "ensemble"],
+    )
+    def test_detected_and_read(self, tmp_path, kwargs):
+        """A file with one past 32767 is detected and reads whole."""
+        path, data = _write_unsigned_segy_file(tmp_path / "wide.sgy", **kwargs)
+        assert dc.get_format(path) == ("segy", "1.0")
+        patch = dc.read(path)[0]
+        np.testing.assert_array_equal(patch.data, data.T)
+        step = np.timedelta64(kwargs.get("interval", 500), "us")
+        assert patch.get_coord("time").step == step
+
+
+class TestSegySampleCount:
+    """Trace headers stating another sample count than the binary header."""
+
+    def test_every_trace_agrees(self, tmp_path):
+        """A smaller count every trace header states is the count read."""
+        fields = {"TRACE_SAMPLE_COUNT": [15] * 3}
+        path, data = _write_segy_file(tmp_path / "short.sgy", fields=fields)
+        match = "binary header states 20 .* every trace header states 15"
+        with pytest.warns(UserWarning, match=match):
+            patch = dc.read(path)[0]
+        assert len(patch.get_coord("time")) == 15
+        np.testing.assert_array_equal(patch.data, data[:15])
+        np.testing.assert_array_equal(SegyV1_0().read_array(path), data[:15])
+
+    def test_counts_past_signed_range(self, tmp_path):
+        """A trace of more than 32767 samples reads them all."""
+        path, data = _write_unsigned_segy_file(tmp_path / "long.sgy", 40_000)
+        fiber_io = SegyV1_0()
+        np.testing.assert_array_equal(fiber_io.read_array(path), data.T)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            patch = fiber_io.read(path)[0]
+        assert len(patch.get_coord("time")) == 40_000
+
+    @pytest.mark.parametrize(
+        "counts, match",
+        [
+            ([19, 20, 20], r"different sample counts \(19, 20\)"),
+            ([25] * 3, "states 25 samples, more than the 20"),
+        ],
+    )
+    def test_counts_raise(self, tmp_path, counts, match):
+        """Counts disagreeing, or more than a trace holds, name the counts."""
+        fields = {"TRACE_SAMPLE_COUNT": counts}
+        path, _ = _write_segy_file(tmp_path / "counts.sgy", fields=fields)
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
 
 
 class TestSegyTracePositions:

@@ -4,7 +4,11 @@ Core modules for reading Neubrex data.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 import numpy as np
+from pydantic import model_validator
 
 import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
@@ -15,25 +19,45 @@ from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
 
+def _renamed(data: Any, old: str, new: str) -> Any:
+    """Take an attr given under the name its field had before."""
+    if isinstance(data, Mapping) and old in data:
+        data = dict(data)
+        data.setdefault(new, data.pop(old))
+    return data
+
+
 class NeubrexRFSPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex files."""
 
     api: str | None = None
-    filed_name: str = ""
+    field_name: str = ""
     well_id: str = ""
     well_name: str = ""
     well_bore_id: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _take_old_name(cls, data: Any) -> Any:
+        """Take filed_name, as field_name was called."""
+        return _renamed(data, "filed_name", "field_name")
 
 
 class NeubrexDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex DAS Format files."""
 
     gauge_length: OptionalFiniteFloat = None
-    index_of_reflection: OptionalFiniteFloat = 1.46
+    index_of_refraction: OptionalFiniteFloat = 1.46
     triggered_time: np.datetime64 | None = None
     phase_to_strain: OptionalFiniteFloat = None
     distance_decimation_filter: int = 0
     time_decimation_filter: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _take_old_name(cls, data: Any) -> Any:
+        """Take index_of_reflection, as index_of_refraction was called."""
+        return _renamed(data, "index_of_reflection", "index_of_refraction")
 
 
 class NeubrexRFSV1(H5ArrayMixin, FiberIO):

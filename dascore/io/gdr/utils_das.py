@@ -6,13 +6,18 @@ See: https://gdr.openei.org/das_data_standard for more info.
 
 from __future__ import annotations
 
+import warnings
+from contextlib import suppress
+
 import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import convert_attr_units, stored_coord
+from dascore.exceptions import UnitError
+from dascore.io.utils import convert_attr_units, parse_units, stored_coord
+from dascore.units import convert_units
 from dascore.utils.hdf5 import extract_h5_attrs, h5_matches_structure
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import _maybe_unpack, unbyte
 
 # This defines the metadata/rawdata version combinations that define GDR versions.
 _COMPOSITE_VERSIONS = {
@@ -78,6 +83,35 @@ def _get_attrs_coords_and_data(resource, snap):
     return attrs, coords, data
 
 
+def _get_distance_start(resource, units) -> float:
+    """
+    Return where the channels start along the fiber, in the spacing's units.
+
+    GDR files state it, if at all, as the fiber's FiberStartLocation
+    (PRODML's StartLocus); a NaN or missing one is 0, and a unit left
+    unstated is the spacing's.
+    """
+    attrs = getattr(resource.get("DasMetadata/Cable/Fiber"), "attrs", {})
+    stated = unbyte(_maybe_unpack(attrs.get("FiberStartLocation", "NaN")))
+    try:
+        start = float(stated)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(start):
+        return 0.0
+    from_units = unbyte(_maybe_unpack(attrs.get("FiberStartLocationUnit", "")))
+    from_units = from_units or units
+    if parse_units(from_units) is not None:
+        with suppress(UnitError):
+            return float(convert_units(start, units, from_units))
+    msg = (
+        f"FiberStartLocation {stated!r} is in units {from_units!r}, which do "
+        f"not convert to {units!r}, so distance starts at 0."
+    )
+    warnings.warn(msg, UserWarning)
+    return 0.0
+
+
 def _nanoseconds(values) -> np.ndarray:
     """Decode stored times, integer nanoseconds since the epoch."""
     return np.asarray(values).astype(np.int64).astype("datetime64[ns]")
@@ -96,15 +130,15 @@ def _get_coord_manager(resource, snap=True):
 
     def get_dist_coord(resource, length):
         """Get distance coordinates."""
-        # Note: There is not enough info to correctly infer the start of
-        # distance coordinate since Channels are often not included. In this
-        # case we just assume the distance starts at 0 since the location of
+        # Note: Channels are often not included, so the distance starts
+        # where the fiber's metadata says, else at 0, since the location of
         # each channel must be attached later anyway. This at least includes
         # correct dx information.
         group = resource["DasMetadata/Interrogator/Acquisition"]
         dx = float(unbyte(group.attrs["SpatialSamplingInterval"]))
         units = unbyte(group.attrs["SpatialSamplingIntervalUnit"])
-        return get_coord(start=0, step=dx, shape=(length,), units=units)
+        start = _get_distance_start(resource, units)
+        return get_coord(start=start, step=dx, shape=(length,), units=units)
 
     time_coord = get_time_coord(resource, snap)
     dataset = resource["DasRawData/RawData"]

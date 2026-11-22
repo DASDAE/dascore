@@ -16,6 +16,7 @@ from .utils import (
     _get_text_attrs,
     _open_segy,
     _parse_binary_header,
+    _sample_count,
     _write_segy,
 )
 
@@ -46,7 +47,7 @@ class SegyV1_0(FiberIO):  # noqa
         segyio = optional_import(self._package_name)
         stream, _ = _open_segy(resource, segyio)
         with stream:
-            shape = (len(stream.samples), len(stream.header))
+            shape = (_sample_count(stream, warn=False), len(stream.header))
             time, channel = windows_to_slices(windows, shape)
             channels = range(shape[1])[channel]
             out = np.empty((len(range(shape[0])[time]), len(channels)), stream.dtype)

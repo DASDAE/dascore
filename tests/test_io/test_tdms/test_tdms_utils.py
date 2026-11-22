@@ -12,13 +12,66 @@ import pytest
 
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
-from dascore.exceptions import RemoteCacheError
+from dascore.exceptions import InvalidFiberFileError, RemoteCacheError
 from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
 from dascore.io.tdms.core import TDMSFormatterV4713
 from dascore.io.tdms.utils import parse_time_stamp, type_not_supported
 from dascore.utils.downloader import fetch
 from dascore.utils.io import IOResourceManager, LocalBinaryReader
+
+IDAS = "iDAS005_tdms_example.626.tdms"
+
+
+def _edited(path, edits=(), size=None):
+    """Write the iDAS005 example to path, bytes replaced at offsets, cut to size."""
+    raw = bytearray(Path(fetch(IDAS)).read_bytes())
+    for offset, value in edits:
+        raw[offset : offset + len(value)] = value
+    path.write_bytes(raw[:size])
+    return path
+
+
+# struct formats of the fixed-size property types the example files hold
+_PROPERTY_FORMATS = {0x03: "i", 0x05: "B", 0x06: "H", 0x07: "I", 0x0A: "d", 0x21: "?"}
+
+
+def _big_endian(raw):
+    """The one-segment int16 TDMS file `raw`, written as a big-endian file."""
+    src, out = io.BytesIO(raw), bytearray()
+
+    def copy(fmt):
+        """Copy one number, swapping its bytes, and return it."""
+        (value,) = struct.unpack("<" + fmt, src.read(struct.calcsize("<" + fmt)))
+        out.extend(struct.pack(">" + fmt, value))
+        return value
+
+    def text():
+        out.extend(src.read(copy("I")))
+
+    tag, toc = struct.unpack("<4si", src.read(8))
+    # The ToC itself is always little-endian.
+    out.extend(struct.pack("<4si", tag, toc | tdms_utils.BIG_ENDIAN_MASK))
+    copy("i"), copy("Q")
+    raw_data = 28 + copy("Q")
+    for _ in range(copy("I")):  # objects
+        text()
+        if copy("I") != 0xFFFFFFFF:  # a raw data index
+            assert copy("I") == 0x02, "an int16 file"
+            copy("I"), copy("Q")
+        for _ in range(copy("I")):  # properties
+            text()
+            kind = copy("I")
+            if kind == 0x20:
+                text()
+            elif kind == 0x44:  # a timestamp's halves swap places
+                fractions, seconds = struct.unpack("<Qq", src.read(16))
+                out.extend(struct.pack(">qQ", seconds, fractions))
+            else:
+                copy(_PROPERTY_FORMATS[kind])
+    out.extend(src.read(raw_data - src.tell()))
+    out.extend(np.frombuffer(src.read(), "<i2").astype(">i2").tobytes())
+    return bytes(out)
 
 
 class _FakeTDMSFile(io.BytesIO):
@@ -79,6 +132,104 @@ class TestReadWork:
             assert not resource.closed
         assert patch.shape == metadata.shape
         assert patch.dtype == metadata.dtype
+
+
+class TestStatedVersion:
+    """Files stating another TDMS version are read where the layout allows."""
+
+    version = ((8, struct.pack("<i", 4712)),)
+
+    def test_read(self, tmp_path):
+        """The parts the reader uses are the same, so the file reads."""
+        path = _edited(tmp_path / "v4712.tdms", self.version)
+        assert dc.get_format(path) == ("TDMS", "4713")
+        patch, expected = dc.read(path)[0], dc.read(fetch(IDAS))[0]
+        assert patch.coords == expected.coords
+        np.testing.assert_array_equal(patch.data, expected.data)
+
+    def test_header_failure_names_version(self, tmp_path):
+        """A header the reader cannot parse names the version and the part."""
+        path = _edited(tmp_path / "cut.tdms", self.version, size=200)
+        match = "header of a TDMS file stating version 4712.*follows version 4713"
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
+
+    def test_data_failure_names_version(self, tmp_path):
+        """Data the reader cannot lay out names the version and the part."""
+        with open(fetch(IDAS), "rb") as fi:
+            tdms_utils._get_all_attrs(fi)
+            # the chunk size follows the array dimension
+            chunk_size = fi.tell() + 4
+        edits = [*self.version, (chunk_size, struct.pack("<i", 0))]
+        path = _edited(tmp_path / "chunk.tdms", edits)
+        match = "data of a TDMS file stating version 4712.*ZeroDivisionError"
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
+
+
+class TestByteOrder:
+    """Every field is read in the byte order the ToC states."""
+
+    def test_big_endian(self, tmp_path):
+        """A big-endian file reads as the little-endian one it was made from."""
+        path = tmp_path / "big_endian.tdms"
+        path.write_bytes(_big_endian(Path(fetch(IDAS)).read_bytes()))
+        assert dc.get_format(path) == ("TDMS", "4713")
+        patch, expected = dc.read(path)[0], dc.read(fetch(IDAS))[0]
+        assert patch.coords == expected.coords == dc.scan_payloads(path)[0].coords
+        assert patch.dtype == expected.dtype == np.dtype("int16")
+        np.testing.assert_array_equal(patch.data, expected.data)
+        ids = {"origin_id": "", "data_id": ""}
+        assert patch.attrs.update(**ids) == expected.attrs.update(**ids)
+
+
+class TestDistanceGrid:
+    """The channel count sets the distance coordinate's length."""
+
+    @staticmethod
+    def _value(name):
+        """The offset of a property's value in the example file."""
+        name = name.encode()
+        # the name is followed by its four byte type
+        return Path(fetch(IDAS)).read_bytes().index(name) + len(name) + 4
+
+    @staticmethod
+    def _renamed(name):
+        """An edit hiding a property, its name changed in place."""
+        return name.encode(), name.replace("[m]", "[x]").encode()
+
+    @pytest.mark.parametrize("measure_length", [1000, 2000])
+    def test_channel_count_wins(self, tmp_path, measure_length):
+        """A measure length stating another channel count warns."""
+        value = struct.pack("<I", measure_length)
+        edits = [(self._value("MeasureLength[m]"), value)]
+        path = _edited(tmp_path / "grid.tdms", edits)
+        with pytest.warns(UserWarning, match=f"disagree.*gives {measure_length}"):
+            patch = dc.read(path)[0]
+        expected = dc.read(fetch(IDAS))[0]
+        assert patch.get_coord("distance") == expected.get_coord("distance")
+        np.testing.assert_array_equal(patch.data, expected.data)
+
+    def test_unstated_start_and_length(self, tmp_path):
+        """Without them the channels start at 0, and nothing disagrees."""
+        raw = Path(fetch(IDAS)).read_bytes()
+        for name in ("StartPosition[m]", "MeasureLength[m]"):
+            raw = raw.replace(*self._renamed(name))
+        path = tmp_path / "unstated.tdms"
+        path.write_bytes(raw)
+        distance = dc.read(path)[0].get_coord("distance")
+        expected = dc.read(fetch(IDAS))[0].get_coord("distance")
+        assert distance.min() == 0 and len(distance) == len(expected)
+        assert distance.step == expected.step
+
+    def test_unstated_spacing(self, tmp_path):
+        """Without the spacing there is no coordinate to build."""
+        raw = Path(fetch(IDAS)).read_bytes()
+        path = tmp_path / "no_spacing.tdms"
+        path.write_bytes(raw.replace(*self._renamed("SpatialResolution[m]")))
+        match = "header of a TDMS file stating version 4713.*no SpatialResolution"
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
 
 
 class TestTDMSUtils:
@@ -145,7 +296,7 @@ class TestTDMSUtils:
         monkeypatch.setattr(
             tdms_utils,
             "_get_distance_coord",
-            lambda _: tdms_utils.get_coord(start=0, stop=1, step=1, units="m"),
+            lambda *_: tdms_utils.get_coord(start=0, stop=1, step=1, units="m"),
         )
         with pytest.raises(Exception, match="Unsupported TDMS data type"):
             tdms_utils._get_all_attrs(fake)
@@ -160,6 +311,7 @@ class TestTDMSUtils:
             "raw_data_offset": 0,
             "n_channels": 1,
             "next_segment_offset": 12,
+            "order": "<",
         }
         attrs = {"tag": "example"}
         data = bytearray(52)
@@ -185,6 +337,7 @@ class TestTDMSUtils:
             "raw_data_offset": 0,
             "n_channels": 1,
             "next_segment_offset": 8,
+            "order": "<",
         }
         attrs = {"tag": "example"}
         data = np.array([1.0, 2.0], dtype=np.float32).tobytes()
@@ -228,6 +381,7 @@ class TestSampleOrder:
             "raw_data_offset": 0,
             "next_segment_offset": len(payload),
             "file_size": len(payload),
+            "order": "<",
         }
         start, stop = bounds
         with path.open("rb") as resource:
@@ -284,6 +438,7 @@ class TestMultiSegment:
             "file_size": 200,
             "n_channels": 1,
             "data_type": "float32",
+            "order": "<",
         }
         buffer = bytearray(200)
         buffer[52:68] = struct.pack("<QQ", 0xFFFFFFFFFFFFFFFF, 0)
@@ -399,8 +554,8 @@ class TestTDMSInterrogator:
         """A canonical property already named in the header survives filtering."""
         read_attr = tdms_utils._read_attr
 
-        def canonical_attr(resource):
-            name, value = read_attr(resource)
+        def canonical_attr(*args):
+            name, value = read_attr(*args)
             if name == "GaugeLength":
                 name = "gauge_length"
             return name, value
