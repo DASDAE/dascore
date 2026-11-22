@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.neubrex import NeubrexRFSV1
+from dascore.io.neubrex.core import NeubrexRFSPatchAttrs
 from dascore.utils.downloader import fetch
 
 
@@ -60,3 +61,15 @@ class TestNeubrexRFSAttrs:
                 attrs[name] = attrs.pop("WellboreID")
         attrs = NeubrexRFSV1().read(rfs_path)[0].attrs
         assert attrs.well_bore_id == "16B(78)-32"
+
+    def test_field_name(self, rfs_path):
+        """The file's field name is the one attr naming it."""
+        attrs = dict(NeubrexRFSV1().read(rfs_path)[0].attrs)
+        assert "filed_name" not in attrs
+        assert attrs["field_name"] == "Beaver"
+
+    def test_old_field_name_accepted(self):
+        """The name the field had before is taken as it."""
+        attrs = NeubrexRFSPatchAttrs(filed_name="Beaver")
+        assert attrs.field_name == "Beaver"
+        assert "filed_name" not in dict(attrs)

@@ -283,7 +283,6 @@ VENDOR_ATTRS = frozenset(
         "fiberbreak",
         "fiberlength",
         "field_name",
-        "filed_name",
         "folog_a1_software_version",
         "format_version",
         "freq_fiber",
