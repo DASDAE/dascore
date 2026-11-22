@@ -130,6 +130,29 @@ class TestSnapDims:
         with pytest.raises(CoordError, match="one position"):
             patch.snap_coords("x", step=1.0)
 
+    @pytest.mark.parametrize(
+        "labels",
+        [
+            np.full(3, 3.0),
+            np.full(3, np.datetime64("2020-01-01", "ns")),
+            np.datetime64("2020-01-01", "ns") + np.array([0, 1, 1, 2], "m8[ns]"),
+        ],
+    )
+    def test_labels_spanning_too_little_raise(self, labels):
+        """Labels spanning no range, or under a tick a sample, cannot spread."""
+        patch = _gapped_patch(get_coord(data=labels), dim="x")
+        with pytest.raises(CoordError, match="spread"):
+            patch.snap_coords("x")
+
+    def test_tick_a_sample_spreads(self):
+        """Times spanning one nanosecond a sample spread onto a 1 ns grid."""
+        start = np.datetime64("2020-01-01", "ns")
+        patch = _gapped_patch(
+            get_coord(data=start + np.array([0, 1, 1, 3], "m8[ns]")), dim="x"
+        )
+        out = patch.snap_coords("x").get_coord("x")
+        assert np.array_equal(out.values, start + np.arange(4).astype("m8[ns]"))
+
     def test_max_shift_raises(self):
         """A move larger than max_shift raises; a smaller one passes."""
         patch = _gapped_patch(get_coord(data=np.array([0.0, 1.3, 2.0])), dim="x")

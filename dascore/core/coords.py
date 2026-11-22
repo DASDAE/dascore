@@ -990,8 +990,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         `delta` (after - before) and `excess` (delta minus the expected local
         sampling interval, NaN when no sampling interval is defined).
 
-        A monotonic array reports every spacing which is not its declared
-        step (or its median spacing when it declares none); a segmented
+        A monotonic list of labels reports every spacing which is not its
+        median spacing, within float rounding for float labels; a segmented
         coordinate reports the seams between its runs; every other
         coordinate (a range, an unordered array, a partial or string
         coordinate) returns an empty dataframe. ``tolerance`` may also be a
@@ -1154,9 +1154,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if axes is None:
             new_shape = np.zeros(len(self.shape), dtype=np.int_)
         else:
-            assert np.max(axes) <= (len(self) - 1)
             new_shape = np.asarray(self.shape)
             for ind in iterate(axes):
+                if not -self.ndim <= ind < self.ndim:
+                    msg = f"Axis {ind} is not an axis of a {self.ndim}-D coordinate."
+                    raise CoordError(msg)
                 new_shape[ind] = 0
         data = np.empty(tuple(new_shape), dtype=self.dtype)
         return get_coord(data=data)
@@ -2750,17 +2752,23 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # --- indexing and selection
 
     def __getitem__(self, item):
-        if self._partial:
+        if (blank := self._blank) is not None:
             # Index the broadcast view without allocating the full coordinate.
             shape = self.values[item].shape
             if (
                 shape == self.shape
                 and isinstance(item, slice)
-                and item.step in (None, 1)
+                and (item.step in (None, 1) or len(self) == 1)
             ):
-                return self  # every sample, in order
+                return self  # every sample, in order (one sample is either way)
+            start = stop = None
+            if isinstance(item, slice) and self.ndim == 1 and shape[0]:
+                # a kept end sample keeps its label, wherever it now sits
+                ends = {len(self) - 1: blank.stop, 0: blank.start}
+                kept = range(len(self))[item]
+                start, stop = ends.get(kept[0]), ends.get(kept[-1])
             return self.__class__(
-                runs=(Blank(shape),), units=self.units, dtype=self.dtype
+                runs=(Blank(shape, start, stop),), units=self.units, dtype=self.dtype
             )
         if isinstance(item, int | np.integer) and self.ndim == 1:
             if item >= len(self) or item < -len(self):
@@ -3159,8 +3167,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if self.ndim != 1:
                 msg = "change_length only works on 1D coords."
                 raise CoordError(msg)
-            new = Blank((_validate_new_length(length),), blank.start)
-            return self._with_runs((new,))
+            if (length := _validate_new_length(length)) == len(self):
+                return self
+            return self._with_runs((Blank((length,), blank.start),))
         if (grid := self._grid) is None:
             return super().change_length(length)
         length = _validate_new_length(length)
@@ -3233,9 +3242,16 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                     dur = max_v.astype("M8[D]") - min_v.astype("M8[D]")
                 raw = float(dc.to_timedelta64(dur).astype(np.int64)) / (len(self) - 1)
                 step = np.timedelta64(int(np.round(raw)), "ns")
+                small = raw < 1  # judged before rounding: a step is a whole tick
             else:
                 step = dur / (len(self) - 1)
-            assert step > (_TD64_ZERO if is_timedelta64(step) else 0)
+                small = not step > 0
+            if small:
+                msg = (
+                    f"The labels span {dur}, too little to spread {len(self)} "
+                    "samples over evenly, so no step can be inferred to snap them."
+                )
+                raise CoordError(msg)
         if self.reverse_sorted:
             step = -step
             start, stop = max_v, min_v + step
@@ -3462,9 +3478,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             values = self.values
             diffs = _diffs(values)
             expected = self._expected_spacing()
+            off = diffs != expected
+            if values.dtype.kind == "f":  # spacings within float rounding agree
+                off = np.abs(diffs - expected) > _float_allowance(values, expected)
             return [
                 (int(i) + 1, values[i], values[i + 1], expected)
-                for i in np.flatnonzero(diffs != expected)
+                for i in np.flatnonzero(off)
             ]
         rows, offsets = [], self._run_offsets()
         for num in range(1, self.runs_count):

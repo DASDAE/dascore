@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from fractions import Fraction
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -311,6 +314,24 @@ class TestCoordManagerInputs:
         dims = "time", "distance"
         with pytest.raises(ValidationError):
             get_coord_manager(coords, dims=dims)
+
+    @pytest.mark.parametrize("value", [5.0, np.float64(5.0), np.datetime64(5, "s")])
+    @pytest.mark.parametrize("dims", [(), None])
+    def test_scalar_coord(self, cm_basic, value, dims):
+        """A scalar label makes a 0-d coordinate, as a 0-d array does."""
+        coord = cm_basic.update(x=(dims, value)).get_coord("x")
+        assert coord.shape == () and coord.values == value
+
+    def test_coord_unlike_its_value_raises(self, cm_basic):
+        """A value read as a coordinate of another shape is refused."""
+        with pytest.raises(CoordError, match="shape"):
+            cm_basic.update(x=((), np.int64(5)))
+
+    @pytest.mark.parametrize("name", ["time", "x"])
+    def test_scalar_coord_on_dimension_raises(self, cm_basic, name):
+        """One label cannot run along a dimension."""
+        with pytest.raises(CoordError, match="one label"):
+            cm_basic.update(**{name: ("time", 5.0)})
 
     def test_mappings_immutable(self, coord_manager):
         """Ensure the mappings are immutable."""
@@ -1260,6 +1281,22 @@ class TestDecimate:
         out, _ = cm.decimate(distance=2)
         assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
         assert (out.shape[ind] * 2) == cm.shape[ind]
+
+    def test_whole_float_factor(self, cm_basic):
+        """A whole float factor slices the data as it does the coordinates."""
+        out, slices = cm_basic.decimate(time=2.0)
+        data = np.empty(cm_basic.shape)[slices]
+        assert data.shape == out.shape
+        assert slices[cm_basic.get_axis("time")] == slice(None, None, 2)
+
+    @pytest.mark.parametrize(
+        "factor",
+        [2.5, Fraction(2 * 10**16 + 1, 10**16), Decimal("2.0000000000000001")],
+    )
+    def test_fractional_factor_raises(self, cm_basic, factor):
+        """A factor which is not exactly a whole number is refused, not truncated."""
+        with pytest.raises(ParameterError, match="whole number"):
+            cm_basic.decimate(time=factor)
 
 
 class TestSort:

@@ -117,7 +117,7 @@ filled = gapped.fill_gaps("x", fill_value=0)
 assert filled.shape == (12,) and filled.data.sum() == len(coord)
 ```
 
-[`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the boundaries between runs and, for a monotonic array, every spacing other than its declared step (or median spacing). Its `tolerance` is the excess over one step in coordinate units; [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) counts steps instead, as `waterfall(gap_factor=)` does. `Spool.chunk` judges seams between patches differently; see the [coordinate guidelines](../notes/coordinates.qmd).
+[`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the boundaries between runs and, for a monotonic list of labels, every spacing other than its median spacing, within float rounding for float labels. Its `tolerance` is the excess over one step in coordinate units; [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) counts steps instead, as `waterfall(gap_factor=)` does. `Spool.chunk` judges seams between patches differently; see the [coordinate guidelines](../notes/coordinates.qmd).
 
 ## Updating and units
 

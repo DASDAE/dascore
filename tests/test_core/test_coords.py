@@ -2004,6 +2004,19 @@ class TestArrayCoord:
         out3 = two_d_coord.empty(axes=0)
         assert out1.size == out2.size == out3.size == 0
 
+    def test_empty_axis_beyond_length(self):
+        """An axis is checked against the dimensions, not the first length."""
+        wide = get_coord(data=np.zeros((1, 5)))
+        assert wide.empty(axes=1).shape == (1, 0)
+        assert wide.empty(axes=-1).shape == (1, 0)
+
+    @pytest.mark.parametrize("axes", [3, -2, (0, 1)])
+    def test_empty_missing_axis_raises(self, axes):
+        """An axis the coordinate does not have is named in the error."""
+        coord = get_coord(start=0, stop=10, step=1)
+        with pytest.raises(CoordError, match="1-D"):
+            coord.empty(axes=axes)
+
 
 def _blank_after_end():
     """The time coordinate of a selection past a patch's end."""
@@ -2122,6 +2135,36 @@ class TestPartialCoord:
         coord = _blank_coord(shape=(4,), start=10, step=1)
         assert coord[:] is coord
         assert coord[::2].shape == (2,)
+
+    @pytest.mark.parametrize(
+        ("item", "ends"),
+        [
+            (slice(0, 5), (0.0, None)),
+            (slice(5, None), (None, 9.0)),
+            (slice(None, None, 3), (0.0, 9.0)),
+            (slice(None, None, -1), (9.0, 0.0)),
+            (slice(9, None), (9.0, 9.0)),
+            (slice(2, 7), (None, None)),
+        ],
+    )
+    def test_slice_keeps_known_ends(self, item, ends):
+        """A slice keeps the label of each end sample it keeps, where it lands."""
+        coord = get_coord(data=10, start=0.0, stop=9.0)
+        out = coord[item]
+        assert out._blank == Blank(coord.values[item].shape, *ends)
+
+    def test_change_length_keeps_ends(self):
+        """Its own length changes nothing; another length keeps the start."""
+        coord = get_coord(data=10, start=0.0, stop=9.0)
+        assert coord.change_length(10) is coord
+        out = coord.change_length(5)
+        assert out.min() == 0.0 and np.isnan(out.max())
+
+    @pytest.mark.parametrize("ends", [dict(start=9.0), dict(stop=9.0)])
+    def test_reversed_singleton_is_itself(self, ends):
+        """Reversing one sample changes nothing, whichever end it states."""
+        coord = get_coord(data=1, **ends)
+        assert coord[::-1] is coord
 
     def test_convert_units_widens_dtype(self):
         """An end which is no longer whole widens an integer dtype."""

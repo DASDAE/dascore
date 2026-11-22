@@ -1291,6 +1291,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
         assert len(kwargs) == 1
         (dim, value) = next(iter(kwargs.items()))
         assert dim in self.dims
+        # compared exactly, so no factor is truncated; text is read as a number
+        number = float(value) if isinstance(value, str) else value
+        if int(number) != number:
+            msg = f"A decimation factor must be a whole number, not {value}."
+            raise ParameterError(msg)
         dim_slice = slice(None, None, int(value))
         updates = {}
         for name, coord_dims in self.dim_map.items():
@@ -1299,10 +1304,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             coord = self.coord_map[name].index(dim_slice, axis=coord_dims.index(dim))
             updates[name] = (coord_dims, coord)
         new = self.update(**updates)
-        slices = tuple(
-            slice(None, None) if d != dim else slice(None, None, value)
-            for d in new.dims
-        )
+        slices = tuple(slice(None, None) if d != dim else dim_slice for d in new.dims)
         return new, slices
 
     @property
@@ -1636,6 +1638,9 @@ def _get_coord_dim_map(coords, dims):
             )
             raise CoordError(msg)
         cval = coord[1]
+        scalar = isinstance(cval, float | complex | str | np.generic)
+        if scalar and not isinstance(cval, np.integer):
+            cval = np.asarray(cval)  # one label, as a 0-d array is read
         # pull out any relevant info from attrs.
         coord_out = _get_coord(cval)
         # check if this is added a new dimension.
@@ -1643,7 +1648,17 @@ def _get_coord_dim_map(coords, dims):
             if newdname not in dims:
                 new_dims.append(newdname)
         expected_shape = (cval,) if isinstance(cval, int) else np.shape(cval)
-        assert coord_out.shape == expected_shape
+        if coord_out.shape != expected_shape:
+            msg = (
+                f"Coordinate {name!r} would have shape {coord_out.shape}, not "
+                f"the shape {expected_shape} of the value given for it."
+            )
+            raise CoordError(msg)
+        if dim_names and not coord_out.ndim:
+            msg = (
+                f"Coordinate {name!r} is one label, so it cannot run along {dim_names}."
+            )
+            raise CoordError(msg)
         return coord_out, dim_names
 
     assert not isinstance(coords, CoordManager)
