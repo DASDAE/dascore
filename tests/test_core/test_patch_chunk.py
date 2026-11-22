@@ -1272,6 +1272,19 @@ class TestMixedUnitChunk:
         # the file's own spelling survives, not the plan's normalized unit
         assert set(rows["_distance_units_source"]) == {"m", "ft"}
 
+    def test_third_rechunk_keeps_every_sample(self):
+        """A foot member's source range counts its samples in metres (#1657)."""
+        metres = dc.Patch(
+            data=np.arange(12.0).reshape(6, 2),
+            coords={"distance": np.arange(6.0), "time": np.arange(2.0)},
+            dims=("distance", "time"),
+        ).set_units(distance="m")
+        feet = metres.update_coords(distance_min=6.0).convert_units(distance="ft")
+        spool = dc.spool([metres, feet]).chunk(distance=3, keep_partial=True)
+        (out,) = spool.chunk(distance=4, keep_partial=True).chunk(distance=None)
+        assert np.allclose(out.get_array("distance"), np.arange(12.0))
+        assert np.allclose(out.data[:, 0], np.tile(np.arange(0.0, 12, 2), 2))
+
     def test_affine_quantity_length_is_a_delta(self):
         """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""
         degf = dc.get_example_patch().set_units(distance="degF")

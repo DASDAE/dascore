@@ -4075,8 +4075,8 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
 
     Tick labels are ``base + (phase + k * stride) // den``, float ones
     ``base + k * stride``, from the source's first label ``base``. A row with
-    no known origin, or a source counted in other units, has a zero stride.
-    ``width`` is the step's size; min/max are a whole row's own labels.
+    no known origin, or a view's source counted in other units, has a zero
+    stride. ``width`` is the step's size; min/max are a whole row's own labels.
     """
     low, high = rows[f"{name}_min"], rows[f"{name}_max"]
     blank = pd.Series(None, index=rows.index, dtype=object)
@@ -4084,16 +4084,20 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
     stated = rows.get(f"_{name}_units_source", blank)
     converted = stated.notna() & (stated != rows.get(f"_{name}_units"))
     first, known = low, whole
-    # a plan member keeps its source's range, a selected view its envelope
-    sources = [rows.get(f"_{name}_src_low")]
+    # a plan member keeps its source's range, in the source's units
+    sources = []
+    if (source := rows.get(f"_{name}_src_low")) is not None:
+        sources.append(_in_row_units(source, rows, name, converted))
+    # a selected view keeps its envelope
     if (envelope := rows.get(f"_{name}_source_envelope")) is not None:
         pick = lambda x: x.get(f"{name}_min") if isinstance(x, dict) else None  # noqa
         picked = envelope.map(pick)
         # integer labels hold a row stating no start as floats, as `_src_low` does
         lacking = low.dtype.kind in "iu" and picked.isna().any()
         sources.append(picked.astype(np.float64 if lacking else low.dtype))
-    for source in (x for x in sources if x is not None):
-        usable = source.notna() & ~converted
+        sources[-1] = sources[-1].where(~converted)
+    for source in sources:
+        usable = source.notna()
         first, known = first.where(known | ~usable, source), known | usable
     steps = rows[f"{name}_step"]
     base, steps = first.to_numpy(), steps.fillna(steps.iloc[:0].sum() * 0)
@@ -4114,6 +4118,19 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
             phase[on] = (min(num, 0) * (count - 1) + offset) % step_den
     own = (x.where(whole).to_numpy() for x in (low, high))
     return base, stride, den, phase, width, *own
+
+
+def _in_row_units(values: pd.Series, rows, name: str, converted) -> pd.Series:
+    """Values stated in each row's source units, in the row's own units."""
+    if not converted.any():
+        return values
+    assert values.dtype.kind == "f", "only numbers are stated per spelling"
+    out = values.copy()
+    pairs = rows.loc[converted, [f"_{name}_units_source", f"_{name}_units"]]
+    for (unit, target), index in pairs.groupby(list(pairs)).groups.items():
+        moved = values[index].to_numpy()
+        out[index] = convert_units(moved, to_units=target, from_units=unit)
+    return out
 
 
 def _lattice_label(x, lattice, before=False):
