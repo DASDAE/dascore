@@ -126,7 +126,9 @@ def _sample_count(fi, warn=True) -> int:
     """
     segyio = optional_import("segyio")
     stored = len(fi.samples)
-    counts = np.unique(fi.attributes(segyio.TraceField.TRACE_SAMPLE_COUNT)[:])
+    # Unsigned two-byte counts, which segyio returns signed (40000 as -25536).
+    stated = fi.attributes(segyio.TraceField.TRACE_SAMPLE_COUNT)[:] & 0xFFFF
+    counts = np.unique(stated)
     if len(counts) > 1:
         stated = ", ".join(str(x) for x in counts)
         msg = (

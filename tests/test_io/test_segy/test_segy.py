@@ -1,6 +1,7 @@
 """Tests for SEGY format."""
 
 import tracemalloc
+import warnings
 
 import numpy as np
 import pytest
@@ -331,6 +332,27 @@ class TestSegySampleCount:
         assert len(patch.get_coord("time")) == 15
         np.testing.assert_array_equal(patch.data, data[:15])
         np.testing.assert_array_equal(SegyV1_0().read_array(path), data[:15])
+
+    def test_counts_past_signed_range(self, tmp_path):
+        """A trace of more than 32767 samples reads them all."""
+        segyio = pytest.importorskip("segyio")
+        data = np.arange(2 * 40_000, dtype=np.float32).reshape(2, 40_000)
+        spec = segyio.spec()
+        spec.format, spec.samples, spec.tracecount = 5, range(40_000), 2
+        path = tmp_path / "long.sgy"
+        field = segyio.TraceField
+        header = {field.TRACE_SAMPLE_COUNT: 40_000, field.TRACE_SAMPLE_INTERVAL: 500}
+        header |= {field.YearDataRecorded: 2021, field.DayOfYear: 63}
+        with segyio.create(str(path), spec) as fi:
+            fi.bin.update({segyio.BinField.Interval: 500})
+            for num, trace in enumerate(data):
+                fi.header[num], fi.trace[num] = header, trace
+        fiber_io = SegyV1_0()
+        np.testing.assert_array_equal(fiber_io.read_array(path), data.T)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            patch = fiber_io.read(path)[0]
+        assert len(patch.get_coord("time")) == 40_000
 
     @pytest.mark.parametrize(
         "counts, match",
