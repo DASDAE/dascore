@@ -748,6 +748,7 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         trim_dims: tuple[str, ...] = (),
+        parent_backend=None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -781,6 +782,20 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
+        # the index the members' `_index_row` numbers rows of
+        self.parent_backend = parent_backend
+
+    def __getstate__(self) -> dict:
+        """
+        Pickle without the parent's index, which only equality consults.
+
+        An index held in memory cannot be pickled, and one in a file may
+        be gone where this is unpickled; without it a member a selection
+        trimmed before planning compares by metadata.
+        """
+        state = dict(self.__dict__)
+        state.pop("_stored_by_row", None)
+        return state | {"parent_backend": None}
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -1097,6 +1112,46 @@ class PlanResolver(PatchResolver):
                 patch = fill_on_grid(patch, dim, grid, merge, row.get("_dtype"))
         return self._stamp(patch, row)
 
+    def layout_data_id(self, output: int) -> str | None:
+        """
+        The data id an output of files loads with, reading nothing.
+
+        See `PatchAssembler.layout_data_id`. A member a selection trimmed
+        before planning is named from its parent's index row. None for any
+        output but a chunk's, one holding a member which is not a file, one
+        whose selections name a coordinate beside its dimensions (loading
+        derives that select), and one which fills or restates attrs.
+        """
+        fills = self.merge_kwargs.get("fill_value") is not None
+        if self.mode != "chunk" or self.stamped or fills:
+            return None
+        members = self.member_rows[self.member_rows["output_id"] == output]
+        paths = [_row_str(x) for x in members["source_path"]]
+        if any(is_memory_uri(x) or x.startswith(PLAN_SCHEME) for x in paths):
+            return None
+        named = {name for coords, _, _ in self.parent_residuals for name in coords}
+        if any(named - set(str(x).split(",")) for x in members["dims"]):
+            return None
+        members = _own_dtypes(members, self.dim)
+        assembler = self._assembler()
+        return assembler.layout_data_id(
+            assembler._df_to_dict_list(members), self._stored_rows(members)
+        )
+
+    def _stored_rows(self, members: pd.DataFrame) -> list:
+        """The parent's index row for the array each cut member is cut from."""
+        stored, rows = self._stored_by_row, _cut_index_rows(members)
+        return [None if pd.isna(x) else stored.get(int(x)) for x in rows]
+
+    @cached_property
+    def _stored_by_row(self) -> dict:
+        """The parent's index rows of every cut member, queried once."""
+        wanted = sorted({int(x) for x in _cut_index_rows(self.member_rows).dropna()})
+        if self.parent_backend is None or not wanted:
+            return {}
+        found = self.parent_backend.query(patch_rows=wanted)
+        return {x["_patch_row"]: x for x in found.to_dict("records")}
+
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
         Apply the attrs the outputs state about themselves, if any.
@@ -1114,6 +1169,19 @@ class PlanResolver(PatchResolver):
         if not self.stamped:
             return patch
         return patch.update_attrs(**{x: row[x] for x in self.stamped})
+
+
+def _cut_index_rows(members: pd.DataFrame) -> pd.Series:
+    """
+    The parent's index row of each member cut from its array, else null.
+
+    A member the plan cut, or one a selection cut before planning (which
+    states no id until it loads), is part of the array that row states.
+    """
+    none = pd.Series(None, index=members.index, dtype=object)
+    cut = members.get("_modified", none).fillna(False).astype(bool)
+    cut |= members.get("data_id", none).isna()
+    return members.get("_index_row", none).where(cut)
 
 
 def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
@@ -1390,6 +1458,7 @@ def derived_catalog(
         stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
         trim_dims=plan.trim_dims,
+        parent_backend=None if parent is None else parent.backend,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for

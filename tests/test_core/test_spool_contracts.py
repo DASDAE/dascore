@@ -17,6 +17,8 @@ from dascore.compat import UPath
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
+from dascore.utils.identity import window_data_id
+from dascore.utils.patch_assembly import stored_window_id
 
 
 @pytest.fixture(scope="module")
@@ -133,14 +135,55 @@ class TestEqualityComparesLoads:
             **window
         )
 
+    @pytest.fixture(params=[6.0, 6.25])
+    def adjacent(self, ones, tmp_path, request):
+        """Two files, the second starting a step after the first ends or near it."""
+        patches = [ones, ones.update_coords(time_min=request.param) * 2]
+        path = dc.examples.spool_to_directory(dc.spool(patches), path=tmp_path / "a")
+        return dc.spool(path).update(progress=None)
+
     @pytest.mark.parametrize("on_disk", [True, False])
     def test_view_equals_its_loaded_result(self, ones, directories, on_disk):
         """A selection or plan equals the patches it loads."""
         source = directories[0] if on_disk else dc.spool([ones])
-        for view in (source.select(time=(1, 4)), source.chunk(time=3)):
+        selected = source.select(time=(1, 4))
+        for view in (selected, source.chunk(time=3), selected.chunk(time=2)):
             assert view == view.load()
             assert view.load() == view
             assert view == dc.spool(list(view))
+
+    def test_merged_files_equal_their_loaded_result(self, adjacent):
+        """What the rows say a merge of files loads is what it loads."""
+        # the wider max_shift puts the late file on the first one's grid
+        kwargs = {"max_shift": 0.3}
+        for view in (adjacent.chunk(time=None, **kwargs), adjacent.chunk(time=4)):
+            assert view == dc.spool(list(view))
+            assert view != dc.spool([x * 2 for x in view])
+
+    def test_files_against_patches_of_other_data(self, ones, directories, no_reads):
+        """A selection or plan of files names what it loads, as a file row does."""
+        on_disk, _ = directories
+        window = {"time": (1, 4)}
+        assert on_disk.select(**window) != dc.spool([ones.select(**window) * 2])
+        doubled = [x * 2 for x in dc.spool([ones]).chunk(time=3)]
+        assert on_disk.chunk(time=3) != dc.spool(doubled)
+
+    def test_plans_loading_alike(self, directories, no_reads):
+        """Plans of files which load the same samples the same way are equal."""
+        ones, twos = directories
+        window = {"time": (1, 4)}
+        selected = ones.select(**window)
+        assert selected == selected.chunk(time=None)
+        assert selected.chunk(time=None) == selected
+        assert selected != twos.select(**window).chunk(time=None)
+
+    def test_plan_of_selected_files(self, directories, no_reads):
+        """A member a selection trimmed is its file's id and window."""
+        ones, twos = directories
+        window = {"time": (1, 4)}
+        planned = ones.select(**window).chunk(time=2)
+        assert planned == ones.select(**window).chunk(time=2)
+        assert planned != twos.select(**window).chunk(time=2)
 
     def test_spools_of_same_files(self, directories, tmp_path, no_reads):
         """Spools over the same files compare their data ids."""
@@ -167,12 +210,14 @@ class TestEqualityComparesLoads:
         assert dc.spool(path) == dc.spool([ones])
         assert dc.spool(path) != dc.spool([ones * 2])
 
-    def test_comparing_reads_no_file(self, ones, directories, no_reads):
+    def test_comparing_reads_no_file(self, ones, directories, tmp_path, no_reads):
         """Neither files nor plans over them are read to compare."""
         on_disk, _ = directories
         assert on_disk == dc.spool([ones])
         view = on_disk.select(time=(1, 4))
-        assert view == dc.spool([ones.select(time=(1, 4))])
+        # the window of the file, which a selection in memory does not name
+        read = dc.read(tmp_path / "ones" / "patch.h5")[0].select(time=(1, 4))
+        assert view == dc.spool([read])
         assert on_disk.chunk(time=3) == on_disk.chunk(time=3)
 
     @pytest.mark.parametrize("on_disk", [True, False])
@@ -214,6 +259,79 @@ class TestEqualityComparesLoads:
         routes = {prefix: object() for prefix in resolver.plan_entries()}
         monkeypatch.setattr(resolver, "plan_entries", lambda: routes)
         assert chunked == dc.spool([ones * 2]).chunk(time=3)
+
+    @pytest.mark.parametrize("case", ["data_units", "uneven", "time_units"])
+    def test_files_the_rows_cannot_place(self, ones, tmp_path, case):
+        """Where the rows cannot name what a plan of files loads, it equals it."""
+        later, kwargs = ones.update_coords(time_min=6.0), {}
+        if case == "data_units":  # loading converts the later member
+            members = [
+                ones.update_attrs(data_units="m"),
+                later.update_attrs(data_units="mm"),
+            ]
+            kwargs = {"conflict": "keep_first"}
+        elif case == "uneven":  # no step places the samples
+            uneven = ones.update_coords(time=np.array([0.0, 1, 2, 4, 5, 7]))
+            members = [uneven, uneven.update_coords(time_min=8.0)]
+        else:  # the plan counts both in one unit
+            milli = later.update_coords(time=later.get_array("time") * 1000)
+            members = [ones.set_units(time="s"), milli.set_units(time="ms")]
+        path = dc.examples.spool_to_directory(dc.spool(members), path=tmp_path / case)
+        files = dc.spool(path).update(progress=None)
+        view = files.chunk(time=None, **kwargs)
+        assert view == dc.spool(list(view))
+
+    def test_a_selection_on_a_rider(self, ones, tmp_path, no_reads):
+        """Selecting on a coordinate beside the dimensions is a select, not a window."""
+        rider = ones.update_coords(lat=("distance", np.array([0.5, 1.5])))
+        spools = []
+        for name, patch in (("ones", rider), ("twos", rider * 2)):
+            dc.write(patch, tmp_path / name / "patch.h5", "dasdae")
+            spools.append(dc.spool(tmp_path / name).update(progress=None))
+        ones, twos, again = (
+            x.select(lat=(0, 1))
+            for x in (*spools, dc.spool(tmp_path / "ones").update(progress=None))
+        )
+        # a selection compares its source; a plan over one, its metadata
+        assert ones == again and ones != twos
+        assert ones.chunk(time=3) == again.chunk(time=3)
+
+
+class TestStoredWindowId:
+    """The data id of the samples a trimmed row keeps, from the index rows alone."""
+
+    @pytest.fixture()
+    def stored(self):
+        """The index's row for a ten-sample array."""
+        return {
+            "source_path": "a.h5",
+            "source_patch_key": "",
+            "dims": "time",
+            "data_id": "x" * 32,
+            "time_min": 0.0,
+            "time_max": 9.0,
+            "time_step": 1.0,
+        }
+
+    def test_a_window(self, stored):
+        """A window is the array's id and the samples kept; all of it is the array."""
+        row = {**stored, "source_path": "/root/a.h5", "time_min": 2.0, "time_max": 4.0}
+        assert stored_window_id(row, stored) == window_data_id("x" * 32, [(2, 5)], [10])
+        assert stored_window_id(stored, stored) == "x" * 32
+
+    @pytest.mark.parametrize(
+        ("row", "whole"),
+        [
+            ({}, {"data_id": None}),  # a moved source has its id cleared
+            ({"source_path": "b.h5"}, {}),  # another file
+            ({"_time_units": "ms"}, {}),  # another unit
+            ({}, {"time_step": np.nan}),  # no step places the samples
+            ({"time_min": 4.5, "time_max": 4.6}, {}),  # no sample kept
+        ],
+    )
+    def test_none_where_the_rows_cannot_say(self, stored, row, whole):
+        """The rows name no window rather than a wrong one."""
+        assert stored_window_id({**stored, **row}, {**stored, **whole}) is None
 
 
 class TestUpdateContract:

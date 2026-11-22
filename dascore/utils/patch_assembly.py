@@ -55,7 +55,9 @@ from dascore.utils.attrs import (
 from dascore.utils.chunk import _READ_PAD
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
 from dascore.utils.identity import (
+    derive,
     ids_enabled,
+    merge_operation,
     operation_context,
     operation_id,
     stamp,
@@ -402,6 +404,61 @@ def _units_converted(row: Mapping, dim: str) -> bool:
     """Whether the row's envelope was converted from the file's own units."""
     source_units = row.get(f"_{dim}_units_source")
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
+
+
+def stored_window_id(row: Mapping, stored: Mapping) -> str | None:
+    """
+    The data id of the samples a trimmed row keeps of its stored array.
+
+    Worked out from the rows alone, as loading names a window (see
+    [`window_data_id`](`dascore.utils.identity.window_data_id`)): `stored`
+    is the index's row for the whole array, and the samples of each of its
+    ranges inside the row's are the window. None where the two rows name
+    different arrays, a range is not evenly sampled or is in other units,
+    or the row keeps none of a range's samples.
+    """
+    found = _stored_window(row, stored)
+    return None if found is None else found[0]
+
+
+def _stored_window(row: Mapping, stored: Mapping):
+    """`stored_window_id`, and the coordinates of the samples the row keeps."""
+    base, dims = stored.get("data_id"), stored.get("dims")
+    if _is_missing(base) or not dims or row.get("dims") != dims:
+        return None
+    if not _same_array(row, stored):
+        return None
+    windows, extent, coords = [], [], {}
+    for dim in str(dims).split(","):
+        units = {_stated_unit(x.get(f"_{dim}_units")) for x in (row, stored)}
+        if _units_converted(row, dim) or len(units) > 1:
+            return None
+        whole = coord_from_row(stored, dim, units=units.pop())
+        bounds = _row_bounds(row, dim)
+        if whole is None or bounds is None:
+            return None
+        kept, index = whole.select(bounds)  # one run: the grid is even
+        if not len(kept):
+            return None
+        windows.append(index.indices(len(whole))[:2])
+        extent.append(len(whole))
+        coords[dim] = coord_at_stored_unit(kept, stored, dim) or kept
+    return window_data_id(str(base), windows, extent), coords
+
+
+def _same_array(row: Mapping, stored: Mapping) -> bool:
+    """Whether a row names the array an index row does; its path may be rooted."""
+    path, named = (
+        str(x.get("source_path") or "").replace("\\", "/") for x in (row, stored)
+    )
+    keys = [x.get("source_patch_key") or "" for x in (row, stored)]
+    located = bool(named) and (path == named or path.endswith(f"/{named}"))
+    return located and keys[0] == keys[1]
+
+
+def _stated_unit(value) -> str | None:
+    """A row's units for a range, None where it states none."""
+    return None if _is_null(value) or value == "" else str(value)
 
 
 # What a source's own range is called beside a member's trim of it. Not
@@ -955,6 +1012,65 @@ class PatchAssembler:
             # that window's id rather than the whole array's
             meta.attrs = meta.attrs.update(data_id=source.data_id)
         return source
+
+    def layout_data_id(self, rows, stored=None) -> str | None:
+        """
+        The data id loading gives one output, from its member rows alone.
+
+        Nothing is read. Each member is its array's id, or the window a
+        trim keeps of it (`stored_window_id`), laid out and put on a grid
+        as assembly does. `stored` holds, beside each row, the index's row
+        for the array the member is cut from, which a member row trimmed
+        before planning no longer states itself. None where loading could
+        name the output otherwise: a member converted to other units, or
+        one the rows cannot place.
+        """
+        dim, stored = self.plan_dim, stored or [None] * len(rows)
+        frame = pd.DataFrame(list(rows))
+        if len({_stated_unit(x.get("data_units")) for x in rows}) > 1:
+            return None  # loading converts the later members
+        descending = bool((to_float(frame[f"{dim}_step"].values) < 0).all())
+        order = frame[f"{dim}_min"].sort_values(ascending=not descending, kind="stable")
+        members = [self._member_layout(rows[x], stored[x]) for x in order.index]
+        if None in members:
+            return None
+        ids, coords = zip(*members, strict=True)
+        data_id = ids[0]
+        if len(ids) > 1:
+            offsets = [0, *accumulate(len(x) for x in coords)][:-1]
+            conflict = self.merge_kwargs.get("conflict") or "raise"
+            data_id = derive(ids, merge_operation(merge_layout(dim, offsets, conflict)))
+        first = rows[order.index[0]]
+        if not isinstance(first.get(f"_{dim}_stretch"), tuple):
+            return data_id  # only a stretch's grid moves labels
+        each = [get_coord_manager({dim: x}, dims=(dim,)) for x in coords]
+        joined = _get_merged_coord(dim, each)
+        attrs = dc.PatchAttrs(data_id=data_id)
+        return _regridded(joined, attrs, dim, first)[1].data_id
+
+    def _member_layout(self, row: Mapping, stored: Mapping | None):
+        """A member's id and its labels along the plan's dimension, or None."""
+        dim, data_id = self.plan_dim, row.get("data_id")
+        if row.get("_modified") or _is_missing(data_id):
+            whole = self._whole_source(row) or stored
+            found = None if whole is None else _stored_window(row, whole)
+            # the array's own labels: an envelope only rounds them
+            return None if found is None else (found[0], found[1][dim])
+        if any(_units_converted(row, x) for x in str(row["dims"]).split(",")):
+            return None
+        units = _stated_unit(row.get(f"_{dim}_units"))
+        coord = coord_from_row(row, dim, units=units)
+        if coord is None:
+            return None
+        return data_id, coord_at_stored_unit(coord, row, dim) or coord
+
+    def _whole_source(self, row: Mapping) -> Mapping | None:
+        """The row for the whole array a cut member's row trims, if it says."""
+        ends = [source_range_column(self.plan_dim, x) for x in SOURCE_RANGE_ENDS]
+        if any(_is_null(row.get(x)) for x in ends) or self.trim_dims:
+            return None
+        names = [f"{self.plan_dim}_{x}" for x in ("min", "max", "step")]
+        return {**row, **{x: row[y] for x, y in zip(names, ends, strict=True)}}
 
     def describe_output(self, rows, units=None) -> OutputMeta | None:
         """
