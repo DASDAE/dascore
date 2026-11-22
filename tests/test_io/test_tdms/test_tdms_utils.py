@@ -183,6 +183,55 @@ class TestByteOrder:
         assert patch.attrs.update(**ids) == expected.attrs.update(**ids)
 
 
+class TestDistanceGrid:
+    """The channel count sets the distance coordinate's length."""
+
+    @staticmethod
+    def _value(name):
+        """The offset of a property's value in the example file."""
+        name = name.encode()
+        # the name is followed by its four byte type
+        return Path(fetch(IDAS)).read_bytes().index(name) + len(name) + 4
+
+    @staticmethod
+    def _renamed(name):
+        """An edit hiding a property, its name changed in place."""
+        return name.encode(), name.replace("[m]", "[x]").encode()
+
+    @pytest.mark.parametrize("measure_length", [1000, 2000])
+    def test_channel_count_wins(self, tmp_path, measure_length):
+        """A measure length stating another channel count warns."""
+        value = struct.pack("<I", measure_length)
+        edits = [(self._value("MeasureLength[m]"), value)]
+        path = _edited(tmp_path / "grid.tdms", edits)
+        with pytest.warns(UserWarning, match=f"disagree.*gives {measure_length}"):
+            patch = dc.read(path)[0]
+        expected = dc.read(fetch(IDAS))[0]
+        assert patch.get_coord("distance") == expected.get_coord("distance")
+        np.testing.assert_array_equal(patch.data, expected.data)
+
+    def test_unstated_start_and_length(self, tmp_path):
+        """Without them the channels start at 0, and nothing disagrees."""
+        raw = Path(fetch(IDAS)).read_bytes()
+        for name in ("StartPosition[m]", "MeasureLength[m]"):
+            raw = raw.replace(*self._renamed(name))
+        path = tmp_path / "unstated.tdms"
+        path.write_bytes(raw)
+        distance = dc.read(path)[0].get_coord("distance")
+        expected = dc.read(fetch(IDAS))[0].get_coord("distance")
+        assert distance.min() == 0 and len(distance) == len(expected)
+        assert distance.step == expected.step
+
+    def test_unstated_spacing(self, tmp_path):
+        """Without the spacing there is no coordinate to build."""
+        raw = Path(fetch(IDAS)).read_bytes()
+        path = tmp_path / "no_spacing.tdms"
+        path.write_bytes(raw.replace(*self._renamed("SpatialResolution[m]")))
+        match = "header of a TDMS file stating version 4713.*no SpatialResolution"
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
+
+
 class TestTDMSUtils:
     """Tests for TDMS utility functions."""
 
@@ -247,7 +296,7 @@ class TestTDMSUtils:
         monkeypatch.setattr(
             tdms_utils,
             "_get_distance_coord",
-            lambda _: tdms_utils.get_coord(start=0, stop=1, step=1, units="m"),
+            lambda *_: tdms_utils.get_coord(start=0, stop=1, step=1, units="m"),
         )
         with pytest.raises(Exception, match="Unsupported TDMS data type"):
             tdms_utils._get_all_attrs(fake)

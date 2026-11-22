@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import mmap
 import struct
+import warnings
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any, Literal
@@ -82,6 +83,7 @@ BIG_ENDIAN_MASK = 0b01000000
 READ_VERSION = 4713
 # What parsing a layout the reader does not follow raises.
 _PARSE_ERRORS = (
+    InvalidFiberFileError,
     struct.error,
     KeyError,
     IndexError,
@@ -185,19 +187,40 @@ def _read_attr(tdms_file, order):
     return name, value  # data_type, value
 
 
-def _get_distance_coord(attr):
-    """Get distance coordinate from attribute."""
+def _get_distance_coord(attr, n_channels):
+    """
+    Get the distance coordinate of the file's channels.
+
+    The channels start at StartPosition[m] (0 if unstated), spaced by
+    SpatialResolution[m] times the Fibre Length Multiplier. The channel
+    count wins over a MeasureLength[m] stating another, with a warning.
+    """
     # Note: some TDMS files actually have "Start Distance (m)" and
     # "Stop Distance (m)" fields, but not all. These also don't really
     # match the distance calculated below. We need to figure out why and what
     # is the correct way to do this, but this seems safe for now.
+    spacing = ("SpatialResolution[m]", "Fibre Length Multiplier")
+    if missing := [x for x in spacing if x not in attr]:
+        msg = (
+            f"The TDMS file states no {' or '.join(missing)}, so the spacing "
+            "of its distance coordinate is unknown."
+        )
+        raise InvalidFiberFileError(msg)
     multiplier = attr["Fibre Length Multiplier"]
-    total_length = attr["MeasureLength[m]"] * multiplier
-    start = attr["StartPosition[m]"]
+    start = attr.get("StartPosition[m]", 0)
     step = attr["SpatialResolution[m]"] * multiplier
-    stop = start + total_length
-    d_coord = get_coord(start=start, stop=stop, step=step, units="m")
-    return d_coord
+    if (length := attr.get("MeasureLength[m]")) is not None:
+        stop = start + length * multiplier
+        stated = len(get_coord(start=start, stop=stop, step=step))
+        if stated != n_channels:
+            msg = (
+                f"The TDMS file's properties disagree with its {n_channels} "
+                f"channels: MeasureLength[m] {length} at SpatialResolution[m] "
+                f"{attr['SpatialResolution[m]']} gives {stated}. The distance "
+                f"coordinate has {n_channels} labels at the stated spacing."
+            )
+            warnings.warn(msg, UserWarning)
+    return get_coord(start=start, step=step, shape=(n_channels,), units="m")
 
 
 def _iter_segment_bounds(tdms_file, fileinfo, lead_in_length=28):
@@ -293,7 +316,7 @@ def _read_header(tdms_file, fileinfo, lead_in_length):
     out["interrogator.name"] = out.get("SystemInfomation.OS.HostName")
     drop_blank_attrs(out, ("interrogator.name",))
     # Rename some attributes to preferred names
-    d_coord = _get_distance_coord(out)
+    d_coord = _get_distance_coord(out, n_channels)
     fileinfo["end_of_properties_offset"] = tdms_file.tell()
     tdms_file.seek(fileinfo["end_of_properties_offset"], 0)
     # skip over Group Information:
