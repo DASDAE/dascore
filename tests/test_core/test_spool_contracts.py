@@ -204,10 +204,11 @@ class TestChunkPlanContract:
             return spool.chunk(time=None)
 
         selected = spool.select(**distance)
+        windows = spool.chunk(time=3 * step, keep_partial=True)
         chains = (
             chunk(selected, 3),
             chunk(selected, 3, 5),
-            chunk(chunk(spool, 3).select(**distance), 5, 2),
+            chunk(windows.select(**distance), 5, 2),
         )
         for chunked in chains:
             (patch,) = chunked
@@ -241,6 +242,20 @@ class TestChunkPlanContract:
         chunked = planned.select(distance=(1, 1)).chunk(time=3, keep_partial=True)
         (out,) = chunked.chunk(time=None)
         assert np.array_equal(out.get_array("time"), np.arange(3.0, 11.0))
+
+    def test_replan_after_other_selection_integer_labels(self):
+        """Integer labels chunk when only some rows state where their grid starts."""
+        patch = dc.Patch(
+            data=np.arange(24.0).reshape(2, 12),
+            coords={"distance": np.arange(2), "time": np.arange(12)},
+            dims=("distance", "time"),
+        )
+        planned = dc.spool([patch]).chunk(distance=None)
+        later = dc.spool([patch.update_coords(time_min=12)])
+        for spool, count in ((planned, 12), (planned + later, 24)):
+            chunked = spool.select(distance=(1, 1)).chunk(time=3, keep_partial=True)
+            times = np.concatenate([p.get_array("time") for p in chunked])
+            assert np.array_equal(times, np.arange(count))
 
     def test_planned_state_is_derived(self, patches):
         """A chunked spool is a fresh derived catalog, not a mode flag."""

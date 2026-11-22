@@ -3918,7 +3918,10 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
     sources = [rows.get(f"_{name}_src_low")]
     if (envelope := rows.get(f"_{name}_source_envelope")) is not None:
         pick = lambda x: x.get(f"{name}_min") if isinstance(x, dict) else None  # noqa
-        sources.append(envelope.map(pick).astype(low.dtype))
+        picked = envelope.map(pick)
+        # integer labels hold a row stating no start as floats, as `_src_low` does
+        lacking = low.dtype.kind in "iu" and picked.isna().any()
+        sources.append(picked.astype(np.float64 if lacking else low.dtype))
     for source in (x for x in sources if x is not None):
         usable = source.notna() & ~converted
         first, known = first.where(known | ~usable, source), known | usable
