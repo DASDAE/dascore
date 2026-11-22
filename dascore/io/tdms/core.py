@@ -14,6 +14,7 @@ from .utils import (
     _get_all_attrs,
     _get_fileinfo,
     _get_version_str,
+    _naming_version,
     _read_sample_range,
 )
 
@@ -29,9 +30,15 @@ class TDMSFormatterV4713(FiberIO):
     lead_in_length = 28
 
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
-        """Return the file version when the resource matches this family."""
+        """
+        Return this reader's version for any TDMS file.
+
+        The reader follows version 4713 but is tried on files stating any
+        version, since the parts it reads may not differ; where they do,
+        the read names the version the file states.
+        """
         try:
-            return _get_version_str(resource) or None
+            return self.version if _get_version_str(resource) else None
         except Exception:
             return None
 
@@ -85,5 +92,7 @@ class TDMSFormatterV4713(FiberIO):
     def _read_array(resource, fileinfo, shape, windows):
         """Decode a window using an already parsed header."""
         time_slice, dist_slice = windows_to_slices(windows, shape)
-        data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
+        with _naming_version(fileinfo["version"], "data"):
+            start, stop = time_slice.start, time_slice.stop
+            data = _read_sample_range(resource, fileinfo, start, stop)
         return data[:, dist_slice]

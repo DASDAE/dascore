@@ -12,13 +12,24 @@ import pytest
 
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
-from dascore.exceptions import RemoteCacheError
+from dascore.exceptions import InvalidFiberFileError, RemoteCacheError
 from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
 from dascore.io.tdms.core import TDMSFormatterV4713
 from dascore.io.tdms.utils import parse_time_stamp, type_not_supported
 from dascore.utils.downloader import fetch
 from dascore.utils.io import IOResourceManager, LocalBinaryReader
+
+IDAS = "iDAS005_tdms_example.626.tdms"
+
+
+def _edited(path, edits=(), size=None):
+    """Write the iDAS005 example to path, bytes replaced at offsets, cut to size."""
+    raw = bytearray(Path(fetch(IDAS)).read_bytes())
+    for offset, value in edits:
+        raw[offset : offset + len(value)] = value
+    path.write_bytes(raw[:size])
+    return path
 
 
 class _FakeTDMSFile(io.BytesIO):
@@ -79,6 +90,39 @@ class TestReadWork:
             assert not resource.closed
         assert patch.shape == metadata.shape
         assert patch.dtype == metadata.dtype
+
+
+class TestStatedVersion:
+    """Files stating another TDMS version are read where the layout allows."""
+
+    version = ((8, struct.pack("<i", 4712)),)
+
+    def test_read(self, tmp_path):
+        """The parts the reader uses are the same, so the file reads."""
+        path = _edited(tmp_path / "v4712.tdms", self.version)
+        assert dc.get_format(path) == ("TDMS", "4713")
+        patch, expected = dc.read(path)[0], dc.read(fetch(IDAS))[0]
+        assert patch.coords == expected.coords
+        np.testing.assert_array_equal(patch.data, expected.data)
+
+    def test_header_failure_names_version(self, tmp_path):
+        """A header the reader cannot parse names the version and the part."""
+        path = _edited(tmp_path / "cut.tdms", self.version, size=200)
+        match = "header of a TDMS file stating version 4712.*follows version 4713"
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
+
+    def test_data_failure_names_version(self, tmp_path):
+        """Data the reader cannot lay out names the version and the part."""
+        with open(fetch(IDAS), "rb") as fi:
+            tdms_utils._get_all_attrs(fi)
+            # the chunk size follows the array dimension
+            chunk_size = fi.tell() + 4
+        edits = [*self.version, (chunk_size, struct.pack("<i", 0))]
+        path = _edited(tmp_path / "chunk.tdms", edits)
+        match = "data of a TDMS file stating version 4712.*ZeroDivisionError"
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
 
 
 class TestTDMSUtils:

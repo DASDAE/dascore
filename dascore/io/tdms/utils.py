@@ -6,11 +6,13 @@ import datetime
 import mmap
 import struct
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any, Literal
 
 import numpy as np
 
 from dascore.core.coords import get_coord
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import drop_blank_attrs, step_from_rate
 from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64
@@ -76,6 +78,18 @@ TDS_READ_VAL: dict[str, Callable] = dict(
 )
 
 DECIMATE_MASK = 0b00100000
+# The version the reader follows; a file may state another.
+READ_VERSION = 4713
+# What parsing a layout the reader does not follow raises.
+_PARSE_ERRORS = (
+    struct.error,
+    KeyError,
+    IndexError,
+    TypeError,
+    ValueError,
+    NotImplementedError,
+    ArithmeticError,
+)
 FILEINFO_NAMES = (
     "file_tag",
     "toc",
@@ -112,6 +126,20 @@ def _get_version_str(tdms_file, lead_in_length=28) -> str | Literal[False]:
         return version_str
     else:
         return False
+
+
+@contextmanager
+def _naming_version(version, part):
+    """Raise a failure to parse `part` as one naming the file's TDMS version."""
+    try:
+        yield
+    except _PARSE_ERRORS as exc:
+        msg = (
+            f"Failed to read the {part} of a TDMS file stating version "
+            f"{version} (DASCore's reader follows version {READ_VERSION}): "
+            f"{type(exc).__name__}: {exc}"
+        )
+        raise InvalidFiberFileError(msg) from exc
 
 
 def _get_time_coord(attrs, num_samps):
@@ -216,6 +244,12 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     # Make sure next segment does not go beyond file capacity
     if fileinfo["next_segment_offset"] > fileinfo["file_size"]:
         fileinfo["next_segment_offset"] = fileinfo["file_size"]
+    with _naming_version(fileinfo["version"], "header"):
+        return _read_header(tdms_file, fileinfo, lead_in_length), fileinfo
+
+
+def _read_header(tdms_file, fileinfo, lead_in_length):
+    """Read the properties and data layout following the lead-in."""
     # navigate pointer to immediately after lead in data
     tdms_file.seek(lead_in_length, 0)
     # Read number of channels
@@ -253,21 +287,23 @@ def _get_all_attrs(tdms_file, lead_in_length=28):
     tdms_file.seek(var + 4, 1)
     fileinfo["data_type"] = TDS_DATA_TYPE.get(struct.unpack("<i", tdms_file.read(4))[0])
     if fileinfo["data_type"] not in ("int16", "float32"):
-        raise Exception(f"Unsupported TDMS data type: {fileinfo['data_type']}")
+        msg = f"Unsupported TDMS data type: {fileinfo['data_type']}"
+        raise NotImplementedError(msg)
     # Add up what each segment holds, which for a one-segment file is the
     # whole file after the header.
     numofsamples = _get_sample_count(tdms_file, fileinfo, lead_in_length)
     t_coord = _get_time_coord(out, numofsamples)
     out["coords"] = {"time": t_coord, "distance": d_coord}
-    return out, fileinfo
+    return out
 
 
 def _get_fileinfo(tdms_file, lead_in_length=28):
     """Get info about file not included in the attributes."""
     attrs, fileinfo = _get_all_attrs(tdms_file)
-    # Read Dimension of the raw data array (has to be 1):
-    _ = struct.unpack("<i", tdms_file.read(4))[0]
-    fileinfo["chunk_size"] = struct.unpack("<i", tdms_file.read(4))[0]
+    with _naming_version(fileinfo["version"], "header"):
+        # Read Dimension of the raw data array (has to be 1):
+        _ = struct.unpack("<i", tdms_file.read(4))[0]
+        fileinfo["chunk_size"] = struct.unpack("<i", tdms_file.read(4))[0]
     return fileinfo, attrs
 
 
