@@ -201,11 +201,21 @@ class TestRead:
         time = dc.read(path)[0].get_coord("time")
         assert time.min() == np.timedelta64(-1500, "ms")
 
-    def test_year_out_of_range(self, tmp_path):
-        """A reference year nanosecond times cannot hold raises."""
-        path = write_sac(tmp_path / "x.sac", nzyear=3000)
-        with pytest.raises(InvalidFiberFileError, match="3000"):
+    @pytest.mark.parametrize(
+        "fields",
+        [{"nzyear": 3000}, {"nzjday": 1, "b": 8e9}, {"nzmsec": None, "b": -1e10}],
+    )
+    def test_start_out_of_range(self, tmp_path, fields):
+        """A start nanosecond times cannot hold raises, rather than wrapping."""
+        path = write_sac(tmp_path / "x.sac", **fields)
+        with pytest.raises(InvalidFiberFileError, match="out of range"):
             dc.read(path)
+
+    def test_reference_rolls_over(self, tmp_path):
+        """Reference fields past their range add up, as SAC adds them."""
+        path = write_sac(tmp_path / "x.sac", nzjday=33, nzhour=28, nzmsec=1789)
+        time = dc.read(path)[0].get_coord("time")
+        assert time.min() == _START + np.timedelta64(1, "s")
 
     @pytest.mark.parametrize(
         "fields", [{"iftype": 2}, {"iftype": 4, "leven": 0}, {"leven": 0}]

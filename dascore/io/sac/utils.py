@@ -140,20 +140,22 @@ def _get_start(header: _Header) -> np.datetime64 | np.timedelta64:
     Return the first sample's time: the reference time plus B.
 
     The reference fields are added up, so a value past its range rolls over.
-    Without a reference time, the start is B as an offset.
+    Without a reference time, the start is B as an offset. The sum is taken in
+    integer nanoseconds, since numpy wraps a time past its range silently.
     """
     begin = 0 if header.begin == _UNDEFINED else _exact(header.begin)
-    offset = np.timedelta64(round(begin * ONE_BILLION), "ns")
-    if _UNDEFINED in header.reference:
-        return offset
-    year, day, hour, minute, second, msec = header.reference
-    # datetime64[ns] holds these years only; others would wrap silently.
-    if not 1678 <= year <= 2261:
-        msg = f"The SAC reference year {year} is outside the years DASCore holds."
+    ns = round(begin * ONE_BILLION)
+    relative = _UNDEFINED in header.reference
+    if not relative:
+        year, day, hour, minute, second, msec = header.reference
+        days = np.datetime64(year - 1970, "Y").astype("datetime64[D]").astype(int)
+        seconds = (((int(days) + day - 1) * 24 + hour) * 60 + minute) * 60 + second
+        ns += (seconds * 1000 + msec) * 1_000_000
+    # the most negative int64 is NaT
+    if abs(ns) >= 2**63:
+        msg = "The SAC start time, the reference time plus B, is out of range."
         raise InvalidFiberFileError(msg)
-    seconds = (((day - 1) * 24 + hour) * 60 + minute) * 60 + second
-    start = np.datetime64(f"{year:04d}-01-01", "ns")
-    return start + np.timedelta64(seconds * 1000 + msec, "ms") + offset
+    return np.timedelta64(ns, "ns") if relative else np.datetime64(ns, "ns")
 
 
 def _source_id(header: _Header) -> str:
