@@ -475,19 +475,22 @@ class _LoadsReader:
         self._members: dict[int, tuple] = {}
         self._routes: dict[int, Mapping] = {}
 
-    def row(self, path, data_id, resolver, source_id=None, window_id=None) -> _Loads:
+    def row(
+        self, path, data_id, resolver, source_id=None, window_id=None, whole=True
+    ) -> _Loads:
         """
         What one row loads through its resolver.
 
         `source_id` names the source of a row a selection trimmed, and
-        `window_id` the samples it keeps of a stored one.
+        `window_id` the samples it keeps of a stored one. Unless `whole`, a
+        selection may still trim what the row loads.
         """
         path, stated = str(path), _stated_id(data_id)
         live = resolver.live_entries().get(path) if is_memory_uri(path) else None
         if live is not None:
             source = _Loads.of(live)
         elif (route := self._route(resolver, path)) is not None:
-            return self._output(*route)
+            return self._output(*route, whole=whole)
         elif window_id is not None and not stated:
             return _Loads(data_id=window_id)  # a window of a file
         else:
@@ -507,8 +510,13 @@ class _LoadsReader:
                 return plan, path.removeprefix(prefix)
         return None
 
-    def _output(self, plan, output: str) -> _Loads:
-        """What a plan output loads: its members, put together as planned."""
+    def _output(self, plan, output: str, whole=True) -> _Loads:
+        """
+        What a plan output loads: its members, put together as planned.
+
+        Unless `whole`, a selection trims the output as it loads, so the
+        id of the whole of it names something else.
+        """
         if getattr(plan, "mode", None) is None:
             return _Loads()  # a route which is not a plan says nothing of its rows
         if (members := self._members.get(id(plan))) is None:
@@ -519,11 +527,13 @@ class _LoadsReader:
             self._members[id(plan)] = members
         by_output, paths, ids = members
         # a chunk of files is named by what it does (see `layout_data_id`)
-        if (laid := getattr(plan, "layout_data_id", None)) is not None:
+        if whole and (laid := getattr(plan, "layout_data_id", None)) is not None:
             if (data_id := laid(int(output))) is not None:
                 return _Loads(data_id=data_id)
+        cut = bool(plan.parent_residuals)  # trims the members as they load
         sources = tuple(
-            self.row(paths[x], ids[x], plan.loader) for x in by_output[int(output)]
+            self.row(paths[x], ids[x], plan.loader, whole=not cut)
+            for x in by_output[int(output)]
         )
         if plan.mode == "identity" and not plan.merge_kwargs:
             return sources[0]  # one member, untouched but for the view's selection
@@ -3779,7 +3789,12 @@ class Spool(NodeRepr, NamespaceOwner):
             zip(df.get("source_path", none), ids, rows, strict=True)
         ):
             loads = reader.row(
-                path, data_id, catalog.resolver, stored.get(row), windows.get(index)
+                path,
+                data_id,
+                catalog.resolver,
+                stored.get(row),
+                windows.get(index),
+                whole=not catalog.residuals,
             )
             if loads.recipe is not None and loads.in_memory:
                 loads = loads._replace(load=partial(catalog.get_patch, index))

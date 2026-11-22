@@ -160,6 +160,18 @@ class TestEqualityComparesLoads:
             assert view == dc.spool(list(view))
             assert view != dc.spool([x * 2 for x in view])
 
+    def test_a_selection_after_a_plan_of_files(self, adjacent):
+        """A selection trims a plan's output as it loads, so the two compare alike."""
+        merged = adjacent.chunk(time=None, max_shift=0.3)
+        for view in (
+            merged.select(time=(2, 8)),
+            merged.select(time=(2, 8), samples=True),
+            merged.select(distance=(0, 0)),
+        ):
+            assert view == dc.spool(list(view))
+            combined = view + dc.spool([])
+            assert combined == dc.spool(list(combined))
+
     def test_files_against_patches_of_other_data(self, ones, directories, no_reads):
         """A selection or plan of files names what it loads, as a file row does."""
         on_disk, _ = directories
