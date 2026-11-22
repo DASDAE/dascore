@@ -644,15 +644,12 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     Returns the names of columns which represent and range in the dataframe.
 
     For example, time_min, time_max, time_step would be returned if in dataframe.
+    Only a trailing suffix ends a name, so lag_max_min, lag_max_max and
+    lag_max_step give lag_max.
     """
     cols = set(df.columns)
-    possible_dims = {
-        x.replace("_min", "").replace("_max", "").replace("_step", "") for x in cols
-    }
-    out = {
-        x for x in possible_dims if {f"{x}_min", f"{x}_max", f"{x}_step"}.issubset(cols)
-    }
-    return sorted(out)
+    names = (x.removesuffix("_min") for x in cols if x.endswith("_min"))
+    return sorted(x for x in names if {f"{x}_max", f"{x}_step"} <= cols)
 
 
 def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):

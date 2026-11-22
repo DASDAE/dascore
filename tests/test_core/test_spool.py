@@ -3132,6 +3132,12 @@ class TestSpoolRepr:
         assert "➤ Dimensions (time, distance)" in rendered
         assert "temperature" not in rendered
 
+    def test_dimension_names_holding_suffixes(self):
+        """A dimension named like an envelope column is still a dimension."""
+        coords = {"travel_step": np.arange(3.0), "lag_max": np.arange(4.0)}
+        patch = dc.Patch(data=np.zeros((3, 4)), coords=coords, dims=tuple(coords))
+        assert "➤ Dimensions (lag_max, travel_step)" in str(dc.spool([patch]))
+
     def test_tracks_are_named_as_the_plot_names_lanes(self):
         """A track and the lane of the same patches carry the same name."""
         spool = dc.get_example_spool("diverse_das")
