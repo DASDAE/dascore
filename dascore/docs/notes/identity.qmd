@@ -74,7 +74,8 @@ A **weak** ID is derived without reading data, so it is only as good as what it 
 
 - a stored patch takes its origin's ID, which is derived from the format, version, path, key, size and modification time unless the file stores one;
 - a window of a stored array is derived from the whole array's ID and the absolute sample windows, so slicing twice and slicing once agree; a window says nothing about a coordinate riding no dimension, so changing one is an operation rather than a window;
-- an operation's result is derived from the `data_id` of each input, in order, and the `operation_id`.
+- an operation's result is derived from the `data_id` of each input, in order, and the `operation_id`;
+- a chunk or merge output is derived from what was done: each member's ID and the samples it gives (a window, named as a stored window is), in output order; the dimension they join along and each one's sample offset in the output; and the grid the plan put them on, where that moved their labels. A `conflict` other than `"raise"` counts too, since it decides what disagreeing members keep. The bounds the plan read with, its options and `dascore.config` count only through their effect on that, so two plans giving the same output from the same members give it one ID.
 
 Because a stored patch's ID comes from where it is stored, repeated reads and metadata scans agree without hashing the data, but copying the same bytes to another path gives a different ID, and so does overwriting a path. Formats which store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
 

@@ -57,8 +57,10 @@ from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
 from dascore.utils.identity import (
     ids_enabled,
     operation_context,
+    operation_id,
     stamp,
     try_operation_id,
+    window_data_id,
 )
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
@@ -66,6 +68,7 @@ from dascore.utils.patch import (
     _get_merge_dim,
     _get_merged_coord,
     _split_coord_merge_kwargs,
+    merge_layout,
 )
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -561,16 +564,54 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
     return coords._update_grid(dim, **{dim: coord})
 
 
+def _regridded(coords: CoordManager, attrs, dim: str, row: Mapping):
+    """
+    The coordinates and attrs of an output on its stretch's grid.
+
+    Moving the labels onto the grid is part of what was done, so the grid
+    joins the id where it changes them; an id nobody knows stays unknown.
+    """
+    placed = on_stretch_grid(coords, dim, row)
+    if placed is coords or not (ids_enabled() and attrs.data_id):
+        return placed, attrs
+    if placed.coord_map[dim] == coords.coord_map[dim]:
+        return placed, attrs
+    spec = row[f"_{dim}_stretch"]  # only a stretch's grid moves labels
+    return placed, stamp(
+        attrs, [attrs], operation_id("Regrid", {"dim": dim, "grid": spec})
+    )
+
+
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
     """The patch with its ``dim`` labels on its stretch's grid (see above)."""
-    coords = on_stretch_grid(patch.coords, dim, row)
+    coords, attrs = _regridded(patch.coords, patch.attrs, dim, row)
     if coords is patch.coords:
         return patch
-    # relabelling is part of the merge the plan named, not another operation
     with operation_context():
-        return dc.Patch(
-            data=patch.data, coords=coords, attrs=patch.attrs, dims=patch.dims
-        )
+        return dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
+
+
+def _as_window(whole: dc.Patch, cut: dc.Patch, query: Mapping) -> dc.Patch:
+    """
+    The cut a plan made of a member, named as the window of it it is.
+
+    The id is the member's and the samples the cut keeps, however the
+    bounds asking for them were spelled. A cut its stored source loads is
+    named by the same rule already, counted from the whole stored array.
+    """
+    base, source = whole.attrs.data_id, cut._source
+    if not ids_enabled() or not base or cut.attrs.data_id == base:
+        return cut
+    if source is not None and source.loadable and source.data_id == cut.attrs.data_id:
+        return cut
+    _, indexers = whole.coords.select_indexers(**query)
+    windows = []
+    for dim, size in zip(whole.dims, whole.shape, strict=True):
+        index = indexers.get(dim, slice(None))
+        if not isinstance(index, slice) or index.step not in (None, 1):
+            return cut  # not one run of samples, so not a window
+        windows.append(index.indices(size)[:2])
+    return cut.update_attrs(data_id=window_data_id(base, windows, whole.shape))
 
 
 def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
@@ -792,7 +833,8 @@ class PatchAssembler:
         # and its trim dims are narrowed, everything else loads untouched.
         trims = (self.plan_dim, self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
-            patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
+            query = _as_plan_units(patch, select_kwargs, patch_kwargs)
+            patch = _as_window(patch, patch.select(**query), query)
         # Already in the plan's units, spelled as the plan spells them,
         # there is nothing to convert, and a lazy member is not asked to
         # run what would do nothing. The same quantity spelled another way
@@ -956,9 +998,9 @@ class PatchAssembler:
                 [x.attrs for x in metas],
                 rows,
             )
-        coords = on_stretch_grid(coords, self.plan_dim, rows[0])
         if not all(known):
             attrs = attrs.update(data_id="")
+        coords, attrs = _regridded(coords, attrs, self.plan_dim, rows[0])
         return OutputMeta(dims, coords, attrs, chain[-1], metas)
 
     def _stream(self, joined, df_dict_list, merge_dim, samples, units=None):
@@ -1121,11 +1163,14 @@ class PatchAssembler:
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
         new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
         warn_if_histories_differ(attrs, "Merging")
+        lengths = [x.shape[x.dims.index(merge_dim)] for x in coords]
         new_attrs = combine_patch_attrs(
             attrs,
             **attr_kwargs,
             drop_attrs=self.stamped,
-            merge_params=self.merge_kwargs,
+            merge_params=merge_layout(
+                merge_dim, [0, *accumulate(lengths)][:-1], coord_kwargs["conflict"]
+            ),
         )
         return new_coord, new_attrs
 
