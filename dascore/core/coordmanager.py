@@ -1291,7 +1291,10 @@ class CoordManager(RichRepr, DascoreBaseModel):
         assert len(kwargs) == 1
         (dim, value) = next(iter(kwargs.items()))
         assert dim in self.dims
-        dim_slice = slice(None, None, int(value))
+        if (factor := int(value)) != value:
+            msg = f"A decimation factor must be a whole number, not {value}."
+            raise ParameterError(msg)
+        dim_slice = slice(None, None, factor)
         updates = {}
         for name, coord_dims in self.dim_map.items():
             if dim not in coord_dims:
@@ -1299,10 +1302,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             coord = self.coord_map[name].index(dim_slice, axis=coord_dims.index(dim))
             updates[name] = (coord_dims, coord)
         new = self.update(**updates)
-        slices = tuple(
-            slice(None, None) if d != dim else slice(None, None, value)
-            for d in new.dims
-        )
+        slices = tuple(slice(None, None) if d != dim else dim_slice for d in new.dims)
         return new, slices
 
     @property

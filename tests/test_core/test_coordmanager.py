@@ -1261,6 +1261,18 @@ class TestDecimate:
         assert len(out.coord_map["distance"]) < len(cm.coord_map["distance"])
         assert (out.shape[ind] * 2) == cm.shape[ind]
 
+    def test_whole_float_factor(self, cm_basic):
+        """A whole float factor slices the data as it does the coordinates."""
+        out, slices = cm_basic.decimate(time=2.0)
+        data = np.empty(cm_basic.shape)[slices]
+        assert data.shape == out.shape
+        assert slices[cm_basic.get_axis("time")] == slice(None, None, 2)
+
+    def test_fractional_factor_raises(self, cm_basic):
+        """A factor which is not a whole number is refused, not truncated."""
+        with pytest.raises(ParameterError, match="whole number"):
+            cm_basic.decimate(time=2.5)
+
 
 class TestSort:
     """Tests for sorting coord managers."""
