@@ -7,6 +7,7 @@ import functools
 import shutil
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from itertools import islice
 from pathlib import Path
 from unittest import mock
 
@@ -1635,6 +1636,14 @@ class TestSplit:
         (name,) = kwargs
         with pytest.raises(ParameterError, match=f"{name} to be a whole number"):
             list(random_spool.split(**kwargs))
+
+    @pytest.mark.parametrize("kwargs", [{"count": np.inf}, {"size": np.inf}])
+    def test_infinite_raises(self, random_spool, kwargs):
+        """An infinite count or size is no whole number, so is refused by name."""
+        (name,) = kwargs
+        with pytest.raises(ParameterError, match=f"{name} to be a whole number"):
+            # Bounded: an infinite count once yielded empty spools forever.
+            list(islice(random_spool.split(**kwargs), 3))
 
     def test_whole_float_size(self, random_spool_len_10):
         """A float holding a whole number is that number."""

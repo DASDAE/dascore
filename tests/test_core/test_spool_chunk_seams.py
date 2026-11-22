@@ -467,6 +467,7 @@ class TestStretchGrid:
         step = patch.get_coord("time").step_exact
         assert step not in (Fraction(1, 1000), Fraction(9997, 10**7))
 
+    @pytest.mark.wasm_skip
     def test_fractional_window_holds_the_labels_inside(self):
         """A 1024 Hz grid missing its first sample keeps windows half open."""
         full = get_coord(start=T0, step=Fraction(1, 1024), shape=(4096,))
