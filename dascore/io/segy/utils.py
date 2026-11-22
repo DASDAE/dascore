@@ -67,24 +67,19 @@ def _parse_binary_header(fp):
         return None
     major, minor = header[300:302]
     for endian in ("big", "little"):
-        traces, auxiliary, interval, _, samples, _, code = (
-            twos_comp(header[i : i + 2], endian) for i in range(12, 26, 2)
+        # The trace and sample counts and the sample interval are unsigned,
+        # so none can be negative and only the sample count is checked;
+        # the extended header count is signed, -1 meaning a variable number.
+        samples, code, fixed_length = (
+            int.from_bytes(header[i : i + 2], endian) for i in (20, 24, 302)
         )
-        fixed_length, extended = (
-            twos_comp(header[i : i + 2], endian) for i in (302, 304)
-        )
+        extended = twos_comp(header[304:306], endian)
         checks = (
             # First check that some samples are defined.
             samples > 0,
-            # The interval may be 0 (defined in the trace headers) but not
-            # negative.
-            interval >= 0,
             # Ensure the data sample format code is valid (2.1 standard range).
             1 <= code <= 16,
             major in {0, 1, 2, 3},
-            # Sanity checks for other values.
-            traces >= 0,
-            auxiliary >= 0,
             fixed_length in {0, 1},
         )
         if all(checks):
@@ -174,7 +169,9 @@ def _get_coords(fi, text):
 
     # Get time array from SEGY headers.
     starttime = _get_time_from_text(text, _get_time_from_header(header_0))
-    dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
+    # An unsigned two-byte interval, which segyio returns signed.
+    interval = int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]) & 0xFFFF
+    dt = np.timedelta64(interval, "us")
     time_array = starttime + dt * np.arange(_sample_count(fi))
 
     # Get distance array from SEGY header

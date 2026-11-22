@@ -319,6 +319,45 @@ class TestSegyCompatibility:
         assert new.get_coord("time").min() == np.datetime64(start)
 
 
+def _write_unsigned_segy_file(path, samples=100, interval=500, ensemble=2):
+    """
+    Write a 2-trace SEG-Y file whose binary header states these samples per
+    trace, sample interval (us) and traces per ensemble, any above 32767.
+    """
+    segyio = pytest.importorskip("segyio")
+    data = np.arange(2 * samples, dtype=np.float32).reshape(2, samples)
+    spec = segyio.spec()
+    spec.format, spec.samples, spec.tracecount = 5, range(samples), 2
+    field = segyio.TraceField
+    header = {field.TRACE_SAMPLE_COUNT: samples, field.TRACE_SAMPLE_INTERVAL: interval}
+    header |= {field.YearDataRecorded: 2021, field.DayOfYear: 63}
+    with segyio.create(str(path), spec) as fi:
+        bin_field = segyio.BinField
+        fi.bin.update({bin_field.Interval: interval, bin_field.Traces: ensemble})
+        fi.bin.update({bin_field.SEGYRevision: 1, bin_field.SEGYRevisionMinor: 0})
+        for num, trace in enumerate(data):
+            fi.header[num], fi.trace[num] = header, trace
+    return path, data
+
+
+class TestSegyUnsignedHeader:
+    """Binary header counts and intervals are unsigned."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"samples": 40_000}, {"interval": 50_000}, {"ensemble": 40_000}],
+        ids=["samples", "interval", "ensemble"],
+    )
+    def test_detected_and_read(self, tmp_path, kwargs):
+        """A file with one past 32767 is detected and reads whole."""
+        path, data = _write_unsigned_segy_file(tmp_path / "wide.sgy", **kwargs)
+        assert dc.get_format(path) == ("segy", "1.0")
+        patch = dc.read(path)[0]
+        np.testing.assert_array_equal(patch.data, data.T)
+        step = np.timedelta64(kwargs.get("interval", 500), "us")
+        assert patch.get_coord("time").step == step
+
+
 class TestSegySampleCount:
     """Trace headers stating another sample count than the binary header."""
 
@@ -335,18 +374,7 @@ class TestSegySampleCount:
 
     def test_counts_past_signed_range(self, tmp_path):
         """A trace of more than 32767 samples reads them all."""
-        segyio = pytest.importorskip("segyio")
-        data = np.arange(2 * 40_000, dtype=np.float32).reshape(2, 40_000)
-        spec = segyio.spec()
-        spec.format, spec.samples, spec.tracecount = 5, range(40_000), 2
-        path = tmp_path / "long.sgy"
-        field = segyio.TraceField
-        header = {field.TRACE_SAMPLE_COUNT: 40_000, field.TRACE_SAMPLE_INTERVAL: 500}
-        header |= {field.YearDataRecorded: 2021, field.DayOfYear: 63}
-        with segyio.create(str(path), spec) as fi:
-            fi.bin.update({segyio.BinField.Interval: 500})
-            for num, trace in enumerate(data):
-                fi.header[num], fi.trace[num] = header, trace
+        path, data = _write_unsigned_segy_file(tmp_path / "long.sgy", 40_000)
         fiber_io = SegyV1_0()
         np.testing.assert_array_equal(fiber_io.read_array(path), data.T)
         with warnings.catch_warnings():
