@@ -1,5 +1,6 @@
 """Tests for the GDR file format."""
 
+import shutil
 from types import SimpleNamespace
 
 import h5py
@@ -30,6 +31,48 @@ class TestGDR:
         time_2 = patch2.get_coord("time")
         assert len(time_1) == len(time_2)
         assert np.all(time_1.values == time_2.values)
+
+
+class TestDistanceStart:
+    """Distance starts where the fiber's metadata says, else at 0."""
+
+    @pytest.fixture
+    def path(self, gpr_path, tmp_path):
+        """A copy of the GDR file, to edit."""
+        return shutil.copy(gpr_path, tmp_path / "gdr.h5")
+
+    def _distance(self, path, **attrs):
+        """The distance coordinates of a read and a scan, the fiber edited."""
+        with h5py.File(path, "a") as h5:
+            h5["DasMetadata/Cable/Fiber"].attrs.update(attrs)
+        read = dc.read(path)[0].get_coord("distance")
+        assert read == dc.scan_payloads(path)[0].get_coord("distance")
+        return read
+
+    @pytest.mark.parametrize(
+        "location, unit, start",
+        [
+            ("120.5", "meters", 120.5),
+            (0.5, "kilometer", 500.0),
+            ("12", "", 12.0),
+            (np.array([b"0.5"]), np.array([b"kilometers"]), 500.0),
+            ("NaN", "meters", 0.0),
+            ("NaN-ish", "meters", 0.0),
+        ],
+    )
+    def test_fiber_start_location(self, path, location, unit, start):
+        """The stated start, in the spacing's units; none states 0."""
+        attrs = {"FiberStartLocation": location, "FiberStartLocationUnit": unit}
+        distance = self._distance(path, **attrs)
+        assert distance.min() == pytest.approx(start)
+        assert distance.step == pytest.approx(1.021)
+
+    @pytest.mark.parametrize("unit", ["s", "not_a_unit"])
+    def test_unconvertible_units(self, path, unit):
+        """A start in units which do not convert warns and starts at 0."""
+        attrs = {"FiberStartLocation": "120.5", "FiberStartLocationUnit": unit}
+        with pytest.warns(UserWarning, match="do not convert"):
+            assert self._distance(path, **attrs).min() == 0
 
 
 class TestGetDims:
