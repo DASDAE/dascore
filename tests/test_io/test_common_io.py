@@ -55,6 +55,7 @@ from dascore.io.pickle import PickleIO
 from dascore.io.prodml import ProdMLFlatV1, ProdMLV2_0, ProdMLV2_1
 from dascore.io.puniu import PuniuV1
 from dascore.io.rsf import RSFV1
+from dascore.io.sac import SacV6, SacV7
 from dascore.io.segy import SegyV1_0
 from dascore.io.sentek import SentekV5
 from dascore.io.silixah5 import SilixaH5V1, SilixaH5V2, SilixaH5V3
@@ -84,6 +85,7 @@ from tests.test_io._common_io_test_utils import (
 )
 from tests.test_io.test_asdf.test_asdf import write_asdf
 from tests.test_io.test_puniu.test_puniu import write_puniu
+from tests.test_io.test_sac.test_sac import write_sac
 from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 
 # No shipped file is DASDAE version 2 yet: the current writer makes one
@@ -112,6 +114,10 @@ _WITSML_FILES = {
 }
 # No shipped file is seismic ASDF, so the example its tests build is written.
 _ASDF_PATH = Path(mkdtemp("asdf")) / "example_asdf.h5"
+# Nor SAC: one file per version, the second in the other byte order, each
+# big enough for the scan to be held to reading only its header.
+_SAC_DIR = Path(mkdtemp("sac"))
+_SAC_PATHS = {SacV6(): _SAC_DIR / "v6.sac", SacV7(): _SAC_DIR / "v7.sac"}
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -132,6 +138,8 @@ def _write_dasdae_v2():
     for path, make_text in _WITSML_FILES.values():
         path.write_text(make_text())
     write_asdf(_ASDF_PATH)
+    for (io, path), byte_order in zip(_SAC_PATHS.items(), "<>", strict=True):
+        write_sac(path, 300_000, byte_order=byte_order, version=int(io.version))
 
 
 # --- Fixtures
@@ -185,6 +193,7 @@ COMMON_IO_READ_TESTS = {
     ProdMLFlatV1(): ("prodml_flat_1.h5",),
     PuniuV1(): (FixtureFile("puniu_matrix_file"),),
     RSFV1(): ("example_dascore.rsf",),
+    **{io: (str(path),) for io, path in _SAC_PATHS.items()},
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     SegyV1_0(): ("conoco_segy_1.sgy",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
