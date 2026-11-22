@@ -66,6 +66,15 @@ class TestFebus:
         sampling_rate = np.timedelta64(1, "s") / time.step
         assert np.isclose(sampling_rate, 250)
 
+    @pytest.mark.parametrize(
+        "name", ["valencia_febus_example.h5", "febus_1.h5", "febus_2.h5"]
+    )
+    def test_data_type_is_strain_rate(self, name):
+        """Scans and reads of both versions spell strain rate as dascore does."""
+        path = fetch(name)
+        assert {x.attrs.data_type for x in dc.scan(path)} == {"strain_rate"}
+        assert {x.attrs.data_type for x in dc.read(path)} == {"strain_rate"}
+
     def test_scan_summaries_include_source_patch_key(self, febus_path):
         """Scanned Febus summaries should carry a reloadable patch id."""
         summaries = dc.scan(febus_path)

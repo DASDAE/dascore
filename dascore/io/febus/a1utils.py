@@ -242,7 +242,7 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
     out["zone"] = feb.zone_name
     out["schema_version"] = out.get("folog_a1_software_version", "").split(".")[0]
     out["dims"] = ("time", "distance")
-    out["data_type"] = "strainrate"
+    out["data_type"] = "strain_rate"
     out["data_units"] = "nanostrain/s"
     return out
 

@@ -34,6 +34,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
 # changes, not only when a column does.
+# Version 40 reads the data type of Febus A1 files as strain_rate, not
+# strainrate.
 # Version 39 shrinks the index: a coordinate's data_id is read from its
 # def_key, a source of one patch is stored without a key unless the key
 # is an HDF5 dataset path, and patch_coords is clustered on its key.
@@ -77,7 +79,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 39
+INDEX_VERSION = 40
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 

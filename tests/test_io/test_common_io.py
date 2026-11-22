@@ -27,7 +27,11 @@ import pytest
 
 import dascore as dc
 import dascore.core.coords as coords_module
-from dascore.constants import INVENTORY_ATTRS, STORAGE_PROVENANCE_ATTRS
+from dascore.constants import (
+    INVENTORY_ATTRS,
+    STORAGE_PROVENANCE_ATTRS,
+    VALID_DATA_TYPES,
+)
 from dascore.exceptions import CoordError, ParameterError, UnknownFiberFormatError
 from dascore.io import BinaryReader, FiberIO
 from dascore.io import utils as io_utils
@@ -1301,6 +1305,13 @@ class TestAttrVocabulary:
         for patch in _cached_read(data_file_path):
             names = set(dict(patch.attrs))
             assert not names & set(STORAGE_PROVENANCE_ATTRS)
+
+    def test_known_data_type(self, data_file_path):
+        """Readers give each registry file a data_type in VALID_DATA_TYPES."""
+        if _replays_stored_attrs(data_file_path):
+            return
+        for patch in _cached_read(data_file_path):
+            assert patch.attrs.data_type in VALID_DATA_TYPES
 
 
 class TestIntegration:
