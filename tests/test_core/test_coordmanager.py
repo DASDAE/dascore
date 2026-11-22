@@ -312,6 +312,18 @@ class TestCoordManagerInputs:
         with pytest.raises(ValidationError):
             get_coord_manager(coords, dims=dims)
 
+    @pytest.mark.parametrize("value", [5.0, np.float64(5.0), np.datetime64(5, "s")])
+    @pytest.mark.parametrize("dims", [(), None])
+    def test_scalar_coord(self, cm_basic, value, dims):
+        """A scalar label makes a 0-d coordinate, as a 0-d array does."""
+        coord = cm_basic.update(x=(dims, value)).get_coord("x")
+        assert coord.shape == () and coord.values == value
+
+    def test_coord_unlike_its_value_raises(self, cm_basic):
+        """A value read as a coordinate of another shape is refused."""
+        with pytest.raises(CoordError, match="shape"):
+            cm_basic.update(x=((), np.int64(5)))
+
     def test_mappings_immutable(self, coord_manager):
         """Ensure the mappings are immutable."""
         with pytest.raises(Exception):
