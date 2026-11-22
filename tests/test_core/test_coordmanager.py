@@ -1015,6 +1015,19 @@ class TestUpdate:
             out = cm.update(distance=new_dist)
         assert dropped_coords.isdisjoint(set(out.coord_map))
 
+    def test_size_change_warns_in_dim_order(self):
+        """Resizing several dimensions warns in their order, whatever the seed."""
+        # Eight names: no hash seed of the first 2,000 iterates a set of
+        # them in this order.
+        dims = ("h", "g", "f", "e", "d", "c", "b", "a")
+        coords = {x: np.arange(2) for x in dims}
+        coords |= {f"{x}_rider": (x, np.arange(2)) for x in dims}
+        cm = get_coord_manager(coords, dims=dims)
+        with pytest.warns(DASCoreWarning, match="Changing the length") as record:
+            cm.update(**{x: np.arange(3) for x in dims})
+        said = [str(x.message).split("'")[1] for x in record]
+        assert said == list(dims)
+
     def test_size_change_keeps_resupplied_coords(self, cm_multidim):
         """A rider given alongside its resized dimension is kept, silently."""
         cm = cm_multidim

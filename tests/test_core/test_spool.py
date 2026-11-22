@@ -1534,9 +1534,16 @@ class TestSort:
 
     def test_sorting_attr_not_exists(self, diverse_spool):
         """Test sorting by an attribute that does not exist in the DataFrame."""
-        expected_str = "Invalid attribute"
-        with pytest.raises(IndexError, match=expected_str):
+        expected_str = "Cannot sort by 'dummy_attribute'"
+        with pytest.raises(ParameterError, match=expected_str):
             diverse_spool.sort("dummy_attribute")
+
+    def test_sorting_refusal_names_spools_own(self):
+        """The refusal lists what this spool can sort by, not a fixed name."""
+        patch = dc.Patch(data=np.zeros(3), coords={"x": np.arange(3.0)}, dims=("x",))
+        with pytest.raises(ParameterError, match=r"coordinates: \['x'\]") as info:
+            dc.spool([patch]).sort("depth")
+        assert "time" not in str(info.value)
 
     def test_sorting_attr_exists(self, diverse_spool):
         """Test sorting by an attribute that exists in the DataFrame."""
@@ -1575,7 +1582,7 @@ class TestSplit:
     @pytest.mark.parametrize("kwargs", [{"size": 1, "count": 2}, {}])
     def test_needs_exactly_one_parameter(self, random_spool, kwargs):
         """Ensure split raises unless exactly one of size/count is given."""
-        msg = "requires either spool_count or spool_size"
+        msg = "requires exactly one of size or count"
         with pytest.raises(ParameterError, match=msg):
             list(random_spool.split(**kwargs))
 
@@ -1607,9 +1614,16 @@ class TestSplit:
         with pytest.raises(ParameterError, match=msg):
             list(random_spool.split(**kwargs))
 
-    def test_non_integral_size(self, random_spool_len_10):
-        """A size which isn't a whole number rounds up rather than raising."""
-        split = list(random_spool_len_10.split(size=2.5))
+    @pytest.mark.parametrize("kwargs", [{"size": 2.5}, {"count": 1.5}])
+    def test_non_integral_raises(self, random_spool, kwargs):
+        """A size or count counts patches or spools, so is a whole number."""
+        (name,) = kwargs
+        with pytest.raises(ParameterError, match=f"{name} to be a whole number"):
+            list(random_spool.split(**kwargs))
+
+    def test_whole_float_size(self, random_spool_len_10):
+        """A float holding a whole number is that number."""
+        split = list(random_spool_len_10.split(size=3.0))
         assert [len(x) for x in split] == [3, 3, 3, 1]
 
     def test_spool_count(self, random_spool_len_10):
@@ -3117,6 +3131,12 @@ class TestSpoolRepr:
         rendered = str(dc.spool([patch]))
         assert "➤ Dimensions (time, distance)" in rendered
         assert "temperature" not in rendered
+
+    def test_dimension_names_holding_suffixes(self):
+        """A dimension named like an envelope column is still a dimension."""
+        coords = {"travel_step": np.arange(3.0), "lag_max": np.arange(4.0)}
+        patch = dc.Patch(data=np.zeros((3, 4)), coords=coords, dims=tuple(coords))
+        assert "➤ Dimensions (lag_max, travel_step)" in str(dc.spool([patch]))
 
     def test_tracks_are_named_as_the_plot_names_lanes(self):
         """A track and the lane of the same patches carry the same name."""

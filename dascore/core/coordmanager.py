@@ -362,7 +362,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
         def _warn_resized(dropped, coord_map, kwargs):
             """Say which riders of a resized dimension are lost, not replaced."""
-            for dim in set(coord_map) & set(self.dims):
+            for dim in (x for x in self.dims if x in coord_map):
                 if len(coord_map[dim]) == len(self.coord_map[dim]):
                     continue
                 skip = {dim, *kwargs, *_cell_edge_names(dim, self.coord_map)}

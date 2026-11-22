@@ -1143,14 +1143,12 @@ def _kind_parts(df: pd.DataFrame) -> list[pd.DataFrame]:
     say, as objects, which arithmetic over the whole column refuses or
     misreads. Empty where no coordinate is held as objects of several kinds.
     """
-    # a name may hold a suffix itself, as `lag_max` does
-    names = (str(x)[: -len("_min")] for x in df.columns if str(x).endswith("_min"))
+    names = get_dim_names_from_columns(df)
     groups = ([f"{x}_{end}" for end in ("min", "max", "step")] for x in names)
     groups = [
         x
         for x in groups
-        if set(x).issubset(df.columns)
-        and any(
+        if any(
             df[y].dtype == object
             and pd.api.types.infer_dtype(df[y]) in ("mixed", "mixed-integer")
             for y in x

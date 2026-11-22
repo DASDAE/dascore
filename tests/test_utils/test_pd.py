@@ -14,6 +14,7 @@ from dascore.utils.pd import (
     dataframe_to_patch,
     fill_defaults_from_pydantic,
     filter_df,
+    get_dim_names_from_columns,
     get_interval_columns,
     list_ser_to_str,
     patch_to_dataframe,
@@ -576,6 +577,19 @@ class TestDFtoPatch:
         attrs = {"dims": ("time", "distance")}
         patch = dataframe_to_patch(random_df_no_dims, attrs=attrs)
         assert patch.dims == ("time", "distance")
+
+
+class TestGetDimNamesFromColumns:
+    """Tests for finding the names a dataframe holds ranges of."""
+
+    @pytest.mark.parametrize(
+        "names", [["travel_step"], ["lag_max", "lag"], ["time", "time_min"]]
+    )
+    def test_names_holding_suffixes(self, names):
+        """Only a trailing _min, _max or _step ends a name."""
+        columns = [f"{x}_{y}" for x in names for y in ("min", "max", "step")]
+        df = pd.DataFrame(columns=columns)
+        assert get_dim_names_from_columns(df) == sorted(names)
 
 
 class TestGetIntervalColumns:

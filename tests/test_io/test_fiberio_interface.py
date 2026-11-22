@@ -191,6 +191,21 @@ class TestDerivedRead:
         getattr(reader, method)("memory", snap=True)
         assert reader.snaps == [("time",), True]
 
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_default_is_the_hooks_in_place(self, monkeypatch, method):
+        """A temporary hook's default lasts only while it is in place."""
+        reader = _TimeSnapReader()
+        original = _TimeSnapReader.get_metadata
+
+        def spy(self, *args, **kwargs):
+            return original(self, *args, **kwargs)
+
+        with monkeypatch.context() as context:
+            context.setattr(_TimeSnapReader, "get_metadata", spy)
+            getattr(reader, method)("memory")
+        getattr(reader, method)("memory")
+        assert reader.snaps == [True, ("time",)]
+
     @pytest.mark.parametrize("failure", ["shape", "dtype"])
     def test_bad_array_contract_raises(self, reader, monkeypatch, failure):
         """A reader cannot attach a different shape or silently cast its dtype."""

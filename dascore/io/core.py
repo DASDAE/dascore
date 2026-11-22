@@ -1305,10 +1305,16 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
     return getattr(fiber_io, hook)
 
 
-@cache
 def _default_snap(cls: type[FiberIO]) -> snap_type:
     """The names a format snaps unless told otherwise: its hook's default."""
-    param = inspect.signature(cls.get_metadata).parameters.get("snap")
+    # Keyed on the hook, not the class: a class can swap its hook.
+    return _hook_default_snap(cls.get_metadata)
+
+
+@cache
+def _hook_default_snap(get_metadata) -> snap_type:
+    """The default of a metadata hook's snap parameter, True if it has none."""
+    param = inspect.signature(get_metadata).parameters.get("snap")
     if param is None or param.default is inspect.Parameter.empty:
         return True
     return param.default

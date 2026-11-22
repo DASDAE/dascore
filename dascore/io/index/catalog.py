@@ -1128,16 +1128,20 @@ class PatchCatalog:
         copied and no relation is realized here.
         """
         name = str(attribute)
-        coords = self.backend.coord_names()
+        coords, attrs = self.backend.coord_names(), self.backend.attr_names()
         if name in coords:
             spec = ("coord", name, ascending)
-        elif name in self.backend.attr_names():
+        elif name in attrs:
             spec = ("attr", name, ascending)
         elif name.endswith("_min") and name.removesuffix("_min") in coords:
             spec = ("coord", name.removesuffix("_min"), ascending)
         else:
-            msg = "Invalid attribute. Please use a valid attribute such as: 'time'"
-            raise IndexError(msg)
+            msg = (
+                f"Cannot sort by {name!r}: it is neither an attribute nor a "
+                f"coordinate of this spool. Attributes: {sorted(attrs)}; "
+                f"coordinates: {sorted(coords)}."
+            )
+            raise ParameterError(msg)
         return self._view(self._queries, self._residuals, order=spec)
 
     @property
