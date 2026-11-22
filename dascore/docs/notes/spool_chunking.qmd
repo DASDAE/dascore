@@ -47,7 +47,7 @@ Patches merge only when they agree on all four of these.
 
 **1. Kind.** By default, the attributes in the `patch_kind_attrs` config option: acquisition key, data category, and tag (see [Patch Compatibility](patch_compatibility.qmd)). Override it per call with `group=`. Patches of different kinds go to separate outputs; that is never an error. A missing value counts as a value, so patches that never recorded an attribute group together, apart from those that did. Names passed to `group=` must exist somewhere in the spool; names from config are used where present.
 
-**2. Structure.** The dimensions, the coordinate of every dimension not being chunked, and the chunked dimension's units. A metre patch never merges with a seconds patch, nor a patch with units with one without. Compatible units such as metres and feet are normalized to one unit per dimensionality before planning, so they merge, and assembly converts each member to the first member's units.
+**2. Structure.** The dimensions, the coordinate of every dimension not being chunked, and the chunked dimension's units. A metre patch never merges with a seconds patch, nor a patch with units with one without. Compatible units such as metres and feet are normalized to one unit per dimensionality before planning, so they merge, and assembly converts each member to the first member's units. Patches stating the dimension in different kinds (datetimes, timedeltas, numbers) are each planned and reported as a spool of their kind alone would be.
 
 **3. Sampling.** Step sizes must be within `config.sampling_group_tolerance` (default 5%) of the group's smallest absolute step, and in the same direction. Ascending never merges with descending, though contiguous descending patches merge with each other.
 

@@ -1272,6 +1272,22 @@ class TestMixedUnitChunk:
         # the file's own spelling survives, not the plan's normalized unit
         assert set(rows["_distance_units_source"]) == {"m", "ft"}
 
+    @pytest.mark.parametrize("select", [{}, {"time": (1.0, 1.0)}])
+    def test_third_rechunk_keeps_every_sample(self, select):
+        """A foot member's source counts its samples in metres (#1657)."""
+        metres = dc.Patch(
+            data=np.arange(12.0).reshape(6, 2),
+            coords={"distance": np.arange(6.0), "time": np.arange(2.0)},
+            dims=("distance", "time"),
+        ).set_units(distance="m")
+        feet = metres.update_coords(distance_min=6.0).convert_units(distance="ft")
+        spool = dc.spool([metres, feet]).select(**select)
+        spool = spool.chunk(distance=3, keep_partial=True)
+        (out,) = spool.chunk(distance=4, keep_partial=True).chunk(distance=None)
+        assert np.allclose(out.get_array("distance"), np.arange(12.0))
+        expected = metres.select(**select).data
+        assert np.allclose(out.data, np.concatenate([expected, expected]))
+
     def test_affine_quantity_length_is_a_delta(self):
         """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""
         degf = dc.get_example_patch().set_units(distance="degF")
@@ -2457,13 +2473,12 @@ class TestFilledWindows:
         "select", [dict(time=(2.2, 2.9)), dict(time=(0.8, -0.1), relative=True)]
     )
     def test_window_holding_no_position_is_skipped(self, select):
-        """A selection between two samples leaves no position to fill."""
+        """A selection between two samples leaves nothing to fill (#1668)."""
         time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
         coords = {"distance": [0], "time": time}
         patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
         view = dc.spool([patch]).select(**select)
-        with pytest.raises(ChunkError, match="chunk"):
-            view.fill_gaps("time").chunk(time=2.0, keep_partial=True)
+        assert not len(view.fill_gaps("time").chunk(time=2.0, keep_partial=True))
 
     def test_pickles_unbuilt(self, random_spool):
         """A fill pickles before anything built its catalog, and loads after."""

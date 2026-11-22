@@ -1443,9 +1443,13 @@ class SQLiteIndexBackend:
             if name in ("time", "distance"):
                 col = f"{name}_min"
                 # ...but relative-time and numeric-time patches leave them
-                # NULL; when the whole result does, serve the coord-link
-                # envelopes so chunking on them works (#553).
-                if not (col in out.columns and out[col].isnull().all() and mins):
+                # NULL; when the whole result does (#553), or a row's
+                # coordinate states what the patch row cannot (#1639), serve
+                # the coord-link envelopes, each row in its own kind.
+                blank = out[col].isnull() if col in out.columns else None
+                if blank is None or (
+                    not blank.all() and out["patch_row"][blank].map(mins).isna().all()
+                ):
                     continue
             out[f"{name}_min"] = out["patch_row"].map(mins)
             out[f"{name}_max"] = out["patch_row"].map(maxs)

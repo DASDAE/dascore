@@ -300,6 +300,14 @@ def enriched_attr_names(attrs) -> frozenset[str]:
 # --- planning-frame helpers -------------------------------------------
 
 
+def _instants(column):
+    """A time column's instants, NaT where a row states time in another kind."""
+    if column is None or column.dtype != object:
+        return column
+    dated = column.map(lambda x: isinstance(x, pd.Timestamp | np.datetime64))
+    return pd.to_datetime(column.where(dated)) if dated.any() else column
+
+
 def resolution_columns(frame: pd.DataFrame, enrich_kwargs=None) -> list | None:
     """
     Return the columns a relation resolves against an inventory with.
@@ -320,6 +328,7 @@ def resolution_columns(frame: pd.DataFrame, enrich_kwargs=None) -> list | None:
     key, start, end = (
         frame.get(x) for x in ("acquisition_key", "time_min", "time_max")
     )
+    start, end = _instants(start), _instants(end)
     enrich_kwargs = enrich_kwargs or {}
     if override := enrich_kwargs.get("acquisition_key"):
         # A relation no row states the key in has no column for it.

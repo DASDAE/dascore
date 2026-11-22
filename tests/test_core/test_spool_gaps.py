@@ -353,6 +353,95 @@ class TestGetCoverage:
         assert out[measured].dtypes.to_dict() == populated[measured].dtypes.to_dict()
 
 
+# five samples of time in each kind a coordinate may state it in
+TIME_KINDS = {
+    "absolute": T0 + np.arange(5) * ONE_SECOND,
+    "durations": np.arange(5) * ONE_SECOND,
+    "numbers": np.arange(5.0),
+    "stepless": np.array([0, 1, 3, 4, 6.0]),
+}
+
+
+class TestMixedKinds:
+    """Patches timed in two kinds each plan as a spool of their kind alone (#1639)."""
+
+    @pytest.fixture(
+        params=[
+            ("absolute", "numbers"),
+            ("durations", "numbers"),
+            ("absolute", "durations"),
+            ("absolute", "stepless"),
+        ]
+    )
+    def patches(self, request):
+        """Two patches of each kind with a gap between them, the kinds interleaved."""
+        out = []
+        for kind in request.param:
+            time = TIME_KINDS[kind]
+            gap = 10 * (1.0 if time.dtype.kind == "f" else ONE_SECOND)
+            out.append([self._patch(time), self._patch(time + gap)])
+        return [out[0][0], out[1][0], out[0][1], out[1][1]]
+
+    @staticmethod
+    def _patch(time):
+        return dc.Patch(data=np.zeros(len(time)), coords={"time": time}, dims=("time",))
+
+    @staticmethod
+    def _values(frame, columns):
+        """The frame's columns as lists, nulls as None."""
+        return [[None if pd.isna(y) else y for y in frame[x]] for x in columns]
+
+    def _alone(self, patches):
+        """A spool of each kind alone, in order of first appearance."""
+        return [dc.spool(patches[0::2]), dc.spool(patches[1::2])]
+
+    def test_contents(self, patches):
+        """Each row states its envelope in its own kind."""
+        got = dc.spool(patches).get_contents()
+        expected = pd.concat([dc.spool([x]).get_contents() for x in patches])
+        columns = ["time_min", "time_max", "time_step"]
+        assert self._values(got, columns) == self._values(expected, columns)
+
+    @pytest.mark.parametrize("method", ["get_gaps", "get_coverage"])
+    def test_reports(self, patches, method):
+        """Gaps and coverage are those of each kind alone, each its own group."""
+        got = getattr(dc.spool(patches), method)()
+        alone = [getattr(x, method)() for x in self._alone(patches)]
+        expected = pd.concat(alone, ignore_index=True)
+        columns = [x for x in expected if x != "group_id"]
+        assert self._values(got, columns) == self._values(expected, columns)
+        assert got["group_id"].tolist() == [0, 1]
+
+    @pytest.mark.parametrize("lengths", [[None], [2], [2, None]])
+    def test_chunk(self, patches, lengths):
+        """Chunking, and chunking again, gives each kind's chunks alone."""
+        got, expected = dc.spool(patches), self._alone(patches)
+        for length in lengths:
+            got = got.chunk(time=length)
+            expected = [x.chunk(time=length) for x in expected]
+        expected = [y for x in expected for y in x]
+        assert len(got) == len(expected)
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+    def test_kind_too_short_is_skipped(self):
+        """A kind with no full chunk yields none, as alone; the others chunk."""
+        short = [self._patch(TIME_KINDS[x]) for x in ("absolute", "numbers")]
+        numbers = self._patch(np.arange(20.0))
+        got = list(dc.spool([short[0], numbers]).chunk(time=10))
+        expected = list(dc.spool([numbers]).chunk(time=10))
+        assert len(got) == len(expected) == 2
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+        with pytest.raises(ChunkError, match="shorter than the requested"):
+            dc.spool(short).chunk(time=10)
+
+    def test_concatenate(self, patches):
+        """Concatenating gives each kind's concatenation alone."""
+        got = list(dc.spool(patches).concatenate(time=None))
+        expected = [x.concatenate(time=None)[0] for x in self._alone(patches)]
+        assert len(got) == len(expected)
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+
 def _time_runs_patch(count, samples=10):
     """A patch whose time coordinate holds ``count`` runs a minute apart."""
     runs = [
@@ -446,6 +535,29 @@ class TestChunkKeepsHoles:
         assert len(filled) == 1 and filled.get_gaps().empty
         assert filled[0].get_coord("time").evenly_sampled
         assert len(filled[0].get_coord("time")) > 200
+
+    def test_rechunks_keep_a_later_segment(self):
+        """Members of a later segment count from its first label (#1659)."""
+        runs = [get_coord(start=x, step=1.0, shape=(6,)) for x in (0.0, 10.5)]
+        data = np.arange(12.0)[None]
+        coords = {"distance": [0], "time": concat_coords(*runs)}
+        patch = dc.Patch(data=data, coords=coords, dims=DIMS)
+        spool = dc.spool([patch]).chunk(time=4, keep_partial=True)
+        spool = spool.chunk(time=2.5, keep_partial=True).chunk(time=None)
+        assert list(spool) == list(patch.split_gaps())
+
+    def test_rechunks_keep_a_later_segment_in_other_units(self):
+        """A converted member's segment counts from its first label (#1659)."""
+        coords = {"distance": np.arange(6.0), "time": np.arange(2.0)}
+        metres = dc.Patch(data=np.zeros((6, 2)), coords=coords, dims=DIMS)
+        metres = metres.set_units(distance="m")
+        runs = [get_coord(start=x, step=1.0, shape=(3,)) for x in (6.0, 10.3)]
+        segments = metres.update_coords(distance=concat_coords(*runs))
+        feet = segments.set_units(distance="m").convert_units(distance="ft")
+        spool = dc.spool([metres, feet]).chunk(distance=3, keep_partial=True)
+        spool = spool.chunk(distance=4, keep_partial=True).chunk(distance=None)
+        labels = [x.get_array("distance") for x in spool]
+        assert np.allclose(np.concatenate(labels), [*range(9), 10.3, 11.3, 12.3])
 
     @pytest.mark.parametrize(
         ("runs", "order"),

@@ -1443,6 +1443,15 @@ class TestSelectSeesPendingEnrichment:
         with pytest.raises(PatchError, match="time coordinate"):
             enriched.select(tag="random")[0]
 
+    def test_a_dated_row_beside_a_lag_time_row_resolves_alone(self, patch, two_epochs):
+        """With no pending time, the dated row resolves at its own instants."""
+        when = patch.get_coord("time").min()
+        lag = patch.update_coords(time=patch.get_coord("time").values - when)
+        spool = dc.spool([patch, lag.update_attrs(tag="lag")])
+        spool = spool.attach_inventory(two_epochs)
+        tags = spool.select(gauge_length=12.0).get_contents()["tag"].tolist()
+        assert tags == ["random"]
+
 
 class TestSelectPartlyHeldCoord:
     """

@@ -62,6 +62,7 @@ from dascore.utils.chunk_plan import (
     PIECE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
+    _own_dtypes,
     _SampleTracker,
     grid_fits,
     patch_local_adjusted_envelopes,
@@ -1069,6 +1070,9 @@ class PlanResolver(PatchResolver):
                 conflict=merge.get("conflict", "raise"),
             )
         else:
+            # one output's members are of one kind, which a plan of several
+            # holds as objects
+            members = _own_dtypes(members, dim)
             # a fill's members fill onto their output's slice of the
             # stretch's grid, or the part a trim asks for, loading only
             # the members reaching it
@@ -1592,6 +1596,9 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
             for row in catalog.to_df().to_dict("records")
         }
         members = members[members["output_id"].isin(present)]
+    # the outputs left may be of one kind, which a plan of several holds
+    # as objects
+    members = _own_dtypes(members, resolver.dim)
     # `_modified` carries: it says the member is a *trim* of its source
     # rather than the whole of it, which is exactly what the re-plan needs
     # to know. Dropping it left `_build_members` to assume no source was

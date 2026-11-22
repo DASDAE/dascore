@@ -106,6 +106,10 @@ _SOURCE_COLUMNS = (
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
 
 
+class _NoOutputError(ChunkError):
+    """No stretch is long enough to give one output."""
+
+
 @dataclass(frozen=True)
 class ChunkPlan:
     """
@@ -273,6 +277,20 @@ def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
     merged[lo] = members.groupby(piece, sort=False)[lo].min().to_numpy()
     merged[hi] = members.groupby(piece, sort=False)[hi].max().to_numpy()
     return replace(plan, members=merged.reset_index(drop=True))
+
+
+def stack_plans(plans: Sequence[ChunkPlan]) -> ChunkPlan:
+    """One plan of several plans' outputs, each numbered after those before."""
+    offsets = np.cumsum([0, *(len(x.outputs) for x in plans[:-1])])
+
+    def _stack(attr):
+        frames = (getattr(x, attr) for x in plans)
+        moved = (
+            x.assign(output_id=x["output_id"] + y) for x, y in zip(frames, offsets)
+        )
+        return pd.concat(moved, ignore_index=True)
+
+    return replace(plans[0], outputs=_stack("outputs"), members=_stack("members"))
 
 
 def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
@@ -1148,13 +1166,45 @@ def _kind_parts(df: pd.DataFrame) -> list[pd.DataFrame]:
     for code, first in enumerate(firsts):
         part = df[codes == code]
         for columns, kind in zip(groups, kinds, strict=True):
-            kind = kind[first]
-            if kind in ("datetime", "timedelta", "number"):
-                step = "timedelta" if kind == "datetime" else kind
-                ends = zip(columns, (kind, kind, step), strict=True)
-                part = part.assign(**{x: _coerce(part[x], y) for x, y in ends})
+            if (kind := kind[first]) in ("datetime", "timedelta", "number"):
+                part = _as_kind(part, columns[0][: -len("_min")], kind)
         parts.append(part)
     return parts
+
+
+def _as_kind(df: pd.DataFrame, name: str, kind: str) -> pd.DataFrame:
+    """The frame with ``name``'s range, and its sources' ranges, held as ``kind``."""
+    step = "timedelta" if kind == "datetime" else kind
+    columns = [f"{name}_{x}" for x in ("min", "max", "step")]
+    columns += [f"_{name}_src_{x}" for x in ("low", "high", "step")]
+    ends = zip(columns, (kind, kind, step) * 2, strict=True)
+    return df.assign(**{x: _coerce(df[x], y) for x, y in ends if x in df})
+
+
+# The value family of a column of one kind held as objects, by `infer_dtype`.
+_INFERRED_FAMILIES = {
+    "datetime": "datetime",
+    "datetime64": "datetime",
+    "timedelta": "timedelta",
+    "timedelta64": "timedelta",
+    "floating": "number",
+    "integer": "number",
+    "mixed-integer-float": "number",
+}
+
+
+def _own_dtypes(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    The frame with ``name``'s range in its kind's dtype where objects hold it.
+
+    A plan of several kinds holds its members' ranges as objects, and so
+    does a slice of them holding one kind, which arithmetic refuses.
+    """
+    low = df.get(f"{name}_min")
+    if low is None or low.dtype != object:
+        return df
+    kind = _INFERRED_FAMILIES.get(pd.api.types.infer_dtype(low))
+    return df if kind is None else _as_kind(df, name, kind)
 
 
 def patch_local_adjusted_envelopes(
@@ -1300,6 +1350,53 @@ def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
     """Drop rows whose selected patch is empty from data-bearing plans."""
     empty = df.get(_PATCH_LOCAL_EMPTY)
     return df if empty is None else df[~empty]
+
+
+def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
+    """
+    Drop rows a selection of ``names`` left holding no sample, for planning.
+
+    A sample selection marks the rows it empties; a value or relative one
+    between two samples leaves an envelope holding none of the row's labels.
+    A row whose labels are not known to lie on a lattice is kept.
+    """
+    df = _drop_patch_local_empty(df)
+    if "_modified" not in df or df.empty:
+        return df
+    emptied = []
+    for part in _kind_parts(df) or [df]:
+        trimmed = part["_modified"].fillna(False).to_numpy(dtype=bool)
+        for name in names:
+            if not {f"{name}_{x}" for x in ("min", "max", "step")} <= set(part):
+                continue
+            low, high, step = (part[f"{name}_{x}"] for x in ("min", "max", "step"))
+            # an envelope a step wide holds a sample; only a narrower one may not
+            narrow = ((high - low) < 2 * step.abs()).to_numpy(dtype=bool)
+            held = trimmed & _structural(part, name) & narrow
+            if not held.any():
+                continue
+            # only the columns a row's lattice is read from: the frame is wide
+            own = (f"{name}_", f"_{name}_", "_modified")
+            rows = part.loc[held, part.columns.str.startswith(own)]
+            emptied += rows.index[_holds_no_sample(rows, name)].tolist()
+    return df.drop(index=emptied) if emptied else df
+
+
+def _holds_no_sample(rows: pd.DataFrame, name: str) -> np.ndarray:
+    """Whether no label of each row's lattice lies inside its envelope."""
+    lattice = _sample_lattices(rows, name)
+    base, stride, den, phase, *_ = lattice
+    lows, highs = (rows[f"{name}_{x}"].to_numpy() for x in ("min", "max"))
+    if lows.dtype.kind in "Mm":  # ticks, as the lattice counts them
+        lows, highs = to_int(lows), to_int(highs)
+    grid = (base, np.where(stride > 0, stride, 1), den, phase)
+    if lows.dtype.kind == "f":  # positions: a bump on a large label rounds away
+        first = np.ceil((lows - base) / grid[1] - _GRID_SNAP_RTOL)
+        last = np.floor((highs - base) / grid[1] + _GRID_SNAP_RTOL)
+    else:
+        first = _lattice_label(lows, grid)
+        last = _lattice_label(highs + 1, grid, before=True)
+    return (stride > 0) & (first > last)
 
 
 def _ensure_patch_row(df: pd.DataFrame) -> pd.DataFrame:
@@ -2749,6 +2846,26 @@ def _gap_carried_columns(df: pd.DataFrame, name: str, group_attrs) -> list[str]:
     return list(dict.fromkeys(cols))
 
 
+def _ordered_cells(df: pd.DataFrame, name: str, group_attrs, carried):
+    """Yield the rows of each cell of `df`, rows of one kind, in report order."""
+    cells = _cell_labels(
+        df, name, group_attrs, dc.get_config().sampling_group_tolerance
+    )
+    df = _adopt_lone_steps(df, name, cells)
+    grouped = df.groupby(cells, sort=False)
+    groups = grouped.groups
+    mins = grouped[f"{name}_min"].min()
+    stated = {
+        label: tuple(df.loc[index, x].iloc[0] for x in carried)
+        for label, index in groups.items()
+    }
+    order = sorted(
+        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
+    )
+    for label in order:
+        yield df.loc[groups[label]]
+
+
 def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance, max_shift):
     """
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
@@ -2760,26 +2877,15 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance, max_shift):
     never depends on the order the relation happened to arrive in. Each
     cell's ordinal rides on its gaps as `group_id`, which is the only
     thing that always tells two cells apart: sampling group and
-    structural def keys partition without being shown.
+    structural def keys partition without being shown. Rows stating the
+    dimension in several kinds report each kind alone, as a spool of that
+    kind would, in order of the kinds' first rows.
     """
     min_name, max_name, step_name = _dim_columns(df, name)
     carried = _gap_carried_columns(df, name, group_attrs)
-    cells = _cell_labels(
-        df, name, group_attrs, dc.get_config().sampling_group_tolerance
-    )
-    df = _adopt_lone_steps(df, name, cells)
-    grouped = df.groupby(cells, sort=False)
-    groups = grouped.groups
-    mins = grouped[min_name].min()
-    stated = {
-        label: tuple(df.loc[index, x].iloc[0] for x in carried)
-        for label, index in groups.items()
-    }
-    order = sorted(
-        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
-    )
-    for group_id, label in enumerate(order):
-        sub = df.loc[groups[label]]
+    parts = [_normalize_chunk_units(x, name) for x in _kind_parts(df)] or [df]
+    cells = (y for x in parts for y in _ordered_cells(x, name, group_attrs, carried))
+    for group_id, sub in enumerate(cells):
         tol = _cell_tolerance(tolerance, sub, name)
         seams = _cell_seams(_integer_ticks(sub, name), name, tol, max_shift)
         found = (seams["_joined"] == "gap").to_numpy() & seams["_keep"].to_numpy()
@@ -2857,8 +2963,9 @@ def build_gap_frame(
             }
             | {x: df[x] for x in carried},
         )[columns]
-    out = pd.concat(frames, ignore_index=True)
-    return out[columns].sort_values(["group_id", min_name]).reset_index(drop=True)
+    # cells come in group order, each's gaps in order; a sort would compare
+    # the values of two kinds
+    return pd.concat(frames, ignore_index=True)[columns]
 
 
 def build_coverage_frame(
@@ -2940,8 +3047,11 @@ def build_coverage_frame(
     out["covered"] = out["span"] - out["gap_total"]
     # A zero span is a single sample, which is wholly covered; dividing
     # would make it NaN and read as "unknown" rather than "all there".
-    covered = np.asarray(to_float(out["covered"]), dtype=float)
-    total = np.asarray(to_float(out["span"]), dtype=float)
+    # Row by row, since rows of two kinds share the column.
+    covered, total = (
+        np.array([to_float(y) for y in out[x]], dtype=float)
+        for x in ("covered", "span")
+    )
     out["coverage"] = np.divide(
         covered, total, out=np.ones_like(total), where=total != 0
     )
@@ -3039,6 +3149,31 @@ def build_chunk_plan(
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
+    if len(parts := _kind_parts(df)) > 1:
+        # each kind plans alone, as a spool of that kind would; one too short
+        # for any output is skipped, as a stretch is, unless every kind is
+        plans, short = [], []
+        for part in parts:
+            try:
+                plans.append(
+                    build_chunk_plan(
+                        part,
+                        overlap=overlap,
+                        keep_partial=keep_partial,
+                        tolerance=tolerance,
+                        max_shift=max_shift,
+                        conflict=conflict,
+                        group=group,
+                        on_missing_dim=on_missing_dim,
+                        fill_value=fill_value,
+                        **{name: value},
+                    )
+                )
+            except _NoOutputError as exc:
+                short.append(exc)
+        if not plans:
+            raise short[0]
+        return stack_plans(plans)
     frame_dtype = df[min_name].dtype
     df = seams = _seams(df, name, params["group"], tolerance, max_shift)
     if fill_value is None:  # a fill spreads no labels
@@ -3391,7 +3526,7 @@ def build_chunk_plan(
                 f"shorter than the sample step along {name!r} "
                 f"({np.abs(part_steps).min()}). Use a larger chunk length."
             )
-            raise ChunkError(msg)
+            raise _NoOutputError(msg)
         msg = "Could not chunk. No segments with sufficient length found."
         # Say how short the data actually is, and name the two knobs which
         # make an over-long request work. Size chunks are excluded; their
@@ -3417,7 +3552,7 @@ def build_chunk_plan(
                 f"tolerance to join segments separated by gaps, or "
                 f"keep_partial=True to keep the short segments."
             )
-        raise ChunkError(msg)
+        raise _NoOutputError(msg)
     # Assemble the outputs table: envelopes and step, then the carried
     # columns (each partition's single value repeated over its outputs),
     # then the ids.
@@ -3457,6 +3592,10 @@ def build_chunk_plan(
             "_modified": ~unchanged,
         }
     )
+    if (origin := f"_{name}_source_envelope") in kept_df:
+        # where a member's samples count from: a segment's first label, which
+        # its source's range does not state
+        members[origin] = kept_df[origin].to_numpy()[src_rows]
     # The partition's unit (single-valued after normalization) rides on
     # every member row: trim magnitudes mean THIS unit, not whatever
     # spelling the member's source file used.
@@ -3808,7 +3947,7 @@ def _normalize_numeric_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     part = df.loc[numeric, :].copy()
     for col in (min_name, max_name, step_name):
         if col in part:
-            part[col] = pd.to_numeric(part[col])
+            part[col] = _coerce(part[col], "number")
     part = _normalize_chunk_units(part, name)
     if numeric.all():
         return df.assign(**{c: part[c] for c in cols})
@@ -3910,6 +4049,8 @@ def _coerce(values: pd.Series, family: str) -> pd.Series:
         return pd.to_timedelta(values)
     if family == "text":
         return values.astype(str)
+    if values.dtype.kind in "mM":  # only nulls, which a time column holds as NaT
+        values = values.astype(object).where(values.notna())
     return pd.to_numeric(values)
 
 
@@ -3957,8 +4098,8 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
 
     Tick labels are ``base + (phase + k * stride) // den``, float ones
     ``base + k * stride``, from the source's first label ``base``. A row with
-    no known origin, or a source counted in other units, has a zero stride.
-    ``width`` is the step's size; min/max are a whole row's own labels.
+    no known origin has a zero stride. ``width`` is the step's size; min/max
+    are a whole row's own labels.
     """
     low, high = rows[f"{name}_min"], rows[f"{name}_max"]
     blank = pd.Series(None, index=rows.index, dtype=object)
@@ -3966,16 +4107,21 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
     stated = rows.get(f"_{name}_units_source", blank)
     converted = stated.notna() & (stated != rows.get(f"_{name}_units"))
     first, known = low, whole
-    # a plan member keeps its source's range, a selected view its envelope
-    sources = [rows.get(f"_{name}_src_low")]
+    # a plan member keeps its source's range, in the source's units; a
+    # source stating no step (one of segments, say) is not one grid
+    sources = []
+    if (source := rows.get(f"_{name}_src_low")) is not None:
+        source = source.where(rows[f"_{name}_src_step"].notna())
+        sources.append(_in_row_units(source, rows, name, converted))
+    # a selected view keeps its envelope, in the row's units
     if (envelope := rows.get(f"_{name}_source_envelope")) is not None:
         pick = lambda x: x.get(f"{name}_min") if isinstance(x, dict) else None  # noqa
         picked = envelope.map(pick)
         # integer labels hold a row stating no start as floats, as `_src_low` does
         lacking = low.dtype.kind in "iu" and picked.isna().any()
         sources.append(picked.astype(np.float64 if lacking else low.dtype))
-    for source in (x for x in sources if x is not None):
-        usable = source.notna() & ~converted
+    for source in sources:
+        usable = source.notna()
         first, known = first.where(known | ~usable, source), known | usable
     steps = rows[f"{name}_step"]
     base, steps = first.to_numpy(), steps.fillna(steps.iloc[:0].sum() * 0)
@@ -3996,6 +4142,19 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
             phase[on] = (min(num, 0) * (count - 1) + offset) % step_den
     own = (x.where(whole).to_numpy() for x in (low, high))
     return base, stride, den, phase, width, *own
+
+
+def _in_row_units(values: pd.Series, rows, name: str, converted) -> pd.Series:
+    """Values stated in each row's source units, in the row's own units."""
+    if not converted.any():
+        return values
+    assert values.dtype.kind == "f", "only numbers are stated per spelling"
+    out = values.copy()
+    pairs = rows.loc[converted, [f"_{name}_units_source", f"_{name}_units"]]
+    for (unit, target), index in pairs.groupby(list(pairs)).groups.items():
+        moved = values[index].to_numpy()
+        out[index] = convert_units(moved, to_units=target, from_units=unit)
+    return out
 
 
 def _lattice_label(x, lattice, before=False):

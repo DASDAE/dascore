@@ -110,6 +110,7 @@ from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
+    _drop_emptied,
     _drop_patch_local_empty,
     _ensure_patch_row,
     _resolve_group_attrs,
@@ -120,6 +121,7 @@ from dascore.utils.chunk_plan import (
     build_gap_frame,
     build_subdivision_plan,
     coalesce_runs,
+    stack_plans,
     subdivision_pieces,
     window_plan,
     with_runs,
@@ -278,11 +280,7 @@ def _joined(frame, parts, dim) -> ChunkPlan:
         done |= rows
     ends = zip(frame[f"{dim}_min"][~done], frame[f"{dim}_max"][~done])
     plans.append(build_subdivision_plan(frame[~done], [[x] for x in ends], dim))
-    for num, plan in enumerate(plans[1:]):  # numbered after those before
-        for x in (plan.outputs, plan.members):
-            x["output_id"] += sum(len(y.outputs) for y in plans[: num + 1])
-    stack = lambda x: pd.concat([getattr(y, x) for y in plans])  # noqa
-    return replace(plans[0], outputs=stack("outputs"), members=stack("members"))
+    return stack_plans(plans)
 
 
 def _composed(plan, pieces) -> ChunkPlan:
@@ -2520,7 +2518,9 @@ class Spool(NodeRepr, NamespaceOwner):
             base = with_untrimmed_origins(base, dim, self._catalog)
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
-        working = _drop_patch_local_empty(working)
+        # a member a selection emptied holds nothing to plan
+        selected = {x for coords, _, _ in self._catalog.residuals for x in coords}
+        working = _drop_emptied(working, selected)
         # a sample or relative selection resolves against the whole patch at
         # load, so its runs cannot be planned apart
         local = any(s or r for _, s, r in self._catalog.residuals)
