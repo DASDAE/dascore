@@ -358,6 +358,7 @@ TIME_KINDS = {
     "absolute": T0 + np.arange(5) * ONE_SECOND,
     "durations": np.arange(5) * ONE_SECOND,
     "numbers": np.arange(5.0),
+    "stepless": np.array([0, 1, 3, 4, 6.0]),
 }
 
 
@@ -369,6 +370,7 @@ class TestMixedKinds:
             ("absolute", "numbers"),
             ("durations", "numbers"),
             ("absolute", "durations"),
+            ("absolute", "stepless"),
         ]
     )
     def patches(self, request):

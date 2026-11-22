@@ -3947,7 +3947,7 @@ def _normalize_numeric_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     part = df.loc[numeric, :].copy()
     for col in (min_name, max_name, step_name):
         if col in part:
-            part[col] = pd.to_numeric(part[col])
+            part[col] = _coerce(part[col], "number")
     part = _normalize_chunk_units(part, name)
     if numeric.all():
         return df.assign(**{c: part[c] for c in cols})
@@ -4049,6 +4049,8 @@ def _coerce(values: pd.Series, family: str) -> pd.Series:
         return pd.to_timedelta(values)
     if family == "text":
         return values.astype(str)
+    if values.dtype.kind in "mM":  # only nulls, which a time column holds as NaT
+        values = values.astype(object).where(values.notna())
     return pd.to_numeric(values)
 
 
