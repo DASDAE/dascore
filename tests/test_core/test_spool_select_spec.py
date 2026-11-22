@@ -642,6 +642,53 @@ class TestRelative:
         assert len(out) == len(out.get_contents()) == len(list(out))
 
 
+class TestPlansOverLocalSelections:
+    """A plan over a sample or relative view cuts members on its own dimensions."""
+
+    @staticmethod
+    def _assert_as_loaded(selected, method, kwargs):
+        """The plan's outputs are those of the same plan over the loaded patches."""
+        got = list(getattr(selected, method)(**kwargs))
+        expected = list(getattr(dc.spool(list(selected)), method)(**kwargs))
+        assert len(got) == len(expected)
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+    @pytest.mark.parametrize(
+        "method, kwargs",
+        [
+            ("concatenate", {"rank": None}),
+            ("concatenate", {"distance": None}),
+            ("chunk", {"distance": 1}),
+        ],
+        ids=["concatenate-new", "concatenate-distance", "chunk-distance"],
+    )
+    def test_emptied_member(self, method, kwargs):
+        """A member the selection emptied joins as its loaded patch does (#1640)."""
+        patch = dc.Patch(
+            data=np.ones((2, 5)),
+            coords={"distance": [0.0, 1.0], "time": np.arange(5) * 2.0},
+            dims=("distance", "time"),
+        )
+        # no sample lies one second in, which the index cannot tell
+        selected = dc.spool([patch]).select(time=(1, 1), relative=True)
+        self._assert_as_loaded(selected, method, kwargs)
+
+    @pytest.mark.parametrize(
+        "selection",
+        [{"time": (1, 9), "samples": True}, {"time": (1, -1), "relative": True}],
+        ids=["samples", "relative"],
+    )
+    def test_other_dimension_kept_whole(self, selection):
+        """A chunk along time keeps every channel, one labelled NaN included."""
+        patch = dc.Patch(
+            data=np.arange(30.0).reshape(3, 10),
+            coords={"distance": [0.0, np.nan, 2.0], "time": np.arange(10.0)},
+            dims=("distance", "time"),
+        )
+        selected = dc.spool([patch]).select(**selection)
+        self._assert_as_loaded(selected, "chunk", {"time": 4})
+
+
 class TestTwoKinds:
     """Patches stating a coordinate in two kinds each select as alone."""
 
