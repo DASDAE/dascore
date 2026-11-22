@@ -549,6 +549,112 @@ def _adjust_relative_envelopes(df, coords, uncertain):
     return df
 
 
+def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarray]:
+    """
+    The float64 labels a row keeps inside ``ends``, as `Grid.labels` makes them.
+
+    The grid is the row's own where it is whole, else its source envelope's.
+    Loading takes a bound within twice the float allowance of a label as
+    that label (`_onto_grid`), so each end first moves out by that and one
+    allowance more, for rounding: a label in that margin may or may not
+    load, and is kept. Integer labels are exact. Returns each end's labels
+    and the rows with such a grid.
+    """
+    blank = pd.Series(None, index=rows.index, dtype=object)
+    whole = ~rows.get("_modified", blank).fillna(False).astype(bool).to_numpy()
+    envelope = rows.get(f"_{name}_source_envelope", blank)
+    low, high = (
+        np.where(
+            whole,
+            rows[f"{name}_{x}"].to_numpy(dtype=np.float64),
+            envelope.map(
+                lambda y, x=x: y.get(f"{name}_{x}") if isinstance(y, dict) else None
+            ).to_numpy(dtype=np.float64),
+        )
+        for x in ("min", "max")
+    )
+    step = rows[f"{name}_step"].to_numpy(dtype=np.float64)
+    stored = rows.get(f"_{name}_coord_dtype", blank).astype(str)
+    units, source = (rows.get(f"_{name}_{x}", blank) for x in ("units", "units_source"))
+    exact = rows.get(f"_{name}_grid", blank).map(lambda x: isinstance(x, tuple))
+    fit = np.isfinite(low + high + step) & (step != 0)
+    fit &= ~(
+        exact
+        | stored.isin(("float16", "float32"))
+        | (source.notna() & (source != units))
+    ).to_numpy()
+    allowance = np.maximum(
+        _GRID_RTOL * np.abs(step),
+        _GRID_ULPS * np.spacing(np.maximum(np.abs(low), np.abs(high))),
+    )
+    allowance = np.where(stored.str.match("u?int"), 0, allowance)
+    origin, last = np.where(step > 0, low, high), np.where(step > 0, high, low)
+    with np.errstate(invalid="ignore", divide="ignore"):  # rows with no grid
+        count = np.rint((high - low) / np.abs(step)) + 1
+        fit &= count > 1  # one sample has no spacing to count by
+        spacing = (last - origin) / (count - 1)
+        got = []
+        for end, sign in zip(ends, (-1, 1), strict=True):
+            at = (end + sign * 3 * allowance - origin) / spacing
+            # the label at or inside the end, whichever way the grid runs
+            k = np.where((sign < 0) == (spacing > 0), np.ceil(at), np.floor(at))
+            k = np.clip(k, 0, count - 1)  # a margin past the grid's ends
+            got.append(np.where(k == count - 1, last, k * spacing + origin))
+    return got, fit
+
+
+def _snap_to_samples(before, after, coords, uncertain) -> pd.DataFrame:
+    """
+    Move the ends a range selection drew onto the samples each row keeps.
+
+    A bound between two samples is no label, so a row states the first and
+    last samples inside it, which loading keeps (#1127): on its lattice
+    (`_sample_lattices`) for ticks, on its grid (`_float_samples`) for
+    floats. An end stays the bound where neither is known, an exact
+    fractional grid was trimmed before (its phase and origin may part), the
+    row holds no sample inside, a relative selection cut it without knowing
+    where, or its float labels are stored narrower than float64 (they
+    rebuild only to their rounding).
+    """
+    for name in coords:
+        cols = [f"{name}_min", f"{name}_max"]
+        if after.empty or not {*cols, f"{name}_step"}.issubset(after.columns):
+            continue
+        ends = [after[x].to_numpy() for x in cols]
+        if (kind := ends[0].dtype.kind) not in "fiuMm":  # labels have no lattice
+            continue
+        rows = before.loc[after.index]
+        moved = [x != rows[y].to_numpy() for x, y in zip(ends, cols, strict=True)]
+        cut = (moved[0] | moved[1]) & ~rows.index.isin(list(uncertain.get(name, ())))
+        if not cut.any():
+            continue
+        rows, part = rows[cut], [x[cut] for x in ends]
+        if kind == "f":
+            got, fit = _float_samples(rows, name, part)
+        else:
+            base, stride, den, phase, *_ = _sample_lattices(rows, name)
+            modified = rows.get("_modified", pd.Series(False, index=rows.index))
+            fit = (stride > 0) & ~((den > 1) & modified.fillna(False).to_numpy(bool))
+            unit = f"{kind}8[ns]" if kind in "Mm" else part[0].dtype
+            ticks = [x.astype(unit).view(np.int64) for x in part]
+            grid = (base, np.where(stride > 0, stride, 1), den, phase)
+            got = [
+                _lattice_label(ticks[0], grid),
+                _lattice_label(ticks[1] + 1, grid, before=True),
+            ]
+            got = [x.view(unit).astype(part[0].dtype) for x in got]
+        new = [
+            np.where(fit & y[cut], x, e)
+            for x, y, e in zip(got, moved, part, strict=True)
+        ]
+        empty = new[0] > new[1]  # no sample inside: the row may hold nothing
+        ends = [x.copy() for x in ends]
+        for end, old, snapped in zip(ends, part, new, strict=True):
+            end[cut] = np.where(empty, old, snapped)
+        after = after.assign(**dict(zip(cols, ends, strict=True)))
+    return after
+
+
 # What a row's samples on one dimension are known to be, as a selection
 # is replayed: not yet selected, followed position by position, or lost
 # to a selection the relation could not follow.
@@ -1035,9 +1141,11 @@ class _SampleTracker:
         ]
         mins = np.array([x.min() for x in kept])[codes]
         maxs = np.array([x.max() for x in kept])[codes]
+        # a row's own labels say whether it needs the allowance, not the array's
+        floats = np.array([x.dtype.kind == "f" for x in kept], dtype=bool)[codes]
         if held.shift is not None:
             mins, maxs = mins + held.shift[rows], maxs + held.shift[rows]
-        elif mins.dtype.kind == "f":
+        elif floats.any():
             steps = to_float(source[f"{name}_step"].to_numpy()[rows])
             dtypes = source.get(f"_{name}_coord_dtype", pd.Series(index=source.index))
             dtypes = dtypes.to_numpy(dtype=object)[rows]
@@ -1048,8 +1156,8 @@ class _SampleTracker:
             low = np.minimum(source[f"{name}_min"].to_numpy()[rows], mins)
             high = np.maximum(source[f"{name}_max"].to_numpy()[rows], maxs)
             scales = np.maximum(np.abs(low), np.abs(high))
-            out_min = _outward(mins, steps, scales, dtypes, -1)
-            out_max = _outward(maxs, steps, scales, dtypes, 1)
+            out_min = np.where(floats, _outward(mins, steps, scales, dtypes, -1), mins)
+            out_max = np.where(floats, _outward(maxs, steps, scales, dtypes, 1), maxs)
             mins = np.where(np.where(down, last, first), low, out_min)
             maxs = np.where(np.where(down, first, last), high, out_max)
         return mins, maxs, kept, codes
@@ -1243,6 +1351,12 @@ def patch_local_adjusted_envelopes(
         if (empty := out.get(_PATCH_LOCAL_EMPTY)) is not None:
             # a kind whose replay marked no row empty has none
             out[_PATCH_LOCAL_EMPTY] = empty.fillna(False).astype(bool)
+        for column in out.columns.intersection(df.columns):
+            # a column one dtype held before the split holds it again, so a
+            # row stating no step keeps the null it had (NaT beside durations)
+            if df[column].dtype != object and out[column].dtype == object:
+                cells = out[column]
+                out[column] = cells.where(cells.notna(), None).astype(df[column].dtype)
         return out.sort_index(kind="stable")
     source = df
     df = df.copy(deep=False)
@@ -1262,6 +1376,7 @@ def patch_local_adjusted_envelopes(
             if riders or position < len(residuals) - 1 or len(coords) > 1:
                 tracker.follow_values(before, df, coords, relative, uncertain)
                 df = tracker.trim(df, coords)
+            df = _snap_to_samples(before, df, coords, uncertain)
             continue
         for name, value in coords.items():
             cols = [f"{name}_min", f"{name}_max", f"{name}_step"]

@@ -1062,6 +1062,8 @@ class TestSelectSharedDimension:
             {"distance": (10, 20)},
             {"distance": (10, 20), "relative": True},
             {"distance": (10, 21), "samples": True},
+            {"distance": (10.5, 20.5)},
+            {"sensor": (1020.5, 1040.5)},
         ],
     )
     def test_contents_match_patches(self, sensor_spool, kwargs):
@@ -1116,6 +1118,19 @@ class TestSelectSharedDimension:
         for kwargs in ({"time": (10, 300)}, {"lag": (10, 300)}):
             out = spool.select(**kwargs, samples=True)
             _assert_contents_match_patches(out, ["time", "lag"])
+
+    def test_integer_rider_beside_float_rider(self):
+        """An integer rider is advertised exactly beside a float one (#1634)."""
+        patches = [
+            dc.Patch(
+                data=np.zeros(5),
+                coords={"x": np.arange(5), "y": ("x", rider)},
+                dims=("x",),
+            )
+            for rider in (np.arange(5) * 10, np.arange(5) * 0.25 + 1.0)
+        ]
+        out = dc.spool(patches).select(x=(1, 2))
+        _assert_contents_match_patches(out, ["x", "y"])
 
     def test_irregular_rider_keeps_envelope(self, sensor_patch):
         """A rider the row cannot rebuild keeps its whole envelope."""

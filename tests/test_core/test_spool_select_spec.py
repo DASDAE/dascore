@@ -689,6 +689,127 @@ class TestPlansOverLocalSelections:
         self._assert_as_loaded(selected, "chunk", {"time": 4})
 
 
+class TestBoundBetweenSamples:
+    """A range bound between samples states the samples it keeps (#1127)."""
+
+    @pytest.fixture(params=["float", "integer", "datetime"])
+    def kind(self, request):
+        """Labels, a chunk of three samples, and bounds 2.5 and 10.5 samples in."""
+        start, ms = np.datetime64("2020-01-01"), np.timedelta64(1, "ms")
+        return {
+            "float": (np.arange(24.0), 3.0, (2.5, 10.5)),
+            "integer": (np.arange(24) * 10, 30, (25, 105)),
+            "datetime": (
+                start + np.arange(24) * 1000 * ms,
+                3000 * ms,
+                (start + 2500 * ms, start + 10500 * ms),
+            ),
+        }[request.param]
+
+    @staticmethod
+    def _patches(labels, count=1):
+        """``count`` contiguous patches of twelve samples on two channels."""
+        return [
+            dc.Patch(
+                data=np.arange(24.0).reshape(2, 12),
+                coords={"distance": [0.0, 1.0], "time": labels[12 * x : 12 * x + 12]},
+                dims=("distance", "time"),
+            )
+            for x in range(count)
+        ]
+
+    @staticmethod
+    def _select(spool, labels, bounds, relative):
+        """The spool selected to ``bounds``, as values or from its start."""
+        if relative:
+            bounds = tuple(x - labels[0] for x in bounds)
+        return spool.select(time=bounds, relative=relative)
+
+    @pytest.mark.parametrize("relative", [False, True])
+    def test_contents_state_kept_samples(self, kind, relative):
+        """Contents state the first and last samples loaded, not the bounds."""
+        labels, _, bounds = kind
+        out = self._select(dc.spool(self._patches(labels)), labels, bounds, relative)
+        (row,) = out.get_contents().itertuples()
+        coord = out[0].get_coord("time")
+        assert (row.time_min, row.time_max) == (coord.min(), coord.max())
+        assert (coord.min(), coord.max()) == (labels[3], labels[10])
+
+    @pytest.mark.parametrize("relative", [False, True])
+    @pytest.mark.parametrize("first", [None, {"distance": None}])
+    def test_chunk_as_loaded(self, kind, relative, first):
+        """Chunks count from the first kept sample, holding each once (#1658)."""
+        labels, length, bounds = kind
+        out = self._select(dc.spool(self._patches(labels)), labels, bounds, relative)
+        out = out if first is None else out.chunk(**first)
+        kwargs = {"time": length, "keep_partial": True}
+        TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", kwargs)
+
+    def test_joined_patches_keep_labels(self, kind):
+        """Patches joined after a selection keep their labels."""
+        labels, _, (low, high) = kind
+        spool = dc.spool(self._patches(labels, count=2))
+        out = spool.select(time=(low, high + 10 * (labels[1] - labels[0])))
+        TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", {"time": None})
+
+    _start = np.datetime64("2020-01-01")
+
+    @pytest.mark.parametrize(
+        "time, chain",
+        [
+            # integers on a fractional step, which a float frame rounds
+            (dc.get_coord(start=0, step=(1000, 3), shape=(400,)), [(850, 100500)]),
+            # floats far from zero, where start + k * step rounds unlike a label
+            (
+                dc.get_coord(start=1e12, step=0.1, shape=(100,)),
+                [(1e12 + 0.25, 1e12 + 9.75)],
+            ),
+            # a rounding margin wider than the step, at both ends of the grid
+            (
+                dc.get_coord(start=1e12, step=0.001, shape=(10,)),
+                [(1e12 + 0.0001, 1e12 + 0.0089)],
+            ),
+            # a fractional time grid, sliced before the value selection
+            (
+                dc.get_coord(start=_start, step=(1, 1024), shape=(40,)),
+                [
+                    {"time": (0.0025, -0.0025), "relative": True},
+                    {"time": (2, None), "samples": True},
+                    (
+                        _start + 6500 * np.timedelta64(1, "us"),
+                        _start + 30500 * np.timedelta64(1, "us"),
+                    ),
+                ],
+            ),
+        ],
+    )
+    def test_contents_hold_what_loads(self, time, chain):
+        """No end is advertised inside what loads, and a join keeps every sample."""
+        patch = dc.Patch(
+            data=np.zeros((2, len(time))),
+            coords={"distance": [0.0, 1.0], "time": time},
+            dims=("distance", "time"),
+        )
+        out = dc.spool([patch])
+        for bounds in chain:
+            out = out.select(**bounds if isinstance(bounds, dict) else {"time": bounds})
+        (row,) = out.get_contents().itertuples()
+        coord = out[0].get_coord("time")
+        assert time.min() <= row.time_min <= coord.min()
+        assert coord.max() <= row.time_max <= time.max()
+        TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", {"time": None})
+
+    def test_bound_near_a_sample_through_a_plan(self):
+        """A plan's outputs over a bound just short of a sample state that sample."""
+        (patch,) = self._patches(np.arange(24.0))
+        out = dc.spool([patch]).select(time=(2.95, 10.5)).chunk(distance=None)
+        view = out.select(distance=(0, 0))
+        kwargs = {"time": 3.0, "keep_partial": True}
+        TestPlansOverLocalSelections._assert_as_loaded(view, "chunk", kwargs)
+        chunked = view.chunk(**kwargs)
+        assert chunked.get_contents()["time_min"].tolist() == [3.0, 6.0, 9.0]
+
+
 class TestTwoKinds:
     """Patches stating a coordinate in two kinds each select as alone."""
 
@@ -749,6 +870,23 @@ class TestTwoKinds:
         expected = [y for x in alone for y in x]
         assert len(mixed) == len(expected)
         assert all(x.equals(y) for x, y in zip(mixed, expected, strict=True))
+
+    @pytest.mark.parametrize("stepless", ["numbers", "durations"])
+    @pytest.mark.parametrize("kwargs", [{"samples": True}, {"relative": True}])
+    def test_missing_step_kept(self, stepless, kwargs):
+        """A row with no step states the missing step it did before selecting."""
+        irregular = np.array([0, 1, 3, 4, 6])
+        numbers = irregular * 1.0 if stepless == "numbers" else np.arange(5.0)
+        durations = np.arange(5) if stepless == "numbers" else irregular
+        times = (durations * np.timedelta64(1, "s"), numbers)
+        patches = [
+            dc.Patch(data=np.zeros(5), coords={"time": x}, dims=("time",))
+            for x in times
+        ]
+        spool = dc.spool(patches)
+        out = spool.select(time=(1, None), **kwargs)
+        expected = spool.get_contents()["time_step"]
+        pd.testing.assert_series_equal(out.get_contents()["time_step"], expected)
 
 
 class TestMaterializedNamespaces:
