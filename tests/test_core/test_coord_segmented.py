@@ -653,6 +653,17 @@ class TestDiscontinuities:
         df = reverse_gap_coord.get_discontinuities("gaps")
         assert len(df) == 1
 
+    @pytest.mark.parametrize("kind", ["all", "gaps"])
+    @pytest.mark.parametrize(
+        ("order", "dtype", "index"),
+        [(1, np.float64, 8), (-1, np.float64, 2), (1, np.float32, 8)],
+    )
+    def test_float_rounding_is_no_discontinuity(self, kind, order, dtype, index):
+        """Spacings off the median only by float rounding are not reported."""
+        labels = np.array([0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9, 1.0])
+        coord = get_coord(data=labels[::order].astype(dtype))
+        assert coord.get_discontinuities(kind)["index"].tolist() == [index]
+
 
 class TestRoundTrips:
     """Serialization and summary round trips."""

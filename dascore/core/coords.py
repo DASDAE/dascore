@@ -990,8 +990,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         `delta` (after - before) and `excess` (delta minus the expected local
         sampling interval, NaN when no sampling interval is defined).
 
-        A monotonic array reports every spacing which is not its declared
-        step (or its median spacing when it declares none); a segmented
+        A monotonic list of labels reports every spacing which is not its
+        median spacing, within float rounding for float labels; a segmented
         coordinate reports the seams between its runs; every other
         coordinate (a range, an unordered array, a partial or string
         coordinate) returns an empty dataframe. ``tolerance`` may also be a
@@ -3469,9 +3469,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             values = self.values
             diffs = _diffs(values)
             expected = self._expected_spacing()
+            off = diffs != expected
+            if values.dtype.kind == "f":  # spacings within float rounding agree
+                off = np.abs(diffs - expected) > _float_allowance(values, expected)
             return [
                 (int(i) + 1, values[i], values[i + 1], expected)
-                for i in np.flatnonzero(diffs != expected)
+                for i in np.flatnonzero(off)
             ]
         rows, offsets = [], self._run_offsets()
         for num in range(1, self.runs_count):
