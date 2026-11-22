@@ -968,17 +968,18 @@ class TestSharedDimensionEnvelopes:
 class TestTwoKindEnvelopes:
     """Replaying selections onto rows stating a coordinate in two kinds."""
 
-    def test_unset_marker_marks_no_row(self):
+    @pytest.mark.parametrize("name", ["time", "lag_max"])
+    def test_unset_marker_marks_no_row(self, name):
         """A kind whose replay never marks an emptied row marks none."""
         frame = pd.DataFrame(
             {
-                "time_min": [pd.Timedelta(0, "s"), 0.0],
-                "time_max": [pd.Timedelta(4, "s"), 6.0],
-                "time_step": [pd.Timedelta(1, "s"), np.nan],
+                f"{name}_min": [pd.Timedelta(0, "s"), 0.0],
+                f"{name}_max": [pd.Timedelta(4, "s"), 6.0],
+                f"{name}_step": [pd.Timedelta(1, "s"), np.nan],
             },
             dtype=object,
         )
-        residuals = (({"time": (9, None)}, True, False),)
+        residuals = (({name: (9, None)}, True, False),)
         out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
         # the numbers have no step to count by, so only the durations empty
         assert out[_PATCH_LOCAL_EMPTY].tolist() == [True, False]
