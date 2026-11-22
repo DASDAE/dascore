@@ -11,10 +11,11 @@ import gc
 import os
 import pickle
 import random
+import sqlite3
 import threading
 import warnings
 from concurrent.futures import ProcessPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import timedelta
 from fractions import Fraction
 from itertools import accumulate, pairwise
@@ -4629,15 +4630,25 @@ class TestStaleSourceCheck:
         assert os.path.realpath(index) not in held()
         index.unlink()
 
-    @pytest.mark.parametrize("change", ["removed", "garbled"])
+    @pytest.mark.parametrize("change", ["removed", "garbled", "damaged"])
     def test_a_plan_whose_index_is_gone(self, selected_plan, change):
         """Without the index to name its members by, a plan compares as before."""
         planned, index = selected_plan
         if change == "removed":
             index.unlink()
-        else:
+        elif change == "garbled":
             index.write_bytes(b"not an index")
+        else:  # it opens, but its patch rows cannot be read
+            with closing(sqlite3.connect(index)) as con:
+                size = con.execute("PRAGMA page_size").fetchone()[0]
+                (root,) = con.execute(
+                    "SELECT rootpage FROM sqlite_master WHERE name = 'patches'"
+                ).fetchone()
+            raw = bytearray(index.read_bytes())
+            raw[(root - 1) * size : root * size] = b"\xff" * size
+            index.write_bytes(bytes(raw))
         assert planned == dc.spool(list(planned))
+        index.unlink(missing_ok=True)  # nothing was left holding it
 
     def test_a_plan_unpickles_with_the_index_directory_gone(self, plan_and_index):
         """Nothing reopens the index, so its parent need not exist."""

@@ -1195,14 +1195,15 @@ def _index_rows(index, patch_rows: list[int]) -> list[dict] | None:
         return None
     if not isinstance(index, str):
         return index.query(patch_rows=patch_rows).to_dict("records")
+    backend = None
     try:
         backend = get_backend(index, read_only=True)
-    except (sqlite3.Error, InvalidIndexError):
-        return None  # rewritten since, by another version, or broken
-    try:
         return backend.query(patch_rows=patch_rows).to_dict("records")
+    except (sqlite3.Error, pd.errors.DatabaseError, InvalidIndexError):
+        return None  # rewritten since, by another version, or damaged
     finally:
-        backend.close()
+        if backend is not None:
+            backend.close()
 
 
 def _cut_index_row(member: Mapping) -> int | None:
