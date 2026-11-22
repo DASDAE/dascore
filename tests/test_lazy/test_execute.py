@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tracemalloc
 import warnings
+from itertools import product
 from typing import ClassVar
 
 import numpy as np
@@ -243,6 +244,20 @@ class TestLoad:
         np.testing.assert_allclose(loaded.data, expected.data, rtol=1e-12, atol=1e-12)
 
 
+# The windowed cases slowest in boxes an eighth of a row long. WebAssembly
+# runs them in larger boxes only; the other cases still run in eighths there.
+SLOW_EIGHTHS = ("halo_beside", "halo_inside", "pointwise", "analysis", "fill")
+
+
+def _block_sizes(names):
+    """Each case at each block size, the slowest eighths marked wasm_skip."""
+    slow = [(1 / 8, x) for x in SLOW_EIGHTHS]
+    return [
+        pytest.param(*x, marks=pytest.mark.wasm_skip) if x in slow else x
+        for x in product((0, 60, 3, 1 / 8), names)
+    ]
+
+
 class TestWindowed:
     """An operation in a window is computed from the windows a box overlaps."""
 
@@ -291,8 +306,7 @@ class TestWindowed:
         ),
     }
 
-    @pytest.mark.parametrize("name", CASES)
-    @pytest.mark.parametrize("rows", (0, 60, 3, 1 / 8))
+    @pytest.mark.parametrize(("rows", "name"), _block_sizes(CASES))
     def test_any_block_size(self, lazy, eager, name, rows):
         """However the work is cut, the result is the eager one exactly."""
         out, expected = self.CASES[name](lazy), self.CASES[name](eager)
@@ -421,7 +435,15 @@ class TestFilterArguments:
         kwargs = {"distance": 3, "samples": True, "mode": mode}
         self._same(getattr(lazy, name)(**kwargs), getattr(eager, name)(**kwargs))
 
-    @pytest.mark.parametrize("mode", ("wrap", "interp", "mirror", "nearest"))
+    @pytest.mark.parametrize(
+        "mode",
+        (
+            "wrap",
+            "interp",
+            pytest.param("mirror", marks=pytest.mark.wasm_skip),
+            pytest.param("nearest", marks=pytest.mark.wasm_skip),
+        ),
+    )
     def test_savgol_modes(self, lazy, eager, mode):
         """Each savgol edge mode gives the eager result, however it is cut."""
         kwargs = {"distance": 7, "polyorder": 2, "samples": True, "mode": mode}
@@ -440,6 +462,7 @@ class TestFilterArguments:
             loaded.data, np.abs(expected.data), rtol=1e-12, atol=1e-12
         )
 
+    @pytest.mark.wasm_skip
     def test_truncate(self, lazy, eager):
         """A wider gaussian kernel reads further."""
         kwargs = {"distance": 3, "samples": True, "truncate": 8.0}

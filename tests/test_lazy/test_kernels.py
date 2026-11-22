@@ -200,6 +200,12 @@ GRIDS = (((7, 150), (500,)), ((1, 2, 3), (1, 2, 1000)), ((), (3, 4, 5, 1999)))
 # Operations whose chunks differ from the eager result by design, each
 # with the largest difference allowed, as a fraction of its largest value.
 APPROXIMATE = {"Impulsed": 2e-9}
+# Windowed in every grid is too slow for WebAssembly, which runs windowed
+# operations in boxes through TestWindowed in test_execute instead.
+CHECKED = [
+    pytest.param(x, marks=pytest.mark.wasm_skip) if x.__name__ == "Windowed" else x
+    for x in CONTRACTED
+]
 
 
 class TestContractsHold:
@@ -214,7 +220,7 @@ class TestContractsHold:
         assert {x.__name__ for x in CONTRACTED} == set(CALLS)
 
     @pytest.mark.parametrize("dtype", DTYPES)
-    @pytest.mark.parametrize("cls", CONTRACTED, ids=lambda x: x.__name__)
+    @pytest.mark.parametrize("cls", CHECKED, ids=lambda x: x.__name__)
     def test_contract_holds(self, stored, cls, dtype):
         """Computed in boxes of any grid, the result is the eager one."""
         call = CALLS[cls.__name__]

@@ -142,6 +142,7 @@ class TestDroppedWithWarning:
         assert "tcoord" not in out.coords.coord_map
         _assert_rides(out, "dcoord", patch.get_array("dcoord"))
 
+    @pytest.mark.wasm_skip
     def test_tau_p_keeps_time_riders(self, patch):
         """tau-p replaces distance only; time and what rides it stay."""
         with pytest.warns(DASCoreWarning, match="dcoord"):
