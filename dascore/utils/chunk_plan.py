@@ -106,6 +106,10 @@ _SOURCE_COLUMNS = (
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
 
 
+class _NoOutputError(ChunkError):
+    """No stretch is long enough to give one output."""
+
+
 @dataclass(frozen=True)
 class ChunkPlan:
     """
@@ -3146,22 +3150,29 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
     if len(parts := _kind_parts(df)) > 1:
-        # each kind plans alone, as a spool of that kind would
-        plans = [
-            build_chunk_plan(
-                x,
-                overlap=overlap,
-                keep_partial=keep_partial,
-                tolerance=tolerance,
-                max_shift=max_shift,
-                conflict=conflict,
-                group=group,
-                on_missing_dim=on_missing_dim,
-                fill_value=fill_value,
-                **{name: value},
-            )
-            for x in parts
-        ]
+        # each kind plans alone, as a spool of that kind would; one too short
+        # for any output is skipped, as a stretch is, unless every kind is
+        plans, short = [], []
+        for part in parts:
+            try:
+                plans.append(
+                    build_chunk_plan(
+                        part,
+                        overlap=overlap,
+                        keep_partial=keep_partial,
+                        tolerance=tolerance,
+                        max_shift=max_shift,
+                        conflict=conflict,
+                        group=group,
+                        on_missing_dim=on_missing_dim,
+                        fill_value=fill_value,
+                        **{name: value},
+                    )
+                )
+            except _NoOutputError as exc:
+                short.append(exc)
+        if not plans:
+            raise short[0]
         return stack_plans(plans)
     frame_dtype = df[min_name].dtype
     df = seams = _seams(df, name, params["group"], tolerance, max_shift)
@@ -3515,7 +3526,7 @@ def build_chunk_plan(
                 f"shorter than the sample step along {name!r} "
                 f"({np.abs(part_steps).min()}). Use a larger chunk length."
             )
-            raise ChunkError(msg)
+            raise _NoOutputError(msg)
         msg = "Could not chunk. No segments with sufficient length found."
         # Say how short the data actually is, and name the two knobs which
         # make an over-long request work. Size chunks are excluded; their
@@ -3541,7 +3552,7 @@ def build_chunk_plan(
                 f"tolerance to join segments separated by gaps, or "
                 f"keep_partial=True to keep the short segments."
             )
-        raise ChunkError(msg)
+        raise _NoOutputError(msg)
     # Assemble the outputs table: envelopes and step, then the carried
     # columns (each partition's single value repeated over its outputs),
     # then the ids.

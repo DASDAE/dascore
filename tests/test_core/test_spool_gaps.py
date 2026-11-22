@@ -382,7 +382,7 @@ class TestMixedKinds:
 
     @staticmethod
     def _patch(time):
-        return dc.Patch(data=np.zeros(5), coords={"time": time}, dims=("time",))
+        return dc.Patch(data=np.zeros(len(time)), coords={"time": time}, dims=("time",))
 
     @staticmethod
     def _values(frame, columns):
@@ -420,6 +420,17 @@ class TestMixedKinds:
         expected = [y for x in expected for y in x]
         assert len(got) == len(expected)
         assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+    def test_kind_too_short_is_skipped(self):
+        """A kind with no full chunk yields none, as alone; the others chunk."""
+        short = [self._patch(TIME_KINDS[x]) for x in ("absolute", "numbers")]
+        numbers = self._patch(np.arange(20.0))
+        got = list(dc.spool([short[0], numbers]).chunk(time=10))
+        expected = list(dc.spool([numbers]).chunk(time=10))
+        assert len(got) == len(expected) == 2
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+        with pytest.raises(ChunkError, match="shorter than the requested"):
+            dc.spool(short).chunk(time=10)
 
     def test_concatenate(self, patches):
         """Concatenating gives each kind's concatenation alone."""
