@@ -35,7 +35,8 @@ def _get_attrs_coords_and_data(h5, snap):
     # carrying either would otherwise pass it on as a patch attr -- and
     # only scan used to drop them, so scan and read disagreed.
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
-    attr_names = set(attrs) - skip
+    # Sorted, as a set's order changes with the process's hash seed.
+    attr_names = sorted(set(attrs) - skip)
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
     # Taken before filtering, which would skip a dims array as a coordinate.
     dims = attr_dict.pop("dims", None)
@@ -165,7 +166,7 @@ def _get_nodes(h5):
     return (
         root_nodes[next(iter(data_node_name))],
         root_nodes[next(iter(time_node_name))],
-        {x: root_nodes[x] for x in other_node_names},
+        {x: root_nodes[x] for x in sorted(other_node_names)},
     )
 
 

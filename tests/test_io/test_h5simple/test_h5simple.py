@@ -5,7 +5,11 @@ from __future__ import annotations
 import copy
 import io
 import itertools
+import json
+import os
 import shutil
+import subprocess
+import sys
 from dataclasses import replace
 from functools import wraps
 from pathlib import Path
@@ -408,6 +412,48 @@ class TestH5Simple:
             h5.attrs["format"] = "other"
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(path)
+
+
+@pytest.mark.skipif(
+    sys.platform == "emscripten", reason="emscripten does not support processes"
+)
+class TestHashSeed:
+    """A file reads the same whatever the process's hash seed."""
+
+    _code = (
+        "import json, sys, dascore as dc;"
+        "patch = dc.read(sys.argv[1])[0];"
+        "print(json.dumps([list(dict(patch.attrs)), list(patch.coords.coord_map)]))"
+    )
+
+    def _read(self, path):
+        """The attr and coordinate names of a read, in two processes."""
+        out = []
+        for seed in ("1", "2"):
+            result = subprocess.run(
+                [sys.executable, "-c", self._code, str(path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=os.environ | {"PYTHONHASHSEED": seed},
+            )
+            out.append(json.loads(result.stdout))
+        assert out[0] == out[1]
+        return out[0]
+
+    def test_names_sorted(self, tmp_path):
+        """Root attrs and the arrays beside time come in name order."""
+        names = ["zeta", "alpha", "mid", "beta", "gamma", "omega", "site"]
+        path = tmp_path / "cube.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.zeros((4, 5, 6, 30), dtype=np.float32)
+            h5["time"] = 1.7e9 + np.arange(30) / 50
+            for name, size in zip(("d", "a", "c"), (4, 5, 6)):
+                h5[name] = np.arange(size)
+            h5.attrs.update({x: x for x in names})
+        attrs, coords = self._read(path)
+        assert [x for x in attrs if x in names] == sorted(names)
+        assert coords == ["a", "c", "d", "time"]
 
 
 class TestSingletonCoordinates:
