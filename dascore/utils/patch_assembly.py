@@ -631,11 +631,28 @@ def _regridded(coords: CoordManager, attrs, dim: str, row: Mapping):
     placed = on_stretch_grid(coords, dim, row)
     if placed is coords or not (ids_enabled() and attrs.data_id):
         return placed, attrs
-    if placed.coord_map[dim] == coords.coord_map[dim]:
+    coord = placed.coord_map[dim]
+    if _same_labels(coord, coords.coord_map[dim]):
         return placed, attrs
-    spec = row[f"_{dim}_stretch"]  # only a stretch's grid moves labels
-    return placed, stamp(
-        attrs, [attrs], operation_id("Regrid", {"dim": dim, "grid": spec})
+    operation = operation_id("Regrid", {"dim": dim, "coord": coord})
+    return placed, stamp(attrs, [attrs], operation)
+
+
+def _same_labels(first, second) -> bool:
+    """Whether two coordinates hold exactly the same labels, dtype and units."""
+    if first.data_id == second.data_id:
+        return True
+    if (first.shape, first.dtype, first.units) != (
+        second.shape,
+        second.dtype,
+        second.units,
+    ):
+        return False
+    # coordinate equality forgives rounding, which an id must not
+    block = 2**18
+    return all(
+        np.array_equal(first[x : x + block].values, second[x : x + block].values)
+        for x in range(0, len(first), block)
     )
 
 

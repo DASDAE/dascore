@@ -217,8 +217,26 @@ class TestChunkLayout:
         spool = dc.spool([self._patch(0), self._patch(6)])
         first = [x.attrs.data_id for x in spool.chunk(time=4)]
         second = [x.attrs.data_id for x in spool.chunk(time=4)]
-        assert first == second
+        again = [x.attrs.data_id for x in spool.chunk(time=None).chunk(time=4)]
+        assert first == second == again
         assert len(set(first)) == len(first)
+
+    def test_labels_moved_by_a_little(self):
+        """A grid which moves the labels at all names another array."""
+        members = [self._patch(0), self._patch(6.00001)]
+        snapped = dc.spool(members).chunk(time=None)[0]
+        spread = dc.spool(members).chunk(time=None, max_shift=1e-8, tolerance=1.5)[0]
+        labels = [x.get_coord("time").values for x in (snapped, spread)]
+        assert not np.array_equal(*labels)
+        assert snapped.attrs.data_id != spread.attrs.data_id
+
+    def test_a_grid_named_by_its_labels(self):
+        """A window's grid is named by its labels, not the stretch it is cut from."""
+        members = [self._patch(0), self._patch(6.25), self._patch(12.25)]
+        two = dc.spool(members[:2]).chunk(time=4, max_shift=0.3)[1]
+        three = dc.spool(members).chunk(time=4, max_shift=0.3)[1]
+        assert two == three
+        assert two.attrs.data_id == three.attrs.data_id
 
     def test_a_file_window_is_the_read_window(self, terra15_dir, terra15_path):
         """A chunk of a file names what reading that window names."""
