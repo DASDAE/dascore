@@ -275,6 +275,20 @@ def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
     return replace(plan, members=merged.reset_index(drop=True))
 
 
+def stack_plans(plans: Sequence[ChunkPlan]) -> ChunkPlan:
+    """One plan of several plans' outputs, each numbered after those before."""
+    offsets = np.cumsum([0, *(len(x.outputs) for x in plans[:-1])])
+
+    def _stack(attr):
+        frames = (getattr(x, attr) for x in plans)
+        moved = (
+            x.assign(output_id=x["output_id"] + y) for x, y in zip(frames, offsets)
+        )
+        return pd.concat(moved, ignore_index=True)
+
+    return replace(plans[0], outputs=_stack("outputs"), members=_stack("members"))
+
+
 def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
     """
     Label each row by kind: rows sharing a label hold equal values.
@@ -1148,13 +1162,45 @@ def _kind_parts(df: pd.DataFrame) -> list[pd.DataFrame]:
     for code, first in enumerate(firsts):
         part = df[codes == code]
         for columns, kind in zip(groups, kinds, strict=True):
-            kind = kind[first]
-            if kind in ("datetime", "timedelta", "number"):
-                step = "timedelta" if kind == "datetime" else kind
-                ends = zip(columns, (kind, kind, step), strict=True)
-                part = part.assign(**{x: _coerce(part[x], y) for x, y in ends})
+            if (kind := kind[first]) in ("datetime", "timedelta", "number"):
+                part = _as_kind(part, columns[0][: -len("_min")], kind)
         parts.append(part)
     return parts
+
+
+def _as_kind(df: pd.DataFrame, name: str, kind: str) -> pd.DataFrame:
+    """The frame with ``name``'s range, and its sources' ranges, held as ``kind``."""
+    step = "timedelta" if kind == "datetime" else kind
+    columns = [f"{name}_{x}" for x in ("min", "max", "step")]
+    columns += [f"_{name}_src_{x}" for x in ("low", "high", "step")]
+    ends = zip(columns, (kind, kind, step) * 2, strict=True)
+    return df.assign(**{x: _coerce(df[x], y) for x, y in ends if x in df})
+
+
+# The value family of a column of one kind held as objects, by `infer_dtype`.
+_INFERRED_FAMILIES = {
+    "datetime": "datetime",
+    "datetime64": "datetime",
+    "timedelta": "timedelta",
+    "timedelta64": "timedelta",
+    "floating": "number",
+    "integer": "number",
+    "mixed-integer-float": "number",
+}
+
+
+def _own_dtypes(df: pd.DataFrame, name: str) -> pd.DataFrame:
+    """
+    The frame with ``name``'s range in its kind's dtype where objects hold it.
+
+    A plan of several kinds holds its members' ranges as objects, and so
+    does a slice of them holding one kind, which arithmetic refuses.
+    """
+    low = df.get(f"{name}_min")
+    if low is None or low.dtype != object:
+        return df
+    kind = _INFERRED_FAMILIES.get(pd.api.types.infer_dtype(low))
+    return df if kind is None else _as_kind(df, name, kind)
 
 
 def patch_local_adjusted_envelopes(
@@ -2749,6 +2795,26 @@ def _gap_carried_columns(df: pd.DataFrame, name: str, group_attrs) -> list[str]:
     return list(dict.fromkeys(cols))
 
 
+def _ordered_cells(df: pd.DataFrame, name: str, group_attrs, carried):
+    """Yield the rows of each cell of `df`, rows of one kind, in report order."""
+    cells = _cell_labels(
+        df, name, group_attrs, dc.get_config().sampling_group_tolerance
+    )
+    df = _adopt_lone_steps(df, name, cells)
+    grouped = df.groupby(cells, sort=False)
+    groups = grouped.groups
+    mins = grouped[f"{name}_min"].min()
+    stated = {
+        label: tuple(df.loc[index, x].iloc[0] for x in carried)
+        for label, index in groups.items()
+    }
+    order = sorted(
+        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
+    )
+    for label in order:
+        yield df.loc[groups[label]]
+
+
 def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance, max_shift):
     """
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
@@ -2760,26 +2826,15 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance, max_shift):
     never depends on the order the relation happened to arrive in. Each
     cell's ordinal rides on its gaps as `group_id`, which is the only
     thing that always tells two cells apart: sampling group and
-    structural def keys partition without being shown.
+    structural def keys partition without being shown. Rows stating the
+    dimension in several kinds report each kind alone, as a spool of that
+    kind would, in order of the kinds' first rows.
     """
     min_name, max_name, step_name = _dim_columns(df, name)
     carried = _gap_carried_columns(df, name, group_attrs)
-    cells = _cell_labels(
-        df, name, group_attrs, dc.get_config().sampling_group_tolerance
-    )
-    df = _adopt_lone_steps(df, name, cells)
-    grouped = df.groupby(cells, sort=False)
-    groups = grouped.groups
-    mins = grouped[min_name].min()
-    stated = {
-        label: tuple(df.loc[index, x].iloc[0] for x in carried)
-        for label, index in groups.items()
-    }
-    order = sorted(
-        groups, key=lambda label: (mins[label], [str(x) for x in stated[label]])
-    )
-    for group_id, label in enumerate(order):
-        sub = df.loc[groups[label]]
+    parts = [_normalize_chunk_units(x, name) for x in _kind_parts(df)] or [df]
+    cells = (y for x in parts for y in _ordered_cells(x, name, group_attrs, carried))
+    for group_id, sub in enumerate(cells):
         tol = _cell_tolerance(tolerance, sub, name)
         seams = _cell_seams(_integer_ticks(sub, name), name, tol, max_shift)
         found = (seams["_joined"] == "gap").to_numpy() & seams["_keep"].to_numpy()
@@ -2857,8 +2912,9 @@ def build_gap_frame(
             }
             | {x: df[x] for x in carried},
         )[columns]
-    out = pd.concat(frames, ignore_index=True)
-    return out[columns].sort_values(["group_id", min_name]).reset_index(drop=True)
+    # cells come in group order, each's gaps in order; a sort would compare
+    # the values of two kinds
+    return pd.concat(frames, ignore_index=True)[columns]
 
 
 def build_coverage_frame(
@@ -2940,8 +2996,11 @@ def build_coverage_frame(
     out["covered"] = out["span"] - out["gap_total"]
     # A zero span is a single sample, which is wholly covered; dividing
     # would make it NaN and read as "unknown" rather than "all there".
-    covered = np.asarray(to_float(out["covered"]), dtype=float)
-    total = np.asarray(to_float(out["span"]), dtype=float)
+    # Row by row, since rows of two kinds share the column.
+    covered, total = (
+        np.array([to_float(y) for y in out[x]], dtype=float)
+        for x in ("covered", "span")
+    )
     out["coverage"] = np.divide(
         covered, total, out=np.ones_like(total), where=total != 0
     )
@@ -3039,6 +3098,24 @@ def build_chunk_plan(
     if df.empty:
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
+    if len(parts := _kind_parts(df)) > 1:
+        # each kind plans alone, as a spool of that kind would
+        plans = [
+            build_chunk_plan(
+                x,
+                overlap=overlap,
+                keep_partial=keep_partial,
+                tolerance=tolerance,
+                max_shift=max_shift,
+                conflict=conflict,
+                group=group,
+                on_missing_dim=on_missing_dim,
+                fill_value=fill_value,
+                **{name: value},
+            )
+            for x in parts
+        ]
+        return stack_plans(plans)
     frame_dtype = df[min_name].dtype
     df = seams = _seams(df, name, params["group"], tolerance, max_shift)
     if fill_value is None:  # a fill spreads no labels

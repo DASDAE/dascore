@@ -120,6 +120,7 @@ from dascore.utils.chunk_plan import (
     build_gap_frame,
     build_subdivision_plan,
     coalesce_runs,
+    stack_plans,
     subdivision_pieces,
     window_plan,
     with_runs,
@@ -278,11 +279,7 @@ def _joined(frame, parts, dim) -> ChunkPlan:
         done |= rows
     ends = zip(frame[f"{dim}_min"][~done], frame[f"{dim}_max"][~done])
     plans.append(build_subdivision_plan(frame[~done], [[x] for x in ends], dim))
-    for num, plan in enumerate(plans[1:]):  # numbered after those before
-        for x in (plan.outputs, plan.members):
-            x["output_id"] += sum(len(y.outputs) for y in plans[: num + 1])
-    stack = lambda x: pd.concat([getattr(y, x) for y in plans])  # noqa
-    return replace(plans[0], outputs=stack("outputs"), members=stack("members"))
+    return stack_plans(plans)
 
 
 def _composed(plan, pieces) -> ChunkPlan:

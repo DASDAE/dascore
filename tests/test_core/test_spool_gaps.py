@@ -353,6 +353,82 @@ class TestGetCoverage:
         assert out[measured].dtypes.to_dict() == populated[measured].dtypes.to_dict()
 
 
+# five samples of time in each kind a coordinate may state it in
+TIME_KINDS = {
+    "absolute": T0 + np.arange(5) * ONE_SECOND,
+    "durations": np.arange(5) * ONE_SECOND,
+    "numbers": np.arange(5.0),
+}
+
+
+class TestMixedKinds:
+    """Patches timed in two kinds each plan as a spool of their kind alone (#1639)."""
+
+    @pytest.fixture(
+        params=[
+            ("absolute", "numbers"),
+            ("durations", "numbers"),
+            ("absolute", "durations"),
+        ]
+    )
+    def patches(self, request):
+        """Two patches of each kind with a gap between them, the kinds interleaved."""
+        out = []
+        for kind in request.param:
+            time = TIME_KINDS[kind]
+            gap = 10 * (1.0 if time.dtype.kind == "f" else ONE_SECOND)
+            out.append([self._patch(time), self._patch(time + gap)])
+        return [out[0][0], out[1][0], out[0][1], out[1][1]]
+
+    @staticmethod
+    def _patch(time):
+        return dc.Patch(data=np.zeros(5), coords={"time": time}, dims=("time",))
+
+    @staticmethod
+    def _values(frame, columns):
+        """The frame's columns as lists, nulls as None."""
+        return [[None if pd.isna(y) else y for y in frame[x]] for x in columns]
+
+    def _alone(self, patches):
+        """A spool of each kind alone, in order of first appearance."""
+        return [dc.spool(patches[0::2]), dc.spool(patches[1::2])]
+
+    def test_contents(self, patches):
+        """Each row states its envelope in its own kind."""
+        got = dc.spool(patches).get_contents()
+        expected = pd.concat([dc.spool([x]).get_contents() for x in patches])
+        columns = ["time_min", "time_max", "time_step"]
+        assert self._values(got, columns) == self._values(expected, columns)
+
+    @pytest.mark.parametrize("method", ["get_gaps", "get_coverage"])
+    def test_reports(self, patches, method):
+        """Gaps and coverage are those of each kind alone, each its own group."""
+        got = getattr(dc.spool(patches), method)()
+        alone = [getattr(x, method)() for x in self._alone(patches)]
+        expected = pd.concat(alone, ignore_index=True)
+        columns = [x for x in expected if x != "group_id"]
+        assert self._values(got, columns) == self._values(expected, columns)
+        assert got["group_id"].tolist() == [0, 1]
+
+    @pytest.mark.parametrize("lengths", [[None], [2], [2, None]])
+    def test_chunk(self, patches, lengths):
+        """Chunking, and chunking again, gives each kind's chunks alone."""
+        got, expected = dc.spool(patches), self._alone(patches)
+        for length in lengths:
+            got = got.chunk(time=length)
+            expected = [x.chunk(time=length) for x in expected]
+        expected = [y for x in expected for y in x]
+        assert len(got) == len(expected)
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+    def test_concatenate(self, patches):
+        """Concatenating gives each kind's concatenation alone."""
+        got = list(dc.spool(patches).concatenate(time=None))
+        expected = [x.concatenate(time=None)[0] for x in self._alone(patches)]
+        assert len(got) == len(expected)
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+
 def _time_runs_patch(count, samples=10):
     """A patch whose time coordinate holds ``count`` runs a minute apart."""
     runs = [
