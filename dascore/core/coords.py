@@ -3244,7 +3244,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 step = np.timedelta64(int(np.round(raw)), "ns")
             else:
                 step = dur / (len(self) - 1)
-            assert step > (_TD64_ZERO if is_timedelta64(step) else 0)
+            if not step > (_TD64_ZERO if is_timedelta64(step) else 0):
+                msg = (
+                    f"The labels span {dur}, too little to spread {len(self)} "
+                    "samples over evenly, so no step can be inferred to snap them."
+                )
+                raise CoordError(msg)
         if self.reverse_sorted:
             step = -step
             start, stop = max_v, min_v + step
