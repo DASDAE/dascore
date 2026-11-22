@@ -2750,7 +2750,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # --- indexing and selection
 
     def __getitem__(self, item):
-        if self._partial:
+        if (blank := self._blank) is not None:
             # Index the broadcast view without allocating the full coordinate.
             shape = self.values[item].shape
             if (
@@ -2759,8 +2759,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 and item.step in (None, 1)
             ):
                 return self  # every sample, in order
+            start = stop = None
+            if isinstance(item, slice) and self.ndim == 1 and shape[0]:
+                # a kept end sample keeps its label, wherever it now sits
+                ends = {len(self) - 1: blank.stop, 0: blank.start}
+                kept = range(len(self))[item]
+                start, stop = ends.get(kept[0]), ends.get(kept[-1])
             return self.__class__(
-                runs=(Blank(shape),), units=self.units, dtype=self.dtype
+                runs=(Blank(shape, start, stop),), units=self.units, dtype=self.dtype
             )
         if isinstance(item, int | np.integer) and self.ndim == 1:
             if item >= len(self) or item < -len(self):
@@ -3159,8 +3165,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if self.ndim != 1:
                 msg = "change_length only works on 1D coords."
                 raise CoordError(msg)
-            new = Blank((_validate_new_length(length),), blank.start)
-            return self._with_runs((new,))
+            if (length := _validate_new_length(length)) == len(self):
+                return self
+            return self._with_runs((Blank((length,), blank.start),))
         if (grid := self._grid) is None:
             return super().change_length(length)
         length = _validate_new_length(length)

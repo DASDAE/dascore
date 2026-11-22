@@ -2123,6 +2123,30 @@ class TestPartialCoord:
         assert coord[:] is coord
         assert coord[::2].shape == (2,)
 
+    @pytest.mark.parametrize(
+        ("item", "ends"),
+        [
+            (slice(0, 5), (0.0, None)),
+            (slice(5, None), (None, 9.0)),
+            (slice(None, None, 3), (0.0, 9.0)),
+            (slice(None, None, -1), (9.0, 0.0)),
+            (slice(9, None), (9.0, 9.0)),
+            (slice(2, 7), (None, None)),
+        ],
+    )
+    def test_slice_keeps_known_ends(self, item, ends):
+        """A slice keeps the label of each end sample it keeps, where it lands."""
+        coord = get_coord(data=10, start=0.0, stop=9.0)
+        out = coord[item]
+        assert out._blank == Blank(coord.values[item].shape, *ends)
+
+    def test_change_length_keeps_ends(self):
+        """Its own length changes nothing; another length keeps the start."""
+        coord = get_coord(data=10, start=0.0, stop=9.0)
+        assert coord.change_length(10) is coord
+        out = coord.change_length(5)
+        assert out.min() == 0.0 and np.isnan(out.max())
+
     def test_convert_units_widens_dtype(self):
         """An end which is no longer whole widens an integer dtype."""
         coord = get_coord(shape=3, start=1, dtype="int64", units="cm")
