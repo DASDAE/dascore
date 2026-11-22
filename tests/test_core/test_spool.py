@@ -719,6 +719,21 @@ class TestGetContents:
         df = random_spool.get_contents()
         assert {"time_units", "distance_units"}.issubset(df.columns)
 
+    @pytest.mark.parametrize("count", [1, 3, 12])
+    def test_units_dtype_ignores_selection_size(self, count):
+        """
+        A units column is object, with None where a patch states no units,
+        however many patches are selected and whatever the rest state.
+        """
+        patches = [
+            dc.Patch(data=np.zeros(3), coords={"x": np.arange(3)}, dims=("x",))
+            for _ in range(12)
+        ]
+        patches[-1] = patches[-1].set_units(x="m")
+        units = dc.spool(patches)[:count].get_contents()["x_units"]
+        assert units.dtype == object
+        assert units.tolist() == [None] * min(count, 11) + ["m"] * (count == 12)
+
     def test_data_description_survives_the_drop(self, random_spool):
         """`_dtype` and `_data_size` are renamed, not dropped."""
         df = random_spool.get_contents()

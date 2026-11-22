@@ -561,7 +561,9 @@ class Spool(NodeRepr, NamespaceOwner):
         lists them), so the frame states each patch's `dtype` and
         `data_size` -- the samples its data array holds. A row which
         does not know its size states none: a merged or subdivided
-        chunk output, or a patch a selection trims.
+        chunk output, or a patch a selection trims. A coordinate's
+        `{name}_units` column is object, holding None where a patch
+        states no units.
 
         Examples
         --------
