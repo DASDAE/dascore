@@ -56,6 +56,7 @@ from dascore.utils.chunk import _READ_PAD
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
 from dascore.utils.identity import (
     derive,
+    encode,
     ids_enabled,
     merge_operation,
     operation_context,
@@ -634,7 +635,11 @@ def _regridded(coords: CoordManager, attrs, dim: str, row: Mapping):
     coord = placed.coord_map[dim]
     if _same_labels(coord, coords.coord_map[dim]):
         return placed, attrs
-    operation = operation_id("Regrid", {"dim": dim, "coord": coord})
+    # The labels themselves: a grid's own id also says which stretch it
+    # was cut from, which the labels may not show.
+    labels = [encode(x.values) for x in _label_blocks(coord)]
+    params = {"dim": dim, "dtype": str(coord.dtype), "units": coord.units}
+    operation = operation_id("Regrid", params | {"labels": labels})
     return placed, stamp(attrs, [attrs], operation)
 
 
@@ -649,11 +654,13 @@ def _same_labels(first, second) -> bool:
     ):
         return False
     # coordinate equality forgives rounding, which an id must not
-    block = 2**18
-    return all(
-        np.array_equal(first[x : x + block].values, second[x : x + block].values)
-        for x in range(0, len(first), block)
-    )
+    pairs = zip(_label_blocks(first), _label_blocks(second), strict=True)
+    return all(np.array_equal(x.values, y.values) for x, y in pairs)
+
+
+def _label_blocks(coord, size: int = 2**18):
+    """A coordinate a few megabytes at a time, so no grid is spelled out whole."""
+    return (coord[x : x + size] for x in range(0, len(coord), size))
 
 
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:

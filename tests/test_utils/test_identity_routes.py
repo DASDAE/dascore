@@ -11,6 +11,7 @@ import pytest
 import dascore as dc
 import dascore.utils.patch_assembly as assembly
 from dascore.config import config_context
+from dascore.core.coordmanager import get_coord_manager
 from dascore.io.core import scan_payloads
 from dascore.utils.downloader import fetch
 from dascore.utils.identity import narrowed_data_id, read_operation_id
@@ -237,6 +238,20 @@ class TestChunkLayout:
         three = dc.spool(members).chunk(time=4, max_shift=0.3)[1]
         assert two == three
         assert two.attrs.data_id == three.attrs.data_id
+
+    def test_a_regrid_is_named_by_its_labels(self):
+        """Stretches of other lengths which label a slice alike name it alike."""
+        labels = dc.get_coord(data=np.arange(4) * 0.1 + 0.4 + 1e-9)
+        coords = get_coord_manager({"time": labels}, dims=("time",))
+        attrs = dc.PatchAttrs(data_id="a" * 32)
+        placed, ids = [], []
+        for count in (12, 14):  # a float slice remembers its parent's length
+            row = {"_time_stretch": (0.0, 0.1, 0, count, 0, 4, 4, "float64")}
+            out_coords, out_attrs = assembly._regridded(coords, attrs, "time", row)
+            placed.append(out_coords.coord_map["time"].values)
+            ids.append(out_attrs.data_id)
+        assert np.array_equal(*placed)
+        assert ids[0] == ids[1] != attrs.data_id
 
     def test_a_file_window_is_the_read_window(self, terra15_dir, terra15_path):
         """A chunk of a file names what reading that window names."""
