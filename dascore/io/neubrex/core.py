@@ -4,7 +4,11 @@ Core modules for reading Neubrex data.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 import numpy as np
+from pydantic import model_validator
 
 import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
@@ -29,11 +33,20 @@ class NeubrexDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex DAS Format files."""
 
     gauge_length: OptionalFiniteFloat = None
-    index_of_reflection: OptionalFiniteFloat = 1.46
+    index_of_refraction: OptionalFiniteFloat = 1.46
     triggered_time: np.datetime64 | None = None
     phase_to_strain: OptionalFiniteFloat = None
     distance_decimation_filter: int = 0
     time_decimation_filter: int = 0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _take_old_name(cls, data: Any) -> Any:
+        """Take index_of_reflection, as index_of_refraction was called."""
+        if isinstance(data, Mapping) and "index_of_reflection" in data:
+            data = dict(data)
+            data.setdefault("index_of_refraction", data.pop("index_of_reflection"))
+        return data
 
 
 class NeubrexRFSV1(H5ArrayMixin, FiberIO):

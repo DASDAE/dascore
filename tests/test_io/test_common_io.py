@@ -298,7 +298,6 @@ VENDOR_ATTRS = frozenset(
         "freqstep",
         "gps_status",
         "group",
-        "index_of_reflection",
         "index_of_refraction",
         "laser_wavelength",
         "long_name",
