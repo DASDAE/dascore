@@ -262,6 +262,22 @@ class TestPatchSetBackend:
             again = lazy.set_backend("numpy").set_backend("lazy")
             assert again.load().equals(patch)
 
+    def test_big_endian_data(self, tmp_path):
+        """Data stored big-endian read lazily as they read into memory (#1644)."""
+        data = np.arange(12.0).reshape(3, 4).astype(">f8")
+        coords = {"distance": np.arange(3.0), "time": np.arange(4.0)}
+        path = tmp_path / "big_endian.h5"
+        dc.write(dc.Patch(data=data, coords=coords, dims=tuple(coords)), path, "dasdae")
+        eager = dc.read(path)[0]
+        with reading_lazily("numpy"):
+            read = dc.read(path)[0]
+        handed = dc.spool(path).set_backend("lazy")[0]
+        made = eager.set_backend("lazy")
+        for lazy in (read, handed, made):
+            assert lazy.dtype == eager.dtype == np.dtype(">f8")
+            assert lazy.attrs.data_id == eager.attrs.data_id
+            assert lazy.load().equals(eager)
+
     def test_library_which_narrows_the_data(self, patch, monkeypatch):
         """A library which would hold the values in fewer bits is refused."""
         strict = pytest.importorskip("array_api_strict")
