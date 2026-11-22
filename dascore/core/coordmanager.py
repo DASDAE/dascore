@@ -1291,8 +1291,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
         assert len(kwargs) == 1
         (dim, value) = next(iter(kwargs.items()))
         assert dim in self.dims
-        # float, not int, reads every whole number int does without truncating
-        if not float(value).is_integer():
+        # compared exactly, so no factor is truncated; text is read as a number
+        number = float(value) if isinstance(value, str) else value
+        if int(number) != number:
             msg = f"A decimation factor must be a whole number, not {value}."
             raise ParameterError(msg)
         dim_slice = slice(None, None, int(value))
@@ -1651,6 +1652,11 @@ def _get_coord_dim_map(coords, dims):
             msg = (
                 f"Coordinate {name!r} would have shape {coord_out.shape}, not "
                 f"the shape {expected_shape} of the value given for it."
+            )
+            raise CoordError(msg)
+        if dim_names and not coord_out.ndim:
+            msg = (
+                f"Coordinate {name!r} is one label, so it cannot run along {dim_names}."
             )
             raise CoordError(msg)
         return coord_out, dim_names

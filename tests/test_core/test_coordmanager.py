@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+from fractions import Fraction
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -323,6 +326,12 @@ class TestCoordManagerInputs:
         """A value read as a coordinate of another shape is refused."""
         with pytest.raises(CoordError, match="shape"):
             cm_basic.update(x=((), np.int64(5)))
+
+    @pytest.mark.parametrize("name", ["time", "x"])
+    def test_scalar_coord_on_dimension_raises(self, cm_basic, name):
+        """One label cannot run along a dimension."""
+        with pytest.raises(CoordError, match="one label"):
+            cm_basic.update(**{name: ("time", 5.0)})
 
     def test_mappings_immutable(self, coord_manager):
         """Ensure the mappings are immutable."""
@@ -1280,10 +1289,14 @@ class TestDecimate:
         assert data.shape == out.shape
         assert slices[cm_basic.get_axis("time")] == slice(None, None, 2)
 
-    def test_fractional_factor_raises(self, cm_basic):
-        """A factor which is not a whole number is refused, not truncated."""
+    @pytest.mark.parametrize(
+        "factor",
+        [2.5, Fraction(2 * 10**16 + 1, 10**16), Decimal("2.0000000000000001")],
+    )
+    def test_fractional_factor_raises(self, cm_basic, factor):
+        """A factor which is not exactly a whole number is refused, not truncated."""
         with pytest.raises(ParameterError, match="whole number"):
-            cm_basic.decimate(time=2.5)
+            cm_basic.decimate(time=factor)
 
 
 class TestSort:

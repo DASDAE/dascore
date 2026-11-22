@@ -2160,6 +2160,12 @@ class TestPartialCoord:
         out = coord.change_length(5)
         assert out.min() == 0.0 and np.isnan(out.max())
 
+    @pytest.mark.parametrize("ends", [dict(start=9.0), dict(stop=9.0)])
+    def test_reversed_singleton_is_itself(self, ends):
+        """Reversing one sample changes nothing, whichever end it states."""
+        coord = get_coord(data=1, **ends)
+        assert coord[::-1] is coord
+
     def test_convert_units_widens_dtype(self):
         """An end which is no longer whole widens an integer dtype."""
         coord = get_coord(shape=3, start=1, dtype="int64", units="cm")

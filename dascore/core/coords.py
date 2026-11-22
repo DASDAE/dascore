@@ -2758,9 +2758,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if (
                 shape == self.shape
                 and isinstance(item, slice)
-                and item.step in (None, 1)
+                and (item.step in (None, 1) or len(self) == 1)
             ):
-                return self  # every sample, in order
+                return self  # every sample, in order (one sample is either way)
             start = stop = None
             if isinstance(item, slice) and self.ndim == 1 and shape[0]:
                 # a kept end sample keeps its label, wherever it now sits
@@ -3242,9 +3242,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                     dur = max_v.astype("M8[D]") - min_v.astype("M8[D]")
                 raw = float(dc.to_timedelta64(dur).astype(np.int64)) / (len(self) - 1)
                 step = np.timedelta64(int(np.round(raw)), "ns")
+                small = raw < 1  # judged before rounding: a step is a whole tick
             else:
                 step = dur / (len(self) - 1)
-            if not step > (_TD64_ZERO if is_timedelta64(step) else 0):
+                small = not step > 0
+            if small:
                 msg = (
                     f"The labels span {dur}, too little to spread {len(self)} "
                     "samples over evenly, so no step can be inferred to snap them."
