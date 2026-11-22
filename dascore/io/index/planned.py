@@ -1152,6 +1152,23 @@ def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
     ]
 
 
+def _member_residuals(parent: PatchCatalog, sources: pd.DataFrame) -> tuple:
+    """
+    The selections the source rows load under, which the parent view states.
+
+    A collapsed re-plan (`collapse_working_df`) plans over a plan's members
+    rather than its outputs, and they load under that plan's selections
+    first, as its outputs did: their trimmed envelopes reach the loader
+    only as hints, which a patch in memory ignores.
+    """
+    resolver = parent.resolver
+    if isinstance(resolver, PlanResolver) and "source_path" in sources.columns:
+        own = f"{PLAN_SCHEME}{resolver.token}/"
+        if not sources["source_path"].astype(str).str.startswith(own).any():
+            return (*resolver.parent_residuals, *parent.residuals)
+    return tuple(parent.residuals)
+
+
 def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int, int]:
     """
     The sample count of each output which is one whole member.
@@ -1283,7 +1300,7 @@ def derived_catalog(
             sources = sources.drop(columns=[unit_col])
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
-    parent_residuals = () if parent is None else parent.residuals
+    parent_residuals = () if parent is None else _member_residuals(parent, source_rows)
     residuals = tuple(parent_residuals)
     if plan.trim_dims:  # explicit windows' trims act as residuals here
         residuals += ((dict.fromkeys(plan.trim_dims), False, False),)

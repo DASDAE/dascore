@@ -158,6 +158,24 @@ class TestChunkPlanContract:
         assert time.min() == min(mins)
         assert time.max() == max(maxs)
 
+    @pytest.mark.parametrize("on_disk", [True, False])
+    def test_replan_keeps_other_selection(self, numbered, tmp_path, on_disk):
+        """Re-planning after a selection on another dimension keeps it (#1637)."""
+        source = numbered
+        if on_disk:
+            directory = dc.examples.spool_to_directory(numbered, path=tmp_path)
+            source = dc.spool(directory).update(progress=None)
+        distance = {"distance": (1, 2)}
+        expected = dc.spool(numbered).chunk(time=None)[0].select(**distance)
+        step = expected.get_coord("time").step
+        # one window per patch
+        once = dc.spool(source).select(**distance).chunk(time=8 * step)
+        twice = once.chunk(time=None)
+        for replanned in (twice, twice.chunk(time=None), once.concatenate(time=None)):
+            (patch,) = replanned
+            assert patch.coords == expected.coords
+            assert np.array_equal(patch.data, expected.data)
+
     @pytest.fixture(scope="class")
     def numbered(self):
         """Two contiguous 4x8 patches whose values are their sample numbers."""
