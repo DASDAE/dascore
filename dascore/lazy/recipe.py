@@ -291,6 +291,9 @@ class Recipe:
         """
         Return the array one source loads, placed at the origin.
 
+        Its dtype is the source's, byte order included, which promotion
+        would make native.
+
         Parameters
         ----------
         source
@@ -298,7 +301,7 @@ class Recipe:
         base_uri
             A prefix the source's path is stored relative to.
         """
-        return cls.from_sources([source], base_uri=base_uri)
+        return cls.from_sources([source], base_uri=base_uri, dtype=source.dtype)
 
     @classmethod
     def from_sources(

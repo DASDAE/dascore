@@ -1110,6 +1110,13 @@ class TestStatedDtype:
         assert whole.data_id != recast.data_id
         assert recast.load().dtype == np.dtype("float32")
 
+    def test_one_source_loads_as_it_is_stored(self):
+        """One source's array keeps its byte order, so it is that source (#1644)."""
+        source = ArraySource.full((2, 3), 1.0, dtype=">f8")
+        whole = Recipe.from_source(source)
+        assert whole.dtype == whole.load().dtype == np.dtype(">f8")
+        assert whole.data_id == source.data_id
+
     def test_a_frame_round_trip_keeps_it(self):
         """The frame plus the array's own shape and dtype rebuild it."""
         array = Recipe.from_sources(self._sources(), axis=0, dtype="float32")
