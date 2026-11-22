@@ -3575,6 +3575,10 @@ def build_chunk_plan(
             "_modified": ~unchanged,
         }
     )
+    if (origin := f"_{name}_source_envelope") in kept_df:
+        # where a member's samples count from: a segment's first label, which
+        # its source's range does not state
+        members[origin] = kept_df[origin].to_numpy()[src_rows]
     # The partition's unit (single-valued after normalization) rides on
     # every member row: trim magnitudes mean THIS unit, not whatever
     # spelling the member's source file used.
@@ -4075,8 +4079,8 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
 
     Tick labels are ``base + (phase + k * stride) // den``, float ones
     ``base + k * stride``, from the source's first label ``base``. A row with
-    no known origin, or a view's source counted in other units, has a zero
-    stride. ``width`` is the step's size; min/max are a whole row's own labels.
+    no known origin has a zero stride. ``width`` is the step's size; min/max
+    are a whole row's own labels.
     """
     low, high = rows[f"{name}_min"], rows[f"{name}_max"]
     blank = pd.Series(None, index=rows.index, dtype=object)
@@ -4084,18 +4088,19 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
     stated = rows.get(f"_{name}_units_source", blank)
     converted = stated.notna() & (stated != rows.get(f"_{name}_units"))
     first, known = low, whole
-    # a plan member keeps its source's range, in the source's units
+    # a plan member keeps its source's range, in the source's units; a
+    # source stating no step (one of segments, say) is not one grid
     sources = []
     if (source := rows.get(f"_{name}_src_low")) is not None:
+        source = source.where(rows[f"_{name}_src_step"].notna())
         sources.append(_in_row_units(source, rows, name, converted))
-    # a selected view keeps its envelope
+    # a selected view keeps its envelope, in the row's units
     if (envelope := rows.get(f"_{name}_source_envelope")) is not None:
         pick = lambda x: x.get(f"{name}_min") if isinstance(x, dict) else None  # noqa
         picked = envelope.map(pick)
         # integer labels hold a row stating no start as floats, as `_src_low` does
         lacking = low.dtype.kind in "iu" and picked.isna().any()
         sources.append(picked.astype(np.float64 if lacking else low.dtype))
-        sources[-1] = sources[-1].where(~converted)
     for source in sources:
         usable = source.notna()
         first, known = first.where(known | ~usable, source), known | usable

@@ -523,6 +523,29 @@ class TestChunkKeepsHoles:
         assert filled[0].get_coord("time").evenly_sampled
         assert len(filled[0].get_coord("time")) > 200
 
+    def test_rechunks_keep_a_later_segment(self):
+        """Members of a later segment count from its first label (#1659)."""
+        runs = [get_coord(start=x, step=1.0, shape=(6,)) for x in (0.0, 10.5)]
+        data = np.arange(12.0)[None]
+        coords = {"distance": [0], "time": concat_coords(*runs)}
+        patch = dc.Patch(data=data, coords=coords, dims=DIMS)
+        spool = dc.spool([patch]).chunk(time=4, keep_partial=True)
+        spool = spool.chunk(time=2.5, keep_partial=True).chunk(time=None)
+        assert list(spool) == list(patch.split_gaps())
+
+    def test_rechunks_keep_a_later_segment_in_other_units(self):
+        """A converted member's segment counts from its first label (#1659)."""
+        coords = {"distance": np.arange(6.0), "time": np.arange(2.0)}
+        metres = dc.Patch(data=np.zeros((6, 2)), coords=coords, dims=DIMS)
+        metres = metres.set_units(distance="m")
+        runs = [get_coord(start=x, step=1.0, shape=(3,)) for x in (6.0, 10.3)]
+        segments = metres.update_coords(distance=concat_coords(*runs))
+        feet = segments.set_units(distance="m").convert_units(distance="ft")
+        spool = dc.spool([metres, feet]).chunk(distance=3, keep_partial=True)
+        spool = spool.chunk(distance=4, keep_partial=True).chunk(distance=None)
+        labels = [x.get_array("distance") for x in spool]
+        assert np.allclose(np.concatenate(labels), [*range(9), 10.3, 11.3, 12.3])
+
     @pytest.mark.parametrize(
         ("runs", "order"),
         [
