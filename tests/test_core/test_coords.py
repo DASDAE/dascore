@@ -2552,6 +2552,28 @@ class TestGetSampleCount:
         assert coord.get_sample_count(0.2) == 2
         assert coord.get_sample_count(1.00000000005 * coord.step) == 2
 
+    def test_negative_keeps_sign(self):
+        """A negative value counts backward, not from the coordinate's end."""
+        coord = get_coord(data=np.arange(10.0))
+        out = [coord.get_sample_count(x) for x in (1.0, 2.5, -1.0, -2.5)]
+        assert out == [1, 3, -1, -3]
+
+    @pytest.mark.parametrize(
+        "name",
+        (
+            "evenly_sampled_coord",
+            "evenly_sampled_reversed_coord",
+            "evenly_sampled_date_coord",
+            "evenly_sampled_time_delta_coord",
+        ),
+    )
+    def test_negative_mirrors_positive(self, request, name):
+        """Negating a value negates its count."""
+        coord = request.getfixturevalue(name)
+        step = abs(coord.step)
+        for value in (step, 3 * step, 10 * percent):
+            assert coord.get_sample_count(-value) == -coord.get_sample_count(value)
+
 
 class TestGetNextIndex:
     """Tests for finding the next index after a value."""

@@ -1060,12 +1060,14 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """The labels at these (possibly negative) sample indices."""
         return np.asarray(self.values)[np.asarray(indices)]
 
-    def _get_compatible_value(self, value, relative=False):
+    def _get_compatible_value(self, value, relative=False, from_end=True):
         """
         Return values that are compatible with dtype/units of coord.
 
         This is used, for example, to coerce values in select tuple
-        so direct comparison with coord values is possible.
+        so direct comparison with coord values is possible. A negative
+        relative value is an offset from the end, or with from_end=False
+        one before the start.
         """
         # strip units and v
         if hasattr(value, "units"):
@@ -1083,7 +1085,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             # A relative offset into any time-like coord is a duration.
             if dtype_time_like(self.dtype):
                 value = dc.to_timedelta64(value)
-            value = self._get_relative_values(value)
+            if from_end:
+                value = self._get_relative_values(value)
+            else:
+                value = self.min() + value
         # apply validators. These can, eg, coerce to correct dtype.
         out = get_compatible_values(value, self.dtype)
         return out
@@ -1228,8 +1233,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         Return the number of samples represented by a value.
 
-        This is calculated by dividing the value by dt and rounding up.
-        Therefore, the output will always be greater or equal to 1.
+        The value is divided by the step and rounded away from zero, so a
+        positive value spans at least one sample and a negative value
+        counts backward: ``get_sample_count(-x) == -get_sample_count(x)``.
 
         Parameters
         ----------
@@ -1253,7 +1259,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 raise ParameterError(msg)
             samples = int(value)
         else:
-            compat_val = self._get_compatible_value(value, relative=True)
+            compat_val = self._get_compatible_value(
+                value, relative=True, from_end=False
+            )
             duration = compat_val - self.min()
             ratio = self._samples_in(duration)
             if np.issubdtype(self.dtype, np.floating):
@@ -1264,7 +1272,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 tol = 10 * abs(np.spacing(self.min()) / self.step)
                 if abs(ratio - nearest) <= tol:
                     ratio = nearest
-            samples = math.ceil(ratio)
+            samples = math.floor(ratio) if ratio < 0 else math.ceil(ratio)
         if enforce_lt_coord and samples > len(self):
             msg = (
                 f"value of {value} with samples={samples} results in a window "
@@ -3948,7 +3956,7 @@ class CoordString(BaseCoord):
         """Reject setting units on string coordinates."""
         return self.convert_units(units)
 
-    def _get_compatible_value(self, value, relative=False):
+    def _get_compatible_value(self, value, relative=False, from_end=True):
         """Normalize selectors without truncating longer string probes."""
         if relative:
             _raise_string_coord_error("relative selection")

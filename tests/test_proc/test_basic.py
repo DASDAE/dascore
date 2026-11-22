@@ -1318,6 +1318,15 @@ class TestRoll:
             == rolled_patch.coords.get_array("distance")[value]
         )
 
+    def test_negative_value_roll(self):
+        """A negative roll in coordinate units rolls back as samples do."""
+        patch = dc.Patch(
+            data=np.arange(10.0), coords={"time": np.arange(10.0)}, dims=("time",)
+        )
+        expected = patch.roll(time=-1, samples=True).data
+        assert np.all(expected == np.roll(np.arange(10.0), -1))
+        assert np.all(patch.roll(time=-1.0).data == expected)
+
 
 class TestWhere:
     """Tests for the where method of Patch."""
