@@ -16,7 +16,7 @@ from collections.abc import (
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
-from functools import singledispatch
+from functools import partial, singledispatch
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -429,6 +429,139 @@ def _bytes_to_load(df: pd.DataFrame, lazy: Container[str] = frozenset()) -> int:
 def _loaded(patch: dc.Patch) -> dc.Patch:
     """The patch with its data array in memory; see `Patch.load`."""
     return patch.load()
+
+
+# What a selection does to a row it trims; the envelopes say where.
+_SELECTION = {"mode": "select"}
+
+
+def _stated_id(value) -> str | None:
+    """An id a row or patch states, or None for a blank one."""
+    return value if isinstance(value, str) and value else None
+
+
+class _Loads(NamedTuple):
+    """
+    What a spool row loads, told without reading a file.
+
+    A patch in memory is the patch; a stored array is its `data_id`; a
+    selection or plan is what it does (`recipe`) to which rows (`sources`).
+    A row stating none of these is known only once loaded. `load` gives the
+    patch of a selection or plan whose sources are all in memory.
+    """
+
+    patch: dc.Patch | None = None
+    data_id: str | None = None
+    recipe: Mapping | None = None
+    sources: tuple = ()
+    load: Callable[[], dc.Patch] | None = None
+
+    @classmethod
+    def of(cls, patch: dc.Patch) -> _Loads:
+        """A patch: itself in memory, or its id while its values are unread."""
+        held = None if _is_lazy(patch.data) else patch
+        return cls(held, _stated_id(patch.attrs.data_id))
+
+    @property
+    def in_memory(self) -> bool:
+        """Whether everything the row loads is already in memory."""
+        if self.recipe is None:
+            return self.patch is not None
+        return all(x.in_memory for x in self.sources)
+
+
+class _LoadsReader:
+    """Tell what spool rows load, sharing each plan's members between rows."""
+
+    def __init__(self):
+        self._members: dict[int, tuple] = {}
+        self._routes: dict[int, Mapping] = {}
+
+    def row(self, path, data_id, resolver, source_id=None) -> _Loads:
+        """What one row loads through its resolver; `source_id` names its source."""
+        path, stated = str(path), _stated_id(data_id)
+        live = resolver.live_entries().get(path) if is_memory_uri(path) else None
+        if live is not None:
+            source = _Loads.of(live)
+        elif (route := self._route(resolver, path)) is not None:
+            return self._output(*route)
+        else:
+            source = _Loads(data_id=stated or _stated_id(source_id))
+        # A row a selection trimmed states no id: it loads part of its source.
+        return source if stated else _Loads(recipe=_SELECTION, sources=(source,))
+
+    def _route(self, resolver, path: str) -> tuple | None:
+        """The plan a path names and its output there, or None."""
+        if "://" not in path:
+            return None  # plans, like live patches, are named by URIs
+        if (routes := self._routes.get(id(resolver))) is None:
+            routes = getattr(resolver, "plan_entries", dict)()
+            self._routes[id(resolver)] = routes
+        for prefix, plan in routes.items():
+            if path.startswith(prefix):
+                return plan, path.removeprefix(prefix)
+        return None
+
+    def _output(self, plan, output: str) -> _Loads:
+        """What a plan output loads: its members, put together as planned."""
+        if getattr(plan, "mode", None) is None:
+            return _Loads()  # a route which is not a plan says nothing of its rows
+        if (members := self._members.get(id(plan))) is None:
+            rows = plan.member_rows
+            ids = rows.get("data_id", pd.Series(None, index=rows.index, dtype=object))
+            by_output = rows.groupby("output_id", sort=False).indices
+            members = by_output, rows["source_path"].tolist(), ids.tolist()
+            self._members[id(plan)] = members
+        by_output, paths, ids = members
+        sources = tuple(
+            self.row(paths[x], ids[x], plan.loader) for x in by_output[int(output)]
+        )
+        if plan.mode == "identity" and not plan.merge_kwargs:
+            return sources[0]  # one member, untouched but for the view's selection
+        recipe = {"mode": plan.mode, "dim": plan.dim, "trim_dims": plan.trim_dims}
+        return _Loads(recipe=recipe | plan.merge_kwargs, sources=sources)
+
+
+def _compare(one: _Loads, two: _Loads, memo: dict) -> bool | None:
+    """
+    Whether two rows load the same data, told from what they load from.
+
+    None where that cannot tell: a selection or plan against a plain row,
+    an unstated id, or different selections or plans of patches in memory.
+    `memo` keeps patch comparisons, which a source many plan outputs share
+    would repeat, with the patches, so their ids are not reused meanwhile.
+    """
+    if one.recipe is not None and two.recipe is not None:
+        if len(one.sources) != len(two.sources) or not deep_equality_check(
+            one.recipe, two.recipe
+        ):
+            return None if one.in_memory and two.in_memory else False
+        out = True
+        for x, y in zip(one.sources, two.sources, strict=True):
+            if (same := _compare(x, y, memo)) is False:
+                return False
+            out = out if same else None
+        return out
+    if one.recipe is not None or two.recipe is not None:
+        return None
+    if one.patch is not None and two.patch is not None:
+        key = (id(one.patch), id(two.patch))
+        if key not in memo:
+            same = one.patch is two.patch or one.patch == two.patch
+            memo[key] = (same, one.patch, two.patch)
+        return memo[key][0]
+    if None in (one.data_id, two.data_id):
+        return None
+    return one.data_id == two.data_id
+
+
+def _same_loads(one: _Loads, two: _Loads, memo: dict) -> bool:
+    """Whether two rows with equal metadata load the same data (see `Spool.__eq__`)."""
+    if (same := _compare(one, two, memo)) is not None:
+        return same
+    # In memory, a row compares as the patch it loads; files are known once read.
+    one, two = (_Loads.of(x.load()) if x.load else x for x in (one, two))
+    return _compare(one, two, {}) is not False
 
 
 def _spool_input_message(data) -> str:
@@ -3544,10 +3677,15 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def __eq__(self, other) -> bool:
         """
-        Equality check which ignores the state of lazy realization.
+        Whether two spools would load the same patches, reading no file.
 
-        The flat relations are built and compared directly so that
-        equality does not depend on whether they were realized yet.
+        Rows compare in order: first their metadata (`_eq_state`), then
+        what each loads. A patch in memory compares as a patch; a file row,
+        or a patch against a file row, compares `data_id`; a selection or
+        plan compares its sources by the same rules, and what it does to
+        them. Where those cannot tell, a row of patches in memory compares
+        as the patch it loads, so a view equals its loaded result; one of
+        files is known only once read, and compares by metadata alone.
         """
         if self is other:
             return True
@@ -3578,7 +3716,30 @@ class Spool(NodeRepr, NamespaceOwner):
             and mine._ids == theirs._ids
         ):
             return True
-        return deep_equality_check(self._eq_state(), other._eq_state())
+        if not deep_equality_check(self._eq_state(), other._eq_state()):
+            return False
+        pairs, memo = zip(self._loads(), other._loads(), strict=True), {}
+        return all(_same_loads(x, y, memo) for x, y in pairs)
+
+    def _loads(self) -> list[_Loads]:
+        """What each row loads, told without reading a file (see `__eq__`)."""
+        df, catalog = self._df, self._catalog
+        none = pd.Series(None, index=df.index, dtype=object)
+        ids, rows = df.get("data_id", none), df.get("_patch_row", none)
+        # A row a selection trimmed states no id; the index holds its source's.
+        stored = {}
+        if (blank := ids.isna()).any() and "data_id" in df:
+            found = catalog.backend.query(patch_rows=rows[blank].tolist())
+            stored = dict(zip(found["_patch_row"], found.get("data_id", none)))
+        reader, out = _LoadsReader(), []
+        for index, (path, data_id, row) in enumerate(
+            zip(df.get("source_path", none), ids, rows, strict=True)
+        ):
+            loads = reader.row(path, data_id, catalog.resolver, stored.get(row))
+            if loads.recipe is not None and loads.in_memory:
+                loads = loads._replace(load=partial(catalog.get_patch, index))
+            out.append(loads)
+        return out
 
     def _eq_state(self) -> dict:
         """
@@ -3591,10 +3752,10 @@ class Spool(NodeRepr, NamespaceOwner):
         selections folded into the envelopes — a trimmed view equals
         its materialized twin, and spools differing only by a samples
         trim differ in their adjusted envelopes. Whether rows come from
-        a live registry, an index file, or a plan is invisible; data
-        arrays are never compared (metadata-level, like everything
-        here). Because the state is enumerated — never ``__dict__`` —
-        new instance attributes cannot silently join equality.
+        a live registry, an index file, or a plan is invisible here;
+        what each row loads is compared after (`_loads`). Because the
+        state is enumerated — never ``__dict__`` — new instance
+        attributes cannot silently join equality.
         """
         from dascore.io.index.catalog import _SOURCE_SUFFIX  # noqa: PLC0415
         from dascore.io.index.schema import SOURCE_STAT_COLUMNS  # noqa: PLC0415
@@ -3610,14 +3771,9 @@ class Spool(NodeRepr, NamespaceOwner):
             # backend provenance (format/version) are not content; equal
             # spools must compare equal without them, and column order
             # (a construction artifact) must not matter. A patch's own
-            # ids go too: a plan's outputs state none (a merged patch
-            # derives its own from its members'), so
-            # keeping them would make a view unequal to its own
-            # materialization over a column neither describes it by.
-            # Coordinate def keys are representation artifacts too: a
-            # residual-trimmed
-            # view cannot know its trimmed `data_id` without loading,
-            # and data values are never compared here anyway.
+            # ids go too: a plan's outputs and a selection's trimmed rows
+            # state none, so `_loads` compares what each row loads
+            # instead. Coordinate def keys are representation artifacts.
             drop = [
                 "source_path",
                 "_patch_row",

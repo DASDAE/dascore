@@ -1,8 +1,8 @@
 """
 Tests for the unified Spool's equality and update contracts.
 
-Equality is over rows, never backends: order-sensitive, metadata-level,
-with pending residual selections included. update() is case-based:
+Equality is over rows, never backends: order-sensitive, comparing what
+each row loads, with pending residual selections included. update() is case-based:
 directory spools sync, file spools rescan, in-memory spools are
 trivially current, and combined spools with file rows raise.
 """
@@ -13,7 +13,9 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.exceptions import InvalidSpoolError
+from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
 
 
@@ -83,6 +85,135 @@ class TestEqualityContract:
         live_spool = dc.spool(patches)
         assert live_spool == dir_spool
         assert dir_spool == live_spool
+
+
+class TestEqualityComparesLoads:
+    """Equality compares what each spool would load, reading no file (#1642)."""
+
+    @pytest.fixture()
+    def ones(self):
+        """A patch built from an array, so it has a random data_id."""
+        return dc.Patch(
+            data=np.ones((2, 6)),
+            coords={"distance": np.arange(2.0), "time": np.arange(6.0)},
+            dims=("distance", "time"),
+        )
+
+    @pytest.fixture()
+    def directories(self, ones, tmp_path):
+        """Spools of files holding `ones`, and of files holding it doubled."""
+        out = []
+        for name, patch in (("ones", ones), ("twos", ones * 2)):
+            dc.write(patch, tmp_path / name / "patch.h5", "dasdae")
+            out.append(dc.spool(tmp_path / name).update(progress=None))
+        return out
+
+    @pytest.fixture()
+    def no_reads(self, monkeypatch):
+        """Fail any load of a file row."""
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("equality read a file")
+
+        monkeypatch.setattr(FileResolver, "resolve", _fail)
+
+    def test_equal_arrays_with_different_ids(self, ones):
+        """Patches in memory compare as patches, whatever their ids."""
+        twin = dc.Patch(data=ones.data, coords=ones.coords, dims=ones.dims)
+        assert twin.attrs.data_id != ones.attrs.data_id
+        assert dc.spool([ones]) == dc.spool([twin])
+        assert dc.spool([ones]).chunk(time=3) == dc.spool([twin]).chunk(time=3)
+
+    def test_different_data(self, ones):
+        """Patches with equal metadata and different data differ."""
+        assert dc.spool([ones]) != dc.spool([ones * 2])
+        assert dc.spool([ones]).chunk(time=3) != dc.spool([ones * 2]).chunk(time=3)
+        window = {"time": (1, 4)}
+        assert dc.spool([ones]).select(**window) != dc.spool([ones * 2]).select(
+            **window
+        )
+
+    @pytest.mark.parametrize("on_disk", [True, False])
+    def test_view_equals_its_loaded_result(self, ones, directories, on_disk):
+        """A selection or plan equals the patches it loads."""
+        source = directories[0] if on_disk else dc.spool([ones])
+        for view in (source.select(time=(1, 4)), source.chunk(time=3)):
+            assert view == view.load()
+            assert view.load() == view
+            assert view == dc.spool(list(view))
+
+    def test_spools_of_same_files(self, directories, tmp_path, no_reads):
+        """Spools over the same files compare their data ids."""
+        ones, twos = directories
+        assert ones == dc.spool(tmp_path / "ones").update(progress=None)
+        assert ones != twos
+        window = {"time": (1, 4)}
+        assert ones.select(**window) == ones.select(**window)
+        assert ones.select(**window) != twos.select(**window)
+        assert ones.chunk(time=3) == ones.chunk(time=3)
+        assert ones.chunk(time=3) != twos.chunk(time=3)
+
+    def test_memory_vs_files_written_from_it(self, ones, directories):
+        """A written patch keeps its id, so the files equal the memory spool."""
+        on_disk, doubled = directories
+        assert dc.spool([ones]) == on_disk
+        assert on_disk == dc.spool([ones])
+        assert dc.spool([ones]) != doubled
+
+    def test_file_named_by_a_uri(self, ones):
+        """A file named by a URI is a file row, not a plan's output."""
+        path = UPath("memory://dascore/equality/ones.h5")
+        dc.write(ones, path, "dasdae")
+        assert dc.spool(path) == dc.spool([ones])
+        assert dc.spool(path) != dc.spool([ones * 2])
+
+    def test_comparing_reads_no_file(self, ones, directories, no_reads):
+        """Neither files nor plans over them are read to compare."""
+        on_disk, _ = directories
+        assert on_disk == dc.spool([ones])
+        view = on_disk.select(time=(1, 4))
+        assert view == dc.spool([ones.select(time=(1, 4))])
+        assert on_disk.chunk(time=3) == on_disk.chunk(time=3)
+
+    @pytest.mark.parametrize("on_disk", [True, False])
+    def test_plans_filling_differently_differ(self, ones, tmp_path, on_disk):
+        """Plans with equal rows which fill a gap differently differ."""
+        patches = [ones, ones.update_coords(time_min=8.0)]
+        source = dc.spool(patches)
+        if on_disk:
+            path = dc.examples.spool_to_directory(source, path=tmp_path)
+            source = dc.spool(path).update(progress=None)
+        zeros, nans = source.fill_gaps(time=20, fill_value=0), source.fill_gaps(time=20)
+        rows = [x.get_contents().drop(columns="source_path") for x in (zeros, nans)]
+        assert rows[0].equals(rows[1])
+        assert zeros != nans
+
+    def test_selection_and_plan_loading_alike(self, ones):
+        """In memory, a selection equals a plan which loads the same patch."""
+        selected = dc.spool([ones]).select(time=(1, 4))
+        assert selected == selected.chunk(time=None)
+
+    def test_plan_of_selection_in_memory(self, ones):
+        """A plan of a selection compares what it loads with a plan of patches."""
+        planned = dc.spool([ones]).select(time=(1, 4)).chunk(time=2)
+        part = ones.select(time=(1, 4))
+        assert planned == dc.spool([part]).chunk(time=2)
+        assert planned != dc.spool([part * 2]).chunk(time=2)
+
+    def test_snapped_spool_equals_its_loaded_result(self, ones):
+        """A snap applied at load is part of what the spool loads."""
+        numbered = ones.new(data=np.arange(12.0).reshape(2, 6))
+        snapped = dc.spool([numbered]).snap_coords("time", reverse=True)
+        assert snapped == snapped.load()
+        assert snapped != dc.spool([numbered])
+
+    def test_route_which_is_not_a_plan(self, ones, monkeypatch):
+        """Rows another library's route loads compare by metadata alone."""
+        chunked = dc.spool([ones]).chunk(time=3)
+        resolver = chunked._catalog.resolver
+        routes = {prefix: object() for prefix in resolver.plan_entries()}
+        monkeypatch.setattr(resolver, "plan_entries", lambda: routes)
+        assert chunked == dc.spool([ones * 2]).chunk(time=3)
 
 
 class TestUpdateContract:
