@@ -475,20 +475,32 @@ class _LoadsReader:
 
     def __init__(self):
         self._members: dict[int, tuple] = {}
+        self._routes: dict[int, Mapping] = {}
 
     def row(self, path, data_id, resolver, source_id=None) -> _Loads:
         """What one row loads through its resolver; `source_id` names its source."""
         path, stated = str(path), _stated_id(data_id)
         live = resolver.live_entries().get(path) if is_memory_uri(path) else None
-        if live is None:
-            for prefix, plan in getattr(resolver, "plan_entries", dict)().items():
-                if path.startswith(prefix):
-                    return self._output(plan, path.removeprefix(prefix))
-            source = _Loads(data_id=stated or _stated_id(source_id))
-        else:
+        if live is not None:
             source = _Loads.of(live)
+        elif (route := self._route(resolver, path)) is not None:
+            return self._output(*route)
+        else:
+            source = _Loads(data_id=stated or _stated_id(source_id))
         # A row a selection trimmed states no id: it loads part of its source.
         return source if stated else _Loads(recipe=_SELECTION, sources=(source,))
+
+    def _route(self, resolver, path: str) -> tuple | None:
+        """The plan a path names and its output there, or None."""
+        if "://" not in path:
+            return None  # plans, like live patches, are named by URIs
+        if (routes := self._routes.get(id(resolver))) is None:
+            routes = getattr(resolver, "plan_entries", dict)()
+            self._routes[id(resolver)] = routes
+        for prefix, plan in routes.items():
+            if path.startswith(prefix):
+                return plan, path.removeprefix(prefix)
+        return None
 
     def _output(self, plan, output: str) -> _Loads:
         """What a plan output loads: its members, put together as planned."""
@@ -504,40 +516,52 @@ class _LoadsReader:
         sources = tuple(
             self.row(paths[x], ids[x], plan.loader) for x in by_output[int(output)]
         )
-        if plan.mode == "identity":
+        if plan.mode == "identity" and not plan.merge_kwargs:
             return sources[0]  # one member, untouched but for the view's selection
         recipe = {"mode": plan.mode, "dim": plan.dim, "trim_dims": plan.trim_dims}
         return _Loads(recipe=recipe | plan.merge_kwargs, sources=sources)
 
 
-def _same_loads(one: _Loads, two: _Loads, memo: dict) -> bool:
+def _compare(one: _Loads, two: _Loads, memo: dict) -> bool | None:
     """
-    Whether two rows with equal metadata load the same data (see `Spool.__eq__`).
+    Whether two rows load the same data, told from what they load from.
 
-    `memo` keeps patch comparisons, which a source shared by many plan
-    outputs would otherwise repeat.
+    None where that cannot tell: a selection or plan against a plain row,
+    an unstated id, or different selections or plans of patches in memory.
+    `memo` keeps patch comparisons, which a source many plan outputs share
+    would repeat, with the patches, so their ids are not reused meanwhile.
     """
     if one.recipe is not None and two.recipe is not None:
-        if len(one.sources) == len(two.sources) and deep_equality_check(
+        if len(one.sources) != len(two.sources) or not deep_equality_check(
             one.recipe, two.recipe
         ):
-            pairs = zip(one.sources, two.sources, strict=True)
-            return all(_same_loads(x, y, memo) for x, y in pairs)
-        if one.load is None or two.load is None:
-            return False
-    if (one.recipe is not None and one.load is None) or (
-        two.recipe is not None and two.load is None
-    ):
-        # What a selection or plan of files loads is known once it is read.
-        return True
-    one, two = (_Loads.of(x.load()) if x.load else x for x in (one, two))
+            return None if one.in_memory and two.in_memory else False
+        out = True
+        for x, y in zip(one.sources, two.sources, strict=True):
+            if (same := _compare(x, y, memo)) is False:
+                return False
+            out = out if same else None
+        return out
+    if one.recipe is not None or two.recipe is not None:
+        return None
     if one.patch is not None and two.patch is not None:
         key = (id(one.patch), id(two.patch))
         if key not in memo:
-            memo[key] = one.patch is two.patch or one.patch == two.patch
-        return memo[key]
-    # an unstated id is unknown, and the metadata already matched
-    return None in (one.data_id, two.data_id) or one.data_id == two.data_id
+            same = one.patch is two.patch or one.patch == two.patch
+            memo[key] = (same, one.patch, two.patch)
+        return memo[key][0]
+    if None in (one.data_id, two.data_id):
+        return None
+    return one.data_id == two.data_id
+
+
+def _same_loads(one: _Loads, two: _Loads, memo: dict) -> bool:
+    """Whether two rows with equal metadata load the same data (see `Spool.__eq__`)."""
+    if (same := _compare(one, two, memo)) is not None:
+        return same
+    # In memory, a row compares as the patch it loads; files are known once read.
+    one, two = (_Loads.of(x.load()) if x.load else x for x in (one, two))
+    return _compare(one, two, {}) is not False
 
 
 def _spool_input_message(data) -> str:
@@ -3659,9 +3683,9 @@ class Spool(NodeRepr, NamespaceOwner):
         what each loads. A patch in memory compares as a patch; a file row,
         or a patch against a file row, compares `data_id`; a selection or
         plan compares its sources by the same rules, and what it does to
-        them. A selection or plan of patches in memory compares as the patch
-        it loads, so a view equals its loaded result; one of files is known
-        only once read, and against a patch compares by metadata alone.
+        them. Where those cannot tell, a row of patches in memory compares
+        as the patch it loads, so a view equals its loaded result; one of
+        files is known only once read, and compares by metadata alone.
         """
         if self is other:
             return True

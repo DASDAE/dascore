@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.exceptions import InvalidSpoolError
 from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
@@ -159,6 +160,13 @@ class TestEqualityComparesLoads:
         assert on_disk == dc.spool([ones])
         assert dc.spool([ones]) != doubled
 
+    def test_file_named_by_a_uri(self, ones):
+        """A file named by a URI is a file row, not a plan's output."""
+        path = UPath("memory://dascore/equality/ones.h5")
+        dc.write(ones, path, "dasdae")
+        assert dc.spool(path) == dc.spool([ones])
+        assert dc.spool(path) != dc.spool([ones * 2])
+
     def test_comparing_reads_no_file(self, ones, directories, no_reads):
         """Neither files nor plans over them are read to compare."""
         on_disk, _ = directories
@@ -184,6 +192,20 @@ class TestEqualityComparesLoads:
         """In memory, a selection equals a plan which loads the same patch."""
         selected = dc.spool([ones]).select(time=(1, 4))
         assert selected == selected.chunk(time=None)
+
+    def test_plan_of_selection_in_memory(self, ones):
+        """A plan of a selection compares what it loads with a plan of patches."""
+        planned = dc.spool([ones]).select(time=(1, 4)).chunk(time=2)
+        part = ones.select(time=(1, 4))
+        assert planned == dc.spool([part]).chunk(time=2)
+        assert planned != dc.spool([part * 2]).chunk(time=2)
+
+    def test_snapped_spool_equals_its_loaded_result(self, ones):
+        """A snap applied at load is part of what the spool loads."""
+        numbered = ones.new(data=np.arange(12.0).reshape(2, 6))
+        snapped = dc.spool([numbered]).snap_coords("time", reverse=True)
+        assert snapped == snapped.load()
+        assert snapped != dc.spool([numbered])
 
     def test_route_which_is_not_a_plan(self, ones, monkeypatch):
         """Rows another library's route loads compare by metadata alone."""
