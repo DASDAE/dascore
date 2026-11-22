@@ -1348,6 +1348,47 @@ def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
     return df if empty is None else df[~empty]
 
 
+def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
+    """
+    Drop rows a selection of ``names`` left holding no sample, for planning.
+
+    A sample selection marks the rows it empties; a value or relative one
+    between two samples leaves an envelope holding none of the row's labels.
+    A row whose labels are not known to lie on a lattice is kept.
+    """
+    df = _drop_patch_local_empty(df)
+    if "_modified" not in df or df.empty:
+        return df
+    emptied = []
+    for part in _kind_parts(df) or [df]:
+        trimmed = part["_modified"].fillna(False).to_numpy(dtype=bool)
+        for name in names:
+            if not {f"{name}_{x}" for x in ("min", "max", "step")} <= set(part):
+                continue
+            held = trimmed & _structural(part, name) & part[f"{name}_min"].notna()
+            if (rows := part[held.to_numpy()]).empty:
+                continue
+            emptied += rows.index[_holds_no_sample(rows, name)].tolist()
+    return df.drop(index=emptied)
+
+
+def _holds_no_sample(rows: pd.DataFrame, name: str) -> np.ndarray:
+    """Whether no label of each row's lattice lies inside its envelope."""
+    lattice = _sample_lattices(rows, name)
+    base, stride, den, phase, *_ = lattice
+    lows, highs = (rows[f"{name}_{x}"].to_numpy() for x in ("min", "max"))
+    if lows.dtype.kind in "Mm":  # ticks, as the lattice counts them
+        lows, highs = to_int(lows), to_int(highs)
+    grid = (base, np.where(stride > 0, stride, 1), den, phase)
+    if lows.dtype.kind == "f":  # positions: a bump on a large label rounds away
+        first = np.ceil((lows - base) / grid[1] - _GRID_SNAP_RTOL)
+        last = np.floor((highs - base) / grid[1] + _GRID_SNAP_RTOL)
+    else:
+        first = _lattice_label(lows, grid)
+        last = _lattice_label(highs + 1, grid, before=True)
+    return (stride > 0) & (first > last)
+
+
 def _ensure_patch_row(df: pd.DataFrame) -> pd.DataFrame:
     """Attach the positional identity fallback for plain dataframes."""
     if "_patch_row" in df.columns:

@@ -663,15 +663,15 @@ class TestPlansOverLocalSelections:
         ids=["concatenate-new", "concatenate-distance", "chunk-distance"],
     )
     def test_emptied_member(self, method, kwargs):
-        """A member the selection emptied joins as its loaded patch does (#1640)."""
+        """A member the selection emptied is left out of the plan (#1640, #1668)."""
         patch = dc.Patch(
             data=np.ones((2, 5)),
             coords={"distance": [0.0, 1.0], "time": np.arange(5) * 2.0},
             dims=("distance", "time"),
         )
-        # no sample lies one second in, which the index cannot tell
+        # no sample lies one second in
         selected = dc.spool([patch]).select(time=(1, 1), relative=True)
-        self._assert_as_loaded(selected, method, kwargs)
+        assert not list(getattr(selected, method)(**kwargs))
 
     @pytest.mark.parametrize(
         "selection",
@@ -1214,3 +1214,58 @@ class TestNamespaceTagForm:
         """A tagged name must belong to the claimed namespace."""
         with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
             sensor_spool.select(sensor=(1, 2), _attrs="sensor")
+
+
+# plans over a spool, each loaded to its patches
+PLANS = {
+    "concatenate": lambda x: list(x.concatenate(time=None)),
+    "chunk": lambda x: list(x.chunk(time=None)),
+    "chunk_length": lambda x: list(x.chunk(time=2)),
+    "concatenate_other": lambda x: list(x.concatenate(distance=None)),
+}
+
+
+class TestEmptiedMembers:
+    """Plans drop the members a selection left without samples (#1668)."""
+
+    @staticmethod
+    def _patch(time):
+        coords = {"distance": [0, 1], "time": time}
+        data = np.arange(2.0 * len(time)).reshape(2, -1)
+        return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+    @pytest.mark.parametrize("relative", [False, True])
+    @pytest.mark.parametrize("plan", list(PLANS))
+    def test_all_emptied_plan_nothing(self, plan, relative):
+        """A spool whose members a selection emptied plans to no outputs."""
+        patches = [self._patch(np.arange(5.0) + x) for x in (0.0, 5.0)]
+        spool = dc.spool(patches).select(time=(1.2, 1.4), relative=relative)
+        assert len(spool) and all(0 in x.shape for x in spool)
+        assert PLANS[plan](spool) == []
+
+    @pytest.mark.parametrize(
+        "selection",
+        [dict(time=(1.2, 1.4)), dict(time=(0.2, 0.3), relative=True)],
+    )
+    @pytest.mark.parametrize("plan", ["concatenate", "chunk", "concatenate_other"])
+    def test_plan_the_rest(self, plan, selection):
+        """A plan over members some emptied is the plan over the others."""
+        # whole seconds, which the selection empties, beside tenths
+        patches = [self._patch(np.arange(5.0)), self._patch(1 + np.arange(5) / 10)]
+        got = PLANS[plan](dc.spool(patches).select(**selection))
+        expected = PLANS[plan](dc.spool(patches[1:]).select(**selection))
+        assert len(got) == len(expected) == 1
+        assert got[0].equals(expected[0])
+
+    def test_large_labels_keep_their_sample(self):
+        """A one-sample selection on labels far from zero empties nothing."""
+        patch = self._patch(1e9 + np.arange(5.0))
+        spool = dc.spool([patch]).select(time=(1e9 + 2, 1e9 + 2))
+        assert [x.shape for x in PLANS["chunk"](spool)] == [(2, 1)]
+
+    @pytest.mark.parametrize("relative", [False, True])
+    def test_stepless_emptied_loads_empty(self, relative):
+        """Labels with no step cannot show a plan their emptying; they load empty."""
+        patch = self._patch(np.array([0, 1, 3, 4, 6.0]))
+        spool = dc.spool([patch]).select(time=(1.2, 1.4), relative=relative)
+        assert [x.shape for x in PLANS["chunk"](spool)] == [(2, 0)]

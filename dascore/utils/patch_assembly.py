@@ -192,8 +192,8 @@ def _plan_trim_kwargs(patch, kwargs, plan_dim, trim_dims=()) -> dict:
     an open select window admits a patch lacking the plan's own dim.
     """
     coord_map = patch.coords.coord_map
-    # an unmodified member states no range
-    has_dim = plan_dim in kwargs and plan_dim in coord_map
+    # an unmodified member states no range, and an emptied one has no labels
+    has_dim = plan_dim in kwargs and len(coord_map.get(plan_dim, ())) > 0
     out = {plan_dim: kwargs[plan_dim]} if has_dim else {}
     for dim in trim_dims:
         (low, high), coord = kwargs.get(dim, (None, None)), coord_map.get(dim)

@@ -110,6 +110,7 @@ from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
+    _drop_emptied,
     _drop_patch_local_empty,
     _ensure_patch_row,
     _resolve_group_attrs,
@@ -2384,7 +2385,9 @@ class Spool(NodeRepr, NamespaceOwner):
             base = with_untrimmed_origins(base, dim, self._catalog)
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
-        working = _drop_patch_local_empty(working)
+        # a member a selection emptied holds nothing to plan
+        selected = {x for coords, _, _ in self._catalog.residuals for x in coords}
+        working = _drop_emptied(working, selected)
         # a sample or relative selection resolves against the whole patch at
         # load, so its runs cannot be planned apart
         local = any(s or r for _, s, r in self._catalog.residuals)
