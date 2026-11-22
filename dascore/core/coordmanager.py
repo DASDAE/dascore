@@ -1291,10 +1291,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
         assert len(kwargs) == 1
         (dim, value) = next(iter(kwargs.items()))
         assert dim in self.dims
-        if (factor := int(value)) != value:
+        # float, not int, reads every whole number int does without truncating
+        if not float(value).is_integer():
             msg = f"A decimation factor must be a whole number, not {value}."
             raise ParameterError(msg)
-        dim_slice = slice(None, None, factor)
+        dim_slice = slice(None, None, int(value))
         updates = {}
         for name, coord_dims in self.dim_map.items():
             if dim not in coord_dims:

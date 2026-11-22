@@ -475,11 +475,23 @@ class TestShapeProcessors:
         assert not np.shares_memory(copied.data, random_patch.data)
 
     def test_decimate_factor_as_text(self, random_patch):
-        """Unfiltered, the factor is anything int takes; filtered, scipy's."""
+        """Unfiltered, the factor is any whole number int reads; filtered, scipy's."""
         out = random_patch.decimate(time="3", filter_type=None)
         assert out.equals(random_patch.decimate(time=3, filter_type=None))
         with pytest.raises(TypeError, match="cannot be interpreted as an integer"):
             random_patch.decimate(time="3")
+
+    def test_decimate_whole_float_factor(self, random_patch):
+        """Unfiltered, a whole float factor decimates as its integer does."""
+        out = random_patch.decimate(time=2.0, filter_type=None)
+        assert out.equals(random_patch.decimate(time=2, filter_type=None))
+
+    @pytest.mark.parametrize("filter_type", [None, "iir"])
+    @pytest.mark.parametrize("factor", [2.5, "2.5"])
+    def test_decimate_fractional_factor_raises(self, random_patch, filter_type, factor):
+        """A factor which is not a whole number is refused, not truncated."""
+        with pytest.raises(ParameterError, match="whole number"):
+            random_patch.decimate(time=factor, filter_type=filter_type)
 
     def test_interpolate_onto_text(self, random_patch):
         """Positions which are not numbers are scipy's to refuse."""

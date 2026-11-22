@@ -66,7 +66,8 @@ class Decimate(_DecimateFields):
         Copy the sliced data so it does not retain the original array. Applies
         only when `filter_type` is None.
     **kwargs
-        Dimension and factor; `time=10` decimates the time axis by 10.
+        Dimension and factor, a whole number; `time=10` decimates the time
+        axis by 10.
 
     Notes
     -----
@@ -112,7 +113,7 @@ class Decimate(_DecimateFields):
         """Return the decimated coordinates, the axis, factor and slices."""
         extras = self.model_extra or {}
         dim, axis, factor = get_dim_axis_value(meta, kwargs=extras)[0]
-        coords, slices = meta.coords.decimate(**{dim: int(factor)})
+        coords, slices = meta.coords.decimate(**{dim: factor})
         if self.filter_type:
             _refuse_segments(meta, dim, "filtered decimate")
             coords = coords._update_grid(dim)
