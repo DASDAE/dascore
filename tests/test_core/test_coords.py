@@ -2004,6 +2004,19 @@ class TestArrayCoord:
         out3 = two_d_coord.empty(axes=0)
         assert out1.size == out2.size == out3.size == 0
 
+    def test_empty_axis_beyond_length(self):
+        """An axis is checked against the dimensions, not the first length."""
+        wide = get_coord(data=np.zeros((1, 5)))
+        assert wide.empty(axes=1).shape == (1, 0)
+        assert wide.empty(axes=-1).shape == (1, 0)
+
+    @pytest.mark.parametrize("axes", [3, -2, (0, 1)])
+    def test_empty_missing_axis_raises(self, axes):
+        """An axis the coordinate does not have is named in the error."""
+        coord = get_coord(start=0, stop=10, step=1)
+        with pytest.raises(CoordError, match="1-D"):
+            coord.empty(axes=axes)
+
 
 def _blank_after_end():
     """The time coordinate of a selection past a patch's end."""

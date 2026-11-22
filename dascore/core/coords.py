@@ -1154,9 +1154,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if axes is None:
             new_shape = np.zeros(len(self.shape), dtype=np.int_)
         else:
-            assert np.max(axes) <= (len(self) - 1)
             new_shape = np.asarray(self.shape)
             for ind in iterate(axes):
+                if not -self.ndim <= ind < self.ndim:
+                    msg = f"Axis {ind} is not an axis of a {self.ndim}-D coordinate."
+                    raise CoordError(msg)
                 new_shape[ind] = 0
         data = np.empty(tuple(new_shape), dtype=self.dtype)
         return get_coord(data=data)
