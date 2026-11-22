@@ -1433,8 +1433,11 @@ class SQLiteIndexBackend:
             out[f"_{name}_dims"] = out["patch_row"].map(dims)
             # the ORIGINAL unit spelling, matching the native envelope
             # values; chunk partitioning normalizes compatible spellings
-            # to one unit per dimensionality before using this
-            out[f"_{name}_units"] = out["patch_row"].map(units)
+            # to one unit per dimensionality before using this. Object
+            # with None where none is stated: left to infer, pandas makes
+            # it str or float from what the fetch happened to hold.
+            stated = out["patch_row"].map(units).astype(object)
+            out[f"_{name}_units"] = stated.where(stated.notna(), None)
             kinds = set(group["value_kind"])
             # time/distance envelopes already live on patches...
             if name in ("time", "distance"):
