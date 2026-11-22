@@ -1456,6 +1456,19 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                 steps = df.loc[idx, step_name].to_numpy(dtype=float)
                 stepped = convert_units(mins + steps, to_units=target, from_units=unit)
                 df.loc[idx, step_name] = stepped - new_min
+            if (origin := f"_{name}_source_envelope") in df.columns:
+                # where a trimmed row's grid starts is a label, as its min is
+                held = df.loc[idx, origin].tolist()
+                firsts = [
+                    x.get(min_name) if isinstance(x, dict) else None for x in held
+                ]
+                firsts = np.array(firsts, dtype=float)
+                firsts = convert_units(firsts, to_units=target, from_units=unit)
+                moved = [
+                    x if np.isnan(y) else {**x, min_name: y}
+                    for x, y in zip(held, firsts, strict=True)
+                ]
+                df.loc[idx, origin] = pd.Series(moved, index=idx, dtype=object)
             if f"_{name}_coord_dtype" in df.columns:  # converted labels are floats
                 df.loc[idx, f"_{name}_coord_dtype"] = "float64"
         df.loc[rows, unit_col] = target
@@ -3957,7 +3970,10 @@ def _sample_lattices(rows: pd.DataFrame, name: str):
     sources = [rows.get(f"_{name}_src_low")]
     if (envelope := rows.get(f"_{name}_source_envelope")) is not None:
         pick = lambda x: x.get(f"{name}_min") if isinstance(x, dict) else None  # noqa
-        sources.append(envelope.map(pick).astype(low.dtype))
+        picked = envelope.map(pick)
+        # integer labels hold a row stating no start as floats, as `_src_low` does
+        lacking = low.dtype.kind in "iu" and picked.isna().any()
+        sources.append(picked.astype(np.float64 if lacking else low.dtype))
     for source in (x for x in sources if x is not None):
         usable = source.notna() & ~converted
         first, known = first.where(known | ~usable, source), known | usable

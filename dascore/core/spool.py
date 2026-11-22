@@ -2363,6 +2363,7 @@ class Spool(NodeRepr, NamespaceOwner):
         from dascore.io.index.planned import (  # noqa: PLC0415
             PlanResolver,
             collapse_working_df,
+            with_untrimmed_origins,
         )
 
         resolver = self._catalog.resolver
@@ -2381,6 +2382,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 # the patch row in this catalog's index, which derived
                 # catalogs find their members' runs by
                 base = base.assign(_index_row=base["_patch_row"])
+            base = with_untrimmed_origins(base, dim, self._catalog)
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
