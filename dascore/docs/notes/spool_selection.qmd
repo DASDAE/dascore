@@ -31,6 +31,8 @@ Scalars, value lists, and boolean sample masks have no exact meaning across a wh
 
 **Two stages.** The index first keeps patches whose stored ranges could overlap the request. Each patch is then trimmed exactly when it loads. `samples=True` never excludes a patch at the index stage.
 
+**Contents.** A range states the first and last samples each patch keeps, not the bounds asked for: a range from 2.5 to 10.5 over samples one apart shows 3 to 10, so `get_contents`, `get_coverage` and `chunk` count from real samples. A float bound within rounding of a sample states that sample, whether or not loading keeps it. The bound stands where the index can't place a patch's samples (no step, a trim it can't follow, labels stored as float32, or an exact fractional grid trimmed before), and where no sample lies inside the range.
+
 **Relative selection.** With `relative=True`, bounds are resolved per patch: positive offsets count from the coordinate's minimum, negative ones from its maximum. The first bound is always the lower limit and the second the upper. Crossed bounds select nothing. Equal bounds keep a sample at that value if there is one. Attribute filters in the same call are unaffected.
 
 A relative selection drops patches that lack the coordinate, and patches whose stored ranges show the window is empty. For a three-second patch, both `select(time=(5, -1), relative=True)` and `select(time=(5, ...), relative=True)` return an empty spool, while `Patch.select` returns a zero-sample patch for either. Length, contents, indexing, and iteration all use the remaining rows. A window that overlaps a stored range can still land between samples or inside a gap, so its exact result is only known at load time. Sample-index selection keeps empty patches.

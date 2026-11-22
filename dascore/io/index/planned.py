@@ -1265,17 +1265,15 @@ def with_untrimmed_origins(
     A selection on other dimensions marks the rows it cuts trimmed
     (`_modified`) but leaves their labels on ``dim`` their source's own,
     so each row's first label there still places its samples. A plan's
-    output is left out: it may state a bound an earlier selection left
-    there rather than a sample.
+    output counts too, as it does whole: a selection's envelope ends on
+    the samples it keeps (#1127).
     """
     residuals = catalog.residuals
-    columns = {f"{dim}_min", "source_path"}
-    if not residuals or dim is None or not columns.issubset(rows.columns):
+    if not residuals or dim is None or f"{dim}_min" not in rows.columns:
         return rows
     if dim in _trimmed_dims(residuals, catalog.backend.coord_dims_map()):
         return rows
-    planned = rows["source_path"].astype(str).str.startswith(PLAN_SCHEME)
-    return _with_grid_origins(rows, dim, rows[f"{dim}_min"].where(~planned))
+    return _with_grid_origins(rows, dim, rows[f"{dim}_min"])
 
 
 def derived_catalog(

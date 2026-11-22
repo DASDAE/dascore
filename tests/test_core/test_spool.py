@@ -1062,6 +1062,8 @@ class TestSelectSharedDimension:
             {"distance": (10, 20)},
             {"distance": (10, 20), "relative": True},
             {"distance": (10, 21), "samples": True},
+            {"distance": (10.5, 20.5)},
+            {"sensor": (1020.5, 1040.5)},
         ],
     )
     def test_contents_match_patches(self, sensor_spool, kwargs):
