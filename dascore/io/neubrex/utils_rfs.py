@@ -51,6 +51,8 @@ def _get_attr_dict(h5fi):
         "WellBoreID": "well_bore_id",
     }
     data_attrs = dict(h5fi["data"].attrs)
-    out = maybe_get_items(data_attrs, mapping)
+    # Names match whatever their case, as files state WellboreID.
+    lowered = {name.lower(): value for name, value in data_attrs.items()}
+    out = maybe_get_items(lowered, {x.lower(): y for x, y in mapping.items()})
     out["data_units"] = _get_data_units_and_type(data_attrs["DataUnitLabel"])
     return out

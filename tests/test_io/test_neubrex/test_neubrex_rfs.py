@@ -46,3 +46,17 @@ class TestNeubrexRFSDepthUnits:
         with h5py.File(rfs_path, "a") as h5:
             h5["depth"].attrs["unit"] = "not_a_unit"
         assert _distance_units(rfs_path) == {None}
+
+
+class TestNeubrexRFSAttrs:
+    """Tests for the attrs read from the data node."""
+
+    @pytest.mark.parametrize("name", [None, "WellBoreID", "wellboreid"])
+    def test_well_bore_id(self, rfs_path, name):
+        """The well bore id is read whatever the case of its name."""
+        if name is not None:
+            with h5py.File(rfs_path, "a") as h5:
+                attrs = h5["data"].attrs
+                attrs[name] = attrs.pop("WellboreID")
+        attrs = NeubrexRFSV1().read(rfs_path)[0].attrs
+        assert attrs.well_bore_id == "16B(78)-32"
