@@ -750,6 +750,23 @@ class TestTwoKinds:
         assert len(mixed) == len(expected)
         assert all(x.equals(y) for x, y in zip(mixed, expected, strict=True))
 
+    @pytest.mark.parametrize("stepless", ["numbers", "durations"])
+    @pytest.mark.parametrize("kwargs", [{"samples": True}, {"relative": True}])
+    def test_missing_step_kept(self, stepless, kwargs):
+        """A row with no step states the missing step it did before selecting."""
+        irregular = np.array([0, 1, 3, 4, 6])
+        numbers = irregular * 1.0 if stepless == "numbers" else np.arange(5.0)
+        durations = np.arange(5) if stepless == "numbers" else irregular
+        times = (durations * np.timedelta64(1, "s"), numbers)
+        patches = [
+            dc.Patch(data=np.zeros(5), coords={"time": x}, dims=("time",))
+            for x in times
+        ]
+        spool = dc.spool(patches)
+        out = spool.select(time=(1, None), **kwargs)
+        expected = spool.get_contents()["time_step"]
+        pd.testing.assert_series_equal(out.get_contents()["time_step"], expected)
+
 
 class TestMaterializedNamespaces:
     """_attrs/_coords validation on the dataframe (materialized) path."""

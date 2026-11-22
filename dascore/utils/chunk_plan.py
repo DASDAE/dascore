@@ -1197,6 +1197,12 @@ def patch_local_adjusted_envelopes(
         if (empty := out.get(_PATCH_LOCAL_EMPTY)) is not None:
             # a kind whose replay marked no row empty has none
             out[_PATCH_LOCAL_EMPTY] = empty.fillna(False).astype(bool)
+        for column in out.columns.intersection(df.columns):
+            # a column one dtype held before the split holds it again, so a
+            # row stating no step keeps the null it had (NaT beside durations)
+            if df[column].dtype != object and out[column].dtype == object:
+                cells = out[column]
+                out[column] = cells.where(cells.notna(), None).astype(df[column].dtype)
         return out.sort_index(kind="stable")
     source = df
     df = df.copy(deep=False)
