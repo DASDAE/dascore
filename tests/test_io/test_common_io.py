@@ -1307,7 +1307,7 @@ class TestAttrVocabulary:
             assert not names & set(STORAGE_PROVENANCE_ATTRS)
 
     def test_known_data_type(self, data_file_path):
-        """Every data_type a reader states is one of VALID_DATA_TYPES."""
+        """Readers give each registry file a data_type in VALID_DATA_TYPES."""
         if _replays_stored_attrs(data_file_path):
             return
         for patch in _cached_read(data_file_path):
