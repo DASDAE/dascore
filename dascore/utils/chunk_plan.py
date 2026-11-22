@@ -1365,11 +1365,17 @@ def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
         for name in names:
             if not {f"{name}_{x}" for x in ("min", "max", "step")} <= set(part):
                 continue
-            held = trimmed & _structural(part, name) & part[f"{name}_min"].notna()
-            if (rows := part[held.to_numpy()]).empty:
+            low, high, step = (part[f"{name}_{x}"] for x in ("min", "max", "step"))
+            # an envelope a step wide holds a sample; only a narrower one may not
+            narrow = ((high - low) < 2 * step.abs()).to_numpy(dtype=bool)
+            held = trimmed & _structural(part, name) & narrow
+            if not held.any():
                 continue
+            # only the columns a row's lattice is read from: the frame is wide
+            own = (f"{name}_", f"_{name}_", "_modified")
+            rows = part.loc[held, part.columns.str.startswith(own)]
             emptied += rows.index[_holds_no_sample(rows, name)].tolist()
-    return df.drop(index=emptied)
+    return df.drop(index=emptied) if emptied else df
 
 
 def _holds_no_sample(rows: pd.DataFrame, name: str) -> np.ndarray:
