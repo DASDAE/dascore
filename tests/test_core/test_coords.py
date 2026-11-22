@@ -2975,6 +2975,19 @@ class TestIssues:
         coord = get_coord(data=data)
         assert isinstance(coord, NumericCoord)
 
+    @pytest.mark.parametrize("dtype", ["m8[us]", "M8[us]"])
+    def test_big_endian_labels_holding_nat_bytes(self, dtype):
+        """
+        Big-endian time labels whose bytes, read natively, are NaT (128 in
+        their unit) read as the same labels in native order do (#1646).
+        """
+        native = (np.arange(5) * 64).astype(dtype)
+        out = get_coord(data=native.astype(f">{dtype}"))
+        assert np.array_equal(out.values, native)
+        assert out.step == get_coord(data=native).step
+        repeated = np.array([128, 128]).astype(f">{dtype}")
+        assert np.array_equal(get_coord(data=repeated).values, repeated)
+
 
 class TestStringCoords:
     """Tests for string-backed coordinates."""

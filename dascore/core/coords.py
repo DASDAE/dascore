@@ -4344,9 +4344,12 @@ def get_coord(
             return _released_or_exact(out, data, units)
     else:
         monotonic = data.ndim == 1 and is_strictly_monotonic(data)
-    if monotonic and data.ndim == 1 and not pd.isnull(data).any():
+    # pandas reads time-like bytes in native order, so a big-endian label
+    # whose bytes are NaT read that way would count as null (#1646)
+    null = np.isnat(data) if dtype_time_like(data.dtype) else pd.isnull(data)
+    if monotonic and data.ndim == 1 and not null.any():
         return _exact_coord(data, units=units)
-    if not monotonic and np.all(pd.isnull(data)):
+    if not monotonic and np.all(null):
         # The values say nothing, but their type still does: an array of
         # NaT came from datetimes and should stay datetimes, as the empty
         # case above also keeps. Only a kind whose null the values can
