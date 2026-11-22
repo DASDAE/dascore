@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import (
+    InvalidFiberFileError,
     InvalidSpoolError,
     PatchError,
 )
@@ -315,6 +316,35 @@ class TestSegyCompatibility:
             time=patch.get_coord("time") + dc.to_datetime64(start)
         )
         assert new.get_coord("time").min() == np.datetime64(start)
+
+
+class TestSegySampleCount:
+    """Trace headers stating another sample count than the binary header."""
+
+    def test_every_trace_agrees(self, tmp_path):
+        """A smaller count every trace header states is the count read."""
+        fields = {"TRACE_SAMPLE_COUNT": [15] * 3}
+        path, data = _write_segy_file(tmp_path / "short.sgy", fields=fields)
+        match = "binary header states 20 .* every trace header states 15"
+        with pytest.warns(UserWarning, match=match):
+            patch = dc.read(path)[0]
+        assert len(patch.get_coord("time")) == 15
+        np.testing.assert_array_equal(patch.data, data[:15])
+        np.testing.assert_array_equal(SegyV1_0().read_array(path), data[:15])
+
+    @pytest.mark.parametrize(
+        "counts, match",
+        [
+            ([19, 20, 20], r"different sample counts \(19, 20\)"),
+            ([25] * 3, "states 25 samples, more than the 20"),
+        ],
+    )
+    def test_counts_raise(self, tmp_path, counts, match):
+        """Counts disagreeing, or more than a trace holds, name the counts."""
+        fields = {"TRACE_SAMPLE_COUNT": counts}
+        path, _ = _write_segy_file(tmp_path / "counts.sgy", fields=fields)
+        with pytest.raises(InvalidFiberFileError, match=match):
+            dc.read(path)
 
 
 class TestSegyTracePositions:

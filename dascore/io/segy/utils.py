@@ -13,7 +13,7 @@ import pandas as pd
 import dascore as dc
 from dascore import to_float
 from dascore.core import get_coord_manager
-from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.exceptions import InvalidFiberFileError, InvalidSpoolError, PatchError
 from dascore.io.utils import require_grid
 from dascore.utils.misc import optional_import
 
@@ -115,6 +115,41 @@ def _open_segy(path, segyio):
     return segyio.open(str(path), ignore_geometry=True, endian=endian), text
 
 
+def _sample_count(fi, warn=True) -> int:
+    """
+    Return the number of samples per trace.
+
+    segyio lays traces out with the binary header's count. Where every
+    trace header states one smaller count, that count is used, with a
+    warning; trace headers disagreeing among themselves, or stating more
+    samples than a trace holds, raise.
+    """
+    segyio = optional_import("segyio")
+    stored = len(fi.samples)
+    counts = np.unique(fi.attributes(segyio.TraceField.TRACE_SAMPLE_COUNT)[:])
+    if len(counts) > 1:
+        stated = ", ".join(str(x) for x in counts)
+        msg = (
+            f"SEG-Y trace headers state different sample counts ({stated}); "
+            f"the binary header states {stored}."
+        )
+        raise InvalidFiberFileError(msg)
+    count = int(counts[0])
+    if count > stored:
+        msg = (
+            f"Every SEG-Y trace header states {count} samples, more than the "
+            f"{stored} the binary header lays each trace out with."
+        )
+        raise InvalidFiberFileError(msg)
+    if count < stored and warn:
+        msg = (
+            f"The SEG-Y binary header states {stored} samples per trace, but "
+            f"every trace header states {count}; reading {count}."
+        )
+        warnings.warn(msg, UserWarning)
+    return count
+
+
 def _get_coords(fi, text):
     """
     Get coordinates of the segy file.
@@ -138,8 +173,7 @@ def _get_coords(fi, text):
     # Get time array from SEGY headers.
     starttime = _get_time_from_text(text, _get_time_from_header(header_0))
     dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
-    ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
-    time_array = starttime + dt * np.arange(ns)
+    time_array = starttime + dt * np.arange(_sample_count(fi))
 
     # Get distance array from SEGY header
     channel = np.arange(len(fi.header))
