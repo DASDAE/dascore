@@ -19,12 +19,12 @@ from dascore.backends import (
     JaxBackend,
     LazyBackend,
     NumpyBackend,
-    backend_library,
     get_backend,
     read_backend,
     reading_onto,
 )
 from dascore.config import config_context
+from dascore.core import processor as processor_module
 from dascore.core.processor import register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -50,20 +50,44 @@ MISSING = "library_not_installed"
 class _Strict(ArrayAPIBackend):
     """The strict library, as a package which ships no backend registers it."""
 
-    name = STRICT
+    namespace = STRICT
+    array_type = "array_api_strict._array_object.Array"
 
 
 class _Missing(ArrayAPIBackend):
     """A registered backend whose library is not installed."""
 
-    name = MISSING
+    namespace = MISSING
+    array_type = "library_not_installed.Array"
 
 
 class _Dask(ArrayAPIBackend):
     """Dask arrays made from ones in memory."""
 
-    name = "dask"
+    namespace = "dask"
+    array_type = "dask.array.Array"
     module = "dask.array"
+
+
+class _Wrapped:
+    """An array type of a backend's own, of no array library."""
+
+    def __init__(self, data):
+        self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
+        self._data = data
+
+    def __array__(self, dtype=None, copy=None):
+        """Return the values, which costs something."""
+        return self._data
+
+
+@pytest.fixture(autouse=True)
+def _registry():
+    """Forget, after each test, the backends it registered."""
+    before = dict(backends_module._BACKENDS)
+    yield
+    backends_module._BACKENDS.clear()
+    backends_module._BACKENDS.update(before)
 
 
 def _on(patch, backend):
@@ -253,26 +277,15 @@ class TestBackendNames:
     def test_backend_which_reads_an_array_of_its_own_kind(self, path, patch):
         """What a backend makes of a stored array is handed out as it made it."""
 
-        class Wrapped:
-            """An array which keeps its values some other way, and is not indexed."""
-
-            def __init__(self, data):
-                self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
-                self._data = data
-
-            def __array__(self, dtype=None, copy=None):
-                """Return the values, which costs something."""
-                return self._data
-
         class Wrapping(NumpyBackend):
-            """NumPy's, reading each recipe into a wrapper."""
+            """NumPy's, reading each recipe into a wrapper which is not indexed."""
 
             def from_recipe(self, recipe):
                 """Return the recipe's array, wrapped."""
-                return Wrapped(recipe.load())
+                return _Wrapped(recipe.load())
 
         out = dc.spool(path).set_backend(Wrapping())[0]
-        assert type(out.data) is Wrapped and out.load().equals(patch)
+        assert type(out.data) is _Wrapped and out.load().equals(patch)
 
     def test_backend_which_reads_another_dtype_is_refused(self, spool):
         """A read which is not the array its file holds is refused, merged or not."""
@@ -349,7 +362,7 @@ class TestBackendNames:
         there = backend.from_array(np.arange(3.0))
         assert there.device == device and backend.from_array(there) is there
         elsewhere = _Strict().from_array(np.arange(3.0))
-        assert not backend.owns(elsewhere) and _Strict().owns(elsewhere)
+        assert elsewhere.device != device
         # Moved by its own library, with nothing taken through NumPy.
         _refuse_numpy(monkeypatch)
         moved = backend.from_array(elsewhere)
@@ -383,19 +396,17 @@ class TestBackendNames:
             class Plugged(ArrayAPIBackend):
                 """A backend a plugin supplies."""
 
-                name = "plugged_backend"
+                namespace = "plugged_backend"
+                array_type = "plugged.Array"
 
         monkeypatch.setattr(backends_module, "load_backend_plugins", load)
-        try:
-            assert str(get_backend("plugged_backend")) == "plugged_backend"
-        finally:
-            backends_module._BACKENDS.pop("plugged_backend", None)
+        assert str(get_backend("plugged_backend")) == "plugged_backend"
 
 
 class _Fast(NumpyBackend):
-    """A namespace over NumPy's arrays, as a package of other kernels registers."""
+    """Another namespace over NumPy's arrays, as a package of kernels registers."""
 
-    name = "fast_numpy"
+    namespace = "fast_numpy"
 
 
 class _Tripled(dc.PatchProcessor):
@@ -418,75 +429,86 @@ def _tripled_fast(self, data):
     return data * 3
 
 
+def _triples(patch) -> bool:
+    """Whether the namespace's kernel, and not NumPy's, runs on a patch."""
+    made, data = to_numpy(_Tripled()(patch).data), to_numpy(patch.data)
+    assert np.array_equal(made, data * 3) or np.array_equal(made, data * 2)
+    return bool(np.array_equal(made, data * 3))
+
+
 class TestNamespace:
-    """A backend over another's arrays chooses the kernels, not the arrays."""
+    """A backend's namespace chooses the kernels; its array type, the arrays."""
 
     @pytest.fixture()
     def fast(self, spool):
         """A patch a spool set to the namespace handed out, in memory."""
         return spool.set_backend("fast_numpy")[0]
 
-    def test_arrays_are_the_library_s(self, spool, fast):
-        """The namespace makes the arrays its library makes."""
-        assert _Fast.library == "numpy" and backend_library("fast_numpy") == "numpy"
+    def test_arrays_are_its_array_type_s(self, spool, fast):
+        """Under another namespace the arrays are the ones its parent makes."""
+        assert _Fast.array_type is np.ndarray
         assert type(fast.data) is np.ndarray and fast.equals(spool[0])
-        assert _Fast().owns(fast.data) and fast._backend == _Fast()
 
-    def test_a_name_which_is_no_library_s(self, spool, strict):
-        """A backend of any name states the library its arrays are of."""
+    def test_namespace_needs_an_array_type(self):
+        """A backend which states a namespace says which class its arrays are."""
+        with pytest.raises(TypeError, match="no array_type"):
 
-        class Named(ArrayAPIBackend):
+            class Unfinished(ArrayAPIBackend):
+                """A namespace over nothing."""
+
+                namespace = "unfinished"
+
+    def test_a_namespace_of_any_name(self, spool, strict):
+        """The namespace is any name; the array type says what the arrays are."""
+
+        class Named(_Strict):
             """Someone's own kernels, on another library's arrays."""
 
-            name = "any_name_at_all"
-            library = STRICT
+            namespace = "any_name_at_all"
 
-        try:
-            patch = spool.set_backend("any_name_at_all")[0]
-            assert backend_name(patch.data) == STRICT and patch._backend == Named()
-            assert patch._kernel_key == "any_name_at_all"
-            # With no kernel of its own it runs what the library's arrays do.
-            with pytest.warns(NumpyFallbackWarning, match=f"no {STRICT} impl"):
-                out = _Doubles()(patch)
-            assert out._backend == Named()
-        finally:
-            backends_module._BACKENDS.pop("any_name_at_all", None)
+        patch = spool.set_backend("any_name_at_all")[0]
+        assert backend_name(patch.data) == STRICT and patch._backend == Named()
+        # With no kernel of its own it runs what the arrays would anyway.
+        with pytest.warns(NumpyFallbackWarning, match=f"no {STRICT} impl"):
+            out = _Doubles()(patch)
+        assert backend_name(out.data) == STRICT
 
     def test_arrays_told_by_their_class(self, spool):
-        """A backend which states its array type owns the instances of it."""
-
-        class Wrapped:
-            """An array type of the backend's own, of no array library."""
-
-            def __init__(self, data):
-                self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
-                self._data = data
-
-            def __array__(self, dtype=None, copy=None):
-                """Return the values."""
-                return self._data
+        """A backend's arrays are the instances of its array type, and no others."""
 
         class Wrapping(ArrayBackend):
             """A backend which makes its own arrays, and has its own kernels."""
 
-            name = "wrapping"
-            library = "numpy"
-            array_type = Wrapped
+            namespace = "wrapping"
+            array_type = _Wrapped
 
             def from_array(self, array):
                 """Return the array wrapped, or as it is if it is already."""
-                return array if self.owns(array) else Wrapped(np.asarray(array))
+                return array if self._owns(array) else _Wrapped(np.asarray(array))
 
-        try:
-            patch = spool.set_backend("wrapping")[0]
-            assert type(patch.data) is Wrapped and patch._backend == Wrapping()
-            # An array of the same library which is not one of its own is not
-            # of its namespace, though NumPy handles both.
-            plain = patch.new(data=np.asarray(patch.data))
-            assert plain._backend is None and not Wrapping().owns(plain.data)
-            assert NumpyBackend().owns(patch.data)
-        finally:
-            backends_module._BACKENDS.pop("wrapping", None)
+        ran = []
+
+        @register_kernel(_Tripled, "wrapping")
+        def _tripled_wrapped(self, data):
+            """Say that the namespace's kernel ran, and on what."""
+            ran.append(type(data))
+            return _Wrapped(np.asarray(data) * 3)
+
+        patch = spool.set_backend("wrapping")[0]
+        assert type(patch.data) is _Wrapped and _triples(patch)
+        assert ran == [_Wrapped]
+        # NumPy handles both, but an ndarray is not one of the backend's own.
+        plain = patch.new(data=np.asarray(patch.data))
+        assert not _triples(plain) and ran == [_Wrapped]
+        # A lazy load is one of its arrays however many boxes it took.
+        lazy = spool.set_backend("lazy[wrapping]")[0].abs()
+        size = plain.data.nbytes
+        for block, several in ((size * 4, False), (size // 5, True)):
+            with config_context(lazy_block_size=block):
+                assert (len(chunk_boxes(lazy.data)) > 1) is several
+                loaded = lazy.load()
+            assert type(loaded.data) is _Wrapped
+            assert np.array_equal(np.asarray(loaded.data), np.abs(plain.data))
 
     @pytest.mark.parametrize(
         "where, owned",
@@ -500,17 +522,17 @@ class TestNamespace:
 
             array_type = where
 
-        assert Named().owns(np.ones(2)) is owned
+        assert Named()._owns(np.ones(2)) is owned
         assert "not_imported" not in sys.modules
 
     def test_its_kernel_runs(self, spool, fast):
         """An operation with a kernel for the namespace runs it."""
-        np.testing.assert_array_equal(_Tripled()(fast).data, fast.data * 3)
-        # And a patch of no namespace runs the library's.
-        np.testing.assert_array_equal(_Tripled()(spool[0]).data, fast.data * 2)
+        assert _triples(fast)
+        # And a patch of no namespace runs what its array does.
+        assert not _triples(spool[0])
 
-    def test_no_kernel_falls_back_to_the_library_s(self, fast):
-        """Without one the library's kernel runs, and nothing is said of it."""
+    def test_no_kernel_runs_what_the_array_would(self, fast):
+        """Without one the array's own kernel runs, and nothing is said of it."""
         with config_context(numpy_fallback="raise"), warnings.catch_warnings():
             warnings.simplefilter("error")
             out = _Doubles()(fast)
@@ -530,8 +552,16 @@ class TestNamespace:
                 """Return the data times five."""
                 return data * 5
 
-        assert Own.kernel_for("fast_numpy") is Own.__dict__["numpy_kernel"]
-        assert _Tripled.kernel_for("fast_numpy") is _tripled_fast
+        assert Own.kernel_for("numpy", "fast_numpy") is Own.__dict__["numpy_kernel"]
+        assert _Tripled.kernel_for("numpy", "fast_numpy") is _tripled_fast
+        assert _Tripled.kernel_for("numpy") is _Tripled.__dict__["numpy_kernel"]
+
+    def test_plugins_load_for_the_array_and_the_namespace(self, monkeypatch):
+        """Kernels a package has for the arrays load, as do the namespace's."""
+        asked = []
+        monkeypatch.setattr(processor_module, "load_backend_plugins", asked.append)
+        _Tripled.kernel_for(STRICT, "fast_numpy")
+        assert asked == [STRICT, "fast_numpy"]
 
     def test_operations_pass_it_on(self, fast):
         """What an operation makes is of the namespace its input was."""
@@ -540,24 +570,23 @@ class TestNamespace:
             fast.update_attrs(station="here"),
             fast.select(time=(0, 10), samples=True),
             fast.new(data=fast.data + 1),
+            fast.drop_data().to_patch(fast.data),
             _Tripled()(fast),
         )
-        for patch in made:
-            assert patch._backend == _Fast()
-            np.testing.assert_array_equal(_Tripled()(patch).data, patch.data * 3)
+        assert all(_triples(x) for x in made)
 
-    def test_data_of_another_library_drop_it(self, fast, strict):
-        """The namespace is of its library's arrays, and of no others."""
+    def test_its_kernels_are_for_its_arrays(self, fast, strict):
+        """Data which are not its arrays run their own kernels."""
         there = fast.new(data=strict.asarray(fast.data))
-        assert there._backend is None
-        # And it does not come back with data of the library.
-        assert there.new(data=fast.data)._backend is None
+        with pytest.warns(NumpyFallbackWarning, match=f"no {STRICT} impl"):
+            assert not _triples(there)
+        # Given its arrays again, the patch runs the namespace's again.
+        assert _triples(there.new(data=fast.data))
 
     def test_another_backend_replaces_it(self, fast):
-        """A spool set to the library hands the patch out with its kernels."""
+        """A spool set to another backend hands the patch out with its kernels."""
         plain = _on(fast, "numpy")
-        assert plain._backend is None and plain.equals(fast)
-        np.testing.assert_array_equal(_Tripled()(plain).data, fast.data * 2)
+        assert plain.equals(fast) and not _triples(plain)
         # One already of the namespace is handed out as it is.
         assert _on(fast, "fast_numpy") is fast
 
@@ -574,54 +603,48 @@ class TestNamespace:
             loaded = out.load()
         np.testing.assert_array_equal(loaded.data, fast.data * 6)
         # In memory it is still of the namespace it was computed on.
-        assert type(loaded.data) is np.ndarray and loaded._backend == _Fast()
+        assert type(loaded.data) is np.ndarray and _triples(loaded)
 
     def test_merged_by_the_spool_is_of_it(self, spool):
         """What a spool set to the namespace merges is of the namespace too."""
         for name in ("fast_numpy", "lazy[fast_numpy]"):
-            merged = spool.set_backend(name).chunk(time=None)[0]
-            assert merged._backend == _Fast()
+            assert _triples(spool.set_backend(name).chunk(time=None)[0].load())
 
     def test_operation_which_reads_lazy_data_keeps_it(self, spool, fast):
         """Read into memory for an operation, the patch is still of the namespace."""
         lazy = spool.set_backend("lazy[fast_numpy]")[0]
         with config_context(numpy_fallback="ignore"):
             out = lazy.detrend("time")
-        assert type(out.data) is np.ndarray and out._backend == _Fast()
+        assert type(out.data) is np.ndarray and _triples(out)
         np.testing.assert_allclose(out.data, fast.detrend("time").data)
 
     def test_over_arrays_which_compute_later(self):
-        """A namespace over a library which computes later is planned as it is."""
+        """A namespace over arrays which compute later is planned as they are."""
         dask_array = pytest.importorskip("dask.array")
 
         class Flavour(_Dask):
-            """Dask arrays, under a name of its own."""
+            """Dask arrays, under a namespace of its own."""
 
-            name = "dask_flavour"
+            namespace = "dask_flavour"
 
         data = np.ones((12, 400), np.uint8)
         coords = {"distance": np.arange(12.0), "time": np.arange(400.0)}
         patch = dc.Patch(data, coords, ("distance", "time"))
         patch = patch.new(data=dask_array.from_array(data, chunks=(12, 100)))
-        try:
-            there = dc.spool([patch]).set_backend("dask_flavour")[0]
-            assert there._backend == Flavour()
-            # Windows a detrend widens only where one holds NaN: stated
-            # before anything is computed, as for the library's own arrays.
-            out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
-            blocks = [x.compute().dtype for x in out.data.blocks]
-            assert set(blocks) == {np.dtype(out.dtype)} == {np.dtype(np.float64)}
-        finally:
-            backends_module._BACKENDS.pop("dask_flavour", None)
+        there = dc.spool([patch]).set_backend("dask_flavour")[0]
+        assert there._backend == Flavour()
+        # Windows a detrend widens only where one holds NaN: stated
+        # before anything is computed, as for the library's own arrays.
+        out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
+        blocks = [x.compute().dtype for x in out.data.blocks]
+        assert set(blocks) == {np.dtype(out.dtype)} == {np.dtype(np.float64)}
 
-    def test_spool_load_keeps_it(self, spool, fast):
+    def test_spool_load_keeps_it(self, spool):
         """Loaded by the spool, lazily or not, the patches are of the namespace."""
         for name in ("fast_numpy", "lazy[fast_numpy]"):
-            loaded = spool.set_backend(name).load()
-            assert {x._backend for x in loaded} == {_Fast()}
+            assert all(_triples(x) for x in spool.set_backend(name).load())
         # And held in memory under a lazy backend, of the one it computes on.
-        held = dc.spool([spool[0]]).set_backend("lazy[fast_numpy]")[0]
-        assert held._backend == _Fast()
+        assert _triples(dc.spool([spool[0]]).set_backend("lazy[fast_numpy]")[0])
 
 
 class TestFallbackSetting:
@@ -678,21 +701,11 @@ class TestPatchOnABackend:
 
     def test_array_numpy_handles_is_left_alone(self, patch, strict):
         """An array-like of no array library is not made an ndarray of."""
-
-        class Compressed:
-            """An array which keeps its values some other way."""
-
-            shape, dtype, ndim = patch.shape, patch.dtype, patch.ndim
-
-            def __array__(self, dtype=None, copy=None):
-                """Return the values, which costs something."""
-                return np.asarray(patch.data)
-
-        held = patch.new(data=Compressed())
-        assert type(held.data) is Compressed
+        held = patch.new(data=_Wrapped(np.asarray(patch.data)))
+        assert type(held.data) is _Wrapped
         # Reader's choice, NumPy and lazy on NumPy all leave it as it is.
         assert dc.spool([held])[0] is held
-        assert _on(held, "numpy") is held and _on(held, "lazy") is held
+        assert _on(held, "numpy") is held and _on(held, "lazy").data is held.data
         # Another library was asked for, so its values are what is wanted.
         there = _on(held, STRICT)
         assert backend_name(there.data) == STRICT

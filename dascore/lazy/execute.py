@@ -47,17 +47,21 @@ from dascore.utils.array_api import (
     _as_numpy_dtype,
     array_namespace,
     fallbacks_decided,
+    is_numpy,
 )
 
 if TYPE_CHECKING:
+    from dascore.backends import ArrayBackend
     from dascore.lazy.array import LazyArray
 
 
-def _converted(processor, backend: str) -> str | None:
+def _converted(processor, backend: ArrayBackend) -> str | None:
     """Return the operation a step would take chunks through NumPy for, if any."""
-    if backend == NUMPY_BACKEND:
+    native = backend._native
+    if native == NUMPY_BACKEND:
         return None
-    if hasattr(type(processor).kernel_for(backend), "_converts"):
+    kernel = type(processor).kernel_for(native, backend.namespace)
+    if hasattr(kernel, "_converts"):
         return processor.name or type(processor).__name__
     # A step which runs another operation, as one in a window does, has a
     # kernel for any library and converts for the operation it runs.
@@ -183,16 +187,19 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         If a step is still pending, or computed an array of another shape
         or dtype than its metadata stated.
     """
+    backend = array._backend
     if 0 in _sizes(box):
-        return array._backend.from_array(np.empty(_sizes(box), array.dtype))
+        return backend.from_array(np.empty(_sizes(box), array.dtype))
     needed = _needs(array, box)
-    backend = array._backend.name
-    data = array._backend.from_array(array.recipe[needed[0]].load())
+    data = backend.from_array(array.recipe[needed[0]].load())
+    # What the backend's arrays are, and the namespace they are of: the
+    # same for every box, so each step runs one kernel throughout.
+    native, namespace = backend._native, backend.namespace
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
         stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
-        kernel = type(processor).kernel_for(backend)
+        kernel = type(processor).kernel_for(native, namespace)
         run = partial(kernel, processor, **node.plan)
         # A step with no kernel for the library was let through, or
         # refused, when it was chained: it is not asked again for each box.
@@ -219,14 +226,18 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
 def load(array: LazyArray) -> np.ndarray:
     """Compute a lazy array a box at a time, and return the whole of it."""
     boxes = chunk_boxes(array)
-    if len(boxes) == 1:
-        return compute(array, boxes[0])
-    if array._backend.library != NUMPY_BACKEND:
-        return _joined([compute(array, box) for box in boxes], boxes)
-    out = np.empty(array.shape, array.dtype)
-    for box in boxes:
-        out[box] = compute(array, box)
-    return out
+    out = compute(array, boxes[0])
+    if len(boxes) > 1 and is_numpy(out):
+        # Written in place, so only one box is held beside the whole.
+        first, out = out, np.empty(array.shape, array.dtype)
+        out[boxes[0]] = first
+        for box in boxes[1:]:
+            out[box] = compute(array, box)
+    elif len(boxes) > 1:
+        out = _joined([out, *(compute(array, box) for box in boxes[1:])], boxes)
+    # One of the backend's own arrays however many boxes it took: arrays of
+    # no array library are joined as the `ndarray` NumPy makes of them.
+    return array._backend.from_array(out)
 
 
 def _joined(pieces: list, boxes: list[Box]):

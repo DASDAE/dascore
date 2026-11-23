@@ -52,7 +52,6 @@ from pydantic import ConfigDict
 from pydantic.alias_generators import to_snake
 
 import dascore as dc
-from dascore.backends import backend_library
 from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
@@ -375,7 +374,7 @@ class PatchProcessor(DascoreBaseModel):
         return self.run(patch)
 
     @classmethod
-    def kernel_for(cls, backend: str):
+    def kernel_for(cls, backend: str, namespace: str | None = None):
         """
         Return the kernel this class runs for a backend, or None.
 
@@ -386,10 +385,11 @@ class PatchProcessor(DascoreBaseModel):
         registered against its parent must not answer for it. A backend
         other than NumPy first loads its `dascore.kernels` entry points, once.
 
-        A backend which is a namespace over another library's arrays is
-        answered by a kernel registered for the namespace, and where a
-        class has none, by whatever that class runs for the library: the
-        arrays are the library's already, so nothing is converted for it.
+        `backend` is what the data are, as
+        [`backend_name`](`dascore.utils.array_api.backend_name`) reports
+        them, and `namespace` the one their patch is of, if any. A kernel a
+        class has registered for the namespace answers before whatever the
+        class runs for the data as they are, which takes no conversion.
 
         The lazy backend never falls back unasked: the first class which
         computes anything is answered by its own registered lazy kernel, or
@@ -397,9 +397,7 @@ class PatchProcessor(DascoreBaseModel):
         runs the operation by its chunk contract, or refuses it unless the
         `numpy_fallback` setting lets the data be read into memory.
         """
-        if backend != "numpy":
-            load_backend_plugins(backend)
-        namespace, backend = backend, backend_library(backend)
+        _load_plugins(backend, namespace)
         for klass in cls.__mro__:
             contents = klass.__dict__
             kernels = contents.get("_kernels", {})
@@ -536,14 +534,13 @@ class PatchProcessor(DascoreBaseModel):
         """Run the operation; `record=False` writes no history or ids."""
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
         # Before the check, which asks whether the class has any kernel.
-        if meta._kernel_key != "numpy":
-            load_backend_plugins(meta._kernel_key)
+        _load_plugins(meta._kernel_key, meta._kernel_namespace)
         self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
         # settled before anything asks the patch for its data.
-        kernel = self.kernel_for(meta._kernel_key)
+        kernel = self.kernel_for(meta._kernel_key, meta._kernel_namespace)
         if kernel is None:
             if out is meta:
                 return self._finished(patch, self._unchanged(patch, record), record)
@@ -576,7 +573,7 @@ class PatchProcessor(DascoreBaseModel):
             # gets them as any other result does, below.
             attrs = _unrecorded_attrs(attrs)
         out = out.update(attrs=attrs)
-        if backend_library(meta._kernel_key) == LAZY_BACKEND:
+        if meta._kernel_key == LAZY_BACKEND:
             result = self._settled(result, out)
         new = out if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
@@ -924,7 +921,9 @@ def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, .
     backend
         The backend it is for, as
         [`backend_name`](`dascore.utils.array_api.backend_name`) spells
-        it -- "numpy", "cupy", "dask" -- or a tuple of them.
+        it -- "numpy", "cupy", "dask" -- or the namespace of an
+        [`ArrayBackend`](`dascore.backends.ArrayBackend`), or a tuple of
+        them.
     """
     owner = _processor_named(cls) if isinstance(cls, str) else cls
     backends = (backend,) if isinstance(backend, str) else tuple(backend)
@@ -940,6 +939,13 @@ def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, .
         return func
 
     return decorate
+
+
+def _load_plugins(*names: str | None) -> None:
+    """Load the `dascore.kernels` entry points of each name but NumPy's, once."""
+    for name in names:
+        if name is not None and name != "numpy":
+            load_backend_plugins(name)
 
 
 def _processor_named(name: str) -> type[PatchProcessor]:

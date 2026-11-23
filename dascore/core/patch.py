@@ -13,7 +13,6 @@ import dascore.proc.basic
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
-from dascore.backends import ArrayBackend
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -58,20 +57,6 @@ from dascore.utils.namespace import NamespaceOwner
 def _is_lazy(data) -> bool:
     """Whether an array's values are read only when asked for."""
     return isinstance(data, LazyArray) or backend_name(data) == "dask"
-
-
-def _namespace(backend: ArrayBackend | None, data) -> ArrayBackend | None:
-    """
-    Return a backend if it is a namespace which `data` are of, else None.
-
-    Only a namespace counts: a backend named for its array library says
-    nothing the array does not. The data are of it while they are arrays of
-    its own, or a lazy array which computes on it.
-    """
-    if backend is None or backend.name == backend.library:
-        return None
-    computes_on = isinstance(data, LazyArray) and data._backend == backend
-    return backend if computes_on or backend.owns(data) else None
 
 
 def _handed_array_attrs(attrs):
@@ -356,22 +341,19 @@ class Patch(NamespaceOwner, PatchMeta):
 
     @property
     def _kernel_key(self) -> str:
-        """Return the name this patch's kernels are resolved under."""
-        backend = self._backend
-        # A lazy array is not one of its namespace's own until it is loaded:
-        # its steps wait, and run that namespace's kernels when it is.
-        if backend is not None and backend.owns(self._data):
-            return backend.name
+        """Return what the data are, which their kernels are resolved under."""
         return backend_name(self._data)
 
-    def _keep_backend(self, backend: ArrayBackend | None) -> None:
-        """
-        Keep the backend whose namespace this patch's kernels are of.
-
-        Kept only while the data are of that namespace, so a patch given
-        other data drops it; see `_namespace`.
-        """
-        self._backend = _namespace(backend, self._data)
+    @property
+    def _kernel_namespace(self) -> str | None:
+        """Return the namespace whose kernels run on the data, if any."""
+        backend = self._backend
+        # Its kernels are for its own arrays: not for data of another kind
+        # the patch was given since, nor for a lazy array, whose steps wait
+        # and run them when it is loaded.
+        if backend is not None and backend._owns(self._data):
+            return backend.namespace
+        return None
 
     def drop_data(self) -> PatchMeta:
         """
@@ -398,6 +380,7 @@ class Patch(NamespaceOwner, PatchMeta):
             source=self._source,
         )
         out._kernel_key = self._kernel_key
+        out._kernel_namespace = self._kernel_namespace
         out._backend = self._backend
         # What `to_patch` builds: this patch's class, so an operation which
         # drops the data and fills them again keeps a subclass.
@@ -448,7 +431,7 @@ class Patch(NamespaceOwner, PatchMeta):
         # nothing else has spoken for, which this is not.
         with operation_context():
             out = type(self)(data=data, coords=coords, attrs=attrs, **extra)
-        out._keep_backend(self._backend)
+        out._backend = self._backend
         return out
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:

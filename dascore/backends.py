@@ -9,16 +9,14 @@ one. Options, such as the device the arrays go on, are fields of the
 instance. A spool with no backend set hands out whatever its files' readers
 return.
 
-A backend is registered by subclassing `ArrayBackend` and giving the class a
-`name`, which is also what its kernels are registered under. The name can
-be anything if the class states its `library`, which is what
-[`backend_name`](`dascore.utils.array_api.backend_name`) reports for its
-arrays; a class which states none is named for its library. A subclass
-which states another name is a namespace over the same arrays: an
-operation runs the kernel registered for the namespace, and where there is
-none, the one its library would run. A package can have DASCore import its
-backend the first time the name is asked for, by declaring the module as a
-`dascore.kernels` entry point named for the backend.
+A backend states two things. Its `namespace` is any name: what a string
+calls it, what its kernels are registered under, and what a package names
+its `dascore.kernels` entry point, so DASCore imports the backend the first
+time the name is asked for. Its `array_type` is the class of its arrays.
+Two backends may make the same arrays under different namespaces: an
+operation runs the kernel registered for the patch's namespace, and where
+there is none, the one the array would run anyway. Subclassing a backend
+under another namespace is all that takes.
 """
 
 from __future__ import annotations
@@ -32,6 +30,7 @@ from contextvars import ContextVar
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict
 
 from dascore.exceptions import ParameterError
@@ -57,13 +56,15 @@ __all__ = [
     "JaxBackend",
     "LazyBackend",
     "NumpyBackend",
-    "backend_library",
     "get_backend",
 ]
 
-# The registered backend classes, by name in lower case.
+# The registered backend classes, by namespace in lower case.
 _BACKENDS: dict[str, type[ArrayBackend]] = {}
-# A backend's name, and in brackets what it is handed to make itself from.
+# What `backend_name` reports for the arrays a backend class makes; see
+# `ArrayBackend._native`.
+_NATIVE: dict[type[ArrayBackend], str] = {}
+# A backend's namespace, and in brackets what it is handed to make itself from.
 _SPELLING = re.compile(r"\s*(\w+)\s*(?:\[(.*)\])?\s*")
 # The backend reads hand their recipes to, or None when reads fill memory
 # as usual; see `reading_onto`.
@@ -74,49 +75,40 @@ _READING: ContextVar[ArrayBackend | None] = ContextVar(
 
 class ArrayBackend(BaseModel, ABC):
     """
-    How the array a patch holds is made.
+    How the array a patch holds is made, and which kernels run on it.
 
-    A subclass which sets `name` is registered under it. Its options are
-    its fields, so two backends are equal when their options are.
+    A subclass which states a `namespace` is registered under it. Its
+    options are its fields, so two backends are equal when their options are.
 
     Attributes
     ----------
-    name
-        What a string names the backend by, whatever the case, and what its
-        kernels are registered under.
-    library
-        What [`backend_name`](`dascore.utils.array_api.backend_name`)
-        reports for the backend's arrays. A class may state it, so a name
-        can be anything; left unstated it is the name of the first class in
-        its line to state one, so a subclass with a name of its own is a
-        namespace over the same arrays. It says which kernels run where the
-        backend has none of its own.
+    namespace
+        Any name: what a string calls the backend, whatever the case, and
+        what its kernels are registered under.
     array_type
         The class of the backend's arrays, or a string of where it is, such
-        as ``"cupy.ndarray"``, which imports nothing. Its arrays are then
-        the instances of it. None, the default, takes them to be whatever
-        `backend_name` reports as the library's.
-    lazy
-        Whether `from_recipe` returns an array which is not read yet.
+        as ``"cupy.ndarray"``, which imports nothing. Its arrays are the
+        instances of it. A subclass under another namespace inherits it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
-    name: ClassVar[str]
-    library: ClassVar[str]
-    array_type: ClassVar[type | str | None] = None
-    lazy: ClassVar[bool] = False
+    namespace: ClassVar[str]
+    array_type: ClassVar[type | str]
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
-        """Register a class which names itself."""
+        """Register a class which states its namespace."""
         super().__pydantic_init_subclass__(**kwargs)
-        if "name" in cls.__dict__:
-            # Its parent's library, if it has one: a new name over the same
-            # arrays is a namespace, not another library.
-            if not hasattr(cls, "library"):
-                cls.library = cls.name
-            _BACKENDS[cls.name.lower()] = cls
+        if "namespace" not in cls.__dict__:
+            return
+        if not hasattr(cls, "array_type"):
+            msg = (
+                f"{cls.__name__} states the namespace {cls.namespace!r} but no "
+                "array_type: a backend says which class its arrays are."
+            )
+            raise TypeError(msg)
+        _BACKENDS[cls.namespace.lower()] = cls
 
     @classmethod
     def from_string(cls, argument: str | None = None) -> Self:
@@ -126,13 +118,13 @@ class ArrayBackend(BaseModel, ABC):
         Parameters
         ----------
         argument
-            What the string gave in square brackets after the name, or None
-            when it gave nothing. A backend takes nothing there unless it
-            says otherwise, so a string names it only by its name.
+            What the string gave in square brackets after the namespace, or
+            None when it gave nothing. A backend takes nothing there unless
+            it says otherwise, so a string names it only by its namespace.
         """
         if argument is not None:
             msg = (
-                f"The {cls.name} backend takes nothing in square brackets, "
+                f"The {cls.namespace} backend takes nothing in square brackets, "
                 f"but was given {argument!r}. Make an instance to set options."
             )
             raise ParameterError(msg)
@@ -165,18 +157,34 @@ class ArrayBackend(BaseModel, ABC):
             back as it is.
         """
 
-    def owns(self, array: Any) -> bool:
-        """Return True if an array is one this backend would have made."""
-        kind = self.array_type
-        if kind is None:
-            return backend_name(array) == self.library
+    def _owns(self, array: Any) -> bool:
+        """Return True if an array is an instance of the backend's array type."""
+        kind: Any = self.array_type
         if isinstance(kind, str):
-            kind = _named_class(kind)
-        return kind is not None and isinstance(array, kind)
+            # Nothing is imported for it: an array of a library which is
+            # not imported yet cannot be one of its arrays.
+            top, *rest = kind.split(".")
+            kind = sys.modules.get(top)
+            for part in rest:
+                kind = getattr(kind, part, None)
+        return isinstance(kind, type) and isinstance(array, kind)
+
+    @property
+    def _native(self) -> str:
+        """
+        Return what `backend_name` reports for the arrays the backend makes.
+
+        Asked only where there is no array yet to ask, as when a step is
+        chained on lazy data; found once for a class, from an array it makes.
+        """
+        kind = type(self)
+        if kind not in _NATIVE:
+            _NATIVE[kind] = backend_name(self.from_array(np.empty(0)))
+        return _NATIVE[kind]
 
     def __str__(self) -> str:
         """Return the string which names this backend with default options."""
-        return self.name
+        return self.namespace
 
 
 class NumpyBackend(ArrayBackend):
@@ -185,8 +193,7 @@ class NumpyBackend(ArrayBackend):
 
     An array-like which is not of another array library is NumPy's to
     handle, and is left as it is: one which keeps its values some other way,
-    compressed say, is not converted to an `ndarray`. So the backend states
-    no `array_type`: its arrays are more than the instances of `ndarray`.
+    compressed say, is not converted to an `ndarray`.
 
     Examples
     --------
@@ -197,18 +204,21 @@ class NumpyBackend(ArrayBackend):
     >>> assert NumpyBackend().from_array(data) is data
     """
 
-    name = NUMPY_BACKEND
+    namespace = NUMPY_BACKEND
+    array_type = np.ndarray
 
     def from_array(self, array: Any) -> Any:
         """Return an array NumPy handles; one which is already is left alone."""
-        return array if self.owns(array) else to_numpy(array)
+        # Not only an `ndarray`: whatever is of no other array library.
+        return array if backend_name(array) == NUMPY_BACKEND else to_numpy(array)
 
 
 class ArrayAPIBackend(ArrayBackend):
     """
     Arrays of a library which follows the array API standard.
 
-    A subclass names the library, and is all another library needs.
+    A subclass states the namespace and the class of the library's arrays,
+    and is all another library needs.
 
     Parameters
     ----------
@@ -220,7 +230,7 @@ class ArrayAPIBackend(ArrayBackend):
     ----------
     module
         The module whose `asarray` makes the library's arrays, where it is
-        not the one called `library`.
+        not the package the array type is in.
 
     Examples
     --------
@@ -230,7 +240,8 @@ class ArrayAPIBackend(ArrayBackend):
     >>> class Strict(ArrayAPIBackend):
     ...     '''Arrays of array_api_strict.'''
     ...
-    ...     name = "array_api_strict"
+    ...     namespace = "array_api_strict"
+    ...     array_type = "array_api_strict._array_object.Array"
     >>>
     >>> assert Strict().from_array(np.ones(3)).shape == (3,)
     """
@@ -238,12 +249,6 @@ class ArrayAPIBackend(ArrayBackend):
     module: ClassVar[str | None] = None
 
     device: Any = None
-
-    def owns(self, array: Any) -> bool:
-        """Return True for the backend's arrays on this backend's device."""
-        if not super().owns(array):
-            return False
-        return self.device is None or device(array) == self.device
 
     def from_array(self, array: Any) -> Any:
         """
@@ -258,17 +263,18 @@ class ArrayAPIBackend(ArrayBackend):
             If the library cannot be imported, or holds the values in
             another dtype than they came in.
         """
-        if self.owns(array):
-            return array
-        if backend_name(array) == self.library:
-            # Its own already, so only the device is another.
-            return to_device(array, self.device)
+        if self._owns(array):
+            # Its own already, so only the device may be another.
+            there = self.device is None or device(array) == self.device
+            return array if there else to_device(array, self.device)
+        kind = self.array_type
+        package = (kind if isinstance(kind, str) else kind.__module__).split(".")[0]
         # An array NumPy already holds is handed over as it is.
         held = array if is_numpy(array) else to_numpy(array)
         try:
-            out = import_module(self.module or self.library).asarray(held)
+            out = import_module(self.module or package).asarray(held)
         except (ImportError, AttributeError) as error:
-            msg = f"No array library called {self.library!r} could be used: {error}"
+            msg = f"No array library called {package!r} could be used: {error}"
             raise ParameterError(msg) from error
         # A library which holds the values in another dtype, as JAX does
         # with 64-bit numbers unless told otherwise, would change them under
@@ -276,8 +282,8 @@ class ArrayAPIBackend(ArrayBackend):
         made = _as_numpy_dtype(out.dtype)
         if held.size and made != held.dtype:
             msg = (
-                f"{self.library} holds {held.dtype} data as {made}, which would "
-                f"change their values. Configure {self.library} to keep "
+                f"{package} holds {held.dtype} data as {made}, which would "
+                f"change their values. Configure {package} to keep "
                 f"{held.dtype}, or convert the data first."
             )
             raise ParameterError(msg)
@@ -295,7 +301,8 @@ class JaxBackend(ArrayAPIBackend):
     >>> assert get_backend("jax") == JaxBackend()
     """
 
-    name = "jax"
+    namespace = "jax"
+    array_type = "jax.Array"
     module = "jax.numpy"
 
 
@@ -310,7 +317,8 @@ class CupyBackend(ArrayAPIBackend):
     >>> assert get_backend("cupy") == CupyBackend()
     """
 
-    name = "cupy"
+    namespace = "cupy"
+    array_type = "cupy.ndarray"
 
 
 class LazyBackend(ArrayBackend):
@@ -331,15 +339,17 @@ class LazyBackend(ArrayBackend):
     >>> assert str(LazyBackend(compute=JaxBackend())) == "lazy[jax]"
     """
 
-    name = LAZY_BACKEND
-    lazy = True
+    namespace = LAZY_BACKEND
+    # By where it is: a lazy array holds the backend it computes on, so its
+    # module imports this one.
+    array_type = "dascore.lazy.array.LazyArray"
 
     compute: ArrayBackend = NumpyBackend()
 
     def __init__(self, **options: Any) -> None:
         """Refuse a lazy backend to compute on: nothing would ever be read."""
         super().__init__(**options)
-        if self.compute.lazy:
+        if isinstance(self.compute, LazyBackend):
             msg = (
                 "A lazy backend computes on an array library, not on another "
                 f"lazy backend: {self.compute!r}."
@@ -353,8 +363,7 @@ class LazyBackend(ArrayBackend):
 
     def from_recipe(self, recipe: Recipe) -> Any:
         """Return the recipe as a lazy array; nothing is read."""
-        # Imported here: a lazy array holds the backend it computes on, so
-        # its module imports this one.
+        # Imported here: see `array_type`.
         from dascore.lazy.array import LazyArray  # noqa: PLC0415
 
         return LazyArray(recipe, backend=self.compute)
@@ -367,16 +376,18 @@ class LazyBackend(ArrayBackend):
         the chunks of a lazy one are computed. A dask array is another kind
         of promise, and is left to whoever holds it.
         """
-        if backend_name(array) == self.library:
+        if self._owns(array):
             return array._with_backend(self.compute)
         if backend_name(array) == "dask":
             return array
         return self.compute.from_array(array)
 
     def __str__(self) -> str:
-        """Return the name, with the backend computed on if it is not NumPy."""
+        """Return the namespace, with the backend computed on if not NumPy."""
         inner = str(self.compute)
-        return self.name if inner == NUMPY_BACKEND else f"{self.name}[{inner}]"
+        if inner == NUMPY_BACKEND:
+            return self.namespace
+        return f"{self.namespace}[{inner}]"
 
 
 # The class's own name is a spelling of the backend too.
@@ -390,15 +401,15 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
     Parameters
     ----------
     backend
-        A backend, handed back as it is, or a string: the name of a
+        A backend, handed back as it is, or a string: the namespace of a
         registered backend, which gives it with default options, and after
         it in square brackets whatever that backend takes there.
 
     Raises
     ------
     ParameterError
-        If no backend of that name is registered, or it does not take what
-        the brackets gave.
+        If no backend is registered under that namespace, or it does not
+        take what the brackets gave.
 
     Examples
     --------
@@ -416,7 +427,7 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
         # A package's backend is registered when its module is imported.
         load_backend_plugins(name)
     if found is None or name not in _BACKENDS:
-        known = ", ".join(sorted({x.name for x in _BACKENDS.values()}))
+        known = ", ".join(sorted({x.namespace for x in _BACKENDS.values()}))
         msg = (
             f"{backend!r} is not a backend. The registered backends are: "
             f"{known}. A lazy one names the backend it computes on in square "
@@ -424,34 +435,6 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
         )
         raise ParameterError(msg)
     return _BACKENDS[name].from_string(found.group(2))
-
-
-def _named_class(where: str) -> type | None:
-    """Return the class a dotted name is, or None if it is not imported."""
-    # Nothing is imported for it: an array of a library which is not
-    # imported yet cannot be one of its arrays.
-    top, *rest = where.split(".")
-    found: Any = sys.modules.get(top)
-    for part in rest:
-        found = getattr(found, part, None)
-    return found if isinstance(found, type) else None
-
-
-def backend_library(name: str) -> str:
-    """
-    Return the array library a backend name's arrays are of.
-
-    A name no backend is registered under is taken to be a library's own.
-
-    Examples
-    --------
-    >>> from dascore.backends import backend_library
-    >>>
-    >>> assert backend_library("numpy") == "numpy"
-    >>> assert backend_library("some_other_library") == "some_other_library"
-    """
-    found = _BACKENDS.get(name.lower())
-    return name if found is None else found.library
 
 
 @contextmanager

@@ -38,7 +38,7 @@ import pandas as pd
 from h5py import Dataset as H5pyDataset
 
 import dascore as dc
-from dascore.backends import ArrayBackend, read_backend, reading_onto
+from dascore.backends import ArrayBackend, LazyBackend, read_backend, reading_onto
 from dascore.compat import Progress, UPath
 from dascore.constants import (
     INDEX_NAME,
@@ -710,7 +710,7 @@ def _backend_data(fiber_io, source: ArraySource, backend: ArrayBackend):
     """
     if source.loadable:
         return backend.from_recipe(Recipe.from_source(source.anchored()))
-    if backend.lazy:
+    if isinstance(backend, LazyBackend):
         decide_fallback(
             f"A {fiber_io.name} patch cannot be read lazily here: it selects "
             "samples which are not next to each other, or the format names "
@@ -1932,7 +1932,7 @@ def read(
             )
             own_read = type(fiber_io).read is not FiberIO.read
             backend = read_backend()
-            if backend is not None and backend.lazy and own_read:
+            if isinstance(backend, LazyBackend) and own_read:
                 # Its own read is not known to read lazily, so it reads
                 # into memory, which the fallback setting must allow.
                 decide_fallback(

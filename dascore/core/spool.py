@@ -92,7 +92,7 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
-from dascore.core.patch import _is_lazy, _namespace
+from dascore.core.patch import _is_lazy
 from dascore.exceptions import (
     CoordError,
     InsufficientMemoryError,
@@ -108,6 +108,7 @@ from dascore.exceptions import (
 )
 from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
+from dascore.utils.array_api import backend_name
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -976,17 +977,18 @@ class Spool(NodeRepr, NamespaceOwner):
         with reading_onto(backend):
             patch = read()
         data = patch.data
-        if isinstance(data, LazyArray) and not backend.lazy:
+        lazy = isinstance(backend, LazyBackend)
+        if isinstance(data, LazyArray) and not lazy:
             # Held lazy by the spool: computed on the backend asked for,
             # which its pending steps are asked about, so nothing is
             # converted.
             data = data._with_backend(backend).load()
         # Whatever the read made, or the spool held, as the backend's own.
         new = backend.from_array(data)
-        # The namespace its kernels are of: the backend's own, or the one a
-        # lazy backend computes on.
-        lazy = isinstance(backend, LazyBackend)
-        kept = _namespace(backend.compute if lazy else backend, new)
+        # The backend its kernels are of: the one a lazy backend computes on.
+        # One whose namespace is what the array is says nothing it does not.
+        kept = backend.compute if lazy else backend
+        kept = kept if kept.namespace != backend_name(new) else None
         if new is patch.data and kept == patch._backend:
             return patch
         # Inside an operation, so the attrs are taken to describe the array.
@@ -1016,9 +1018,9 @@ class Spool(NodeRepr, NamespaceOwner):
             arrays in memory on that library, and ``"lazy"`` for arrays
             which are not read until [`load`](`dascore.Patch.load`).
             ``"lazy"`` computes each chunk on NumPy, and ``"lazy[jax]"``
-            names another backend to compute on. A backend which is a
-            namespace over another's arrays makes the same arrays, and the
-            operations on them run its kernels. None unsets the backend.
+            names another backend to compute on. Operations on the
+            patches run the kernels registered for the backend's namespace,
+            where it has any. None unsets the backend.
 
         Raises
         ------

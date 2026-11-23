@@ -96,12 +96,14 @@ class LazyArray:
         """
         if backend == self._backend:
             return self
-        # The same library on another device runs the kernels it ran.
-        name = backend.name
-        for node in self._chain if name != self._backend.name else ():
-            if (converted := execute._converted(node.processor, name)) is not None:
+        old = self._backend
+        # The same arrays in the same namespace, on another device say, run
+        # the kernels they ran: there is nothing to ask again.
+        same = (backend._native, backend.namespace) == (old._native, old.namespace)
+        for node in () if same else self._chain:
+            if (converted := execute._converted(node.processor, backend)) is not None:
                 decide_fallback(
-                    f"{converted} has no {name} implementation",
+                    f"{converted} has no {backend._native} implementation",
                     "each chunk is converted to numpy to run it",
                 )
         return LazyArray(self._recipe, self._chain, backend)

@@ -81,13 +81,14 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     contract = _contract(processor, data.dtype, plan)
     if isinstance(contract, Unchanged):
         return data
-    library = data._backend.name
-    kernel = type(processor).kernel_for(library)
+    backend = data._backend
+    native = backend._native
+    kernel = type(processor).kernel_for(native, backend.namespace)
     if isinstance(contract, ChunkContract):
-        if (converted := _converted(processor, library)) is not None:
+        if (converted := _converted(processor, backend)) is not None:
             # It runs a chunk at a time still, each chunk through NumPy.
             decide_fallback(
-                f"{converted} has no {library} implementation",
+                f"{converted} has no {native} implementation",
                 "each chunk is converted to numpy to run it",
             )
         return data._appended(Node(processor, plan, contract))
