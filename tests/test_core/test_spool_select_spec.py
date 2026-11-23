@@ -25,6 +25,8 @@ from dascore.exceptions import (
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m, percent, s
+from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 
 
 @pytest.fixture(
@@ -1518,3 +1520,28 @@ class TestEmptiedMembers:
         patch = self._patch(np.array([0, 1, 3, 4, 6.0]))
         spool = dc.spool([patch]).select(time=(1.2, 1.4), relative=relative)
         assert PLANS["chunk"](spool) == []
+
+    @pytest.mark.parametrize("on_disk", [False, True])
+    @pytest.mark.parametrize("stepped", [True, False])
+    @pytest.mark.parametrize("plan", list(PLANS))
+    def test_rider_emptied_dropped(self, plan, stepped, on_disk, tmp_path):
+        """A member a selection on a coordinate riding a dimension emptied (#1702)."""
+        depths = [[0, 10, 20, 30.0], [0, 15, 30, 45.0]]
+        if not stepped:
+            depths = [[0, 10, 25, 30.0], [0, 15, 25, 30.0]]
+        patches = [
+            dc.Patch(
+                data=np.zeros((4, 4)),
+                coords={"depth": ("distance", x), "time": t + np.arange(4.0)},
+                dims=("distance", "time"),
+            )
+            for x, t in zip(depths, (0.0, 10.0), strict=True)
+        ]
+        spool = dc.spool(patches)
+        if on_disk:
+            path = dc.examples.spool_to_directory(spool, path=tmp_path)
+            spool = dc.spool(path).update()
+        # only the second patch has a depth from 12 to 18
+        with suppress_warnings(DASCoreWarning):  # labels with no step are read
+            outs = PLANS[plan](spool.select(depth=(12, 18)))
+        assert outs and all(x.get_array("depth").tolist() == [15] for x in outs)

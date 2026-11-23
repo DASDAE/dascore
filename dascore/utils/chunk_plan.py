@@ -1592,7 +1592,10 @@ def _drop_emptied(df: pd.DataFrame, names, read) -> pd.DataFrame:
                 continue
             step = part[f"{name}_step"]
             held = trimmed & _structural(part, name)
-            stepless = held & step.isna().to_numpy()
+            # one with no step is judged by its labels, a rider's too
+            rides = part.get(f"_{name}_dims", pd.Series("", index=part.index))
+            stepless = held | (trimmed & rides.fillna("").astype(bool).to_numpy())
+            stepless &= step.isna().to_numpy()
             for index in part.index[stepless]:
                 coord = read(part.loc[index], name)
                 if coord is not None and not len(coord):
