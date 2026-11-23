@@ -16,7 +16,7 @@ import pytest
 import dascore as dc
 import dascore.core.spool as spool_module
 from dascore.core.coords import concat_coords, get_coord
-from dascore.examples import random_spool
+from dascore.examples import random_spool, spool_to_directory
 from dascore.exceptions import (
     ChunkError,
     CoordError,
@@ -440,6 +440,22 @@ class TestMixedKinds:
         expected = [x.concatenate(time=None)[0] for x in self._alone(patches)]
         assert len(got) == len(expected)
         assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_segments_beside_absolute(self, tmp_path, on_disk):
+        """Numbers in segments beside absolute times keep their step (#1699)."""
+        numbers = concat_coords(*(get_coord(data=x) for x in ([0.0, 1], [3.0, 4])))
+        patches = [self._patch(TIME_KINDS["absolute"]), self._patch(numbers)]
+        spool = dc.spool(patches)
+        if on_disk:
+            spool = dc.spool(spool_to_directory(spool, path=tmp_path)).update()
+        chunked = [x.get_array("time") for x in spool.chunk(time=None)]
+        numbered = [x.tolist() for x in chunked if x.dtype.kind == "f"]
+        assert numbered == [[0.0, 1.0], [3.0, 4.0]]
+        assert len(chunked) == 3
+        gap = spool.get_gaps("time").to_dict("records")[-1]
+        assert (gap["time_min"], gap["time_max"], gap["time_step"]) == (1, 3, 1)
+        assert spool.get_coverage("time")["coverage"].tolist()[-1] == 0.5
 
 
 def _time_runs_patch(count, samples=10):

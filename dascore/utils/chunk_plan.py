@@ -213,8 +213,10 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
         return df
     split = df.iloc[[x[0] for x in stretches]].copy()
     names = (f"{dim}_min", f"{dim}_max", f"{dim}_step")
+    # ends of several kinds, held as objects, keep each segment's step in its kind
+    like = df if df[names[0]].dtype != object else df[[]]
     for num, col in enumerate(names, start=1):
-        _set_column(split, col, [x[num] for x in stretches], df)
+        _set_column(split, col, [x[num] for x in stretches], like)
     # each stretch's samples count from its own first label
     split[f"_{dim}_source_envelope"] = [{names[0]: x[4]} for x in stretches]
     # a segment is no longer its source's whole range
