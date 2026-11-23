@@ -463,7 +463,7 @@ def _convert_times(df, some_dict):
         return some_dict
     # convert queries related to datetime into datetime64
     datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
-    non_min_max_cols = {x.replace("_min", "") for x in datetime_cols}
+    non_min_max_cols = {x.removesuffix("_min") for x in datetime_cols}
     datetime_keys = (datetime_cols & set(some_dict)) | (
         non_min_max_cols & set(some_dict)
     )

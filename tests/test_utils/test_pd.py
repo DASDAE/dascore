@@ -467,6 +467,17 @@ class TestAdjustSegments:
         assert row["frequency_max"] == 125.0
         assert not row["_modified"]
 
+    @pytest.mark.parametrize("name", ["time", "time_minute"])
+    def test_converts_datetime_bounds(self, name):
+        """Number bounds on datetime columns are seconds since 1970, also for a
+        dimension whose name holds "_min".
+        """
+        ends = {f"{name}_min": [to_datetime64(0)], f"{name}_max": [to_datetime64(10)]}
+        df = pd.DataFrame(ends).assign(**{f"{name}_step": to_timedelta64(1)})
+        out = adjust_segments(df, **{name: (2, 5)})
+        assert out[f"{name}_min"].iloc[0] == to_datetime64(2)
+        assert out[f"{name}_max"].iloc[0] == to_datetime64(5)
+
     def test_missing_interval_col_raises_parameter_error(self, adjacent_df):
         """Ensure a missing interval column raises ParameterError."""
         df = adjacent_df.drop(columns=["distance_min"])
