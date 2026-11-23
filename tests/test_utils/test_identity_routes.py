@@ -599,15 +599,15 @@ class TestPinnedSources:
         assert terra15_patch._source is not None
         assert pinned._source is terra15_patch._source
 
-    def test_select_derives(self, terra15_patch):
-        """So a window of it builds on the pinned id."""
+    def test_a_window_builds_on_the_pinned_id(self, terra15_patch):
+        """So a window of it is a window of the pinned id, however taken."""
         window = {"time": (0, 100), "samples": True}
         windowed = terra15_patch.select(**window)
         assert windowed.attrs.data_id == terra15_patch._source[0:100].data_id
         pinned = terra15_patch.pin_id()
         out = pinned.select(**window)
         assert out.attrs.data_id not in (windowed.attrs.data_id, pinned.attrs.data_id)
-        assert out.attrs.data_id == pinned.select(**window).attrs.data_id
+        assert out.attrs.data_id == pinned.isel(time=slice(0, 100)).attrs.data_id
 
     def test_dasdae_round_trip(self, dasdae_path, tmp_path):
         """A pinned id is stored and read back like any other."""
