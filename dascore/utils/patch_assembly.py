@@ -983,6 +983,13 @@ class PatchAssembler:
             # is read, and a file which does not hold the array its row
             # described says so when the data are asked for.
             data = recipe.load() if backend is None else backend.from_recipe(recipe)
+            # A backend which made another array than the recipe describes
+            # says so on the patch path, where each member is checked.
+            if (tuple(data.shape), _as_numpy_dtype(data.dtype)) != (
+                recipe.shape,
+                recipe.dtype,
+            ):
+                return None
         except (InvalidFiberIOError, ParameterError):
             # the resource did not hold the array its row described: a
             # different shape, or fewer axes than the windows name

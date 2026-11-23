@@ -26,6 +26,7 @@ from dascore.config import config_context
 from dascore.core.processor import register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
+    InvalidFiberIOError,
     LazyOperationError,
     NumpyFallbackError,
     ParameterError,
@@ -246,6 +247,45 @@ class TestBackendNames:
             warnings.simplefilter("error")
             apart = dc.read(path, time=wanted, samples=True)[0]
         assert len(handed) == 1 and apart.equals(expected)
+
+    def test_backend_which_reads_an_array_of_its_own_kind(self, path, patch):
+        """What a backend makes of a stored array is handed out as it made it."""
+
+        class Wrapped:
+            """An array which keeps its values some other way, and is not indexed."""
+
+            def __init__(self, data):
+                self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
+                self._data = data
+
+            def __array__(self, dtype=None, copy=None):
+                """Return the values, which costs something."""
+                return self._data
+
+        class Wrapping(NumpyBackend):
+            """NumPy's, reading each recipe into a wrapper."""
+
+            def from_recipe(self, recipe):
+                """Return the recipe's array, wrapped."""
+                return Wrapped(recipe.load())
+
+        out = dc.spool(path).set_backend(Wrapping())[0]
+        assert type(out.data) is Wrapped and out.load().equals(patch)
+
+    def test_backend_which_reads_another_dtype_is_refused(self, spool):
+        """A read which is not the array its file holds is refused, merged or not."""
+
+        class Narrowing(NumpyBackend):
+            """NumPy's, reading each recipe into fewer bits."""
+
+            def from_recipe(self, recipe):
+                """Return the recipe's array in another dtype."""
+                return recipe.load().astype(np.float32)
+
+        narrow = spool.set_backend(Narrowing())
+        for read in (lambda: narrow[0], lambda: narrow.chunk(time=None)[0]):
+            with pytest.raises(InvalidFiberIOError, match="float32"):
+                read()
 
     def test_backend_which_reads_for_itself_and_a_format_which_does(
         self, path, patch, monkeypatch

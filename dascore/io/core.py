@@ -76,7 +76,6 @@ from dascore.io.utils import (
     slice_dataset,
     validate_windows,
 )
-from dascore.lazy.array import LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.utils.array_api import _as_numpy_dtype, decide_fallback
 from dascore.utils.downloader import resolve_example_uri
@@ -1067,6 +1066,8 @@ class FiberIO:
                     (patch, coords, source, windows, residual, queries, index)
                 )
             backend = read_backend()
+            # Which arrays the backend made of a stored window, whole.
+            made = [False] * len(selected)
             if backend is None:
                 arrays = load(requests)
             else:
@@ -1075,11 +1076,12 @@ class FiberIO:
                 arrays: list[Any] = [
                     _backend_data(self, x[2], backend) for x in selected
                 ]
+                made = [x is not None for x in arrays]
                 eager = [n for n, x in enumerate(arrays) if x is None]
                 loaded = load([requests[n] for n in eager]) if eager else ()
                 for n, data in zip(eager, loaded, strict=True):
                     arrays[n] = data
-            for selection, data in zip(selected, arrays, strict=True):
+            for selection, data, whole in zip(selected, arrays, made, strict=True):
                 patch, coords, source, windows, residual, queries, index = selection
                 expected = (
                     tuple(stop - start for start, stop in windows)
@@ -1094,7 +1096,9 @@ class FiberIO:
                         f"metadata declared {expected}/{patch.dtype}."
                     )
                     raise InvalidFiberIOError(msg)
-                if not isinstance(data, LazyArray):
+                # What a backend made is the window itself, and is its own
+                # to keep as it is: indexing it could read or convert it.
+                if not whole:
                     data = _apply_union_indexers(residual, data)
                 attrs = _selected_read_attrs(
                     patch.attrs,
