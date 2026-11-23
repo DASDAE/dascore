@@ -114,6 +114,8 @@ from dascore.utils.chunk_plan import (
     _drop_emptied,
     _drop_patch_local_empty,
     _ensure_patch_row,
+    _narrow,
+    _precision,
     _resolve_group_attrs,
     _structural,
     build_chunk_plan,
@@ -597,6 +599,44 @@ def _compare(one: _Loads, two: _Loads, memo: dict) -> bool | None:
     if None in (one.data_id, two.data_id):
         return None
     return one.data_id == two.data_id
+
+
+def _same_rows(one: Spool, two: Spool) -> bool:
+    """
+    Whether two spools' rows (`Spool._eq_state`) state the same.
+
+    A float coordinate's ends match within twice the float allowance, as a
+    looked-up value matches a grid label, and less than half a step: a row
+    restates the labels it keeps from its ends and step, where a patch cut
+    from a longer grid counts them from its parent's start.
+    """
+    mine, theirs = one._eq_state()["rows"], two._eq_state()["rows"]
+    if list(mine.columns) != list(theirs.columns) or len(mine) != len(theirs):
+        return False
+    names = [
+        name
+        for name in (x[: -len("_step")] for x in mine.columns if x.endswith("_step"))
+        if all(
+            col in mine and mine[col].dtype.kind == theirs[col].dtype.kind == "f"
+            for col in (f"{name}_min", f"{name}_max")
+        )
+    ]
+    ends = [f"{x}_{end}" for x in names for end in ("min", "max")]
+    if not mine.drop(columns=ends).equals(theirs.drop(columns=ends)):
+        return False
+    for name in names:
+        cols = [f"{name}_min", f"{name}_max"]
+        these, those = mine[cols].to_numpy(), theirs[cols].to_numpy()
+        step = np.abs(mine[f"{name}_step"].to_numpy(dtype=np.float64))
+        narrow = _narrow(one._df, name) | _narrow(two._df, name)
+        slack = 2 * _precision(False, step, narrow, *these.T, *those.T)[:, None]
+        same = (these == those) | (np.isnan(these) & np.isnan(those))
+        # never half a step apart, as on a grid at its dtype's precision
+        apart = np.abs(these - those)
+        near = (apart <= slack) & ~(apart >= step[:, None] / 2)
+        if not (same | near).all():
+            return False
+    return True
 
 
 def _same_loads(one: _Loads, two: _Loads, memo: dict) -> bool:
@@ -3764,8 +3804,9 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Whether two spools would load the same patches, reading no file.
 
-        Rows compare in order: first their metadata (`_eq_state`), then
-        what each loads. A patch in memory compares as a patch; a file row,
+        Rows compare in order: first their metadata (`_eq_state`, float
+        coordinate ends within twice the float allowance), then what each
+        loads. A patch in memory compares as a patch; a file row,
         or a patch against a file row, compares `data_id`; a selection or
         chunk of files compares the `data_id` its rows say it loads with
         (`stored_window_id`, `PlanResolver.layout_data_id`); any other
@@ -3803,7 +3844,7 @@ class Spool(NodeRepr, NamespaceOwner):
             and mine._ids == theirs._ids
         ):
             return True
-        if not deep_equality_check(self._eq_state(), other._eq_state()):
+        if not _same_rows(self, other):
             return False
         pairs, memo = zip(self._loads(), other._loads(), strict=True), {}
         return all(_same_loads(x, y, memo) for x, y in pairs)
