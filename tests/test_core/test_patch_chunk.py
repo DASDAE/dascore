@@ -2635,6 +2635,65 @@ class TestChunkWithAssociatedCoords:
                 assert set(np.unique(other.get_array("label"))) == labels
 
 
+class TestWindowedRiderStep:
+    """A window keeps its rider's grid, so its row states the step (#1698)."""
+
+    @pytest.fixture(params=["memory", "directory"])
+    def spool_of(self, request, tmp_path):
+        """Make a memory or a directory spool of the patches given."""
+
+        def _make(*patches):
+            if request.param == "memory":
+                return dc.spool(list(patches))
+            for num, patch in enumerate(patches):
+                dc.write(patch, tmp_path / f"p{num}.h5", "DASDAE")
+            return dc.spool(tmp_path).update()
+
+        return _make
+
+    @staticmethod
+    def _patch(lat, start=0.0):
+        """A patch with lat riding distance, which starts at ``start``."""
+        distance = start + np.arange(len(lat), dtype=np.float64)
+        coords = {"distance": distance, "lat": ("distance", np.asarray(lat, float))}
+        return dc.Patch(data=np.ones(len(lat)), coords=coords, dims=("distance",))
+
+    def test_windows_state_the_step(self, spool_of):
+        """Each window states its rider's step, and equals what it loads."""
+        spool = spool_of(self._patch(40 + 10 * np.arange(5)))
+        chunked = spool.chunk(distance=2, keep_partial=True)
+        assert chunked.get_contents()["lat_step"].tolist() == [10, 10, 10]
+        assert chunked == dc.spool(list(chunked))
+
+    def test_stepless_rider(self, spool_of):
+        """A rider with no step states none in a window either."""
+        spool = spool_of(self._patch([0, 1, 3, 4, 6]))
+        chunked = spool.chunk(distance=2, keep_partial=True)
+        assert chunked.get_contents()["lat_step"].isna().all()
+
+    def test_fractional_rider(self, spool_of):
+        """A whole-tick step cannot restate a 1024 Hz rider, so none is stated."""
+        start = np.datetime64("2020-01-01", "ns")
+        time = get_coord(start=start, step=(1, 1024), shape=(10,))
+        coords = {"distance": np.arange(10.0), "time": ("distance", time)}
+        patch = dc.Patch(data=np.ones(10), coords=coords, dims=("distance",))
+        chunked = spool_of(patch).chunk(distance=5)
+        assert chunked.get_contents()["time_step"].isna().all()
+        # so a selection through a sample finds it again
+        end = time.values[2]
+        kept = chunked.select(time=(None, end)).select(time=(end, None))
+        assert [x.get_array("distance").tolist() for x in kept] == [[2.0]]
+
+    def test_filled_window(self, spool_of):
+        """A window a fill pads holds no grid of its rider, so states no step."""
+        patches = [self._patch(40 + 10 * np.arange(5), start=x) for x in (0, 8)]
+        filled = spool_of(*patches).fill_gaps(distance=4.0)
+        chunked = filled.chunk(distance=3, keep_partial=True)
+        steps = chunked.get_contents()["lat_step"]
+        assert steps.isna().tolist() == [False, True, True, False, False]
+        assert steps.equals(dc.spool(list(chunked)).get_contents()["lat_step"])
+
+
 class TestMergeDimCoords:
     """Coordinates riding the merge dimension are concatenated, not policed."""
 
