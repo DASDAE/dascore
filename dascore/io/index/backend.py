@@ -1603,11 +1603,13 @@ class SQLiteIndexBackend:
             "FROM coord_defs WHERE coord_row IN "
             "(SELECT coord_row FROM patch_coords WHERE coord_name = ?) GROUP BY units"
         )
-        df = self._cached(("widest_steps", name), lambda: self._fetch_df(sql, [name]))
-        return {
-            unit: tuple(None if pd.isna(x) else x for x in steps)
-            for unit, *steps in df.itertuples(index=False)
-        }
+        # plain rows: `len` asks on every selection, and a frame costs far
+        # more than these few rows
+        rows = self._cached(
+            ("widest_steps", name),
+            lambda: tuple(self._con.execute(sql, (name,)).fetchall()),
+        )
+        return {unit: (number, ticks) for unit, number, ticks in rows}
 
     def coord_runs(self, name: str, patch_rows) -> dict[int, tuple | None]:
         """

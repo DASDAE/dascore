@@ -1588,7 +1588,7 @@ class PatchCatalog:
         if len(ranges) > 1 and set(ranges) & self.backend.associated_coord_names():
             return True
         for name, values in ranges.items():
-            meta = self.backend.coord_meta([name])
+            meta = self.backend._coord_rows([name]).named(name)
             kinds = {
                 "dur" if kind == "time" and relative else kind
                 for kind, relative in zip(meta["value_kind"], meta["is_relative"])
