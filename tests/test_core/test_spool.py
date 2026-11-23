@@ -1028,6 +1028,39 @@ class TestSelect:
         out = dc.spool([patch]).select(time=(1, 5), samples=True)
         assert list(out) == [expected]
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            {"time": (np.datetime64("2021", "Y"), np.datetime64("2024", "Y"))},
+            {"time": (np.datetime64("2020-06", "ns"), np.datetime64("2024-06", "ns"))},
+            {"lag": (np.timedelta64(13, "M"), np.timedelta64(4, "Y"))},
+            {"time": (np.timedelta64(1, "Y"), None), "relative": True},
+            {"lag": (None, np.timedelta64(-13, "M")), "relative": True},
+        ],
+    )
+    def test_select_calendar_units(self, query):
+        """A spool selects coordinates in years as its patches do in memory,
+        relative offsets in years or months included; a year after 2021 is
+        2022, which an average year passes.
+        """
+        patches = []
+        for start in (0, 3, 6):
+            years = np.datetime64("2021", "Y") + np.arange(start, start + 2)
+            lags = np.arange(start, start + 3).astype("m8[Y]")
+            coords = {"time": years, "lag": lags}
+            data = np.zeros((2, 3))
+            patches.append(dc.Patch(data=data, coords=coords, dims=tuple(coords)))
+        expected = [x.select(**query) for x in patches]
+        out = dc.spool(patches).select(**query)
+        labels = [(x.get_array("time"), x.get_array("lag")) for x in out]
+        expected = [
+            (x.get_array("time"), x.get_array("lag")) for x in expected if x.size
+        ]
+        assert len(labels) == len(expected) >= 2
+        for (time, lag), (time_expected, lag_expected) in zip(labels, expected):
+            assert np.array_equal(time, time_expected)
+            assert np.array_equal(lag, lag_expected)
+
 
 class TestSelectSourcePath:
     """Tests for selecting on the stored source path."""

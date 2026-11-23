@@ -1965,6 +1965,53 @@ class TestMonotonicCoord:
         with pytest.raises(TypeError, match="incompatible nonlinear base time"):
             coord.select((bound, None))
 
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize(
+        "low",
+        [np.datetime64(1, "D"), np.datetime64(86_400 * 10**9, "ns"), "1970-01-02"],
+    )
+    def test_select_calendar_instants(self, unit, reverse, low):
+        """Instants in years or months select by datetimes of any unit,
+        converted by the calendar, as comparing them does.
+        """
+        labels = np.arange(4).astype(f"M8[{unit}]")
+        labels = labels[::-1] if reverse else labels
+        high = np.datetime64(2, unit)
+        out, _ = get_coord(data=labels).select((low, high))
+        expected = labels[(labels >= np.datetime64(low)) & (labels <= high)]
+        assert len(expected) == 2
+        assert np.array_equal(out.values, expected)
+
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_select_calendar_durations(self, unit, reverse):
+        """Durations in years or months select by each other, as comparing
+        them does.
+        """
+        labels = np.arange(5).astype("m8[Y]").astype(f"m8[{unit}]")
+        labels = labels[::-1] if reverse else labels
+        bounds = (np.timedelta64(13, "M"), np.timedelta64(3, "Y"))
+        out, _ = get_coord(data=labels).select(bounds)
+        expected = labels[(labels >= bounds[0]) & (labels <= bounds[1])]
+        assert len(expected) == 2
+        assert np.array_equal(out.values, expected)
+
+    @pytest.mark.parametrize(
+        "labels",
+        [
+            np.array(["2019", "2020", "2021"], dtype="M8[Y]"),
+            np.arange(3).astype("m8[M]"),
+        ],
+    )
+    def test_select_calendar_relative(self, labels):
+        """An offset in years or months moves along labels in them as adding
+        it does, not by an average year.
+        """
+        offset = np.timedelta64(1, np.datetime_data(labels.dtype)[0])
+        out, _ = get_coord(data=labels).select((offset, None), relative=True)
+        assert np.array_equal(out.values, labels[1:])
+
 
 class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""

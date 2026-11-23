@@ -38,6 +38,7 @@ from dascore.core.coords import (
     _GRID_ULPS,
     _MIN_FRACTION_TICKS,
     Grid,
+    _in_calendar_unit,
     get_coord,
 )
 from dascore.exceptions import (
@@ -448,6 +449,10 @@ def _relative_bound(mins, maxs, value, open_values, units=None):
                 raise UnitError("Cannot project a quantity without coordinate units.")
             magnitude = convert_units(value.magnitude, target_units, value.units)
             offset = to_timedelta64(magnitude) if time_like else magnitude
+        elif time_like and _in_calendar_unit(np.asarray(value).dtype):
+            # Envelopes in nanoseconds can't add a year or month by the
+            # calendar, so the loaded coordinate places it.
+            return open_values, True, None
         elif time_like:
             offset = to_timedelta64(value)
         else:
