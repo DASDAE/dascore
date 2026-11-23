@@ -33,7 +33,13 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import CONFLICT, attr_conflict_description
-from dascore.core.coords import _GRID_RTOL, _GRID_ULPS, _MIN_FRACTION_TICKS, Grid
+from dascore.core.coords import (
+    _GRID_RTOL,
+    _GRID_ULPS,
+    _MIN_FRACTION_TICKS,
+    Grid,
+    get_coord,
+)
 from dascore.exceptions import (
     ChunkError,
     CoordError,
@@ -226,6 +232,41 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
     return out
 
 
+def with_labels(df: pd.DataFrame, dim: str, read) -> pd.DataFrame:
+    """
+    The relation with each row stating no step on ``dim`` holding its labels.
+
+    The index holds only the ends of such a coordinate, so ``read(row)``
+    gives a row's coordinate as it loads, or None where its source can't
+    say. The row's labels inside its envelope ride as stored (the dtype
+    and order selecting them infers a step in) as ``_{dim}_labels``, its
+    envelope narrows to them, and a row holding none, as a selection on
+    another coordinate along ``dim`` may leave it, is dropped.
+    """
+    lo, hi, step = (f"{dim}_{x}" for x in ("min", "max", "step"))
+    if df.empty or not {lo, hi, step} <= set(df.columns):
+        return df
+    stepless = (df[step].isna() & df[lo].notna()).to_numpy() & _structural(df, dim)
+    if not stepless.any():
+        return df
+    held, empty = {}, []
+    lows, highs = (df[x].astype(object).to_numpy(copy=True) for x in (lo, hi))
+    for num in np.flatnonzero(stepless):
+        if (coord := read(df.iloc[num])) is not None:
+            values = np.asarray(coord.values)
+            values = values[(values >= lows[num]) & (values <= highs[num])]
+            held[df.index[num]] = values
+            if not len(values):
+                empty.append(df.index[num])
+                continue
+            lows[num], highs[num] = values.min(), values.max()
+    out = df.copy()
+    _set_column(out, lo, lows, df)
+    _set_column(out, hi, highs, df)
+    out[f"_{dim}_labels"] = pd.Series(held, index=out.index, dtype=object)
+    return out.drop(index=empty)
+
+
 def clip_to_runs(df: pd.DataFrame, dim: str, indexed, read) -> pd.DataFrame:
     """
     The relation with each row's envelope narrowed to the samples it holds.
@@ -285,7 +326,9 @@ def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
 
 def stack_plans(plans: Sequence[ChunkPlan]) -> ChunkPlan:
     """One plan of several plans' outputs, each numbered after those before."""
-    offsets = np.cumsum([0, *(len(x.outputs) for x in plans[:-1])])
+    # a plan numbers its windows, and skips those holding nothing
+    counts = (x.outputs["output_id"].max() + 1 if len(x.outputs) else 0 for x in plans)
+    offsets = np.cumsum([0, *list(counts)[:-1]])
 
     def _stack(attr):
         frames = (getattr(x, attr) for x in plans)
@@ -1471,13 +1514,15 @@ def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
     return df if empty is None else df[~empty]
 
 
-def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
+def _drop_emptied(df: pd.DataFrame, names, read) -> pd.DataFrame:
     """
     Drop rows a selection of ``names`` left holding no sample, for planning.
 
     A sample selection marks the rows it empties; a value or relative one
     between two samples leaves an envelope holding none of the row's labels.
-    A row whose labels are not known to lie on a lattice is kept.
+    The index holds only the ends of a coordinate stating no step, so such
+    a row is judged by its coordinate as ``read(row, name)`` gives it, and
+    kept where that is None.
     """
     df = _drop_patch_local_empty(df)
     if "_modified" not in df or df.empty:
@@ -1488,10 +1533,18 @@ def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
         for name in names:
             if not {f"{name}_{x}" for x in ("min", "max", "step")} <= set(part):
                 continue
-            low, high, step = (part[f"{name}_{x}"] for x in ("min", "max", "step"))
-            # an envelope a step wide holds a sample; only a narrower one may not
-            narrow = ((high - low) < 2 * step.abs()).to_numpy(dtype=bool)
-            held = trimmed & _structural(part, name) & narrow
+            step = part[f"{name}_step"]
+            held = trimmed & _structural(part, name)
+            stepless = held & step.isna().to_numpy()
+            for index in part.index[stepless]:
+                coord = read(part.loc[index], name)
+                if coord is not None and not len(coord):
+                    emptied.append(index)
+            held &= ~stepless
+            if held.any():
+                low, high = (part.loc[held, f"{name}_{x}"] for x in ("min", "max"))
+                # an envelope a step wide holds a sample; only a narrower one may not
+                held[held] = ((high - low) < 2 * step[held].abs()).to_numpy(bool)
             if not held.any():
                 continue
             # only the columns a row's lattice is read from: the frame is wide
@@ -1685,6 +1738,14 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                     for x, y in zip(held, firsts, strict=True)
                 ]
                 df.loc[idx, origin] = pd.Series(moved, index=idx, dtype=object)
+            if (col := f"_{name}_labels") in df.columns:  # read in their own unit
+                held = [
+                    convert_units(x, to_units=target, from_units=unit)
+                    if isinstance(x, np.ndarray)
+                    else x
+                    for x in df.loc[idx, col]
+                ]
+                df.loc[idx, col] = pd.Series(held, index=idx, dtype=object)
             if f"_{name}_coord_dtype" in df.columns:  # converted labels are floats
                 df.loc[idx, f"_{name}_coord_dtype"] = "float64"
         df.loc[rows, unit_col] = target
@@ -3357,6 +3418,10 @@ def build_chunk_plan(
         relabel = np.ones(n_parts, dtype=bool)
     gridded = np.array([x is not None for x in grids], dtype=bool)
     regular = not merge_mode
+    # labels read from the sources of rows stating no step (`with_labels`)
+    if (labels := kept_df.get(f"_{name}_labels")) is not None:
+        labels = [_sorted_labels(x, start_all.dtype) for x in labels]
+        labels = pd.Series(labels, dtype=object).to_numpy()
     if regular:
         # a window covering a row with its own labels takes it as it is
         _, stride, *_, width, own_min, own_max = lattice
@@ -3484,7 +3549,8 @@ def build_chunk_plan(
                     # values; a descending coordinate's negative step would
                     # invert the final partial interval
                     step=abs(part_step),
-                    keep_partials=keep_partial,
+                    # a stretch with no step has no partial window (rule 9)
+                    keep_partials=keep_partial or pd.isnull(part_step),
                     tail=cell,
                 )
             except ChunkError:  # partition too short; skip (D8)
@@ -3512,6 +3578,7 @@ def build_chunk_plan(
         rel_out = np.repeat(np.arange(n_out), m_counts)
         offsets = np.repeat(np.cumsum(m_counts) - m_counts, m_counts)
         rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
+        none = np.zeros(total, dtype=bool)
         lo = np.maximum(s1[rel_src], reach[0][rel_out])
         hi = np.minimum(s2[rel_src], reach[1][rel_out])
         if regular:
@@ -3520,8 +3587,10 @@ def build_chunk_plan(
             whole = plain[rows] & (windows[0] <= lo) & (edge[rows] < windows[1])
             if not whole.all():
                 lo, hi = _member_samples(lo, hi, *windows, [x[rows] for x in lattice])
+            if labels is not None:
+                lo, hi, none = _labelled(lo, hi, s1[rel_src], *windows, labels[rows])
         # A member whose window holds none of its samples drops (#1008).
-        overlap_ok = lo <= hi
+        overlap_ok = (lo <= hi) & ~none
         if not overlap_ok.all():
             rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
             lo, hi = lo[overlap_ok], hi[overlap_ok]
@@ -3726,6 +3795,10 @@ def build_chunk_plan(
     outputs, members = _describe_pieces(
         outputs, members, pieces, kept_df, src_rows, name, label_dtype
     )
+    if labels is not None:  # kept labels state the step selecting them infers
+        ends = (members[x].to_numpy() for x in (min_name, max_name))
+        held = (members["output_id"], labels[src_rows], *ends)
+        outputs[f"{name}_step"] = _inferred_steps(outputs, name, *held)
     members["shift"] = shift_all[src_rows]
     outputs = _carry_grids(outputs, members, sorted_df, name)
     # integers counted in ticks go back to the frame's floats
@@ -4327,6 +4400,62 @@ def _member_samples(firsts, lasts, starts, ends, lattice):
     if kind in "Mm":
         lo, hi = (x.astype(np.int64).view(unit).astype(firsts.dtype) for x in (lo, hi))
     return lo, hi
+
+
+def _labelled(lo, hi, firsts, starts, ends, labels):
+    """
+    Place each member whose row holds its labels by those labels.
+
+    Such a member spans its labels from its ``first`` (past any an earlier
+    row overlapped) in its window ``[start, end)``; the mask returned marks
+    those holding none. Other members keep ``lo`` and ``hi``.
+    """
+    lo, hi, none = lo.copy(), hi.copy(), np.zeros(len(lo), dtype=bool)
+    for num in np.flatnonzero([x is not None for x in labels]):
+        held = labels[num][0]
+        first = np.searchsorted(held, max(firsts[num], starts[num]))
+        stop = np.searchsorted(held, ends[num])
+        if first < stop:
+            lo[num], hi[num] = held[first], held[stop - 1]
+        else:
+            none[num] = True
+    return lo, hi, none
+
+
+def _sorted_labels(values, dtype):
+    """Labels ascending in ``dtype``, their order as stored, and the stored ones."""
+    if not isinstance(values, np.ndarray):
+        return None
+    order = np.argsort(values, kind="stable")
+    return values[order].astype(dtype), order, values
+
+
+def _inferred_steps(outputs, name, ids, labels, lows, highs):
+    """
+    Each output's step with no grid, as its members' labels infer it.
+
+    ``ids`` names the output of each member, which holds ``labels`` (see
+    `_sorted_labels`, None where not read) from ``lows`` to ``highs``.
+    """
+    held: dict = {}
+    for out, label, low, high in zip(ids, labels, lows, highs, strict=True):
+        if label is not None:  # its labels as stored, in the order they load
+            ordered, order, stored = label
+            first = np.searchsorted(ordered, low)
+            stop = np.searchsorted(ordered, high, "right")
+            label = stored[np.sort(order[first:stop])]
+        held.setdefault(out, []).append(label)
+    steps = outputs[f"{name}_step"].astype(object).to_numpy(copy=True)
+    specs = zip(outputs["output_id"], outputs[f"_{name}_stretch"], strict=True)
+    for num, (out, spec) in enumerate(specs):
+        if spec == "labels" and all(x is not None for x in held[out]):
+            # as the index states the step of the patch that loads
+            coord = get_coord(data=np.concatenate(held[out]))
+            steps[num] = coord.to_summary().step
+    steps = pd.Series(steps, index=outputs.index)
+    if lows.dtype.kind in "mM":
+        return pd.to_timedelta(steps)
+    return steps.astype(outputs[f"{name}_step"].dtype)
 
 
 def _snapped_cuts(cuts, start, step) -> list:

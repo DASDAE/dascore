@@ -1415,9 +1415,33 @@ class TestEmptiedMembers:
         spool = dc.spool([patch]).select(time=(1e9 + 2, 1e9 + 2))
         assert [x.shape for x in PLANS["chunk"](spool)] == [(2, 1)]
 
+    @pytest.mark.parametrize("kind", ["memory", "directory"])
+    @pytest.mark.parametrize("case", ["text", "durations"])
+    def test_unmeasured_selection_plans(self, case, kind, tmp_path):
+        """Text, and durations with no step, plan after a selection (#1687)."""
+        second = np.timedelta64(1, "s")
+        if case == "text":  # samples on text, as ranges refuse it
+            coords = {"station": ["a", "b", "c"], "time": np.arange(4.0)}
+            selections = [dict(station=(0, 2), samples=True), dict(time=(0, 1))]
+        else:
+            coords = {"station": ["a"], "time": np.array([0, 1, 5]) * second}
+            selections = [dict(time=(0 * second, 2 * second))]
+        shape = tuple(len(x) for x in coords.values())
+        patch = dc.Patch(data=np.zeros(shape), coords=coords, dims=tuple(coords))
+        spool = dc.spool([patch])
+        if kind == "directory":
+            patch.io.write(tmp_path / "p.h5", "DASDAE")
+            spool = dc.spool(tmp_path).update()
+        for selection in selections:
+            spool = spool.select(**selection)
+        (expected,) = spool
+        for plan in ("chunk", "concatenate"):
+            (got,) = PLANS[plan](spool)
+            assert got.equals(expected)
+
     @pytest.mark.parametrize("relative", [False, True])
-    def test_stepless_emptied_loads_empty(self, relative):
-        """Labels with no step cannot show a plan their emptying; they load empty."""
+    def test_stepless_emptied_dropped(self, relative):
+        """A member with no step a selection emptied is dropped by its labels."""
         patch = self._patch(np.array([0, 1, 3, 4, 6.0]))
         spool = dc.spool([patch]).select(time=(1.2, 1.4), relative=relative)
-        assert [x.shape for x in PLANS["chunk"](spool)] == [(2, 0)]
+        assert PLANS["chunk"](spool) == []

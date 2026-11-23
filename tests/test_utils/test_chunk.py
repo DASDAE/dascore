@@ -288,7 +288,8 @@ class TestChunkPlanDF:
         dur = (df["time_max"] - df["time_min"]).iloc[0]
         chunk_df = build_chunk_plan(df, time=dc.to_timedelta64(dur / 2)).outputs
         assert isinstance(chunk_df, pd.DataFrame)
-        assert len(chunk_df) == 2 * len(contiguous_df)
+        # with no step, the window past the last label is kept (rule 9)
+        assert len(chunk_df) == 2 * len(contiguous_df) + 1
         assert np.all(pd.isnull(chunk_df["time_step"]))
 
 

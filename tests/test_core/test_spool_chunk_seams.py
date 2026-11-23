@@ -1,6 +1,7 @@
 """
-Tests for how Spool.chunk joins patches: the seam test, overlaps, and the
-one grid it fits to each stretch (rules 5 and 6 of the coordinate note).
+Tests for how Spool.chunk joins patches: the seam test, overlaps, the one
+grid it fits to each stretch, and windows over labels with no step (rules
+5, 6 and 9 of the coordinate note).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from dascore.units import get_quantity
 from dascore.units import s as seconds
 from dascore.utils.chunk_plan import build_chunk_plan, stretch_coordinate
 from dascore.utils.gaps import GapTolerance
+from dascore.warnings import DASCoreWarning
 
 T0 = np.datetime64("2020-01-01T00:00:00", "ns")
 STEP = np.timedelta64(1_000_000, "ns")  # 1 ms
@@ -64,6 +66,12 @@ def _same(patch, coord, data):
     """Assert a patch holds exactly these time labels and this data."""
     assert patch.get_coord("time") == coord
     assert np.array_equal(patch.data, data)
+
+
+def _by_label(times, data):
+    """Labels in ascending order, and the data columns beside them."""
+    order = np.argsort(times)
+    return times[order], data[:, order]
 
 
 def _joined(*patches, skip=0):
@@ -165,12 +173,24 @@ class TestSeamTest:
         assert len(spool.chunk(time=None, tolerance=2 * STEP)) == 1
 
     def test_stepless_windows_are_checked(self):
-        """Windows over labels with no step still refuse what cannot chunk."""
-        spool = dc.spool([_patch(T0 + np.array([0, 3, 4, 9]) * STEP)])
-        with pytest.raises(ChunkError, match="Could not chunk"):
-            spool.chunk(time=1000 * STEP)
+        """Windows over labels with no step are kept, but refuse a long overlap."""
+        patch = _patch(T0 + np.array([0, 3, 4, 9]) * STEP)
+        spool = dc.spool([patch])
+        (whole,) = spool.chunk(time=1000 * STEP)  # no step, so no partial window
+        assert whole.equals(patch)
         with pytest.raises(ParameterError, match="overlap"):
             spool.chunk(time=2 * STEP, overlap=3 * STEP)
+
+    def test_steps_without_a_grid_judge_windows(self):
+        """A stretch stating steps which fit no grid still drops a partial window."""
+        # integer steps of 20 and 21 spread to 389 / 19, under 100 ticks
+        starts_steps = ((0, 20), (200, 21))
+        grids = [get_coord(start=x, step=y, shape=(10,)) for x, y in starts_steps]
+        spool = dc.spool([_patch(x) for x in grids])
+        with pytest.raises(ChunkError, match="Could not chunk"):
+            spool.chunk(time=10_000)
+        (whole,) = spool.chunk(time=10_000, keep_partial=True)
+        assert len(whole.get_coord("time")) == 20
 
     def test_step_is_the_earlier_patch(self):
         """The seam is judged against the earlier patch's step."""
@@ -676,6 +696,131 @@ class TestWriters:
         assert np.array_equal(
             back.get_array("distance"), drifting.get_array("distance")
         )
+
+
+class TestSteplessWindows:
+    """Windows cut labels with no step by the labels themselves (rule 9)."""
+
+    labels = np.array([0, 0.5, 2, 7, 7.5, 8, 9])
+
+    @staticmethod
+    def _spool(kind, path, *patches):
+        """The patches in memory, or as DASDAE files in a directory."""
+        if kind == "memory":
+            return dc.spool(list(patches))
+        for num, patch in enumerate(patches):
+            dc.write(patch, path / f"p{num}.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    @staticmethod
+    def _ends(spool):
+        """The time range each output states, and the one each loads."""
+        stated = spool.get_contents()[["time_min", "time_max"]].values.tolist()
+        loaded = [[x.get_array("time").min(), x.get_array("time").max()] for x in spool]
+        return stated, loaded
+
+    @pytest.mark.parametrize("keep_partial", [False, True])
+    @pytest.mark.parametrize("kind", ["memory", "directory"])
+    def test_windows_state_their_labels(self, kind, keep_partial, tmp_path):
+        """An output states what it loads, an empty window is none, the last kept."""
+        spool = self._spool(kind, tmp_path, _patch(self.labels))
+        chunked = spool.chunk(time=3, keep_partial=keep_partial)
+        stated, loaded = self._ends(chunked)
+        assert stated == loaded == [[0, 2], [7, 8], [9, 9]]
+        # each states the step its labels infer, so it equals what it loads
+        assert chunked == dc.spool(list(chunked))
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "durations",
+            "descending",
+            "unordered",
+            "float32",
+            "micro",
+            "part_micro",
+            "grid",
+        ],
+    )
+    def test_steps_are_what_loads(self, case):
+        """Each window states the step of the patch it loads, whatever its labels."""
+        micro = np.timedelta64(1, "us")
+        nanos = (self.labels * 1e9).astype(np.int64) * np.timedelta64(1, "ns")
+        start = T0.astype("M8[us]")
+        # 101 us apart, and a fraction of a microsecond the index states no step for
+        micros = start + np.array([0, 101, 202, 303, 1000, 1501]) * micro
+        part = start + np.array([0, 101, 203, 304, 1000, 1501]) * micro
+        floats = np.array([0, 0.1, 0.2, 0.3, 2, 7], "float32")
+        grid = [np.arange(3.0), np.array([3.0])]  # a lone label takes the grid's step
+        times, kwargs = {
+            "durations": ([nanos], dict(time=3 * seconds)),
+            "descending": ([-self.labels], dict(time=3)),
+            "unordered": ([np.array([0.0, 2, 1, 3])], dict(time=5)),
+            "float32": ([floats], dict(time=1)),
+            "micro": ([micros], dict(time=500 * micro)),
+            "part_micro": ([part], dict(time=500 * micro)),
+            "grid": (grid, dict(time=3, keep_partial=True)),
+        }[case]
+        chunked = dc.spool([_patch(x) for x in times]).chunk(**kwargs)
+        assert chunked == dc.spool(list(chunked))
+
+    @pytest.mark.parametrize("kind", ["memory", "directory"])
+    def test_selected_windows(self, kind, tmp_path):
+        """Windows of a selection count from the labels it keeps."""
+        spool = self._spool(kind, tmp_path, _patch(self.labels))
+        stated, loaded = self._ends(spool.select(time=(1, 8.5)).chunk(time=3))
+        assert stated == loaded == [[2, 2], [7, 7.5], [8, 8]]
+
+    def test_labels_in_another_unit(self):
+        """Labels in milliseconds are windowed in the seconds the plan states."""
+        seconds = _patch(np.array([0, 0.5, 2])).set_units(time="s")
+        millis = _patch(1000 * self.labels[3:]).set_units(time="ms")
+        stated, loaded = self._ends(dc.spool([seconds, millis]).chunk(time=3))
+        assert stated == loaded == [[0, 2], [7, 9]]
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_overlap_keeps_the_earlier_labels(self, sign):
+        """Where patches overlap, each window holds what the joined stretch does."""
+        first = _patch(sign * np.array([0, 1, 2.5, 4]))
+        later = _patch(sign * np.array([3, 3.5, 5, 6]))
+        spool = dc.spool([first, later.new(data=later.data + 100)])
+        (joined,) = spool.chunk(time=None)
+        times = joined.get_array("time")
+        # windows two long start each label apart until one holds the last
+        starts = np.arange(times.min(), times.max())
+        inside = [(times >= x) & (times < x + 2) for x in starts]
+        expected = [_by_label(times[x], joined.data[:, x]) for x in inside if x.any()]
+        windows = list(spool.chunk(time=2, overlap=1))
+        assert len(windows) == len(expected)
+        for window, (labels, data) in zip(windows, expected, strict=True):
+            # sorted, as descending labels with no step may join out of order (#1286)
+            got = _by_label(window.get_array("time"), window.data)
+            assert np.array_equal(got[0], labels) and np.array_equal(got[1], data)
+
+    def test_kinds_plan_apart(self):
+        """Numbers and times with no step are each windowed by their own labels."""
+        times = T0 + (self.labels * 1e9).astype(np.int64) * np.timedelta64(1, "ns")
+        windows = dc.spool([_patch(self.labels), _patch(times)]).chunk(time=3)
+        stated, loaded = self._ends(windows)
+        assert stated == loaded and len(stated) == 6
+
+    def test_emptied_along_time(self):
+        """A patch a selection on a coordinate along time empties is no window."""
+        patch = _patch(np.array([0.0, 1, 3, 6]))
+        patch = patch.update_coords(channel=("time", np.array([0, 10, 25, 30])))
+        assert not len(dc.spool([patch]).select(channel=(11, 20)).chunk(time=2))
+
+    def test_warns_once_per_plan(self, tmp_path):
+        """Reading files warns once, counting them; snapped labels need no read."""
+        patches = [_patch(self.labels[:3] + 10 * x) for x in range(3)]
+        spool = self._spool("directory", tmp_path, *patches)
+        with pytest.warns(DASCoreWarning, match="'time' labels of 3 file") as got:
+            spool.chunk(time=1)
+        assert len(got) == 1
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            spool.snap_coords("time").chunk(time=1)
+            dc.spool(patches).chunk(time=1)  # in memory, nothing is read
 
 
 class TestPlanRecords:

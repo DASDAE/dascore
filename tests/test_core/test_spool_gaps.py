@@ -518,7 +518,7 @@ class TestGappedPatchRows:
         alone = [dc.spool([x]) for x in patches]
         got = list(dc.spool(patches).chunk(time=2 * ONE_MS))
         expected = [y for x in alone for y in x.chunk(time=2 * ONE_MS)]
-        assert len(got) == len(expected) == 4
+        assert len(got) == len(expected) == 5
         assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
         (gap,) = dc.spool(patches).get_gaps().to_dict("records")
         assert (gap["time_min"], gap["time_max"]) == (11 * ONE_MS, 14 * ONE_MS)
