@@ -50,6 +50,7 @@ class TestProcessingBenchmarks:
         return np.arange(start, stop, step)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_pass_filter(self, example_patch):
         """Time the pass filter."""
         patch = example_patch
@@ -81,6 +82,7 @@ class TestProcessingBenchmarks:
         patch.decimate(time=10, filter_type=None)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_select(self, example_patch):
         """Selecting on time/distance dimension"""
         patch = example_patch

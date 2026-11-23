@@ -32,8 +32,8 @@ def get_test_file_paths():
 # memory-mapped binary.
 SINGLE_FILE_BENCHMARKS = (
     "sintela_protobuf_1.pb",
-    "terra15_v6_test_file.hdf5",
-    "conoco_segy_1.sgy",
+    pytest.param("terra15_v6_test_file.hdf5", marks=pytest.mark.smoke),
+    pytest.param("conoco_segy_1.sgy", marks=pytest.mark.smoke),
     "sample_tdms_file_v4713.tdms",
 )
 
@@ -148,6 +148,7 @@ class TestIOBenchmarks:
                 dc.scan_to_df(path)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_get_format(self, test_file_paths):
         """Time for format detection of all datafiles."""
         for path in test_file_paths.values():

@@ -43,6 +43,7 @@ class TestFiberIOLookupBenchmarks:
             manager.load_plugins()
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_yield_fiberio_by_extension(self, manager):
         """Time the extension path used when the format is unknown."""
         for _ in range(1_000):
