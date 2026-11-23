@@ -427,6 +427,8 @@ class LazyBackend(ArrayBackend):
 
 # The class's own name is a spelling of the backend too.
 _BACKENDS["lazyarray"] = LazyBackend
+# Asked whether an array is a lazy one, without importing the lazy array.
+_LAZY = LazyBackend()
 
 
 def _settled(backend: ArrayBackend | None, array: Any) -> tuple[Any, Any]:
@@ -455,8 +457,7 @@ def _refuse_mixed(arrays, doing: str) -> None:
     A lazy array is of the library it will be once it is loaded, and an
     array-like of no array library is NumPy's, as it is everywhere else.
     """
-    lazy = LazyBackend()
-    kinds = {x._backend._native if lazy._owns(x) else backend_name(x) for x in arrays}
+    kinds = {x._backend._native if _LAZY._owns(x) else backend_name(x) for x in arrays}
     if len(kinds) > 1:
         msg = (
             f"{doing} needs arrays of one kind, and these are of "
