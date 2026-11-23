@@ -496,10 +496,14 @@ class TestRelative:
             )
             assert selected.equals(expected)
 
+    @pytest.mark.parametrize("dtype", ["int64", "float32"])
     @pytest.mark.parametrize("first_relative", [False, True])
-    def test_relative_drops_off_sample_window(self, first_relative):
-        """A later relative trim drops a regular window that fell between samples."""
-        coord = dc.get_coord(data=np.arange(4), units="m")
+    def test_relative_drops_off_sample_window(self, first_relative, dtype):
+        """
+        A later relative trim drops a regular window that fell between samples,
+        including float32 labels the index can't place.
+        """
+        coord = dc.get_coord(data=np.arange(4).astype(dtype), units="m")
         patch = dc.Patch(
             data=np.arange(4), coords={"distance": coord}, dims=("distance",)
         )
@@ -802,6 +806,23 @@ class TestBoundBetweenSamples:
             spool = dc.spool(path).update()
         out = spool.select(x=(0, 3)).select(y=(12, 18))
         assert len(out) == len(out.get_contents()) == len(list(out)) == 0
+
+    @pytest.mark.parametrize("on_disk", [False, True])
+    @pytest.mark.parametrize("riding_first", [False, True])
+    def test_one_dimension_in_one_layout(self, riding_first, on_disk, tmp_path):
+        """Ranges on two coordinates sharing a dimension in one patch only."""
+        x, y = np.arange(10.0), 2 * np.arange(10.0)
+        coords = {"x": x, "y": y}
+        apart = dc.Patch(data=np.ones((10, 10)), coords=coords, dims=("x", "y"))
+        riding = dc.Patch(data=x, coords={**coords, "y": ("x", y)}, dims=("x",))
+        patches = [riding, apart] if riding_first else [apart, riding]
+        spool = dc.spool(patches)
+        if on_disk:
+            for num, patch in enumerate(patches):
+                patch.io.write(tmp_path / f"{num}.h5", "DASDAE")
+            spool = dc.spool(tmp_path).update()
+        out = spool.select(x=(0, 3)).select(y=(12, 18))
+        assert len(out) == len(out.get_contents()) == len(list(out)) == 1
 
     def test_two_kinds_left_out(self):
         """Beside another kind of the coordinate, the patch is still left out."""

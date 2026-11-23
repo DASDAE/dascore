@@ -1578,15 +1578,14 @@ class PatchCatalog:
         widest step the index states for the coordinate in each unit settles
         it; ranges on one coordinate bound it together, and one open on a
         side reaches the row's last label. Ranges on coordinates sharing a
-        dimension trim each other, which SQL can't see.
+        dimension trim each other, which SQL can't see; a coordinate riding
+        another's dimension in any patch may share one.
         """
         ranges: dict[str, list] = {}
         for coords, samples, relative in self._residuals:
             for name, value in () if samples or relative else coords.items():
                 ranges.setdefault(name, []).append(value)
-        dims = self.backend.coord_dims_map() if len(ranges) > 1 else {}
-        along = Counter(y for x in ranges for y in set(dims.get(x, "").split(",")))
-        if any(count > 1 for dim, count in along.items() if dim):
+        if len(ranges) > 1 and set(ranges) & self.backend.associated_coord_names():
             return True
         for name, values in ranges.items():
             meta = self.backend.coord_meta([name])
