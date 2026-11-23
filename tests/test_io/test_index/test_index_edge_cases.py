@@ -1581,6 +1581,27 @@ class TestReservedAttrNames:
         assert "event_time_min" in df.columns
         assert 123.0 not in set(df["event_time_min"].dropna())
 
+    def test_unfilled_envelope_column_outlives_the_attr(self):
+        """A selection keeps a coordinate column no row fills, an attr's name too."""
+        stepless = dc.Patch(
+            data=np.zeros(3), coords={"x": np.array([0.0, 1.0, 5.0])}, dims=("x",)
+        )
+        stated = dc.Patch(data=np.zeros(3), coords={"y": np.arange(3.0)}, dims=("y",))
+        spool = dc.spool([stated.update_attrs(x_step=2.0), stepless])
+        with pytest.warns(UserWarning, match="collide with coordinate envelope"):
+            df = spool[1:].get_contents()
+        assert df["x_step"].isna().all()
+
+    def test_envelope_named_attr_goes_without_its_coordinate(self):
+        """An attr named like a coordinate's column goes where neither is kept."""
+        patches = [
+            dc.Patch(data=np.zeros(3), coords={x: np.arange(3.0)}, dims=(x,))
+            for x in ("y", "x", "z")
+        ]
+        patches[0] = patches[0].update_attrs(x_step=2.0, x_units="attr")
+        df = dc.spool(patches)[2:].get_contents()
+        assert not {"x_step", "x_units"} & set(df.columns)
+
     def test_data_units_attr_still_indexed(self):
         """A real ``*_units`` attr is not an envelope column; stays queryable."""
         patch = dc.get_example_patch().update_attrs(data_units="strain")
