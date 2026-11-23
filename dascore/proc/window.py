@@ -773,7 +773,7 @@ class Windowed(PatchProcessor):
         halo = self._halo(window, factor, inner)
         # A lazy patch and a dask one both compute later, so both are told
         # now what dtype the blended windows have.
-        deferred = meta._backend in (LAZY_BACKEND, "dask")
+        deferred = meta._kernel_key in (LAZY_BACKEND, "dask")
         plan = {
             "axes": axes,
             "size": size,

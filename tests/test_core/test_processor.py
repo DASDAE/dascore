@@ -1312,7 +1312,7 @@ class TestKernelPlugins:
         patch = dc.get_example_patch()
         meta = dc.PatchMeta(patch.coords, attrs=patch.attrs, dtype=patch.dtype)
         # As the description of data on that backend says, once dropped.
-        meta._backend = "meta_backend"
+        meta._kernel_key = "meta_backend"
         with pytest.raises(PatchDataError):
             Local().run(meta)
 

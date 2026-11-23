@@ -221,7 +221,7 @@ def load(array: LazyArray) -> np.ndarray:
     boxes = chunk_boxes(array)
     if len(boxes) == 1:
         return compute(array, boxes[0])
-    if array._backend.name != NUMPY_BACKEND:
+    if array._backend.library != NUMPY_BACKEND:
         return _joined([compute(array, box) for box in boxes], boxes)
     out = np.empty(array.shape, array.dtype)
     for box in boxes:

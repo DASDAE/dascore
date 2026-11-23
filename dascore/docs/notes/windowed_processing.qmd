@@ -93,7 +93,7 @@ Plain `pass_filter` stays exact and needs its axis whole. The user chooses to ac
 
 ## Backends
 
-A spool is set to a backend, which makes the array each of its patches holds; a patch holds the array it is given and has no backend of its own.
+A spool is set to a backend, which makes the array each of its patches holds; a patch holds the array it is given and is not set to one itself.
 
 ```python
 spool.set_backend("jax")             # eager, on JAX

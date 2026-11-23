@@ -52,6 +52,7 @@ _LINEAGE = dascore.proc.basic._LINEAGE
 
 
 if TYPE_CHECKING:
+    from dascore.backends import ArrayBackend
     from dascore.core.inventory import Inventory
 
 
@@ -122,10 +123,12 @@ class PatchMeta(NodeRepr):
     attrs: PatchAttrs
     dims: tuple[str, ...]
     dtype: Any
-    # The array backend the described data are in, as `backend_name` spells
-    # it, so an operation can resolve its kernel without the data. Set by
-    # `Patch.drop_data`.
-    _backend: str = "numpy"
+    # The name the described data's kernels are resolved under, so an
+    # operation can find its kernel without the data. Set by `Patch.drop_data`.
+    _kernel_key: str = "numpy"
+    # The backend whose namespace the kernels are of, or None when they are
+    # the array library's own; see `Patch._keep_backend`.
+    _backend: ArrayBackend | None = None
     # The class default also covers objects restored from older pickles.
     _source: ArraySource | None = None
     # The class `to_patch` builds; None means a plain `Patch`. Set by
@@ -315,6 +318,7 @@ class PatchMeta(NodeRepr):
             dtype=self.dtype if dtype is None else dtype,
             source=self._source,
         )
+        out._kernel_key = self._kernel_key
         out._backend = self._backend
         out._patch_type = self._patch_type
         return out
@@ -371,6 +375,7 @@ class PatchMeta(NodeRepr):
             out = patch_class(data=data, coords=self.coords, attrs=attrs)
         # Whatever these data are, they are not known to be what the source loads.
         out._source = self._source and self._source.detach()
+        out._keep_backend(self._backend)
         return out
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> PatchMeta:

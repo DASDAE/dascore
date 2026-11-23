@@ -18,6 +18,7 @@ from dascore.backends import (
     JaxBackend,
     LazyBackend,
     NumpyBackend,
+    backend_library,
     get_backend,
     read_backend,
     reading_onto,
@@ -61,7 +62,7 @@ class _Dask(ArrayAPIBackend):
     """Dask arrays made from ones in memory."""
 
     name = "dask"
-    namespace = "dask.array"
+    module = "dask.array"
 
 
 def _on(patch, backend):
@@ -388,6 +389,129 @@ class TestBackendNames:
             assert str(get_backend("plugged_backend")) == "plugged_backend"
         finally:
             backends_module._BACKENDS.pop("plugged_backend", None)
+
+
+class _Fast(NumpyBackend):
+    """A namespace over NumPy's arrays, as a package of other kernels registers."""
+
+    name = "fast_numpy"
+
+
+class _Tripled(dc.PatchProcessor):
+    """An operation the namespace has a kernel of its own for."""
+
+    name = None
+
+    def chunk_contract(self, dtype, plan):
+        """Return that each sample is made from its own."""
+        return _Doubles().chunk_contract(dtype, plan)
+
+    def numpy_kernel(self, data):
+        """Return the data doubled, as NumPy's own kernel does."""
+        return data * 2
+
+
+@register_kernel(_Tripled, "fast_numpy")
+def _tripled_fast(self, data):
+    """Return the data tripled, so the namespace's kernel shows."""
+    return data * 3
+
+
+class TestNamespace:
+    """A backend over another's arrays chooses the kernels, not the arrays."""
+
+    @pytest.fixture()
+    def fast(self, spool):
+        """A patch a spool set to the namespace handed out, in memory."""
+        return spool.set_backend("fast_numpy")[0]
+
+    def test_arrays_are_the_library_s(self, spool, fast):
+        """The namespace makes the arrays its library makes."""
+        assert _Fast.library == "numpy" and backend_library("fast_numpy") == "numpy"
+        assert type(fast.data) is np.ndarray and fast.equals(spool[0])
+        assert _Fast().owns(fast.data) and fast._backend == _Fast()
+
+    def test_its_kernel_runs(self, spool, fast):
+        """An operation with a kernel for the namespace runs it."""
+        np.testing.assert_array_equal(_Tripled()(fast).data, fast.data * 3)
+        # And a patch of no namespace runs the library's.
+        np.testing.assert_array_equal(_Tripled()(spool[0]).data, fast.data * 2)
+
+    def test_no_kernel_falls_back_to_the_library_s(self, fast):
+        """Without one the library's kernel runs, and nothing is said of it."""
+        with config_context(numpy_fallback="raise"), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = _Doubles()(fast)
+            np.testing.assert_array_equal(out.data, fast.data * 2)
+            # Nor of an operation which has only an array API kernel.
+            assert fast.abs().equals(dc.spool([fast]).set_backend("numpy")[0].abs())
+
+    def test_a_class_which_wrote_its_own_kernel_means_it(self):
+        """A namespace kernel registered against a parent does not answer."""
+
+        class Own(_Tripled):
+            """A subclass with a kernel of its own."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Return the data times five."""
+                return data * 5
+
+        assert Own.kernel_for("fast_numpy") is Own.__dict__["numpy_kernel"]
+        assert _Tripled.kernel_for("fast_numpy") is _tripled_fast
+
+    def test_operations_pass_it_on(self, fast):
+        """What an operation makes is of the namespace its input was."""
+        made = (
+            fast.abs(),
+            fast.update_attrs(station="here"),
+            fast.select(time=(0, 10), samples=True),
+            fast.new(data=fast.data + 1),
+            _Tripled()(fast),
+        )
+        for patch in made:
+            assert patch._backend == _Fast()
+            np.testing.assert_array_equal(_Tripled()(patch).data, patch.data * 3)
+
+    def test_data_of_another_library_drop_it(self, fast, strict):
+        """The namespace is of its library's arrays, and of no others."""
+        there = fast.new(data=strict.asarray(fast.data))
+        assert there._backend is None
+        # And it does not come back with data of the library.
+        assert there.new(data=fast.data)._backend is None
+
+    def test_another_backend_replaces_it(self, fast):
+        """A spool set to the library hands the patch out with its kernels."""
+        plain = _on(fast, "numpy")
+        assert plain._backend is None and plain.equals(fast)
+        np.testing.assert_array_equal(_Tripled()(plain).data, fast.data * 2)
+        # One already of the namespace is handed out as it is.
+        assert _on(fast, "fast_numpy") is fast
+
+    def test_lazy_chunks_run_its_kernels(self, spool, fast):
+        """A lazy backend computing on the namespace runs its kernels."""
+        lazy = spool.set_backend("lazy[fast_numpy]")[0]
+        assert isinstance(lazy.data, LazyArray)
+        block = fast.data.nbytes // 6
+        # Under the default setting, which refuses a conversion on lazy data.
+        with config_context(lazy_block_size=block), warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = _Doubles()(_Tripled()(lazy))
+            assert len(chunk_boxes(out.data)) > 3
+            loaded = out.load()
+        np.testing.assert_array_equal(loaded.data, fast.data * 6)
+        # In memory it is still of the namespace it was computed on.
+        assert type(loaded.data) is np.ndarray and loaded._backend == _Fast()
+
+    def test_spool_load_keeps_it(self, spool, fast):
+        """Loaded by the spool, lazily or not, the patches are of the namespace."""
+        for name in ("fast_numpy", "lazy[fast_numpy]"):
+            loaded = spool.set_backend(name).load()
+            assert {x._backend for x in loaded} == {_Fast()}
+        # And held in memory under a lazy backend, of the one it computes on.
+        held = dc.spool([spool[0]]).set_backend("lazy[fast_numpy]")[0]
+        assert held._backend == _Fast()
 
 
 class TestFallbackSetting:

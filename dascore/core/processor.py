@@ -52,6 +52,7 @@ from pydantic import ConfigDict
 from pydantic.alias_generators import to_snake
 
 import dascore as dc
+from dascore.backends import backend_library
 from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
@@ -385,6 +386,11 @@ class PatchProcessor(DascoreBaseModel):
         registered against its parent must not answer for it. A backend
         other than NumPy first loads its `dascore.kernels` entry points, once.
 
+        A backend which is a namespace over another library's arrays is
+        answered by a kernel registered for the namespace, and where a
+        class has none, by whatever that class runs for the library: the
+        arrays are the library's already, so nothing is converted for it.
+
         The lazy backend never falls back unasked: the first class which
         computes anything is answered by its own registered lazy kernel, or
         else by [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), which
@@ -393,9 +399,11 @@ class PatchProcessor(DascoreBaseModel):
         """
         if backend != "numpy":
             load_backend_plugins(backend)
+        namespace, backend = backend, backend_library(backend)
         for klass in cls.__mro__:
             contents = klass.__dict__
-            if (found := contents.get("_kernels", {}).get(backend)) is not None:
+            kernels = contents.get("_kernels", {})
+            if (found := kernels.get(namespace) or kernels.get(backend)) is not None:
                 return found
             if backend == LAZY_BACKEND:
                 # Never the array api kernel or the numpy fallback; a kernel
@@ -528,14 +536,14 @@ class PatchProcessor(DascoreBaseModel):
         """Run the operation; `record=False` writes no history or ids."""
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
         # Before the check, which asks whether the class has any kernel.
-        if meta._backend != "numpy":
-            load_backend_plugins(meta._backend)
+        if meta._kernel_key != "numpy":
+            load_backend_plugins(meta._kernel_key)
         self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
         # settled before anything asks the patch for its data.
-        kernel = self.kernel_for(meta._backend)
+        kernel = self.kernel_for(meta._kernel_key)
         if kernel is None:
             if out is meta:
                 return self._finished(patch, self._unchanged(patch, record), record)
@@ -568,7 +576,7 @@ class PatchProcessor(DascoreBaseModel):
             # gets them as any other result does, below.
             attrs = _unrecorded_attrs(attrs)
         out = out.update(attrs=attrs)
-        if meta._backend == LAZY_BACKEND:
+        if meta._kernel_key == LAZY_BACKEND:
             result = self._settled(result, out)
         new = out if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.

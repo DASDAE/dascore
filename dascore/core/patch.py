@@ -13,6 +13,7 @@ import dascore.proc.basic
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
+from dascore.backends import ArrayBackend
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -340,9 +341,25 @@ class Patch(NamespaceOwner, PatchMeta):
         return self._data.dtype
 
     @property
-    def _backend(self) -> str:
-        """Return the name of the array backend the data are in."""
-        return backend_name(self._data)
+    def _kernel_key(self) -> str:
+        """Return the name this patch's kernels are resolved under."""
+        backend = self._backend
+        return backend_name(self._data) if backend is None else backend.name
+
+    def _keep_backend(self, backend: ArrayBackend | None) -> None:
+        """
+        Keep the backend whose namespace this patch's kernels are of.
+
+        Only a namespace is kept: a backend named for its array library says
+        nothing the array does not. And only while the data are of its
+        library, so a patch given data of another library drops it.
+        """
+        kept = (
+            backend is not None
+            and backend.name != backend.library
+            and backend.library == backend_name(self._data)
+        )
+        self._backend = backend if kept else None
 
     def drop_data(self) -> PatchMeta:
         """
@@ -368,6 +385,7 @@ class Patch(NamespaceOwner, PatchMeta):
             dtype=self.dtype,
             source=self._source,
         )
+        out._kernel_key = self._kernel_key
         out._backend = self._backend
         # What `to_patch` builds: this patch's class, so an operation which
         # drops the data and fills them again keeps a subclass.
@@ -406,7 +424,11 @@ class Patch(NamespaceOwner, PatchMeta):
             # A lazy array loads itself, so an error from one of its steps
             # is the one raised.
             lazy = isinstance(data, LazyArray)
-            return self.update(data=data.load() if lazy else to_numpy(data))
+            out = self.update(data=data.load() if lazy else to_numpy(data))
+        if lazy:
+            # In memory, its kernels are those of the backend it computed on.
+            out._keep_backend(data._backend)
+        return out
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""
@@ -417,7 +439,9 @@ class Patch(NamespaceOwner, PatchMeta):
         # The ids were settled before this; the constructor names an array
         # nothing else has spoken for, which this is not.
         with operation_context():
-            return type(self)(data=data, coords=coords, attrs=attrs, **extra)
+            out = type(self)(data=data, coords=coords, attrs=attrs, **extra)
+        out._keep_backend(self._backend)
+        return out
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:
         """Return `out` under `attrs`, carrying this patch's unchanged data."""
