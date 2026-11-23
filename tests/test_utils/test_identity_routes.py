@@ -282,7 +282,7 @@ class TestWindowComposition:
         assert out is terra15_patch
 
     def test_prior_operation_breaks_the_window(self, terra15_patch):
-        """A patch which is no longer its source derives as usual."""
+        """A window of a patch which is no longer its source builds on its id."""
         window = (10, 100)
         first = terra15_patch.set_units("m").select(time=window, samples=True)
         second = terra15_patch.set_units("s").select(time=window, samples=True)
@@ -482,29 +482,112 @@ class TestDecodeOptions:
         assert trimmed.attrs.data_id == whole._source[0:100].data_id
 
 
-class TestMemoryPatchesUnchanged:
-    """A patch with no loadable source derives as it always did."""
+class TestWindowsOfMemoryPatches:
+    """
+    A window is its parent's data_id and the samples it keeps, however it
+    was asked for, so a patch in memory and the file holding it name their
+    windows alike.
+    """
 
-    def test_example_patch_select_derives(self):
-        """Nothing about an in-memory selection moves."""
-        patch = dc.get_example_patch()
-        first = patch.select(time=(0, 100), samples=True)
-        second = patch.select(time=(0, 100), samples=True)
-        assert first.attrs.data_id == second.attrs.data_id
-        assert first.attrs.data_id != patch.attrs.data_id
+    start, stop = 100, 200  # the samples along time every route keeps
 
-    def test_no_op_select_keeps_id(self):
+    @pytest.fixture(scope="class")
+    @classmethod
+    def patch(cls):
+        """A patch built in memory, which has no source to window."""
+        out = dc.get_example_patch()
+        assert out._source is None
+        return out
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def patch_dir(cls, patch, tmp_path_factory):
+        """A directory holding the patch, written by DASCore."""
+        path = tmp_path_factory.mktemp("memory_routes")
+        dc.write(patch, path / "patch.h5", "dasdae")
+        return path
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def bounds(cls, patch):
+        """The first and last time kept."""
+        time = patch.get_coord("time")
+        return time[cls.start], time[cls.stop - 1]
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def routes(cls, patch, patch_dir, bounds):
+        """The same samples of the patch, taken every way there is."""
+        time, size = patch.get_coord("time"), cls.stop - cls.start
+        offsets = tuple(x - time.min() for x in bounds)
+        samples = {"time": (cls.start, cls.stop), "samples": True}
+        return {
+            "select": patch.select(time=bounds),
+            "samples": patch.select(**samples),
+            "relative": patch.select(time=offsets, relative=True),
+            "isel": patch.isel(time=slice(cls.start, cls.stop)),
+            "sel": patch.sel(time=slice(*bounds)),
+            "chunk_member": dc.spool([patch]).chunk(time=time.step * size)[1],
+            "memory_spool": dc.spool([patch]).select(time=bounds)[0],
+            "stored_window": dc.read(patch_dir / "patch.h5", time=bounds)[0],
+            "file_spool": dc.spool(patch_dir).update().select(time=bounds)[0],
+        }
+
+    def test_every_route_names_one_window(self, routes):
+        """Each route keeps the same samples, so each gives one data_id."""
+        first = routes["select"]
+        assert all(x == first for x in routes.values())
+        found = {name: x.attrs.data_id for name, x in routes.items()}
+        assert len(set(found.values())) == 1, found
+
+    def test_bounds_between_samples(self, patch, bounds, routes):
+        """Bounds anywhere short of the next sample keep the same samples."""
+        nudge = patch.get_coord("time").step / 3
+        out = patch.select(time=(bounds[0] - nudge, bounds[1] + nudge))
+        assert out == routes["select"]
+        assert out.attrs.data_id == routes["select"].attrs.data_id
+
+    def test_other_samples_differ(self, patch, routes):
+        """A window keeping other samples, or a stepped one, is another array."""
+        start, stop = self.start, self.stop
+        others = [
+            patch.select(time=(start + 1, stop), samples=True),
+            patch.select(time=(start, stop + 1), samples=True),
+            patch.select(time=(start, stop), distance=(0, 10), samples=True),
+            patch.isel(time=slice(start, stop, 2)),
+        ]
+        found = {x.attrs.data_id for x in others}
+        assert len(found) == len(others)
+        assert not found & {routes["select"].attrs.data_id, patch.attrs.data_id}
+
+    def test_spools_of_the_file_and_patch(self, patch, patch_dir, bounds):
+        """A selection of the file equals the same selection of the patch."""
+        files = dc.spool(patch_dir).update().select(time=bounds)
+        assert files == dc.spool([patch]).select(time=bounds)
+        # by what each loads: other data under the same metadata differs
+        other = patch.new(data=patch.data * 2)
+        assert files != dc.spool([other]).select(time=bounds)
+
+    def test_every_sample_kept_is_the_patch(self, patch):
+        """Keeping every sample names the patch; select hands it back."""
+        time = patch.get_coord("time")
+        assert patch.select(time=(time.min(), time.max())) is patch
+        whole = patch.isel(time=slice(None))
+        assert whole.attrs.data_id == patch.attrs.data_id
+
+    def test_a_window_of_a_processed_patch(self, patch, bounds):
+        """It builds on the processed patch's id, and leaves history alone."""
+        processed = patch.pass_filter(time=(..., 10))
+        out = processed.select(time=bounds)
+        by_index = processed.isel(time=slice(self.start, self.stop))
+        assert out.attrs.data_id == by_index.attrs.data_id
+        assert out.attrs.data_id != patch.select(time=bounds).attrs.data_id
+        assert out.attrs.history == by_index.attrs.history
+        assert out.attrs.history == processed.attrs.history
+
+    def test_no_op_select_keeps_id(self, patch):
         """A selection which changes nothing changes no id."""
-        patch = dc.get_example_patch()
         assert patch.select(time=...) is patch
-
-    def test_constant_source_is_not_windowed(self):
-        """A patch built in memory names no window of anything."""
-        patch = dc.get_example_patch()
-        assert patch._source is None
-        out = patch.select(distance=(0, 5), samples=True)
-        assert out.attrs.data_id != patch.attrs.data_id
-        assert np.allclose(out.data, patch.data[0:5])
 
 
 class TestPinnedSources:
@@ -516,15 +599,15 @@ class TestPinnedSources:
         assert terra15_patch._source is not None
         assert pinned._source is terra15_patch._source
 
-    def test_select_derives(self, terra15_patch):
-        """So narrowing it is an operation rather than a window."""
+    def test_a_window_builds_on_the_pinned_id(self, terra15_patch):
+        """So a window of it is a window of the pinned id, however taken."""
         window = {"time": (0, 100), "samples": True}
         windowed = terra15_patch.select(**window)
         assert windowed.attrs.data_id == terra15_patch._source[0:100].data_id
         pinned = terra15_patch.pin_id()
         out = pinned.select(**window)
         assert out.attrs.data_id not in (windowed.attrs.data_id, pinned.attrs.data_id)
-        assert out.attrs.data_id == pinned.select(**window).attrs.data_id
+        assert out.attrs.data_id == pinned.isel(time=slice(0, 100)).attrs.data_id
 
     def test_dasdae_round_trip(self, dasdae_path, tmp_path):
         """A pinned id is stored and read back like any other."""

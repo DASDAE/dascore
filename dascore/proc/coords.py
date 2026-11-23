@@ -825,6 +825,8 @@ class Select(_Query):
     [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
     """
 
+    _names_windows = True
+
     def get_metadata(self, meta):
         """Return the selected coordinates and the indexers behind them."""
         queries = self.model_extra or {}
@@ -906,6 +908,7 @@ class Isel(PatchProcessor):
     missing_dims: str = "raise"
 
     history = None
+    _names_windows = True
 
     def get_metadata(self, meta):
         """Return the indexed coordinates and the indexers behind them."""
@@ -999,6 +1002,7 @@ class Sel(PatchProcessor):
     drop: bool = False
 
     history = None
+    _names_windows = True
 
     def get_metadata(self, meta):
         """Resolve each label to a position, then index by position."""

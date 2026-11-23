@@ -1061,11 +1061,12 @@ class FiberIO:
                     else key
                 )
                 requests.append((windows, array_key))
+                index = tuple(indexers.get(x, slice(None)) for x in patch.dims)
                 # Only a contiguous read is what the source alone would load.
-                source = replace(source, key=key).narrow(
-                    tuple(indexers.get(x, slice(None)) for x in patch.dims)
+                source = replace(source, key=key).narrow(index)
+                selected.append(
+                    (patch, coords, source, windows, residual, queries, index)
                 )
-                selected.append((patch, coords, source, windows, residual, queries))
             library = lazy_read_backend()
             if library is None:
                 arrays = load(requests)
@@ -1077,7 +1078,7 @@ class FiberIO:
                 for n, data in zip(eager, loaded, strict=True):
                     arrays[n] = data
             for selection, data in zip(selected, arrays, strict=True):
-                patch, coords, source, windows, residual, queries = selection
+                patch, coords, source, windows, residual, queries, index = selection
                 expected = (
                     tuple(stop - start for start, stop in windows)
                     if patch.dims
@@ -1100,6 +1101,7 @@ class FiberIO:
                     queries,
                     coords=patch.coords,
                     new_coords=coords,
+                    indexer=index,
                     relative=relative,
                     samples=samples,
                 )
@@ -1722,6 +1724,7 @@ def _selected_read_attrs(
     *,
     coords=None,
     new_coords=None,
+    indexer=None,
     relative: bool = False,
     samples: bool = False,
 ):
@@ -1729,8 +1732,9 @@ def _selected_read_attrs(
     Return the attrs of a patch a read trimmed as it loaded.
 
     A selection pushed into the reader names what the same selection on
-    the loaded patch names: a window of the source while the source still
-    loads the result, and otherwise what `Patch.select` derives from it.
+    the loaded patch names: a window of it where the read kept one run of
+    samples along each dimension, and otherwise what `Patch.select`
+    derives from it.
 
     Parameters
     ----------
@@ -1740,13 +1744,16 @@ def _selected_read_attrs(
         The sources of the whole and the trimmed arrays, if any.
     queries
         The coordinate selections the reader carried out.
-    coords, new_coords
-        The coordinates before and after the trim; see
+    coords, new_coords, indexer
+        The coordinates before and after the trim, and what it took along
+        each dimension; see
         [`narrowed_data_id`](`dascore.utils.identity.narrowed_data_id`).
     relative, samples
         How those selections were meant.
     """
-    window = narrowed_data_id(attrs, before, after, coords, new_coords)
+    # Without a selection the read kept no window of the patch it described.
+    kept = indexer if queries else None
+    window = narrowed_data_id(attrs, before, after, coords, new_coords, kept)
     if window is None and not queries:
         return attrs
     if not ids_enabled():

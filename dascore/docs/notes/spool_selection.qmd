@@ -50,7 +50,7 @@ The loaded patch still applies the exact selection and reports its real identity
 
 When a selection is pushed into the file reader, the loaded patch gets the `data_id` of the window it read. That is the same id the selection would give on the loaded patch, so replaying `select` finds nothing to do. `select` adds no history entry.
 
-A window is named by the samples it holds, not by how you asked for it. For a file-backed patch, `...`, `None`, and a quantity in any unit all give the same id. A selection the reader can't do itself — stepped, fancy indexing, or along an axis the file's array can't be sliced on — gets an id derived from the whole array plus the `select` call, so those spellings still differ.
+A window is named by the samples it holds, not by how you asked for it: `...`, `None`, and a quantity in any unit all give the same id, for a patch in memory as for one read from a file. A selection which keeps no single run of samples — stepped or fancy indexing — gets an id derived from the whole array plus the `select` call, so those spellings still differ.
 
 A single range in native units can be pushed into the reader on even or uneven coordinates. These instead replay on the loaded patch:
 

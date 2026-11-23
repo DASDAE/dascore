@@ -672,29 +672,6 @@ def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
         return dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
 
 
-def _as_window(whole: dc.Patch, cut: dc.Patch, query: Mapping) -> dc.Patch:
-    """
-    The cut a plan made of a member, named as the window of it it is.
-
-    The id is the member's and the samples the cut keeps, however the
-    bounds asking for them were spelled. A cut its stored source loads is
-    named by the same rule already, counted from the whole stored array.
-    """
-    base, source = whole.attrs.data_id, cut._source
-    if not ids_enabled() or not base or cut.attrs.data_id == base:
-        return cut
-    if source is not None and source.loadable and source.data_id == cut.attrs.data_id:
-        return cut
-    _, indexers = whole.coords.select_indexers(**query)
-    windows = []
-    for dim, size in zip(whole.dims, whole.shape, strict=True):
-        index = indexers.get(dim, slice(None))
-        if not isinstance(index, slice) or index.step not in (None, 1):
-            return cut  # not one run of samples, so not a window
-        windows.append(index.indices(size)[:2])
-    return cut.update_attrs(data_id=window_data_id(base, windows, whole.shape))
-
-
 def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
     """
     Fill a fill plan's assembled members, as `Patch.fill_gaps` does, onto the
@@ -914,8 +891,8 @@ class PatchAssembler:
         # and its trim dims are narrowed, everything else loads untouched.
         trims = (self.plan_dim, self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
-            query = _as_plan_units(patch, select_kwargs, patch_kwargs)
-            patch = _as_window(patch, patch.select(**query), query)
+            # a window of the member, named by the samples it keeps
+            patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
         # Already in the plan's units, spelled as the plan spells them,
         # there is nothing to convert, and a lazy member is not asked to
         # run what would do nothing. The same quantity spelled another way
