@@ -3484,7 +3484,8 @@ def build_chunk_plan(
                     # values; a descending coordinate's negative step would
                     # invert the final partial interval
                     step=abs(part_step),
-                    keep_partials=keep_partial,
+                    # a stretch with no step has no partial window (rule 9)
+                    keep_partials=keep_partial or pd.isnull(part_step),
                     tail=cell,
                 )
             except ChunkError:  # partition too short; skip (D8)

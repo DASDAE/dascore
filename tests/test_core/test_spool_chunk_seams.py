@@ -165,12 +165,24 @@ class TestSeamTest:
         assert len(spool.chunk(time=None, tolerance=2 * STEP)) == 1
 
     def test_stepless_windows_are_checked(self):
-        """Windows over labels with no step still refuse what cannot chunk."""
-        spool = dc.spool([_patch(T0 + np.array([0, 3, 4, 9]) * STEP)])
-        with pytest.raises(ChunkError, match="Could not chunk"):
-            spool.chunk(time=1000 * STEP)
+        """Windows over labels with no step are kept, but refuse a long overlap."""
+        patch = _patch(T0 + np.array([0, 3, 4, 9]) * STEP)
+        spool = dc.spool([patch])
+        (whole,) = spool.chunk(time=1000 * STEP)  # no step, so no partial window
+        assert whole.equals(patch)
         with pytest.raises(ParameterError, match="overlap"):
             spool.chunk(time=2 * STEP, overlap=3 * STEP)
+
+    def test_steps_without_a_grid_judge_windows(self):
+        """A stretch stating steps which fit no grid still drops a partial window."""
+        # integer steps of 20 and 21 spread to 389 / 19, under 100 ticks
+        starts_steps = ((0, 20), (200, 21))
+        grids = [get_coord(start=x, step=y, shape=(10,)) for x, y in starts_steps]
+        spool = dc.spool([_patch(x) for x in grids])
+        with pytest.raises(ChunkError, match="Could not chunk"):
+            spool.chunk(time=10_000)
+        (whole,) = spool.chunk(time=10_000, keep_partial=True)
+        assert len(whole.get_coord("time")) == 20
 
     def test_step_is_the_earlier_patch(self):
         """The seam is judged against the earlier patch's step."""

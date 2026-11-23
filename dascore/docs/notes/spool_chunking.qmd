@@ -161,7 +161,7 @@ A chunk length splits each stretch into half-open windows `[start, start + lengt
 
 - **No overlap:** windows split the samples with no repeats. A length that isn't a whole number of samples gives windows whose sample counts differ by one.
 - **With overlap:** windows stop at the first one holding the group's last sample, so the last window always holds a sample the previous one doesn't.
-- **Partial windows:** a window is complete when it ends no more than one sample past the group's last sample. Only complete windows are kept unless `keep_partial=True`.
+- **Partial windows:** a window is complete when it ends no more than one sample past the group's last sample. Only complete windows are kept unless `keep_partial=True`. A stretch with no step keeps every window, having no step to judge one by.
 
 An output's coordinate range runs from its first sample to its last when its sources are evenly sampled with known positions. Otherwise (uneven coordinates, or a view trimmed by a relative selection) it states the window's own bounds.
 

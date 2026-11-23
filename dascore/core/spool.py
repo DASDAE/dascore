@@ -2960,7 +2960,7 @@ class Spool(NodeRepr, NamespaceOwner):
             length)``, holding the samples whose labels on the stretch's
             grid fall inside, so windows without overlap share no sample;
             only a final partial window is dropped, unless
-            ``keep_partial=True``.
+            ``keep_partial=True`` or the stretch has no step.
             The value may also be a quantity: one of the coordinate's own
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.
