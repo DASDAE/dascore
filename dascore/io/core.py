@@ -1089,8 +1089,8 @@ class FiberIO:
                     else patch.shape
                 )
                 # A backend which reads for itself states its library's dtype.
-                made = _as_numpy_dtype(data.dtype)
-                if data.shape != expected or made != np.dtype(patch.dtype):
+                held = _as_numpy_dtype(data.dtype)
+                if data.shape != expected or held != np.dtype(patch.dtype):
                     msg = (
                         f"{self.name}.read_array returned {data.shape}/{data.dtype}; "
                         f"metadata declared {expected}/{patch.dtype}."

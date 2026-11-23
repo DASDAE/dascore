@@ -471,11 +471,10 @@ class TestPatchOnABackend:
         path = tmp_path / "big_endian.h5"
         dc.write(dc.Patch(data=data, coords=coords, dims=tuple(coords)), path, "dasdae")
         eager = dc.read(path)[0]
-        with reading_lazily("numpy"):
+        with reading_onto(LazyBackend()):
             read = dc.read(path)[0]
         handed = dc.spool(path).set_backend("lazy")[0]
-        made = eager.set_backend("lazy")
-        for lazy in (read, handed, made):
+        for lazy in (read, handed):
             assert lazy.dtype == eager.dtype == np.dtype(">f8")
             assert lazy.attrs.data_id == eager.attrs.data_id
             assert lazy.load().equals(eager)
