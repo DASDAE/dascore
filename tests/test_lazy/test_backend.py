@@ -1215,6 +1215,10 @@ class TestSpoolSetBackend:
         assert lazy != spool and lazy == spool.set_backend("LazyArray")
         # And None hands the patches out as their readers return them again.
         assert lazy.set_backend(None) == spool
+        assert spool.backend is None and lazy.backend == LazyBackend()
+        assert (
+            lazy[:2].backend == lazy.select(time=(None, None)).backend == lazy.backend
+        )
 
     def test_update_of_one_file_keeps_it(self, path):
         """A spool of one file, looked at again, is on the same backend."""

@@ -999,6 +999,22 @@ class Spool(NodeRepr, NamespaceOwner):
         out._backend = kept
         return out
 
+    @property
+    def backend(self) -> ArrayBackend | None:
+        """
+        Return the backend the spool was set to, or None if it was set to none.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.backends import LazyBackend
+        >>>
+        >>> spool = dc.get_example_spool("random_das")
+        >>> assert spool.backend is None
+        >>> assert spool.set_backend("lazy").backend == LazyBackend()
+        """
+        return self._backend
+
     def set_backend(self, backend: str | ArrayBackend | None) -> Self:
         """
         Return a spool whose patches hold arrays a backend makes.
