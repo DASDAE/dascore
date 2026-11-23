@@ -504,6 +504,8 @@ def _return_number_null(null):
 
 
 @_to_int.register(np.timedelta64)
+@_to_int.register(timedelta)
+@_to_int.register(pd.Timedelta)
 def _time_delta_to_number(time_delta: np.timedelta64):
     return to_int([to_timedelta64(time_delta)])[0]
 
