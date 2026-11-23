@@ -898,6 +898,58 @@ class TestBoundBetweenSamples:
         assert chunked.get_contents()["time_min"].tolist() == [3.0, 6.0, 9.0]
 
 
+class TestDurationBounds:
+    """A duration coordinate reads bounds as `Patch.select` does (#1704)."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """Durations from 0 to 4 s."""
+        time = np.arange(5) * np.timedelta64(1, "s")
+        return dc.Patch(data=np.arange(5.0), coords={"time": time}, dims=("time",))
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def durations(self, request, patch, tmp_path_factory):
+        """The patch in a memory spool, or a directory spool of it."""
+        if request.param == "memory":
+            return dc.spool([patch])
+        path = tmp_path_factory.mktemp("durations")
+        patch.io.write(path / "p.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    @pytest.mark.parametrize(
+        "bounds",
+        [
+            (1.0, 3.0),
+            (1, None),
+            ("1 seconds", "3 seconds"),
+            (1 * s, 3 * s),
+            (get_quantity("1000 ms"), 3.0),
+        ],
+    )
+    def test_as_patch_select(self, durations, patch, bounds):
+        """Numbers and text are seconds, and quantities convert to them."""
+        expected = patch.select(time=bounds)
+        out = durations.select(time=bounds)
+        (got,) = out
+        assert got.equals(expected)
+        (row,) = out.get_contents().itertuples()
+        assert (row.time_min, row.time_max) == (
+            expected.get_coord("time").min(),
+            expected.get_coord("time").max(),
+        )
+
+    def test_between_samples(self, durations):
+        """Seconds between two samples hold none, so leave the patch out."""
+        out = durations.select(time=(1.2, 1.4))
+        assert len(out) == len(list(out)) == 0
+
+    def test_beside_numbers(self, patch):
+        """Beside numbers, a bare number keeps meaning each patch's own units."""
+        numbers = patch.update_coords(time=np.arange(5.0))
+        (got,) = dc.spool([patch, numbers]).select(time=(1.0, 3.0))
+        assert got.equals(numbers.select(time=(1.0, 3.0)))
+
+
 class TestTwoKinds:
     """Patches stating a coordinate in two kinds each select as alone."""
 

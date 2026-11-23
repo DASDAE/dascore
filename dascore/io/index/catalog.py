@@ -63,7 +63,7 @@ from dascore.utils.misc import (
     is_range,
 )
 from dascore.utils.paths import coerce_to_local_path, is_local_path, is_memory_uri
-from dascore.utils.time import to_int
+from dascore.utils.time import to_float, to_int, to_timedelta64
 
 if TYPE_CHECKING:
     from dascore.core.coords import BaseCoord
@@ -72,6 +72,18 @@ if TYPE_CHECKING:
 # alone cannot interleave multi-patch files); ordinal and patch row stay
 # the deterministic tiebreak inside the ORDER BY.
 _DIRECTORY_ORDER = ("coord", "time", True)
+
+
+def _as_durations(value: tuple) -> tuple:
+    """A range on durations: numbers and text in seconds, time quantities too."""
+    out = []
+    for bound in value:
+        if hasattr(bound, "units"):
+            bound = to_timedelta64(to_float(bound)) if bound.check("[time]") else bound
+        elif isinstance(bound, str) or np.asarray(bound).dtype.kind in "iuf":
+            bound = to_timedelta64(bound)
+        out.append(bound)
+    return tuple(out)
 
 
 def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
@@ -92,12 +104,18 @@ def _canonical_coord_selectors(backend, coords: dict) -> tuple[dict, dict]:
     populations correct.
 
     Selectors on non-numeric coordinates (time ranges, string ranges)
-    pass through unchanged.
+    pass through unchanged, except on a coordinate held only as durations,
+    where numbers, text and time quantities become durations as
+    `Patch.select` reads them.
     """
     meta = backend._coord_rows(coords)
     numeric = {x for x in coords if "num" in meta.named(x)["value_kind"]}
     query_coords, residual_coords = {}, {}
     for name, value in coords.items():
+        kinds = zip(*(meta.named(name)[x] for x in ("value_kind", "is_relative")))
+        durations = [x == "time" and bool(y) for x, y in kinds]
+        if is_range(value) and durations and all(durations):
+            value = _as_durations(value)
         canonical = _canonical_range(value) if name in numeric else None
         query_coords[name] = value
         residual_coords[name] = value if canonical is None else canonical
