@@ -136,7 +136,7 @@ Most spool operations work from one flat dataframe with a row per patch. It has:
 
 - `{dim}_min`, `{dim}_max`, and `{dim}_step` columns for each coordinate;
 - a `dims` column;
-- one column per attribute;
+- one column per attribute that some row states, where a text attribute holds `""` for a row that states none;
 - private bookkeeping columns starting with `_`: `_patch_row`, `_{name}_def_key` (coordinate identity), `_{name}_units` (units as written; the chunk planner normalizes them per dimensionality before grouping), `_dtype`, and `_data_size`.
 
 Attributes and coordinates are separate, so an attribute can have the same name as a coordinate column, like an attribute `channel_step` next to a `channel` coordinate. When that happens, the coordinate column keeps the name, the attribute is left out with a warning, and you can still query it through `_attrs`.

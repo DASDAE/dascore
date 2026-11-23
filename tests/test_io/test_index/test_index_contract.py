@@ -1100,6 +1100,8 @@ class TestLineageIds:
         assert moved.get_contents()["origin_id"].iloc[0] == ""
         # A fresh patch's data id is its origin's, so it is as stale.
         assert moved.get_contents()["data_id"].iloc[0] == ""
+        # A column no row states a value in is text all the same.
+        assert (moved.get_contents()[["origin_id", "data_id"]].dtypes == "str").all()
         assert len(moved.select(origin_id=stale)) == 0
         assert len(moved.select(data_id=stale)) == 0
         # The patch itself still says which data it is; only the index

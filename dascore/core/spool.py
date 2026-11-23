@@ -737,7 +737,10 @@ class Spool(NodeRepr, NamespaceOwner):
         does not know its size states none: a merged or subdivided
         chunk output, or a patch a selection trims. A coordinate's
         `{name}_units` column is object, holding None where a patch
-        states no units.
+        states no units. An attribute has a column only if one of the
+        spool's patches states it, so a selection has none for those only
+        the patches it left out state. A text attribute's column is str,
+        holding "" where a patch states none.
 
         Examples
         --------

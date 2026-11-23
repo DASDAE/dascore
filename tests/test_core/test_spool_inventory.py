@@ -1372,7 +1372,7 @@ class TestSelectSeesPendingEnrichment:
         assert all(x.attrs.gauge_length == 10.0 for x in selected)
         # Attached alone, the bare row names no entry and is not selected.
         attached = bare.attach_inventory(inventory).select(gauge_length=10.0)
-        assert attached.get_contents()["tag"].tolist() == (
+        assert [x.attrs.tag for x in attached] == (
             ["keyed"] if with_a_stated_row else []
         )
 

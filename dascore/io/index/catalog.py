@@ -46,7 +46,7 @@ from dascore.constants import (
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import InvalidIndexError, MissingPatchError, ParameterError
 from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
-from dascore.io.index.backend import get_backend
+from dascore.io.index.backend import _LINEAGE_ATTRS, get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats, snap_text
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
@@ -647,6 +647,28 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
         # column is compared and presented as one.
         forgotten["_data_size"] = df["_data_size"].astype("Int64").where(~trimmed)
     return df.assign(**forgotten)
+
+
+def _without_unstated_attrs(df: pd.DataFrame, backend) -> pd.DataFrame:
+    """
+    Drop the attr columns none of the rows state ("" or null).
+
+    The index of the patches the rows load would hold no such attr. The
+    envelope columns of a coordinate the query pivoted (marked by its
+    private `_{name}_dims`) keep a name an attr shares, and the ids every
+    patch carries keep theirs where the index forgot them.
+    """
+    pivoted = [
+        x[1 : -len("_dims")]
+        for x in map(str, df.columns)
+        if x.startswith("_") and x.endswith("_dims")
+    ]
+    shadowed = {f"{x}_{y}" for x in pivoted for y in ("min", "max", "step", "units")}
+    names = df.columns.intersection(
+        list(backend.attr_names() - shadowed - set(_LINEAGE_ATTRS))
+    )
+    unstated = [x for x in names if not (df[x].notna() & (df[x] != "")).any()]
+    return df.drop(columns=unstated)
 
 
 def _coord_from_envelope(envelope, name: str, units=None) -> BaseCoord | None:
@@ -1469,6 +1491,8 @@ class PatchCatalog:
             df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
                 drop=True
             )
+            # after every step which drops rows, so it follows the rows kept
+            df = _without_unstated_attrs(df, self.backend)
             # the index drops blanks, so a stamp's column may be partial or absent
             for name, dtype in self._stamps.items():
                 column = df.get(name, pd.Series(None, index=df.index, dtype=object))

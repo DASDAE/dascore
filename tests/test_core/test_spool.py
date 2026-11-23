@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import re
 import shutil
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -734,6 +735,61 @@ class TestGetContents:
         units = dc.spool(patches)[:count].get_contents()["x_units"]
         assert units.dtype == object
         assert units.tolist() == [None] * min(count, 11) + ["m"] * (count == 12)
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def station_patches(cls):
+        """Three patches along x: only the first, and shortest, states a station."""
+        patches = [
+            dc.Patch(
+                data=np.zeros(size), coords={"x": np.arange(size) + start}, dims="x"
+            )
+            for start, size in ((0, 3), (10, 10), (30, 10))
+        ]
+        patches[0] = patches[0].update_attrs(station="A1", gain=2.0, tag="a")
+        patches[2] = patches[2].update_attrs(tag="t")
+        return patches
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    @classmethod
+    def station_spool(cls, request, station_patches, tmp_path_factory):
+        """The station patches in an in-memory and in a directory spool."""
+        if request.param == "memory":
+            return dc.spool(station_patches)
+        path = tmp_path_factory.mktemp("station_spool")
+        for i, patch in enumerate(station_patches):
+            dc.write(patch, path / f"p{i}.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    @pytest.mark.parametrize(
+        ("x", "expected"),
+        [((None, None), ["A1", "", ""]), ((None, 15), ["A1", ""]), ((None, 5), ["A1"])],
+    )
+    def test_text_attr_dtype_ignores_selection(self, station_spool, x, expected):
+        """
+        A text attribute's column is str, with "" where a patch states none,
+        whatever rows a selection keeps.
+        """
+        station = station_spool.select(x=x).get_contents()["station"]
+        assert station.dtype == "str"
+        assert station.tolist() == expected
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"x": (5, None)},
+            {"x": (5, None), "relative": True},
+            {"tag": re.compile("t")},
+        ],
+    )
+    def test_unstated_attrs_have_no_column(self, station_spool, kwargs):
+        """
+        A selection keeping no patch which states an attr has no column for
+        it, so the selection equals the spool of the patches it loads.
+        """
+        view = station_spool.select(**kwargs)
+        assert not {"station", "gain"} & set(view.get_contents().columns)
+        assert view == dc.spool(list(view))
 
     def test_data_description_survives_the_drop(self, random_spool):
         """`_dtype` and `_data_size` are renamed, not dropped."""
