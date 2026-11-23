@@ -27,8 +27,12 @@ if [[ "$1" == "doctest" ]]; then
   args=(dascore --doctest-modules)
 fi
 if [[ "$1" == "profile" ]]; then
-  # No xdist: codspeed measures this process.
+  # No xdist: codspeed measures this process. An optional marker expression
+  # selects a subset, eg "smoke" on pull requests.
   args=(benchmarks --codspeed)
+  if [[ -n "$2" ]]; then
+    args+=(-m "$2")
+  fi
 fi
 
 python -c "

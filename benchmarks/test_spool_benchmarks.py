@@ -179,6 +179,7 @@ class TestManyFileDirectoryBenchmarks:
         return dc.spool(many_file_directory).update(progress=None)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_index_directory(self, many_file_directory):
         """Time indexing a directory of many files."""
         for index_path in many_file_directory.glob(".dascore*"):
@@ -187,6 +188,7 @@ class TestManyFileDirectoryBenchmarks:
         assert len(spool)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_count_time_window(self, indexed_spool):
         """Time counting the patches in a short time window."""
         window = ("2023-01-01T00:00:01", "2023-01-01T00:00:02")
@@ -200,6 +202,7 @@ class TestManyFileDirectoryBenchmarks:
         assert len(patches) == 1
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_iterate_chunked(self, indexed_spool):
         """Time loading chunks which each span several files."""
         # each file spans 0.4s, so each chunk merges 4 files.
@@ -294,6 +297,7 @@ class TestMemorySpoolBenchmarks:
         return _make_contiguous_patches(100)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_spool_from_patches_access(self, many_patches):
         """Time creating a spool from patches and accessing its contents."""
         spool = dc.spool(many_patches)

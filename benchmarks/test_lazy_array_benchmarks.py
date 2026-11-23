@@ -82,6 +82,7 @@ class TestTableBenchmarks:
         Recipe.from_sources(sources)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_slice_few_members(self, array):
         """Time a window which touches four members of a big table."""
         for _ in range(100):

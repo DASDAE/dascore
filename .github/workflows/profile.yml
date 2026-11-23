@@ -34,9 +34,15 @@ jobs:
     name: Run benchmarks
     if: >
       github.event_name != 'pull_request' ||
-      (github.event.pull_request.state == 'open' &&
-      contains(github.event.pull_request.labels.*.name, 'benchmark'))
+      github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
+    env:
+      # Pull requests run the smoke set unless labelled benchmark; pushes and
+      # manual runs run every benchmark. See benchmarks/readme.md.
+      BENCHMARK_MARKER: >-
+        ${{ github.event_name == 'pull_request' &&
+        !contains(github.event.pull_request.labels.*.name, 'benchmark') &&
+        'smoke' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -67,4 +73,4 @@ jobs:
           # dascore now installs into the interpreter on PATH, so this no
           # longer needs a `micromamba run -n dascore` wrapper to resolve
           # pytest and pytest-codspeed.
-          run: ./.github/test_code.sh profile
+          run: ./.github/test_code.sh profile "$BENCHMARK_MARKER"

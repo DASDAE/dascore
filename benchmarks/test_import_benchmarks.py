@@ -46,6 +46,7 @@ class TestImportBenchmarks:
         pint.set_application_registry(registry)
 
     @pytest.mark.benchmark
+    @pytest.mark.smoke
     def test_reimport_dascore(self, restore_dascore_modules):
         """Time re-importing the top-level dascore module."""
         for name in _dascore_module_names():

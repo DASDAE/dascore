@@ -7,11 +7,14 @@ DASCore's benchmark suite uses [CodSpeed](https://codspeed.io/) for continuous p
 To run benchmarks locally:
 
 ```bash
-# Install test dependencies (includes pytest-codspeed)
-pip install -e ".[test]"
+# Install test dependencies and pytest-codspeed
+pip install -e ".[profile]"
 
 # Run all benchmarks
 pytest benchmarks/ --codspeed
+
+# Run only the smoke set, as pull requests do
+pytest benchmarks -m smoke --codspeed
 
 # Run specific benchmark files
 pytest benchmarks/test_patch_benchmarks.py --codspeed
@@ -36,9 +39,21 @@ The IO benchmark uses the full data registry (all test-suite data files are host
 
 ## Continuous Performance Monitoring
 
-Benchmarks automatically run on:
-- Push to main/master branch
-- Pull requests
+CodSpeed runs one of two sets:
+
+- The full suite runs on pushes to `dev` and `master`, on manual runs, and on pull requests labelled `benchmark`.
+- The smoke set, the benchmarks marked `smoke`, runs on every other pull request. CodSpeed reports the benchmarks a pull request did not run as skipped, carrying the base branch's results.
+
+Each smoke benchmark covers a different end-to-end path: import, format detection, scan and read, indexing a directory, selecting and chunking a spool, building a spool from patches, patch processing, lazy-array slicing and format lookup. To add a benchmark to the set, mark it `smoke`:
+
+```python
+@pytest.mark.benchmark
+@pytest.mark.smoke
+def test_something(self):
+    ...
+```
+
+or mark one parameter with `pytest.param(value, marks=pytest.mark.smoke)`. Keep the set small and cheap: under CodSpeed's simulation a benchmark costs about a hundred times its plain pytest run.
 
 Performance results are tracked by CodSpeed and reported in pull requests, helping identify performance regressions before they're merged.
 
