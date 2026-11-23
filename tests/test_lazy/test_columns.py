@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import tracemalloc
+import gc
+import sys
 from dataclasses import replace
 from itertools import pairwise
+from types import FunctionType, ModuleType
 
 import numpy as np
 import pandas as pd
@@ -27,6 +29,23 @@ from tests.test_lazy.conftest import (
 )
 
 
+def held_bytes(obj) -> int:
+    """Return the bytes of an object and of everything it reaches, each once."""
+    seen, todo, size = set(), [obj], 0
+    while todo:
+        obj = todo.pop()
+        if id(obj) in seen or isinstance(obj, type | ModuleType | FunctionType):
+            continue
+        seen.add(id(obj))
+        # An array owning its buffer counts it; a view counts the one it views.
+        size += sys.getsizeof(obj)
+        todo.extend(gc.get_referents(obj))
+        if isinstance(obj, np.ndarray):  # which reports no referents
+            todo.append(obj.base)
+            todo.extend(obj.ravel().tolist() if obj.dtype == object else ())
+    return size
+
+
 class TestFoldedColumns:
     """Columns of one value throughout cost one value, not one per member."""
 
@@ -43,19 +62,10 @@ class TestFoldedColumns:
     def test_memory_per_member(self):
         """A large array of like members keeps well under a column per field."""
         paths = [f"/data/f{x:05d}.h5" for x in range(20_000)]
-        # Count only allocations made under this file, so other threads
-        # alive in the worker don't inflate the total.
-        tracemalloc.start(100)
-        try:
-            array = Recipe.from_columns(paths, (1000, 100), **FORMAT)
-            snapshot = tracemalloc.take_snapshot()
-            assert len(array) == len(paths)
-        finally:
-            tracemalloc.stop()
-        mine = tracemalloc.Filter(True, __file__, all_frames=True)
-        traces = snapshot.filter_traces([mine]).traces
-        held = sum(trace.size for trace in traces)
-        assert held / len(paths) < 120
+        array = Recipe.from_columns(paths, (1000, 100), **FORMAT)
+        assert len(array) == len(paths)
+        # What the array holds, not what the allocator has yet to release.
+        assert held_bytes(array) / len(paths) < 120
 
     def test_folding_changes_nothing(self, monkeypatch):
         """Folded and unfolded tables give the same arrays."""
