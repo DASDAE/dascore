@@ -108,7 +108,19 @@ class ArrayBackend(BaseModel, ABC):
                 "array_type: a backend says which class its arrays are."
             )
             raise TypeError(msg)
-        _BACKENDS[cls.namespace.lower()] = cls
+        if cls.namespace != cls.namespace.lower():
+            msg = (
+                f"The namespace {cls.namespace!r} of {cls.__name__} must be in "
+                "lower case: kernels are registered under it exactly as it is."
+            )
+            raise TypeError(msg)
+        holder = _BACKENDS.get(cls.namespace)
+        # The same class made again, as a notebook cell run twice makes it,
+        # takes its own place; another class does not take a namespace.
+        if holder is not None and _where(holder) != _where(cls):
+            msg = f"The namespace {cls.namespace!r} is taken by {_where(holder)}."
+            raise TypeError(msg)
+        _BACKENDS[cls.namespace] = cls
 
     @classmethod
     def from_string(cls, argument: str | None = None) -> Self:
@@ -141,7 +153,9 @@ class ArrayBackend(BaseModel, ABC):
         Parameters
         ----------
         recipe
-            Which stored samples fill which box of the array.
+            A [`Recipe`](`dascore.lazy.recipe.Recipe`): which stored samples
+            fill which box of the array. Its `load` reads them into a NumPy
+            array, and the array returned must have its `shape` and `dtype`.
         """
         return self.from_array(recipe.load())
 
@@ -154,7 +168,9 @@ class ArrayBackend(BaseModel, ABC):
         ----------
         array
             An array of any backend. One of this backend's own is handed
-            back as it is.
+            back as it is. A spool set to the backend hands it an empty
+            one-dimensional array first, so a backend which cannot be used
+            says so then and not at the first patch.
         """
 
     def _owns(self, array: Any) -> bool:
@@ -168,6 +184,19 @@ class ArrayBackend(BaseModel, ABC):
             for part in rest:
                 kind = getattr(kind, part, None)
         return isinstance(kind, type) and isinstance(array, kind)
+
+    def _check(self) -> None:
+        """Raise if the backend does not make arrays of its array type."""
+        made = self.from_array(np.empty(0))
+        if not self._owns(made):
+            msg = (
+                f"The {self.namespace} backend made a {_where(type(made))}, "
+                f"which is not an instance of its array_type, "
+                f"{self.array_type!r}. Its kernels would never run: check the "
+                "spelling of the array type, and that the library is the one "
+                "`from_array` makes arrays with."
+            )
+            raise ParameterError(msg)
 
     @property
     def _native(self) -> str:
@@ -240,7 +269,7 @@ class ArrayAPIBackend(ArrayBackend):
     >>> class Strict(ArrayAPIBackend):
     ...     '''Arrays of array_api_strict.'''
     ...
-    ...     namespace = "array_api_strict"
+    ...     namespace = "strict"
     ...     array_type = "array_api_strict._array_object.Array"
     >>>
     >>> assert Strict().from_array(np.ones(3)).shape == (3,)
@@ -356,6 +385,10 @@ class LazyBackend(ArrayBackend):
             )
             raise ParameterError(msg)
 
+    def _check(self) -> None:
+        """Raise if the backend computed on does not make its own arrays."""
+        self.compute._check()
+
     @classmethod
     def from_string(cls, argument: str | None = None) -> Self:
         """Return the lazy backend computing on the one named in brackets."""
@@ -392,6 +425,11 @@ class LazyBackend(ArrayBackend):
 
 # The class's own name is a spelling of the backend too.
 _BACKENDS["lazyarray"] = LazyBackend
+
+
+def _where(kind: type) -> str:
+    """Return the module and name a class is found under."""
+    return f"{kind.__module__}.{kind.__qualname__}"
 
 
 def get_backend(backend: str | ArrayBackend) -> ArrayBackend:

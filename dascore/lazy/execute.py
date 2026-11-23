@@ -191,7 +191,7 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     if 0 in _sizes(box):
         return backend.from_array(np.empty(_sizes(box), array.dtype))
     needed = _needs(array, box)
-    data = backend.from_array(array.recipe[needed[0]].load())
+    data = backend.from_recipe(array.recipe[needed[0]])
     # What the backend's arrays are, and the namespace they are of: the
     # same for every box, so each step runs one kernel throughout.
     native, namespace = backend._native, backend.namespace

@@ -458,6 +458,73 @@ class TestNamespace:
 
                 namespace = "unfinished"
 
+    def test_namespace_is_in_lower_case(self):
+        """A namespace is spelled one way, since kernels are matched exactly."""
+        with pytest.raises(TypeError, match="lower case"):
+
+            class Shouting(NumpyBackend):
+                """A namespace a kernel under "fast" would never match."""
+
+                namespace = "Fast"
+
+    def test_namespace_which_is_taken(self):
+        """Another class does not take a namespace; the same one made again may."""
+        with pytest.raises(TypeError, match=r"'numpy' is taken by .*NumpyBackend"):
+
+            class Impostor(_Strict):
+                """Another library's arrays, under NumPy's namespace."""
+
+                namespace = "numpy"
+
+        assert type(get_backend("numpy")) is NumpyBackend
+
+        def made_again():
+            """Make a class, as running a notebook cell twice makes it twice."""
+
+            class Twice(NumpyBackend):
+                """A backend defined more than once."""
+
+                namespace = "made_twice"
+
+            return Twice
+
+        first, second = made_again(), made_again()
+        assert first is not second and type(get_backend("made_twice")) is second
+
+    @pytest.mark.parametrize("where", ("numpy.ndaray", "numpy.core.nothing.Array"))
+    def test_array_type_which_names_no_class(self, spool, where):
+        """A misspelled array type is refused when a spool is set, not ignored."""
+
+        class Misspelled(NumpyBackend):
+            """NumPy's arrays, told by a class which does not exist."""
+
+            namespace = "misspelled"
+            array_type = where
+
+        for backend in ("misspelled", "lazy[misspelled]"):
+            with pytest.raises(ParameterError, match="not an instance of its array"):
+                spool.set_backend(backend)
+
+    def test_lazy_chunks_are_read_by_the_backend(self, spool):
+        """A backend which reads for itself reads each chunk a lazy array needs."""
+        read = []
+
+        class Reading(NumpyBackend):
+            """NumPy's arrays, reading each recipe itself."""
+
+            def from_recipe(self, recipe):
+                """Read the recipe, and say that this was asked."""
+                read.append(recipe.shape)
+                return super().from_recipe(recipe)
+
+        lazy = spool.set_backend(LazyBackend(compute=Reading()))[0].abs()
+        assert not read
+        with config_context(lazy_block_size=lazy.data.size * 8 // 5):
+            boxes = chunk_boxes(lazy.data)
+            loaded = lazy.load()
+        assert len(boxes) > 1 and len(read) == len(boxes)
+        assert loaded.equals(spool[0].abs())
+
     def test_a_namespace_of_any_name(self, spool, strict):
         """The namespace is any name; the array type says what the arrays are."""
 

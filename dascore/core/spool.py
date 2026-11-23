@@ -1051,7 +1051,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if backend is not None:
             backend = get_backend(backend)
             # Refused here and not at the first patch, if it cannot be used.
-            backend.from_array(np.empty(0))
+            backend._check()
         new = self.__class__(self)
         new._backend = backend
         return new
