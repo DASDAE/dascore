@@ -409,6 +409,24 @@ def _get_coord_filter_validators(dtype):
     return tuple(out)
 
 
+def _in_calendar_unit(dtype) -> bool:
+    """Whether a time dtype counts years or months, which have no fixed length."""
+    dtype = np.dtype(dtype)
+    return dtype.kind in "mM" and np.datetime_data(dtype.str)[0] in ("Y", "M")
+
+
+def _calendar_time(value, dtype, kind: str) -> bool:
+    """
+    Whether a numpy time of this kind meets labels in years or months as it is.
+
+    numpy relates instants in years or months to datetimes of any unit by
+    the calendar, and durations in them to each other; nanoseconds would
+    take a duration's year by its average length.
+    """
+    is_numpy = isinstance(value, np.generic | np.ndarray)
+    return is_numpy and value.dtype.kind == kind and _in_calendar_unit(dtype)
+
+
 def get_compatible_values(val, dtype):
     """
     Get values compatible with dtype.
@@ -424,6 +442,8 @@ def get_compatible_values(val, dtype):
         A numpy compatible datatype or string.
     """
     validators = _get_coord_filter_validators(dtype)
+    if validators and _calendar_time(val, dtype, np.dtype(dtype).kind):
+        return val
     for func in validators:
         if val is not None:
             val = func(val)
@@ -1083,7 +1103,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         # special case for datetime/timedelta and relative
         if relative:
             # A relative offset into any time-like coord is a duration.
-            if dtype_time_like(self.dtype):
+            kept = _calendar_time(value, self.dtype, "m")
+            if dtype_time_like(self.dtype) and not kept:
                 value = dc.to_timedelta64(value)
             if from_end:
                 value = self._get_relative_values(value)
@@ -2177,7 +2198,9 @@ def _coerce_run(run, sources: dict) -> Grid | Labels | Blank:
 
 def _promoted(values, dtype) -> Grid | None:
     """The grid these labels are exactly, or None where no grid is."""
-    if values.ndim != 1 or len(values) < 2:
+    # Labels in years or months stay labels, as get_coord leaves them; a
+    # grid's arithmetic can't place bounds among their uneven lengths.
+    if values.ndim != 1 or len(values) < 2 or _in_calendar_unit(dtype):
         return None
     diffs = _diffs(values)
     # A zero step would make one label answer for every sample, which

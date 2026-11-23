@@ -597,6 +597,22 @@ class TestSelect:
         assert tr3.get_coord("time").max() <= t2
         assert tr3.data.shape < shape
 
+    def test_select_calendar_units(self):
+        """Coordinates in years select by a datetime in nanoseconds and by a
+        duration in months.
+        """
+        years = np.array(["2020", "2021", "2022"], dtype="M8[Y]")
+        lags = np.arange(3).astype("m8[Y]")
+        coords = {"time": years, "lag": lags}
+        patch = dc.Patch(data=np.zeros((3, 3)), coords=coords, dims=tuple(coords))
+        out = patch.select(
+            time=(np.datetime64("2020-06-01", "ns"), None),
+            lag=(np.timedelta64(12, "M"), None),
+        )
+        assert np.array_equal(out.get_array("time"), years[1:])
+        assert np.array_equal(out.get_array("lag"), lags[1:])
+        assert out.shape == (2, 2)
+
     def test_select_out_of_bounds_time(self, random_patch):
         """Selecting out of coordinate range should leave patch unchanged."""
         # this equates to a timestamp of 1 (eg 1 sec after 1970)

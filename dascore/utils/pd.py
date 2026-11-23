@@ -469,10 +469,11 @@ def _convert_times(df, some_dict):
     )
     for key in datetime_keys:
         some_dict[key] = _convert_range_bounds(some_dict[key], to_datetime64)
-    # convert queries related to time delta into timedelta64
+    # convert queries related to time delta into timedelta64, the range of a
+    # duration dimension included
     timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
-    timedelta_keys = timedelta_cols & set(some_dict)
-    for key in timedelta_keys:
+    dims = {x for x in some_dict if {f"{x}_min", f"{x}_max"} <= timedelta_cols}
+    for key in (timedelta_cols & set(some_dict)) | dims:
         some_dict[key] = _convert_range_bounds(some_dict[key], to_timedelta64)
     return some_dict
 
@@ -507,19 +508,10 @@ def yield_range_tuple_from_kwargs(df, kwargs) -> Generator[tuple[str, tuple]]:
 
     Will also convert values based on dtypes in dataframe, eg
     time=(1, 10) will convert to
-    time=(np.timedelta64(1, 's'), np.timedelta64(10, 's')) provided columns
-    'time_min' and 'time_max' are datetime columns.
+    time=(np.datetime64(1, 's'), np.datetime64(10, 's')) provided columns
+    'time_min' and 'time_max' are datetime columns, and likewise to
+    timedelta64 for timedelta columns.
     """
-
-    def _maybe_convert_dtype_to_date(range_tuple, name, df):
-        """Convert dtypes of slice if needed."""
-        datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
-        if {f"{name}_min", f"{name}_max"}.issubset(datetime_cols):
-            range_tuple = tuple(
-                to_datetime64(x) if x is not None else None for x in range_tuple
-            )
-        return range_tuple
-
     # find keys which correspond to column ranges
     col_set = set(df.columns)
     valid_minmax_kwargs = {
@@ -530,8 +522,7 @@ def yield_range_tuple_from_kwargs(df, kwargs) -> Generator[tuple[str, tuple]]:
     # ensure exactly one column is found
     for name in valid_minmax_kwargs:
         range_tuple = sanitize_range_param(kwargs[name])
-        out = _maybe_convert_dtype_to_date(range_tuple, name, df)
-        yield name, out
+        yield name, _convert_times(df, {name: range_tuple})[name]
 
 
 def adjust_segments(df, ignore_bad_kwargs=False, **kwargs):
