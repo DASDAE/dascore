@@ -1478,6 +1478,77 @@ class TestSelectSharedDimensionHoldsWhatLoads:
             assert row["sensor_max"] - row["sensor_min"] < 25
 
 
+class TestFloatEndsStateWhatLoads:
+    """A float end a row rebuilds holds the label that loads (#1678, #1692)."""
+
+    @pytest.fixture(params=["directory", "memory"])
+    def spool_of(self, request, tmp_path):
+        """Make a directory or a memory spool of the patches given."""
+
+        def _make(*patches):
+            if request.param == "memory":
+                return dc.spool(list(patches))
+            for num, patch in enumerate(patches):
+                dc.write(patch, tmp_path / f"p{num}.h5", "DASDAE")
+            return dc.spool(tmp_path).update(progress=None)
+
+        return _make
+
+    @staticmethod
+    def _states_what_loads(view, names):
+        """Each row holds what it loads, and the view equals its loaded twin."""
+        _assert_contents_hold_patches(view, names)
+        assert view == dc.spool(list(view))
+
+    @pytest.fixture()
+    def rider(self, spool_of):
+        """A spool of one patch with lat riding distance, on whole numbers."""
+        distance = np.arange(5.0)
+        coords = {"distance": distance, "lat": ("distance", 40 + 10 * distance)}
+        patch = dc.Patch(data=np.zeros(5), coords=coords, dims=("distance",))
+        return spool_of(patch)
+
+    @pytest.mark.parametrize(
+        "kwargs, ends",
+        [
+            ({"lat": (50, 70)}, [1, 3, 50, 70]),
+            ({"distance": (1, 3)}, [1, 3, 50, 70]),
+        ],
+    )
+    def test_riders_state_their_labels(self, rider, kwargs, ends):
+        """A grid needing no rounding states every coordinate's labels."""
+        view = rider.select(**kwargs)
+        columns = ["distance_min", "distance_max", "lat_min", "lat_max"]
+        assert view.get_contents()[columns].values.tolist() == [ends]
+        assert view == dc.spool(list(view))
+
+    def test_selection_of_a_cut_patch(self, spool_of):
+        """A patch cut from a longer grid counts its labels from that grid."""
+        distance = -15.335 + np.arange(18) * 0.3
+        coords = {"distance": distance}
+        parent = dc.Patch(data=np.zeros(18), coords=coords, dims=("distance",))
+        spool = spool_of(parent.isel(distance=slice(1, 16)))
+        self._states_what_loads(spool.select(distance=(-13.7, -12)), ["distance"])
+
+    @pytest.mark.parametrize("cut", [slice(None), slice(1, 16)])
+    def test_chunk_outputs(self, spool_of, cut):
+        """Chunk outputs of a float grid hold the labels each loads."""
+        distance = -15.335 + np.arange(18) * 1.1
+        coords = {"distance": distance}
+        patch = dc.Patch(data=np.zeros(18), coords=coords, dims=("distance",))
+        chunked = spool_of(patch.isel(distance=cut)).chunk(distance=3.85)
+        self._states_what_loads(chunked, ["distance"])
+
+    def test_ends_a_sample_apart_differ(self):
+        """Float ends compare within the float allowance, not a sample."""
+        distance = 0.1 * np.arange(10)
+        patch = dc.Patch(
+            data=np.zeros(10), coords={"distance": distance}, dims=("distance",)
+        )
+        spool = dc.spool([patch])
+        assert spool.select(distance=(0.1, 0.5)) != spool.select(distance=(0.1, 0.6))
+
+
 class TestUnselect:
     """Tests for removing the patches a selection would keep."""
 

@@ -604,8 +604,10 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
     Loading takes a bound within twice the float allowance of a label as
     that label (`_onto_grid`), so each end first moves out by that and one
     allowance more, for rounding: a label in that margin may or may not
-    load, and is kept. Integer labels are exact. Returns each end's labels
-    and the rows with such a grid.
+    load, and is kept. A label between the grid's ends is rebuilt, so it
+    moves out as a rider's does (`_outward`) unless the grid needs no
+    rounding. Integer labels are exact. Returns each end's labels and the
+    rows with such a grid.
     """
     blank = pd.Series(None, index=rows.index, dtype=object)
     whole = ~rows.get("_modified", blank).fillna(False).astype(bool).to_numpy()
@@ -622,6 +624,7 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
     )
     step = rows[f"{name}_step"].to_numpy(dtype=np.float64)
     stored = rows.get(f"_{name}_coord_dtype", blank).astype(str)
+    dtypes = rows.get(f"_{name}_coord_dtype", blank).to_numpy(dtype=object)
     units, source = (rows.get(f"_{name}_{x}", blank) for x in ("units", "units_source"))
     exact = rows.get(f"_{name}_grid", blank).map(lambda x: isinstance(x, tuple))
     fit = np.isfinite(low + high + step) & (step != 0)
@@ -640,13 +643,18 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
         count = np.rint((high - low) / np.abs(step)) + 1
         fit &= count > 1  # one sample has no spacing to count by
         spacing = (last - origin) / (count - 1)
+        loose = ~_exact_grids(origin, step, count, dtypes)
+        scales = np.maximum(np.abs(low), np.abs(high))
         got = []
         for end, sign in zip(ends, (-1, 1), strict=True):
             at = (end + sign * 3 * allowance - origin) / spacing
             # the label at or inside the end, whichever way the grid runs
             k = np.where((sign < 0) == (spacing > 0), np.ceil(at), np.floor(at))
             k = np.clip(k, 0, count - 1)  # a margin past the grid's ends
-            got.append(np.where(k == count - 1, last, k * spacing + origin))
+            label = np.where(k == count - 1, last, k * spacing + origin)
+            inner = loose & (k > 0) & (k < count - 1)
+            wide = _outward(label, scales, dtypes, sign)
+            got.append(np.where(inner, wide, label))
     return got, fit
 
 
@@ -882,18 +890,14 @@ def _relative_span(coord, value, lows, highs) -> tuple[int, int, int, int]:
     return min(firsts), max(lasts), max(in_firsts), min(in_lasts)
 
 
-def _outward(values, steps, scales, dtypes, sign) -> np.ndarray:
+def _outward(values, scales, dtypes, sign) -> np.ndarray:
     """
-    Float labels moved toward ``sign`` as far as a stored label may sit.
+    Float labels moved toward ``sign`` by `_GRID_ULPS` ulp of ``scales``.
 
-    A label rebuilt from a start and step is not the one the file holds.
-    A float coordinate is evenly sampled only while its labels spread no
-    more than twice `_float_allowance` about the grid through the first,
-    so a stored label is within that of its grid position; a third
-    allowance, four spacings of the largest label or more, covers the
-    rounding of the rebuilt label itself. ``scales`` is each row's
-    largest label in size, which the allowance is measured at in the
-    dtype the file stores.
+    A label rebuilt from a row's start and step can differ in its last
+    places from the one that loads, which a patch cut from a longer grid
+    counts from its parent's start. ``scales`` is each row's largest
+    label in size, the ulp measured in the dtype the file stores.
     """
     out = values.astype(np.float64)
     names = pd.Series(dtypes, dtype=object)
@@ -901,11 +905,35 @@ def _outward(values, steps, scales, dtypes, sign) -> np.ndarray:
     for name in pd.unique(names):
         dtype = np.dtype(name) if np.dtype(name).kind == "f" else np.dtype("float64")
         rows = names == name
-        ulps = _GRID_ULPS * np.spacing(scales[rows].astype(dtype)).astype(np.float64)
-        allowance = np.maximum(
-            _GRID_RTOL * np.abs(steps[rows].astype(np.float64)), ulps
-        )
-        out[rows] += sign * 3 * allowance
+        ulp = np.spacing(scales[rows].astype(dtype)).astype(np.float64)
+        out[rows] += sign * _GRID_ULPS * ulp
+    return out
+
+
+def _exact_grids(origins, steps, counts, dtypes) -> np.ndarray:
+    """
+    Whether each float grid's labels need no rounding.
+
+    Labels rebuilt from such a grid's start and step are the ones that
+    load, unless the patch was cut from a longer grid that needs rounding
+    (`Grid.sliced`), which no row records; those sit an ulp or so off.
+    Labels stored narrower than float64 (``dtypes``) are rounded copies of
+    the grid's, so never count.
+    """
+    columns = {"start": origins, "step": steps, "count": counts}
+    terms = pd.DataFrame(columns, dtype=np.float64)
+    usable = np.isfinite(terms.to_numpy()).all(axis=1) & (terms["count"] >= 1)
+    usable &= ~pd.Series(dtypes, dtype=object).isin(("float16", "float32")).to_numpy()
+    out = np.zeros(len(terms), dtype=bool)
+    if usable.any():
+        # one check per distinct grid, numbered as first seen
+        kept = terms[usable.to_numpy()]
+        codes = kept.groupby(list(columns), sort=False).ngroup().to_numpy()
+        exact = [
+            Grid(start, step, 0, int(count))._float_arithmetic_exact()
+            for start, step, count in kept.drop_duplicates().itertuples(index=False)
+        ]
+        out[usable.to_numpy()] = np.asarray(exact, dtype=bool)[codes]
     return out
 
 
@@ -1179,8 +1207,9 @@ class _SampleTracker:
 
         Returns each row's least and greatest label, the coordinates kept
         and which of them each row keeps. A float label is moved outward
-        to allow for rounding, except at an end of what the row first
-        held, where the row's own envelope states it.
+        to allow for rounding (`_outward`), except at an end of what the
+        row first held, where the row's own envelope states it, or on a
+        grid needing no rounding (`_exact_grids`).
         """
         held, source = self.held(name), self.source
         codes, firsts = _alike([held.codes[rows], state.lo[rows], state.hi[rows]])
@@ -1205,8 +1234,16 @@ class _SampleTracker:
             low = np.minimum(source[f"{name}_min"].to_numpy()[rows], mins)
             high = np.maximum(source[f"{name}_max"].to_numpy()[rows], maxs)
             scales = np.maximum(np.abs(low), np.abs(high))
-            out_min = np.where(floats, _outward(mins, steps, scales, dtypes, -1), mins)
-            out_max = np.where(floats, _outward(maxs, steps, scales, dtypes, 1), maxs)
+            # a grid cut from a longer one is exact as that one is
+            grids = [held.coords[held.codes[x]]._grid for x in rows[firsts]]
+            terms = [
+                (x.origin, x.step_num, x.parent_count or x.count) if x else [np.nan] * 3
+                for x in grids
+            ]
+            origins, grid_steps, counts = np.array(terms, dtype=np.float64)[codes].T
+            floats &= ~_exact_grids(origins, grid_steps, counts, dtypes)
+            out_min = np.where(floats, _outward(mins, scales, dtypes, -1), mins)
+            out_max = np.where(floats, _outward(maxs, scales, dtypes, 1), maxs)
             mins = np.where(np.where(down, last, first), low, out_min)
             maxs = np.where(np.where(down, first, last), high, out_max)
         return mins, maxs, kept, codes
@@ -2440,7 +2477,7 @@ def _grid_windows(grid, value, overlap, keep_partial):
     return firsts[keep], lasts[keep]
 
 
-def _grid_members(windows, kept, kcodes, offsets, lattice, ticks):
+def _grid_members(windows, kept, kcodes, offsets, lattice, ticks, name):
     """
     Map every window of positions onto the kept rows feeding it, at once.
 
@@ -2448,8 +2485,9 @@ def _grid_members(windows, kept, kcodes, offsets, lattice, ticks):
     ``offsets`` numbers every partition's positions apart, so one search
     over all rows finds each window's. Returns each pair's window and kept
     row, the row's own first and last label inside the window (value
-    space). Pairs go in window order, and within one in the plan's row order,
-    which `conflict="keep_first"` and the carried attrs read.
+    space), a float one between the row's ends moved out as a rider's is
+    (`_outward`). Pairs go in window order, and within one in the plan's
+    row order, which `conflict="keep_first"` and the carried attrs read.
     """
     parts, firsts, lasts = windows
     pos, count = kept["_pos"].to_numpy(), kept["_count"].to_numpy()
@@ -2469,12 +2507,21 @@ def _grid_members(windows, kept, kcodes, offsets, lattice, ticks):
     at, size = flat[rel_src], count[rel_src]
     local0 = np.maximum(lows[rel_out], at) - at
     local1 = np.minimum(highs[rel_out], at + size - 1) - at
+    if not ticks:
+        blank = pd.Series(None, index=kept.index, dtype=object)
+        dtypes = kept.get(f"_{name}_coord_dtype", blank).to_numpy(dtype=object)
+        exact = _exact_grids(begin, own, size, dtypes[rel_src])
+        loose = np.isfinite(own) & ~exact
+        scales = np.maximum(np.abs(begin), np.abs(finish))
     edges = []
     for local, after in ((local0, True), (local1, False)):
         guess = (local + (-0.5 if after else 0.5)) * own
         label = _own_label_at(
             guess, lattice, rel_src, ticks, sign, begin, own, after, snap=False
         )
+        if not ticks:  # forward numbers: the first label moves down
+            wide = _outward(label, scales, dtypes[rel_src], -1 if after else 1)
+            label = np.where(loose, wide, label)
         whole = begin if after else finish
         edge = local == 0 if after else local == size - 1
         edges.append(np.where(edge, whole, label) * sign)
@@ -3631,7 +3678,7 @@ def build_chunk_plan(
         offsets = np.where(gridded, np.r_[0, np.cumsum(counts)[:-1]], -(2**62))
         windows = (win_parts, win_first, win_last)
         rel_out, rel_src, lo, hi = _grid_members(
-            windows, kept_df, kcodes, offsets, lattice, ticks
+            windows, kept_df, kcodes, offsets, lattice, ticks, name
         )
         # a window inside a filled gap reads one sample of its stretch's
         # nearest row, which gives it the stretch's other dimensions
