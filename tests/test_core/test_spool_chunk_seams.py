@@ -724,8 +724,45 @@ class TestSteplessWindows:
     def test_windows_state_their_labels(self, kind, keep_partial, tmp_path):
         """An output states what it loads, an empty window is none, the last kept."""
         spool = self._spool(kind, tmp_path, _patch(self.labels))
-        stated, loaded = self._ends(spool.chunk(time=3, keep_partial=keep_partial))
+        chunked = spool.chunk(time=3, keep_partial=keep_partial)
+        stated, loaded = self._ends(chunked)
         assert stated == loaded == [[0, 2], [7, 8], [9, 9]]
+        # each states the step its labels infer, so it equals what it loads
+        assert chunked == dc.spool(list(chunked))
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "durations",
+            "descending",
+            "unordered",
+            "float32",
+            "micro",
+            "part_micro",
+            "grid",
+        ],
+    )
+    def test_steps_are_what_loads(self, case):
+        """Each window states the step of the patch it loads, whatever its labels."""
+        micro = np.timedelta64(1, "us")
+        nanos = (self.labels * 1e9).astype(np.int64) * np.timedelta64(1, "ns")
+        start = T0.astype("M8[us]")
+        # 101 us apart, and a fraction of a microsecond the index states no step for
+        micros = start + np.array([0, 101, 202, 303, 1000, 1501]) * micro
+        part = start + np.array([0, 101, 203, 304, 1000, 1501]) * micro
+        floats = np.array([0, 0.1, 0.2, 0.3, 2, 7], "float32")
+        grid = [np.arange(3.0), np.array([3.0])]  # a lone label takes the grid's step
+        times, kwargs = {
+            "durations": ([nanos], dict(time=3 * seconds)),
+            "descending": ([-self.labels], dict(time=3)),
+            "unordered": ([np.array([0.0, 2, 1, 3])], dict(time=5)),
+            "float32": ([floats], dict(time=1)),
+            "micro": ([micros], dict(time=500 * micro)),
+            "part_micro": ([part], dict(time=500 * micro)),
+            "grid": (grid, dict(time=3, keep_partial=True)),
+        }[case]
+        chunked = dc.spool([_patch(x) for x in times]).chunk(**kwargs)
+        assert chunked == dc.spool(list(chunked))
 
     @pytest.mark.parametrize("kind", ["memory", "directory"])
     def test_selected_windows(self, kind, tmp_path):

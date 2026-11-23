@@ -163,7 +163,7 @@ A chunk length splits each stretch into half-open windows `[start, start + lengt
 - **With overlap:** windows stop at the first one holding the group's last sample, so the last window always holds a sample the previous one doesn't.
 - **Partial windows:** a window is complete when it ends no more than one sample past the group's last sample. Only complete windows are kept unless `keep_partial=True`. A stretch with no step keeps every window, having no step to judge one by.
 
-An output's coordinate range runs from its first sample to its last when its sources are evenly sampled with known positions. The index holds only the ends of a coordinate with no step, so planning reads such a source's labels (warning how many files it read); its windows then state their first and last labels, and a window holding none is no output. Otherwise (a view trimmed by a relative selection) an output states the window's own bounds.
+An output's coordinate range runs from its first sample to its last when its sources are evenly sampled with known positions. The index holds only the ends of a coordinate with no step, so planning reads such a source's labels (warning how many files it read); its windows then state their first and last labels and the step those labels infer (rule 2), as selecting them does, and a window holding none is no output. Otherwise (a view trimmed by a relative selection) an output states the window's own bounds.
 
 ## Chunking by size
 
