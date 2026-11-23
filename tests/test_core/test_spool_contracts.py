@@ -224,14 +224,14 @@ class TestEqualityComparesLoads:
         assert dc.spool(path) == dc.spool([ones])
         assert dc.spool(path) != dc.spool([ones * 2])
 
-    def test_comparing_reads_no_file(self, ones, directories, tmp_path, no_reads):
+    def test_comparing_reads_no_file(self, ones, directories, no_reads):
         """Neither files nor plans over them are read to compare."""
         on_disk, _ = directories
         assert on_disk == dc.spool([ones])
         view = on_disk.select(time=(1, 4))
-        # the window of the file, which a selection in memory does not name
-        read = dc.read(tmp_path / "ones" / "patch.h5")[0].select(time=(1, 4))
-        assert view == dc.spool([read])
+        # the window of the file, which the same selection in memory names
+        assert view == dc.spool([ones.select(time=(1, 4))])
+        assert view == dc.spool([ones]).select(time=(1, 4))
         assert on_disk.chunk(time=3) == on_disk.chunk(time=3)
 
     @pytest.mark.parametrize("on_disk", [True, False])

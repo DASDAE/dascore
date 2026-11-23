@@ -174,16 +174,15 @@ class SintelaProtobufV1(FiberIO):
                 if name in kwargs and kwargs[name] is not None
             }
             endpoints = _get_endpoint_metadata(stream) if selectors else None
+            options = {"samples": samples, "relative": kwargs.get("relative", False)}
+            # the whole patch's coordinates, and what the selection takes of them
+            whole, indexers = None, {}
             if endpoints is not None:
                 metadata, meta = endpoints
-                source_coords = metadata.coords
-                selectors = {
-                    k: v for k, v in selectors.items() if k in source_coords.dims
-                }
-                _, indexers = source_coords.select_indexers(
-                    samples=samples, relative=kwargs.get("relative", False), **selectors
-                )
-                windows, residual = selection_windows(source_coords, indexers)
+                whole = metadata.coords
+                selectors = {k: v for k, v in selectors.items() if k in whole.dims}
+                _, indexers = whole.select_indexers(**options, **selectors)
+                windows, residual = selection_windows(whole, indexers)
                 data, coords, attrs = metadata.decode_stream(stream, meta, windows)
                 coords, data = coords.isel(
                     dict(zip(coords.dims, residual, strict=True)), array=data
@@ -194,12 +193,9 @@ class SintelaProtobufV1(FiberIO):
                 data, coords, attrs = read_payload(stream, snap=snap)
                 selectors = {k: v for k, v in selectors.items() if k in coords.dims}
                 if selectors:
-                    coords, data = coords.select(
-                        data,
-                        samples=samples,
-                        relative=kwargs.get("relative", False),
-                        **selectors,
-                    )
+                    whole = coords
+                    _, indexers = whole.select_indexers(**options, **selectors)
+                    coords, data = coords.select(data, **options, **selectors)
             if not np.size(data):
                 return dc.spool([])
             patches = [dc.Patch(data=data, coords=coords, attrs=attrs)]
@@ -215,14 +211,17 @@ class SintelaProtobufV1(FiberIO):
                 )
                 if selectors:
                     # This reader never describes a loadable source, so a
-                    # trim here names what the same select would derive.
+                    # trim here names what the same select would.
+                    index = tuple(indexers.get(x, slice(None)) for x in coords.dims)
                     attrs = _selected_read_attrs(
                         patches[0].attrs,
                         None,
                         None,
                         selectors,
-                        relative=kwargs.get("relative", False),
-                        samples=samples,
+                        coords=whole,
+                        new_coords=coords,
+                        indexer=index,
+                        **options,
                     )
                     patches = [patches[0].update(attrs=attrs)]
             return dc.spool(patches)

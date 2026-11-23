@@ -206,6 +206,9 @@ class PatchProcessor(DascoreBaseModel):
     history: ClassVar[str | None] = "full"
     # The fields a call may give positionally, in order; None for all.
     _positional_fields: ClassVar[tuple[str, ...] | None] = None
+    # Whether a plan whose `indexer` keeps one run of samples along each
+    # axis makes the result that window of its input, named as one.
+    _names_windows: ClassVar[bool] = False
     # Kernels registered per backend by `register_kernel`, looked up in each
     # class's own `__dict__` so a subclass never answers with its parent's.
     _kernels: ClassVar[dict[str, Any]] = {}
@@ -544,7 +547,9 @@ class PatchProcessor(DascoreBaseModel):
             # metadata has none to show.
             unchanged = patch._data if isinstance(patch, dc.Patch) else None
             out = self.reconcile(unchanged, out, meta)
-            attrs = self._result_attrs(out) if not record else self._record(patch, out)
+            attrs = (
+                self._record(patch, out, plan) if record else self._result_attrs(out)
+            )
             # The data are whatever they were: a patch puts its own back,
             # and metadata has none to put.
             return self._finished(patch, patch._reattach(out, attrs), record)
@@ -559,7 +564,7 @@ class PatchProcessor(DascoreBaseModel):
             return self._finished(patch, self._unchanged(patch, record), record)
         out = self.reconcile(result, out, meta)
         reconciled = isinstance(out, dc.Patch)
-        attrs = self._record(patch, out) if record else self._result_attrs(out)
+        attrs = self._record(patch, out, plan) if record else self._result_attrs(out)
         if not (record or reconciled):
             # The ids a bypass ends with, given before a lazy step is settled
             # so the step is settled once, with them. A patch from reconcile
@@ -612,7 +617,7 @@ class PatchProcessor(DascoreBaseModel):
         """Return how this call is written into history."""
         return _call_str(name, self.kwargs) if self.history == "full" else name
 
-    def _record(self, patch: dc.PatchMeta, out: dc.PatchMeta) -> PatchAttrs:
+    def _record(self, patch: dc.PatchMeta, out: dc.PatchMeta, plan) -> PatchAttrs:
         """Return attrs carrying the data_type, history and ids of this call."""
         attrs = self._result_attrs(out)
         name = self.name or type(self).__name__
@@ -629,12 +634,14 @@ class PatchProcessor(DascoreBaseModel):
             # The patches it holds still say where the data came from.
             operation, others = None, self._inputs()[1]
         members = [patch.attrs, *(x.attrs for x in others)]
+        # A selection keeping one run of samples along each axis names a
+        # window of the same array rather than something derived from it.
         # Only a source the operation set itself says the result is still
-        # something that source loads; such a narrowing names a window of
-        # the same array rather than something derived from it.
+        # something that source loads, which counts the window from it.
         after = out._source if out._source is not patch._source else None
+        indexer = plan.get("indexer") if self._names_windows else None
         window = narrowed_data_id(
-            patch.attrs, patch._source, after, patch.coords, out.coords
+            patch.attrs, patch._source, after, patch.coords, out.coords, indexer
         )
         return attrs.update(**result_ids(members, operation, data_id=window))
 

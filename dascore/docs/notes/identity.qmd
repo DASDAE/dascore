@@ -73,13 +73,21 @@ assert first.data_id != centimetres.data_id
 A **weak** ID is derived without reading data, so it is only as good as what it was derived from, and it always has an `origin_id` beside it:
 
 - a stored patch takes its origin's ID, which is derived from the format, version, path, key, size and modification time unless the file stores one;
-- a window of a stored array is derived from the whole array's ID and the absolute sample windows, so slicing twice and slicing once agree; a window says nothing about a coordinate riding no dimension, so changing one is an operation rather than a window;
+- a window, which `select`, `isel` and `sel` keep when they keep one run of samples along each dimension, is derived from its parent's ID and the samples it keeps; a patch nothing has been done to counts its windows from the whole stored array, so slicing twice and slicing once agree; a window says nothing about a coordinate riding no dimension, so changing one is an operation rather than a window;
 - an operation's result is derived from the `data_id` of each input, in order, and the `operation_id`;
 - a chunk or merge output is derived from what was done: each member's ID and the samples it gives (a window, named as a stored window is), in output order; the dimension they join along and each one's sample offset in the output; and the grid the plan put them on, where that moved their labels. A `conflict` other than `"raise"` counts too, since it decides what disagreeing members keep. The bounds the plan read with, its options and `dascore.config` count only through their effect on that, so two plans giving the same output from the same members give it one ID.
 
 Because a stored patch's ID comes from where it is stored, repeated reads and metadata scans agree without hashing the data, but copying the same bytes to another path gives a different ID, and so does overwriting a path. Formats which store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
 
-A window names the window, not the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)` and `spool.select(time=window)` all name one array. This holds only while the patch is still exactly what its source loads: once anything else has been done to it, or the selection is one the stored array cannot be sliced to, the result derives like any other operation's. Reading under a decode option other than the format's default, such as a `snap` which names other dimensions, is itself an operation, so it names a different array than the default read of the same file.
+A window names the samples it keeps, not the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)`, `spool.select(time=window)`, a chunk output holding those samples, and the same samples taken with `isel`, `samples=True` or `relative=True` all name one array. Bounds anywhere short of the next sample keep the same samples, so they name it too. A patch in memory names its windows the same way, so a selection of it and the same selection of the file DASCore wrote it to agree. A selection which keeps every sample is the patch, with its ID. A stepped, fancy or otherwise non-contiguous selection keeps no window, so it derives like any other operation.
+
+```{python}
+window = patch.select(time=(10, 20), samples=True)
+assert window.attrs.data_id == patch.isel(time=slice(10, 20)).attrs.data_id
+assert window.attrs.data_id != patch.select(time=(10, 21), samples=True).attrs.data_id
+```
+
+Reading under a decode option other than the format's default, such as a `snap` which names other dimensions, is itself an operation, so it names a different array than the default read of the same file.
 
 Equal IDs mean the same array under either grade. Unequal IDs promise nothing: the same bytes reached two ways can carry two IDs. A strong ID only makes equal IDs more common, which is what lets identical coordinate arrays in thousands of files share one entry.
 
@@ -99,7 +107,7 @@ assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
 
 It reads the whole array, about a second per gigabyte, so it is a checkpoint rather than a step in a pipeline: every ID derived afterwards builds on content verified here. Any patch may be pinned, a derived one included; re-running the recipe gives the weak ID again, which is a false distinction, never a false identity.
 
-`origin_id`, the history and the source are left alone, though narrowing a pinned patch is an operation rather than a window, since it is no longer the array its source loads. [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the same ID without pinning, so a caller can record that the weak ID a patch carries names the same array. Object, record and extended-precision data are refused, because none has bytes which are exactly its content, and `PatchMeta`, which holds no data, has no `pin_id`.
+`origin_id`, the history and the source are left alone, though a window of a pinned patch builds on the pinned ID, since it is no longer the array its source loads. [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the same ID without pinning, so a caller can record that the weak ID a patch carries names the same array. Object, record and extended-precision data are refused, because none has bytes which are exactly its content, and `PatchMeta`, which holds no data, has no `pin_id`.
 
 ## The mutation boundary
 

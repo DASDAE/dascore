@@ -415,14 +415,17 @@ def narrowed_data_id(
     after: ArraySource | None,
     coords=None,
     new_coords=None,
+    indexer=None,
 ) -> str | None:
     """
     Return the id of a window of the array a patch already is, or None.
 
-    A patch nothing has been done to *is* its source, so narrowing it to
-    something the source can still load names a window of the same array
-    rather than the result of an operation. Windows compose, so which
-    selections led there does not matter.
+    Narrowing a patch to one run of samples along each dimension names a
+    window of it (see [`window_data_id`](`dascore.utils.identity.window_data_id`)):
+    its `data_id` and the samples it keeps, however they were asked for.
+    A patch nothing has been done to *is* its source, so while its source
+    can still load the result, the window is counted from the whole stored
+    array instead, and slicing twice and slicing once agree.
 
     Parameters
     ----------
@@ -433,30 +436,40 @@ def narrowed_data_id(
     after
         The source the narrowed patch would load from, if any.
     coords, new_coords
-        The coordinates before and after the narrowing. A source states a
-        dimensional window and nothing else, so without them, or when
-        anything outside that window moved, there is no window to name.
+        The coordinates before and after the narrowing. A window says which
+        samples along each dimension and nothing else, so without them, or
+        when anything outside that moved, there is no window to name.
+    indexer
+        What the narrowing took along each dimension, for a patch its
+        source does not name.
 
     Returns
     -------
     The window's id, or None when the result must be derived as usual:
-    the patch is no longer what its source loads (anything was done to
-    it), or one of the two describes no array (a stepped, fancy or
-    non-contiguous selection detaches the source).
+    a stepped, fancy or non-contiguous selection keeps no window, and
+    neither does one which changed anything else.
     """
-    if before is None or after is None or not (before.loadable and after.loadable):
-        return None
-    if (getattr(attrs, "data_id", "") or "") != before.data_id:
+    if coords is None or new_coords is None:
         return None
     if not _only_the_window_moved(coords, new_coords):
         return None
-    return after.data_id
+    data_id = getattr(attrs, "data_id", "") or ""
+    stored = before is not None and after is not None
+    if stored and before.loadable and after.loadable and data_id == before.data_id:
+        return after.data_id
+    if not data_id or indexer is None:
+        return None
+    windows = []
+    for index, size in zip(indexer, coords.shape, strict=True):
+        span = range(size)[index] if isinstance(index, slice) else None
+        if span is None or span.step != 1:
+            return None
+        windows.append((span.start, span.start + len(span)))
+    return window_data_id(data_id, windows, coords.shape)
 
 
 def _only_the_window_moved(coords, new_coords) -> bool:
-    """Whether two coord managers differ only where a source window can."""
-    if coords is None or new_coords is None:
-        return False
+    """Whether two coord managers differ only where a window can."""
     if coords.dims != new_coords.dims or coords.dim_map != new_coords.dim_map:
         return False
     first, second = coords.coord_map, new_coords.coord_map
