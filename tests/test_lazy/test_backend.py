@@ -28,6 +28,7 @@ from dascore.core import processor as processor_module
 from dascore.core.processor import register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
+    IncompatiblePatchError,
     InvalidFiberIOError,
     LazyOperationError,
     NumpyFallbackError,
@@ -50,21 +51,21 @@ MISSING = "library_not_installed"
 class _Strict(ArrayAPIBackend):
     """The strict library, as a package which ships no backend registers it."""
 
-    namespace = STRICT
+    name = STRICT
     array_type = "array_api_strict._array_object.Array"
 
 
 class _Missing(ArrayAPIBackend):
     """A registered backend whose library is not installed."""
 
-    namespace = MISSING
+    name = MISSING
     array_type = "library_not_installed.Array"
 
 
 class _Dask(ArrayAPIBackend):
     """Dask arrays made from ones in memory."""
 
-    namespace = "dask"
+    name = "dask"
     array_type = "dask.array.Array"
     module = "dask.array"
 
@@ -396,7 +397,7 @@ class TestBackendNames:
             class Plugged(ArrayAPIBackend):
                 """A backend a plugin supplies."""
 
-                namespace = "plugged_backend"
+                name = "plugged_backend"
                 array_type = "plugged.Array"
 
         monkeypatch.setattr(backends_module, "load_backend_plugins", load)
@@ -406,7 +407,7 @@ class TestBackendNames:
 class _Fast(NumpyBackend):
     """Another namespace over NumPy's arrays, as a package of kernels registers."""
 
-    namespace = "fast_numpy"
+    name = "fast_numpy"
 
 
 class _Tripled(dc.PatchProcessor):
@@ -456,7 +457,7 @@ class TestNamespace:
             class Unfinished(ArrayAPIBackend):
                 """A namespace over nothing."""
 
-                namespace = "unfinished"
+                name = "unfinished"
 
     def test_namespace_is_in_lower_case(self):
         """A namespace is spelled one way, since kernels are matched exactly."""
@@ -465,7 +466,7 @@ class TestNamespace:
             class Shouting(NumpyBackend):
                 """A namespace a kernel under "fast" would never match."""
 
-                namespace = "Fast"
+                name = "Fast"
 
     def test_namespace_which_is_taken(self):
         """Another class does not take a namespace; the same one made again may."""
@@ -474,7 +475,7 @@ class TestNamespace:
             class Impostor(_Strict):
                 """Another library's arrays, under NumPy's namespace."""
 
-                namespace = "numpy"
+                name = "numpy"
 
         assert type(get_backend("numpy")) is NumpyBackend
 
@@ -484,7 +485,7 @@ class TestNamespace:
             class Twice(NumpyBackend):
                 """A backend defined more than once."""
 
-                namespace = "made_twice"
+                name = "made_twice"
 
             return Twice
 
@@ -498,7 +499,7 @@ class TestNamespace:
         class Misspelled(NumpyBackend):
             """NumPy's arrays, told by a class which does not exist."""
 
-            namespace = "misspelled"
+            name = "misspelled"
             array_type = where
 
         for backend in ("misspelled", "lazy[misspelled]"):
@@ -531,7 +532,7 @@ class TestNamespace:
         class Named(_Strict):
             """Someone's own kernels, on another library's arrays."""
 
-            namespace = "any_name_at_all"
+            name = "any_name_at_all"
 
         patch = spool.set_backend("any_name_at_all")[0]
         assert backend_name(patch.data) == STRICT and patch._backend == Named()
@@ -546,7 +547,7 @@ class TestNamespace:
         class Wrapping(ArrayBackend):
             """A backend which makes its own arrays, and has its own kernels."""
 
-            namespace = "wrapping"
+            name = "wrapping"
             array_type = _Wrapped
 
             def from_array(self, array):
@@ -564,18 +565,21 @@ class TestNamespace:
         patch = spool.set_backend("wrapping")[0]
         assert type(patch.data) is _Wrapped and _triples(patch)
         assert ran == [_Wrapped]
-        # NumPy handles both, but an ndarray is not one of the backend's own.
-        plain = patch.new(data=np.asarray(patch.data))
-        assert not _triples(plain) and ran == [_Wrapped]
+        # A patch of the backend holds its arrays: other data are made them.
+        plain = np.asarray(patch.data)
+        assert type(patch.new(data=plain).data) is _Wrapped
+        # One of no backend holds what it is given, and runs what that runs.
+        assert not _triples(patch.set_backend(None).new(data=plain))
+        assert ran == [_Wrapped]
         # A lazy load is one of its arrays however many boxes it took.
         lazy = spool.set_backend("lazy[wrapping]")[0].abs()
-        size = plain.data.nbytes
+        size = plain.nbytes
         for block, several in ((size * 4, False), (size // 5, True)):
             with config_context(lazy_block_size=block):
                 assert (len(chunk_boxes(lazy.data)) > 1) is several
                 loaded = lazy.load()
             assert type(loaded.data) is _Wrapped
-            assert np.array_equal(np.asarray(loaded.data), np.abs(plain.data))
+            assert np.array_equal(np.asarray(loaded.data), np.abs(plain))
 
     @pytest.mark.parametrize(
         "where, owned",
@@ -642,13 +646,40 @@ class TestNamespace:
         )
         assert all(_triples(x) for x in made)
 
-    def test_its_kernels_are_for_its_arrays(self, fast, strict):
-        """Data which are not its arrays run their own kernels."""
+    def test_other_data_are_made_its_arrays(self, fast, strict):
+        """A patch of a backend holds its arrays, whatever it is given."""
         there = fast.new(data=strict.asarray(fast.data))
+        assert type(there.data) is np.ndarray and there.backend == _Fast()
+        assert _triples(there)
+        # Of no backend, the patch holds what it is given and runs what that runs.
+        loose = fast.set_backend(None).new(data=strict.asarray(fast.data))
+        assert backend_name(loose.data) == STRICT and loose.backend is None
         with pytest.warns(NumpyFallbackWarning, match=f"no {STRICT} impl"):
-            assert not _triples(there)
-        # Given its arrays again, the patch runs the namespace's again.
-        assert _triples(there.new(data=fast.data))
+            assert not _triples(loose)
+
+    def test_two_patches(self, fast, spool, strict):
+        """Patches of one kind of array combine, on the first one's backend."""
+        plain = spool[0]
+        assert (fast + plain).backend == _Fast() and _triples(fast + plain)
+        assert (plain + fast).backend is None and not _triples(plain + fast)
+        # Of another library they do not, whichever comes first.
+        there = plain.set_backend(STRICT)
+        for one, two in ((fast, there), (there, fast)):
+            with pytest.raises(IncompatiblePatchError, match="arrays of one kind"):
+                one + two
+        # But a NumPy patch of no backend is taken in by the other's library.
+        for out in (there + plain, plain + there):
+            assert backend_name(out.data) == STRICT
+        assert (there + plain).backend == _Strict() and (plain + there).backend is None
+
+    def test_patches_a_spool_puts_together(self, spool):
+        """Merged or concatenated, they are of the first one's backend."""
+        held = dc.spool([x.set_backend("fast_numpy") for x in spool])
+        for call in ("chunk", "concatenate"):
+            out = getattr(held, call)(time=None)[0]
+            assert out.backend == _Fast() and _triples(out)
+        # Unless the spool was set to one, which is what it hands out.
+        assert held.set_backend("numpy").chunk(time=None)[0].backend == NumpyBackend()
 
     def test_another_backend_replaces_it(self, fast):
         """A spool set to another backend hands the patch out with its kernels."""
@@ -692,7 +723,7 @@ class TestNamespace:
         class Flavour(_Dask):
             """Dask arrays, under a namespace of its own."""
 
-            namespace = "dask_flavour"
+            name = "dask_flavour"
 
         data = np.ones((12, 400), np.uint8)
         coords = {"distance": np.arange(12.0), "time": np.arange(400.0)}
@@ -749,9 +780,59 @@ class TestPatchOnABackend:
 
     def test_nothing_to_do(self, patch):
         """A patch already on the backend is handed out as it is."""
-        assert _on(patch, "numpy") is patch
+        there = _on(patch, "numpy")
+        # Its array is NumPy's already, so only whose the patch is changes.
+        assert there.data is patch.data and there.backend == NumpyBackend()
+        assert _on(there, "numpy") is there
         lazy = _lazy(patch, "LazyArray")
         assert _on(lazy, "lazy[numpy]") is lazy
+
+    @pytest.mark.parametrize("name", ("numpy", STRICT, "lazy", f"lazy[{STRICT}]"))
+    def test_set_on_the_patch_is_what_a_spool_hands_out(self, patch, strict, name):
+        """A patch set to a backend is the one a spool set to it hands out."""
+        for held in (patch, _lazy(patch), _lazy(patch).abs()):
+            mine, theirs = held.set_backend(name), _on(held, name)
+            assert mine.backend == theirs.backend
+            assert type(mine.data) is type(theirs.data)
+            assert mine.load().equals(theirs.load())
+
+    def test_backend_of_a_patch(self, patch, strict):
+        """A patch says which backend it is of; None, if it was given none."""
+        assert patch.backend is None and patch.abs().backend is None
+        there = patch.set_backend(_Strict())
+        assert there.backend == _Strict() == there.abs().backend
+        # A lazy one is of the lazy backend, and of what it computes on once
+        # it is loaded; in memory already, it has nothing to read later.
+        lazy = _lazy(patch, f"lazy[{STRICT}]")
+        assert lazy.backend == LazyBackend(compute=_Strict()) == lazy.abs().backend
+        assert (
+            lazy.load().backend == _Strict() == patch.set_backend(lazy.backend).backend
+        )
+        assert lazy.set_backend("numpy").backend == NumpyBackend()
+        # None leaves the data as they are, of no backend.
+        loose = there.set_backend(None)
+        assert loose.backend is None and loose.data is there.data
+        with pytest.raises(AttributeError):
+            there.backend = NumpyBackend()
+
+    def test_data_given_to_a_patch_are_made_its_backend_s(self, patch, strict):
+        """A patch of a backend holds that backend's arrays, whatever it is given."""
+        there = patch.set_backend(STRICT)
+        for made in (
+            there.new(data=patch.data),
+            there.update(data=patch.data * 2),
+            there.drop_data().to_patch(patch.data),
+        ):
+            assert backend_name(made.data) == STRICT and made.backend == _Strict()
+        # One of no backend holds what it is given.
+        assert backend_name(patch.new(data=there.data).data) == STRICT
+
+    def test_backend_which_cannot_be_used(self, patch):
+        """A patch is not set to a backend which is not one, or has no library."""
+        with pytest.raises(ParameterError, match="is not a backend"):
+            patch.set_backend("not_a_backend")
+        with pytest.raises(ParameterError, match="No array library called"):
+            patch.set_backend(MISSING)
 
     def test_relative_path_is_pinned(self, patch, tmp_path, monkeypatch):
         """A lazy patch reads the file it was named beside, wherever it is read."""
@@ -1198,13 +1279,12 @@ class TestSpoolSetBackend:
         both = lazy[:2] + lazy[2:]
         assert len(both) == len(spool)
         assert {backend_name(x.data) for x in both} == {"lazy"} and not reads
-        with pytest.raises(ParameterError, match="different backends"):
-            lazy[:2] + spool[2:].set_backend("numpy")
-        # Equal backends are one backend, and the same class with other
-        # options is another.
-        equal = lazy[:2] + spool[2:].set_backend(LazyBackend())
-        assert equal == both
-        with pytest.raises(ParameterError, match="different backends"):
+        # Backends which make one kind of array add, on the first one's.
+        assert lazy[:2] + spool[2:].set_backend(LazyBackend()) == both
+        assert (lazy[:2] + spool[2:].set_backend("numpy")).backend == lazy.backend
+        assert (spool[:2].set_backend("numpy") + lazy[2:]).backend == NumpyBackend()
+        # Those which make different kinds do not.
+        with pytest.raises(ParameterError, match="arrays of different kinds"):
             lazy[:2] + spool[2:].set_backend(LazyBackend(compute=_Strict()))
         # A spool with none set takes the other's, so spools gathered onto
         # an empty one keep theirs.
@@ -1265,7 +1345,8 @@ class TestSpoolSetBackend:
     def test_patches_held_in_memory(self, strict):
         """A patch with nothing to read later is put where chunks compute."""
         held = dc.get_example_spool("random_das")
-        assert held.set_backend("lazy")[0] is held[0]
+        there = held.set_backend("lazy")[0]
+        assert there.data is held[0].data and there.backend == NumpyBackend()
         assert backend_name(held.set_backend(f"lazy[{STRICT}]")[0].data) == STRICT
 
     def test_patches_held_in_memory_merge(self):
@@ -1348,45 +1429,24 @@ class TestSpoolSetBackend:
         np.testing.assert_array_equal(to_numpy(out.data), expected.data)
 
     @pytest.mark.parametrize("call", ("chunk", "concatenate"))
-    def test_numpy_patches_join_another_library(self, spool, strict, call, monkeypatch):
-        """Patches in NumPy beside another library's are joined on that library."""
+    def test_patches_of_another_library_are_not_joined(self, spool, strict, call):
+        """Patches of different array libraries are refused, not put on one."""
         held = dc.spool([_on(spool[0], STRICT), *list(spool)[1:]])
-        expected = getattr(spool, call)(time=None)[0]
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", NumpyFallbackWarning)
-            _refuse_numpy(monkeypatch)
-            out = getattr(held, call)(time=None)[0]
-        monkeypatch.undo()
-        assert backend_name(out.data) == STRICT
-        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+        with pytest.raises(IncompatiblePatchError, match="arrays of one kind"):
+            getattr(held, call)(time=None)[0]
 
-    def test_numpy_patches_beside_dask_stay_dask(self, spool):
-        """Beside dask, NumPy patches join the dask graph and nothing is computed."""
+    def test_two_other_libraries_are_not_joined(self, spool, strict):
+        """Nor patches on two libraries other than NumPy, and nothing is read."""
         dask_array = pytest.importorskip("dask.array")
         callbacks = pytest.importorskip("dask.callbacks")
         first = spool[0]
-        lazy_first = first.new(data=dask_array.from_array(first.data, chunks=-1))
-        held = dc.spool([lazy_first, *list(spool)[1:]])
-        expected = spool.concatenate(time=None)[0]
-        computed = []
-        counter = callbacks.Callback(posttask=lambda *x: computed.append(1))
-        with counter, warnings.catch_warnings():
-            warnings.simplefilter("error", NumpyFallbackWarning)
-            out = held.concatenate(time=None)[0]
-        assert backend_name(out.data) == "dask" and not computed
-        np.testing.assert_array_equal(to_numpy(out.data), expected.data)
-
-    def test_two_other_libraries_are_joined_through_numpy(self, spool, strict):
-        """Patches on two libraries other than NumPy meet in NumPy, said."""
-        dask_array = pytest.importorskip("dask.array")
-        first = spool[0]
         on_dask = first.new(data=dask_array.from_array(first.data, chunks=-1))
         held = dc.spool([on_dask, *[_on(x, STRICT) for x in list(spool)[1:]]])
-        expected = spool.concatenate(time=None)[0]
-        with pytest.warns(NumpyFallbackWarning, match="cannot be joined on one"):
-            out = held.concatenate(time=None)[0]
-        assert backend_name(out.data) == "numpy"
-        np.testing.assert_array_equal(out.data, expected.data)
+        computed = []
+        with callbacks.Callback(posttask=lambda *x: computed.append(1)):
+            with pytest.raises(IncompatiblePatchError, match="dask"):
+                held.concatenate(time=None)[0]
+        assert not computed
 
     def test_fill_onto_a_grid_on_another_library_is_said(self, whole, tmp_path):
         """Placing members of another library onto a grid converts them, said."""
@@ -1489,22 +1549,6 @@ class TestSpoolSetBackend:
         with pytest.raises(ParameterError, match="holds float64 data as float32"):
             lazy_array.join(parts, axis=0)
 
-    def test_numpy_member_onto_a_narrowing_library(self, monkeypatch):
-        """A NumPy member is not narrowed as it is put on another library."""
-        from dascore.lazy import array as lazy_array  # noqa: PLC0415
-
-        strict = pytest.importorskip("array_api_strict")
-        parts = [np.array([16777217.0]), strict.asarray(np.zeros(1, np.float32))]
-
-        def narrowing(array, like):
-            """Hold the array as float32, whatever it was."""
-            return strict.asarray(np.asarray(array, np.float32))
-
-        # As a library which keeps 64-bit floats in 32 bits does.
-        monkeypatch.setattr(lazy_array, "asarray_like", narrowing)
-        with pytest.raises(ParameterError, match="holds float64 data as float32"):
-            lazy_array.join(parts, axis=0)
-
     def test_wrapper_numpy_takes_through_its_array_method(self):
         """Something NumPy takes only through `__array__` is converted, said."""
         from dascore.lazy.array import join  # noqa: PLC0415
@@ -1520,7 +1564,7 @@ class TestSpoolSetBackend:
                 return self.data
 
         parts = [Wrapper(np.ones(2)), Wrapper(np.zeros(2))]
-        with pytest.warns(NumpyFallbackWarning, match="cannot be joined on one"):
+        with pytest.warns(NumpyFallbackWarning, match="cannot be joined as they"):
             out = join(parts, axis=0)
         np.testing.assert_array_equal(out, [1, 1, 0, 0])
 

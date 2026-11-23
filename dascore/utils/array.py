@@ -16,6 +16,7 @@ import numpy as np
 from numpy.lib.array_utils import normalize_axis_tuple
 
 import dascore as dc
+from dascore.backends import _refuse_mixed
 from dascore.compat import array, is_array
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
@@ -406,6 +407,11 @@ _OFFSET_UNIT_OPERATORS = frozenset(
         np.not_equal,
     }
 )
+
+
+def _is_plain_numpy(patch) -> bool:
+    """Whether a patch holds a NumPy array and was set to no backend."""
+    return patch.backend is None and is_numpy(patch.data)
 
 
 def _apply_binary_ufunc(
@@ -807,6 +813,12 @@ def _apply_binary_ufunc(
     # Whether the operand which is not `patch` is one, before alignment
     # replaces it with its data.
     other_is_patch = isinstance(other, dc.Patch)
+    if other_is_patch and not any(_is_plain_numpy(x) for x in (patch, other)):
+        # Of one array library: neither patch's data are put on the other's.
+        # A NumPy patch of no backend is taken in by the other's library, as
+        # it always was. The result is of the first patch's backend.
+        name = getattr(operator, "__name__", str(operator))
+        _refuse_mixed((patch.data, other.data), f"{name} of two patches")
 
     # Taken before the operands are aligned and possibly replaced below:
     # what went in is what decides which data comes out.

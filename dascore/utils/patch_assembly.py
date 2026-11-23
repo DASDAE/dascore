@@ -700,7 +700,10 @@ def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
     if coords is patch.coords:
         return patch
     with operation_context():
-        return dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
+        out = dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
+    # The same data on other labels: of the backend they were of.
+    out._backend = patch._backend
+    return out
 
 
 def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
@@ -1191,8 +1194,11 @@ class PatchAssembler:
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs = [], []
         target_units = None
+        # Made of several, the merged patch is of the first one's backend.
+        first = None
         for number, patch_kwargs in enumerate(df_dict_list):
             patch = self._load_trimmed_patch(patch_kwargs, joined, units)
+            first = patch._backend if number == 0 else first
             patch, target_units = _match_merge_units(patch, merge_dim, target_units)
             if not is_numpy(patch.data):
                 # Lazy, or on another library: joined where the members
@@ -1202,7 +1208,7 @@ class PatchAssembler:
                 if buffer is not None and axis is not None:
                     head = broadcast_for_index(buffer.ndim, axis, slice(0, offset))
                     held.append(buffer[head])
-                return self._joined(
+                out = self._joined(
                     joined,
                     patch,
                     df_dict_list[number + 1 :],
@@ -1212,6 +1218,7 @@ class PatchAssembler:
                     held=(held, coords, attrs, dims),
                     rows=df_dict_list,
                 )
+                return out._with_backend(first)
             data, coord = patch.data, patch.coords
             if dims is None:
                 dims = patch.dims
@@ -1257,7 +1264,8 @@ class PatchAssembler:
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
-        return self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
+        out = self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
+        return out._with_backend(first)
 
     def _joined(
         self, joined, patch, rest, merge_dim, units, target_units, *, held, rows

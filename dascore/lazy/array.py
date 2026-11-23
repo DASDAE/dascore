@@ -34,7 +34,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from dascore.backends import ArrayBackend, NumpyBackend
+from dascore.backends import ArrayBackend, NumpyBackend, _refuse_mixed
 from dascore.exceptions import ParameterError
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
@@ -97,9 +97,9 @@ class LazyArray:
         if backend == self._backend:
             return self
         old = self._backend
-        # The same arrays in the same namespace, on another device say, run
+        # The same arrays under the same name, on another device say, run
         # the kernels they ran: there is nothing to ask again.
-        same = (backend._native, backend.namespace) == (old._native, old.namespace)
+        same = (backend._native, backend.name) == (old._native, old.name)
         for node in () if same else self._chain:
             if (converted := execute._converted(node.processor, backend)) is not None:
                 decide_fallback(
@@ -257,6 +257,9 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     >>> assert np.array_equal(join([np.ones(2), np.zeros(2)], 0), [1, 1, 0, 0])
     """
     arrays = list(arrays)
+    # Of one array library, counting a lazy array as what it loads to: no
+    # library's arrays are put on another's to be joined.
+    _refuse_mixed(arrays, "Joining patches")
     lazy = [isinstance(x, LazyArray) for x in arrays]
     if all(lazy) and not new_axis:
         if (out := _joined_recipes(arrays, axis)) is not None:
@@ -282,18 +285,10 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     # Promoted as NumPy promotes the same arrays, from the dtypes they have
     # now: a library may not do so, nor keep every dtype NumPy holds.
     dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
-    # Arrays NumPy holds join others on their library: putting them there
-    # takes nothing through NumPy, as dask's own join of them never did.
-    others = {backend_name(x) for x in arrays if not is_numpy(x)}
-    if len(others) == 1 and NUMPY_BACKEND not in others:
-        like = next(x for x in arrays if not is_numpy(x))
-        arrays = [_moved(x, like, dtype) if is_numpy(x) else x for x in arrays]
-    libraries = {backend_name(x) for x in arrays}
     # Something NumPy takes only through `__array__`, which may read it.
-    held = libraries == {NUMPY_BACKEND}
-    if len(libraries) > 1 or held:
+    if backend_name(arrays[0]) == NUMPY_BACKEND:
         decide_fallback(
-            f"Arrays on {sorted(libraries)} cannot be joined on one library",
+            "Arrays NumPy holds only through `__array__` cannot be joined as they are",
             "they were converted to numpy and joined there",
             lazy=False,
         )
@@ -306,13 +301,6 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     if new_axis:
         arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
     return xp.concat(arrays, axis=axis)
-
-
-def _moved(array: np.ndarray, like, dtype: np.dtype):
-    """Return a NumPy array in `dtype`, on the library `like` is on."""
-    out = asarray_like(array.astype(dtype, copy=False), like)
-    _check_kept(out, dtype)
-    return out
 
 
 def _check_kept(array, dtype: np.dtype) -> None:

@@ -83,7 +83,7 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
         return data
     backend = data._backend
     native = backend._native
-    kernel = type(processor).kernel_for(native, backend.namespace)
+    kernel = type(processor).kernel_for(native, backend.name)
     if isinstance(contract, ChunkContract):
         if (converted := _converted(processor, backend)) is not None:
             # It runs a chunk at a time still, each chunk through NumPy.

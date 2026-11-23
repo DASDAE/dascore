@@ -106,9 +106,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
-from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
-from dascore.utils.array_api import backend_name
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -155,7 +153,6 @@ from dascore.utils.explicit_ranges import (
     looks_explicit,
 )
 from dascore.utils.gaps import GapTolerance
-from dascore.utils.identity import operation_context
 from dascore.utils.misc import (
     _spool_map,
     available_memory,
@@ -976,28 +973,8 @@ class Spool(NodeRepr, NamespaceOwner):
             return read()
         with reading_onto(backend):
             patch = read()
-        data = patch.data
-        lazy = isinstance(backend, LazyBackend)
-        if isinstance(data, LazyArray) and not lazy:
-            # Held lazy by the spool: computed on the backend asked for,
-            # which its pending steps are asked about, so nothing is
-            # converted.
-            data = data._with_backend(backend).load()
         # Whatever the read made, or the spool held, as the backend's own.
-        new = backend.from_array(data)
-        # The backend its kernels are of: the one a lazy backend computes on.
-        # One whose namespace is what the array is says nothing it does not.
-        kept = backend.compute if lazy else backend
-        kept = kept if kept.namespace != backend_name(new) else None
-        if new is patch.data and kept == patch._backend:
-            return patch
-        # Inside an operation, so the attrs are taken to describe the array.
-        with operation_context():
-            out = patch.update(data=new)
-        # Where its file is stands, so it can still say what it was read from.
-        out._source = patch._source
-        out._backend = kept
-        return out
+        return patch._with_backend(backend)
 
     @property
     def backend(self) -> ArrayBackend | None:
@@ -1196,8 +1173,9 @@ class Spool(NodeRepr, NamespaceOwner):
         up from it, is spool-wide state: the union carries whichever
         operand has one and applies it to every patch it yields, as
         attaching and enriching the union would; two different ones raise.
-        So is the backend set by `set_backend`: the union is on the one its
-        operands were set to, and two different ones raise.
+        So is the backend set by `set_backend`: the union is on the first
+        one its operands were set to, and backends which make arrays of
+        different kinds raise.
 
         Examples
         --------
@@ -1219,18 +1197,21 @@ class Spool(NodeRepr, NamespaceOwner):
         union = PatchCatalog.union([x._as_union_member() for x in spools])
         new = Spool()
         new._catalog = union
-        # The backend the patches are handed out on is the spools' own,
-        # and two different ones have no combined answer.
+        # The backend the patches are handed out on is the spools' own.
         # A spool with none set takes the other's, so spools gathered onto
         # an empty one keep theirs.
         backends: list[ArrayBackend] = []
         for backend in (x._backend for x in spools):
             if backend is not None and backend not in backends:
                 backends.append(backend)
-        if len(backends) > 1:
+        # Arrays of one kind, counting a lazy backend as the one it computes
+        # on: the union is on the first backend, whose kernels its patches run.
+        inner = [x.compute if isinstance(x, LazyBackend) else x for x in backends]
+        kinds = sorted({x._native for x in inner})
+        if len(kinds) > 1:
             msg = (
-                f"Spools on different backends cannot be added: {backends}. "
-                "Set one backend on each before adding them."
+                "Spools whose backends make arrays of different kinds cannot "
+                f"be added: {', '.join(kinds)}. Set them to one backend first."
             )
             raise ParameterError(msg)
         new._backend = backends[0] if backends else None

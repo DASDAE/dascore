@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal, Self
 
@@ -13,6 +14,7 @@ import dascore.proc.basic
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
+from dascore.backends import ArrayBackend, LazyBackend, _settled, get_backend
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -345,15 +347,89 @@ class Patch(NamespaceOwner, PatchMeta):
         return backend_name(self._data)
 
     @property
-    def _kernel_namespace(self) -> str | None:
-        """Return the namespace whose kernels run on the data, if any."""
-        backend = self._backend
-        # Its kernels are for its own arrays: not for data of another kind
-        # the patch was given since, nor for a lazy array, whose steps wait
-        # and run them when it is loaded.
-        if backend is not None and backend._owns(self._data):
-            return backend.namespace
-        return None
+    def backend(self) -> ArrayBackend | None:
+        """
+        Return the backend the patch is of, or None if it was given none.
+
+        A patch of a backend holds that backend's arrays, and its
+        operations run the kernels registered under the backend's name. One
+        of no backend holds whatever array it was given.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.backends import NumpyBackend
+        >>>
+        >>> patch = dc.get_example_patch()
+        >>> assert patch.backend is None
+        >>> assert patch.set_backend("numpy").backend == NumpyBackend()
+        """
+        return self._backend
+
+    def set_backend(self, backend: str | ArrayBackend | None) -> Self:
+        """
+        Return the patch as one of a backend's.
+
+        The patch is what a spool which held it, set to the backend, would
+        hand out: its data are made the backend's own arrays, and every
+        patch made from it is of the backend too.
+
+        Parameters
+        ----------
+        backend
+            An [`ArrayBackend`](`dascore.backends.ArrayBackend`), or the
+            name of a registered one, as
+            [`Spool.set_backend`](`dascore.core.spool.Spool.set_backend`)
+            takes it. None leaves the data as they are, of no backend.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>>
+        >>> patch = dc.get_example_patch().set_backend("numpy")
+        >>> # Other data given to it are made its backend's.
+        >>> out = patch.new(data=patch.data.tolist())
+        >>> assert isinstance(out.data, np.ndarray) and out.backend == patch.backend
+
+        Notes
+        -----
+        - A patch in memory set to a lazy backend stays in memory, on the
+          backend the lazy one computes on: a lazy patch is a promise to
+          read, and there is nothing to read. Set a spool of the file to
+          the lazy backend for one.
+        - A lazy patch set to a backend in memory is loaded, computed on
+          that backend.
+        """
+        if backend is not None:
+            backend = get_backend(backend)
+            # Refused here, if it cannot be used.
+            backend._check()
+        return self._with_backend(backend)
+
+    def _with_backend(self, backend: ArrayBackend | None) -> Self:
+        """Return the patch as one of a backend's; see `set_backend`."""
+        data = self._data
+        eager = backend is not None and not isinstance(backend, LazyBackend)
+        if isinstance(data, LazyArray) and eager:
+            # Computed on the backend asked for, which its pending steps are
+            # asked about, so nothing is converted.
+            data = data._with_backend(backend).load()
+        new, kept = _settled(backend, data)
+        if new is self._data and kept == self._backend:
+            return self
+        # Of no backend while the data are put, so they are not made the
+        # old one's again.
+        out = copy.copy(self)
+        out._backend = None
+        if new is not self._data:
+            # Inside an operation, so the attrs are taken to describe the array.
+            with operation_context():
+                out = out.update(data=new)
+            # Where its file is stands, so it can still say what it was read from.
+            out._source = self._source
+        out._backend = kept
+        return out
 
     def drop_data(self) -> PatchMeta:
         """
@@ -380,7 +456,6 @@ class Patch(NamespaceOwner, PatchMeta):
             source=self._source,
         )
         out._kernel_key = self._kernel_key
-        out._kernel_namespace = self._kernel_namespace
         out._backend = self._backend
         # What `to_patch` builds: this patch's class, so an operation which
         # drops the data and fills them again keeps a subclass.
@@ -426,12 +501,17 @@ class Patch(NamespaceOwner, PatchMeta):
         # A dtype is handed on only when one was asked for: a subclass's
         # `__init__` need not take one, and the data already state theirs.
         extra = {} if dtype is None else {"dtype": dtype}
-        data = self._data if data is None else data
+        backend = self._backend
+        if data is None:
+            data = self._data
+        else:
+            # A patch of a backend holds that backend's arrays.
+            data, backend = _settled(backend, data)
         # The ids were settled before this; the constructor names an array
         # nothing else has spoken for, which this is not.
         with operation_context():
             out = type(self)(data=data, coords=coords, attrs=attrs, **extra)
-        out._backend = self._backend
+        out._backend = backend
         return out
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:

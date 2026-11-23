@@ -14,6 +14,7 @@ import pandas as pd
 import dascore as dc
 import dascore.proc
 import dascore.proc.coords
+from dascore.backends import ArrayBackend, _settled
 from dascore.constants import ENRICH_CONFLICT, ON_MISSING
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
@@ -52,7 +53,6 @@ _LINEAGE = dascore.proc.basic._LINEAGE
 
 
 if TYPE_CHECKING:
-    from dascore.backends import ArrayBackend
     from dascore.core.inventory import Inventory
 
 
@@ -124,12 +124,9 @@ class PatchMeta(NodeRepr):
     dims: tuple[str, ...]
     dtype: Any
     # What the described data are, as `backend_name` spells it, and the
-    # namespace whose kernels run on them, if any: an operation resolves its
-    # kernel from these without the data. Set by `Patch.drop_data`.
+    # backend their patch is of, if any: an operation resolves its kernel
+    # from these without the data. Set by `Patch.drop_data`.
     _kernel_key: str = "numpy"
-    _kernel_namespace: str | None = None
-    # The backend a spool handed the patch out with, which every patch made
-    # from it keeps; see `Patch._kernel_namespace`.
     _backend: ArrayBackend | None = None
     # The class default also covers objects restored from older pickles.
     _source: ArraySource | None = None
@@ -321,7 +318,6 @@ class PatchMeta(NodeRepr):
             source=self._source,
         )
         out._kernel_key = self._kernel_key
-        out._kernel_namespace = self._kernel_namespace
         out._backend = self._backend
         out._patch_type = self._patch_type
         return out
@@ -373,12 +369,14 @@ class PatchMeta(NodeRepr):
             attrs = (
                 attrs.update(data_id=new_id()) if ids_enabled() else _without_ids(attrs)
             )
+        # A patch of a backend holds that backend's arrays.
+        data, backend = _settled(self._backend, data)
         # Named just above, so the constructor does not name it again.
         with operation_context():
             out = patch_class(data=data, coords=self.coords, attrs=attrs)
         # Whatever these data are, they are not known to be what the source loads.
         out._source = self._source and self._source.detach()
-        out._backend = self._backend
+        out._backend = backend
         return out
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> PatchMeta:

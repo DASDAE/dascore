@@ -374,7 +374,7 @@ class PatchProcessor(DascoreBaseModel):
         return self.run(patch)
 
     @classmethod
-    def kernel_for(cls, backend: str, namespace: str | None = None):
+    def kernel_for(cls, backend: str, name: str | None = None):
         """
         Return the kernel this class runs for a backend, or None.
 
@@ -387,9 +387,10 @@ class PatchProcessor(DascoreBaseModel):
 
         `backend` is what the data are, as
         [`backend_name`](`dascore.utils.array_api.backend_name`) reports
-        them, and `namespace` the one their patch is of, if any. A kernel a
-        class has registered for the namespace answers before whatever the
-        class runs for the data as they are, which takes no conversion.
+        them, and `name` that of the backend their patch is of, if any. A
+        kernel a class has registered under the name answers before
+        whatever the class runs for the data as they are, which takes no
+        conversion.
 
         The lazy backend never falls back unasked: the first class which
         computes anything is answered by its own registered lazy kernel, or
@@ -397,11 +398,11 @@ class PatchProcessor(DascoreBaseModel):
         runs the operation by its chunk contract, or refuses it unless the
         `numpy_fallback` setting lets the data be read into memory.
         """
-        _load_plugins(backend, namespace)
+        _load_plugins(backend, name)
         for klass in cls.__mro__:
             contents = klass.__dict__
             kernels = contents.get("_kernels", {})
-            if (found := kernels.get(namespace) or kernels.get(backend)) is not None:
+            if (found := kernels.get(name) or kernels.get(backend)) is not None:
                 return found
             if backend == LAZY_BACKEND:
                 # Never the array api kernel or the numpy fallback; a kernel
@@ -534,13 +535,14 @@ class PatchProcessor(DascoreBaseModel):
         """Run the operation; `record=False` writes no history or ids."""
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
         # Before the check, which asks whether the class has any kernel.
-        _load_plugins(meta._kernel_key, meta._kernel_namespace)
+        name = None if meta._backend is None else meta._backend.name
+        _load_plugins(meta._kernel_key, name)
         self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
         # settled before anything asks the patch for its data.
-        kernel = self.kernel_for(meta._kernel_key, meta._kernel_namespace)
+        kernel = self.kernel_for(meta._kernel_key, name)
         if kernel is None:
             if out is meta:
                 return self._finished(patch, self._unchanged(patch, record), record)

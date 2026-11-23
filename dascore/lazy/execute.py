@@ -60,7 +60,7 @@ def _converted(processor, backend: ArrayBackend) -> str | None:
     native = backend._native
     if native == NUMPY_BACKEND:
         return None
-    kernel = type(processor).kernel_for(native, backend.namespace)
+    kernel = type(processor).kernel_for(native, backend.name)
     if hasattr(kernel, "_converts"):
         return processor.name or type(processor).__name__
     # A step which runs another operation, as one in a window does, has a
@@ -192,14 +192,14 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         return backend.from_array(np.empty(_sizes(box), array.dtype))
     needed = _needs(array, box)
     data = backend.from_recipe(array.recipe[needed[0]])
-    # What the backend's arrays are, and the namespace they are of: the
-    # same for every box, so each step runs one kernel throughout.
-    native, namespace = backend._native, backend.namespace
+    # What the backend's arrays are, and its name: the same for every box,
+    # so each step runs one kernel throughout.
+    native, name = backend._native, backend.name
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
         stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
-        kernel = type(processor).kernel_for(native, namespace)
+        kernel = type(processor).kernel_for(native, name)
         run = partial(kernel, processor, **node.plan)
         # A step with no kernel for the library was let through, or
         # refused, when it was chained: it is not asked again for each box.

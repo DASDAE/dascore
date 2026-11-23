@@ -747,6 +747,8 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     # The fold named the result; building it is not another array.
     with operation_context():
         patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
+    # Made of several, it is of the first one's backend.
+    patch = patch._with_backend(patches[0]._backend)
     new_dict = {"patch": patch}
     return [new_dict]
 
@@ -1734,7 +1736,9 @@ def _concatenate_group(
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp(attrs, [x.attrs for x in patches], operation)
     with operation_context():
-        return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+        out = dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+    # Made of several, it is of the first one's backend.
+    return out._with_backend(first._backend)
 
 
 def _joinable(coords, dim: str) -> list[np.ndarray]:
