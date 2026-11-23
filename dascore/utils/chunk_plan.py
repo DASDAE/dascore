@@ -673,9 +673,11 @@ def _set_cells(frame, column, rows, values) -> None:
     frame[column] = cells
 
 
-def _grid_terms(coord) -> tuple:
-    """The exact grid a relation row states for an evenly sampled coordinate."""
-    return (*coord.runs[0].canonical()[1:], len(coord))
+def _grid_terms(coord) -> tuple | None:
+    """The exact grid a relation row states for a coordinate; None for labels."""
+    if not isinstance(run := coord.runs[0], Grid):
+        return None
+    return (*run.canonical()[1:], len(coord))
 
 
 def _alike(columns) -> tuple[np.ndarray, np.ndarray]:
