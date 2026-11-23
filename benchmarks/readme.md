@@ -7,8 +7,9 @@ DASCore's benchmark suite uses [CodSpeed](https://codspeed.io/) for continuous p
 To run benchmarks locally:
 
 ```bash
-# Install test dependencies and pytest-codspeed
-pip install -e ".[profile]"
+# Install test dependencies, pytest-codspeed and the optional readers, as CI
+# does; a format whose reader is missing is skipped, not benchmarked
+pip install -e ".[profile,extras]"
 
 # Run all benchmarks
 pytest benchmarks/ --codspeed
