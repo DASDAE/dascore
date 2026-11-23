@@ -833,23 +833,26 @@ def _sliced(lo, hi, start, stop):
     return lo + ends[0], lo + ends[1] - 1
 
 
-def _span(coord, low, high) -> tuple[int, int, int, int]:
+def _span(coord, low, high, narrow=False) -> tuple[int, int, int, int]:
     """
     The first and last positions of ``coord`` with labels in a value range.
 
     Given twice: the widest span rounding allows, then the narrowest. A
-    float label is known only to rounding, so a bound within a tenth of a
-    step of one may or may not keep it; time and integer labels are exact
-    and the two agree. None leaves an end open. An empty span has its
-    first position past its last.
+    float label is known only to rounding, so a bound within three float
+    allowances of one may or may not keep it, as the selected coordinate's
+    own ends take it (`_float_samples`), in float32 where ``narrow`` says
+    the labels are stored so; time and integer labels are exact and the
+    two agree. None leaves an end open. An empty span has its first
+    position past its last.
     """
     # Circular import: patch assembly imports the index and its plan utilities.
-    from dascore.utils.patch_assembly import _READ_PAD, _as_numpy  # noqa: PLC0415
+    from dascore.utils.patch_assembly import _as_numpy  # noqa: PLC0415
 
     low, high = (None if pd.isnull(x) else _as_numpy(x) for x in (low, high))
     pads = [0]
     if np.asarray(coord.min()).dtype.kind == "f":
-        pad = abs(to_float(coord.step)) * _READ_PAD
+        step = abs(to_float(coord.step))
+        pad = 3 * _precision(False, step, narrow, coord.min(), coord.max())[()]
         pads = [pad, -pad]
     out = []
     for pad in pads:
@@ -863,7 +866,9 @@ def _span(coord, low, high) -> tuple[int, int, int, int]:
     return tuple(out * (2 // len(pads)))
 
 
-def _relative_span(coord, value, lows, highs) -> tuple[int, int, int, int]:
+def _relative_span(
+    coord, value, lows, highs, narrow=False
+) -> tuple[int, int, int, int]:
     """
     `_span` of a relative range on a coordinate kept from ``coord``.
 
@@ -880,7 +885,7 @@ def _relative_span(coord, value, lows, highs) -> tuple[int, int, int, int]:
             low, high = kept._get_slice_tuple(range_, relative=True)
             if low is not None and high is not None and low > high:
                 return 1, 0, 1, 0
-            span = _span(coord, low, high)
+            span = _span(coord, low, high, narrow)
             found.append(
                 (max(span[0], lo), min(span[1], hi), max(span[2], lo), min(span[3], hi))
             )
@@ -1135,7 +1140,7 @@ class _SampleTracker:
         ``lows`` and ``highs`` are the row's new envelope ends, null where
         the selection left that end alone.
         """
-        held = self.held(name)
+        held, narrow = self.held(name), _narrow(self.source, name)
         place = np.full(len(self.source), -1)
         place[rows] = np.arange(len(rows))
         for state, part in self._followed(name, rows):
@@ -1144,14 +1149,19 @@ class _SampleTracker:
                 ends = [x - held.shift[part] for x in ends]
             codes, firsts = _alike([held.codes[part], *ends])
             spans = [
-                _span(held.coords[held.codes[part[x]]], ends[0][x], ends[1][x])
+                _span(
+                    held.coords[held.codes[part[x]]],
+                    ends[0][x],
+                    ends[1][x],
+                    narrow[part[x]],
+                )
                 for x in firsts
             ]
             state.narrow(part, *(np.array(x)[codes] for x in zip(*spans, strict=True)))
 
     def by_relative(self, name, rows, value) -> None:
         """Replay a relative selection of ``name`` onto ``rows``."""
-        held = self.held(name)
+        held, narrow = self.held(name), _narrow(self.source, name)
         for state, part in self._followed(name, rows, sure=True):
             ranges = [x[part] for x in (state.lo, state.in_lo, state.hi, state.in_hi)]
             codes, firsts = _alike([held.codes[part], *ranges])
@@ -1161,6 +1171,7 @@ class _SampleTracker:
                     value,
                     (ranges[0][x], ranges[1][x]),
                     (ranges[2][x], ranges[3][x]),
+                    narrow[part[x]],
                 )
                 for x in firsts
             ]

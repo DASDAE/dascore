@@ -1448,9 +1448,10 @@ class TestSelectSharedDimensionHoldsWhatLoads:
     def test_relative_after_a_bound_in_doubt(self, second):
         """A relative cut counts from whichever sample the bound left first."""
         spool = self._spool(distance=lambda x: x * 1.0, sensor=lambda x: 1000.0 + 2 * x)
-        # 9.95 sits within a tenth of a step of sample 10, which may or may not
-        # be kept as far as the envelopes can tell
-        out = spool.select(distance=(9.95, 40)).select(distance=second, relative=True)
+        # 9.999998 sits within three float allowances of sample 10, which may
+        # or may not be kept as far as the envelopes can tell
+        out = spool.select(distance=(9.999998, 40))
+        out = out.select(distance=second, relative=True)
         _assert_contents_hold_patches(out, ["distance", "sensor"])
 
     def test_patch_without_the_rider(self):
@@ -1513,6 +1514,9 @@ class TestFloatEndsStateWhatLoads:
         [
             ({"lat": (50, 70)}, [1, 3, 50, 70]),
             ({"distance": (1, 3)}, [1, 3, 50, 70]),
+            # a bound just past a label leaves it out of both coordinates
+            ({"lat": (50.5, 70)}, [2, 3, 60, 70]),
+            ({"distance": (1.05, 3)}, [2, 3, 60, 70]),
         ],
     )
     def test_riders_state_their_labels(self, rider, kwargs, ends):
