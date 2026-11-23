@@ -35,6 +35,7 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
+from dascore.io.index.ingest import def_key_data_id
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.lazy.array import LazyArray, cast_on_library, join
 from dascore.lazy.recipe import Recipe
@@ -423,13 +424,16 @@ def stored_window_id(row: Mapping, stored: Mapping) -> str | None:
 
 
 def _stored_window(row: Mapping, stored: Mapping):
-    """`stored_window_id`, and the coordinates of the samples the row keeps."""
+    """
+    `stored_window_id`, the coordinates of the samples the row keeps, and
+    each dimension's first kept sample and whole coordinate as rebuilt.
+    """
     base, dims = stored.get("data_id"), stored.get("dims")
     if _is_missing(base) or not dims or row.get("dims") != dims:
         return None
     if not _same_array(row, stored):
         return None
-    windows, extent, coords = [], [], {}
+    windows, extent, coords, spans = [], [], {}, {}
     for dim in str(dims).split(","):
         units = {_stated_unit(x.get(f"_{dim}_units")) for x in (row, stored)}
         if _units_converted(row, dim) or len(units) > 1:
@@ -444,7 +448,8 @@ def _stored_window(row: Mapping, stored: Mapping):
         windows.append(index.indices(len(whole))[:2])
         extent.append(len(whole))
         coords[dim] = coord_at_stored_unit(kept, stored, dim) or kept
-    return window_data_id(str(base), windows, extent), coords
+        spans[dim] = (windows[-1][0], whole)
+    return window_data_id(str(base), windows, extent), coords, spans
 
 
 def _same_array(row: Mapping, stored: Mapping) -> bool:
@@ -641,6 +646,32 @@ def _regridded(coords: CoordManager, attrs, dim: str, row: Mapping):
     params = {"dim": dim, "dtype": str(coord.dtype), "units": coord.units}
     operation = operation_id("Regrid", params | {"labels": labels})
     return placed, stamp(attrs, [attrs], operation)
+
+
+def _held_labels(coord, array: tuple, at: int, spec: tuple):
+    """
+    The labels a member loads with along a stretch, or None if unknown.
+
+    Integer and time grids rebuild exactly from a row. A float grid
+    rebuilt from its ends and step can differ in the last place from the
+    labels its array holds (a file cut from a longer grid keeps that
+    grid's terms), so it stands only where the array's coordinate id (its
+    def key) confirms it; failing that, the stretch's grid over the
+    array's samples does where it has that id. `array` is the member's
+    first sample in its array, the array's coordinate as rebuilt and that
+    id; `at` is the member's first sample in its output, `spec` the
+    output's stretch.
+    """
+    start, whole, coord_id = array
+    if np.dtype(whole.dtype).kind != "f" or whole.data_id == coord_id:
+        return coord
+    origin, num, den, count, phase, first, _, dtype = spec
+    begin = first + at - start  # the array's first sample on the stretch
+    if not 0 <= begin <= count - len(whole):
+        return None
+    terms = (origin, num, den, count, phase, begin, len(whole), dtype)
+    grid = stretch_coordinate(terms, whole.units)
+    return grid[start : start + len(coord)] if grid.data_id == coord_id else None
 
 
 def _same_labels(first, second) -> bool:
@@ -1023,8 +1054,10 @@ class PatchAssembler:
         as assembly does. `stored` holds, beside each row, the index's row
         for the array the member is cut from, which a member row trimmed
         before planning no longer states itself. None where loading could
-        name the output otherwise: a member converted to other units, or
-        one the rows cannot place.
+        name the output otherwise: a member converted to other units, one
+        the rows cannot place, or a float grid whose labels they cannot
+        confirm (see `_held_labels`) or, joined with other members, cannot
+        rebuild, so whether loading moves one is unknown.
         """
         dim, stored = self.plan_dim, stored or [None] * len(rows)
         if len({_stated_unit(x.get("data_units")) for x in rows}) > 1:
@@ -1037,35 +1070,56 @@ class PatchAssembler:
         members = [self._member_layout(rows[x], stored[x]) for x in order]
         if None in members:
             return None
-        ids, coords = zip(*members, strict=True)
+        ids, coords, arrays = zip(*members, strict=True)
+        offsets = [0, *accumulate(len(x) for x in coords)][:-1]
         data_id = ids[0]
         if len(ids) > 1:
-            offsets = [0, *accumulate(len(x) for x in coords)][:-1]
             conflict = self.merge_kwargs.get("conflict") or "raise"
             data_id = derive(ids, merge_operation(merge_layout(dim, offsets, conflict)))
         first = rows[order[0]]
-        if not isinstance(first.get(f"_{dim}_stretch"), tuple):
+        if not isinstance(spec := first.get(f"_{dim}_stretch"), tuple):
             return data_id  # only a stretch's grid moves labels
-        each = [get_coord_manager({dim: x}, dims=(dim,)) for x in coords]
-        joined = _get_merged_coord(dim, each)
-        attrs = dc.PatchAttrs(data_id=data_id)
-        return _regridded(joined, attrs, dim, first)[1].data_id
+        held = [
+            _held_labels(*x, spec) for x in zip(coords, arrays, offsets, strict=True)
+        ]
+        if None in held:
+            return None
+
+        def placed(labels) -> str:
+            """The id the output takes when its members hold ``labels``."""
+            each = [get_coord_manager({dim: x}, dims=(dim,)) for x in labels]
+            joined = _get_merged_coord(dim, each)
+            attrs = dc.PatchAttrs(data_id=data_id)
+            return _regridded(joined, attrs, dim, first)[1].data_id
+
+        # Members merged from the index keep the labels their rows rebuild,
+        # and merged as patches the files' own; the id stands where both
+        # name the output alike. One member always loads as a patch.
+        named = {placed(x) for x in ([held] if len(held) == 1 else [held, coords])}
+        return named.pop() if len(named) == 1 else None
 
     def _member_layout(self, row: Mapping, stored: Mapping | None):
-        """A member's id and its labels along the plan's dimension, or None."""
+        """
+        A member's id, its labels along the plan's dimension, and its array
+        there (see `_held_labels`), or None.
+        """
         dim, data_id = self.plan_dim, row.get("data_id")
         if row.get("_modified") or _is_missing(data_id):
             whole = self._whole_source(row) or stored
-            found = None if whole is None else _stored_window(row, whole)
+            if whole is None or (found := _stored_window(row, whole)) is None:
+                return None
             # the array's own labels: an envelope only rounds them
-            return None if found is None else (found[0], found[1][dim])
+            coord_id = def_key_data_id(whole.get(f"_{dim}_def_key"))
+            return found[0], found[1][dim], (*found[2][dim], coord_id)
         if any(_units_converted(row, x) for x in str(row["dims"]).split(",")):
             return None
         units = _stated_unit(row.get(f"_{dim}_units"))
         coord = coord_from_row(row, dim, units=units)
         if coord is None:
             return None
-        return data_id, coord_at_stored_unit(coord, row, dim) or coord
+        coord = coord_at_stored_unit(coord, row, dim) or coord
+        coord_id = def_key_data_id(row.get(f"_{dim}_def_key"))
+        return data_id, coord, (0, coord, coord_id)
 
     def _whole_source(self, row: Mapping) -> Mapping | None:
         """The row for the whole array a cut member's row trims, if it says."""
