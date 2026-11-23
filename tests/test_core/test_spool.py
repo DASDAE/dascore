@@ -735,6 +735,23 @@ class TestGetContents:
         assert units.dtype == object
         assert units.tolist() == [None] * min(count, 11) + ["m"] * (count == 12)
 
+    @pytest.mark.parametrize(
+        ("rows", "expected"), [((0, 2), ["A1", ""]), ((0,), ["A1"]), ((1,), [""])]
+    )
+    def test_text_attr_dtype_ignores_selection(self, rows, expected):
+        """
+        A text attribute's column is str, with "" where a patch states none,
+        whatever rows a selection keeps.
+        """
+        patches = [
+            dc.Patch(data=np.zeros(3), coords={"x": np.arange(3) + 10 * i}, dims=("x",))
+            for i in range(3)
+        ]
+        patches[0] = patches[0].update_attrs(station="A1")
+        station = dc.spool(patches)[list(rows)].get_contents()["station"]
+        assert station.dtype == "str"
+        assert station.tolist() == expected
+
     def test_data_description_survives_the_drop(self, random_spool):
         """`_dtype` and `_data_size` are renamed, not dropped."""
         df = random_spool.get_contents()

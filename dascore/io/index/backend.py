@@ -1209,9 +1209,11 @@ class SQLiteIndexBackend:
                 series = col if series is None else series.where(series.notna(), col)
                 cols_to_drop.append(column)
             if series is not None:
-                if kinds == {"str"} and series.hasnans:
-                    # flat-contract convention: missing strings are ""
-                    series = series.fillna("")
+                if kinds == {"str"}:
+                    # flat-contract convention: missing strings are "". Left
+                    # to infer, pandas makes the column str or object from
+                    # whether the fetch held a value.
+                    series = series.fillna("").astype("str")
                 new_columns[str(name)] = series
         if cols_to_drop:
             out = out.drop(columns=cols_to_drop)
