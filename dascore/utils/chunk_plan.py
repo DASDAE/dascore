@@ -226,6 +226,43 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
     return out
 
 
+def with_labels(df: pd.DataFrame, dim: str, read) -> pd.DataFrame:
+    """
+    The relation with each row stating no step on ``dim`` holding its labels.
+
+    The index holds only the ends of such a coordinate, so ``read(row)``
+    gives a row's coordinate as it loads, or None where its source can't
+    say. The row's labels inside its envelope ride, sorted, as
+    ``_{dim}_labels``, its envelope narrows to them, and a row holding none,
+    as a selection on another coordinate along ``dim`` may leave it, is
+    dropped.
+    """
+    lo, hi, step = (f"{dim}_{x}" for x in ("min", "max", "step"))
+    if df.empty or not {lo, hi, step} <= set(df.columns):
+        return df
+    stepless = (df[step].isna() & df[lo].notna()).to_numpy() & _structural(df, dim)
+    if not stepless.any():
+        return df
+    held, empty, dtype = {}, [], df[lo].dtype
+    lows, highs = (df[x].astype(object).to_numpy(copy=True) for x in (lo, hi))
+    for num in np.flatnonzero(stepless):
+        if (coord := read(df.iloc[num])) is not None:
+            values = np.sort(np.asarray(coord.values))
+            if isinstance(dtype, np.dtype) and dtype.kind != "O":  # as rows hold them
+                values = values.astype(dtype)
+            values = values[(values >= lows[num]) & (values <= highs[num])]
+            held[df.index[num]] = values
+            if not len(values):
+                empty.append(df.index[num])
+                continue
+            lows[num], highs[num] = values[0], values[-1]
+    out = df.copy()
+    _set_column(out, lo, lows, df)
+    _set_column(out, hi, highs, df)
+    out[f"_{dim}_labels"] = pd.Series(held, index=out.index, dtype=object)
+    return out.drop(index=empty)
+
+
 def clip_to_runs(df: pd.DataFrame, dim: str, indexed, read) -> pd.DataFrame:
     """
     The relation with each row's envelope narrowed to the samples it holds.
@@ -285,7 +322,9 @@ def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
 
 def stack_plans(plans: Sequence[ChunkPlan]) -> ChunkPlan:
     """One plan of several plans' outputs, each numbered after those before."""
-    offsets = np.cumsum([0, *(len(x.outputs) for x in plans[:-1])])
+    # a plan numbers its windows, and skips those holding nothing
+    counts = (x.outputs["output_id"].max() + 1 if len(x.outputs) else 0 for x in plans)
+    offsets = np.cumsum([0, *list(counts)[:-1]])
 
     def _stack(attr):
         frames = (getattr(x, attr) for x in plans)
@@ -1685,6 +1724,14 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                     for x, y in zip(held, firsts, strict=True)
                 ]
                 df.loc[idx, origin] = pd.Series(moved, index=idx, dtype=object)
+            if (col := f"_{name}_labels") in df.columns:  # read in their own unit
+                held = [
+                    convert_units(x, to_units=target, from_units=unit)
+                    if isinstance(x, np.ndarray)
+                    else x
+                    for x in df.loc[idx, col]
+                ]
+                df.loc[idx, col] = pd.Series(held, index=idx, dtype=object)
             if f"_{name}_coord_dtype" in df.columns:  # converted labels are floats
                 df.loc[idx, f"_{name}_coord_dtype"] = "float64"
         df.loc[rows, unit_col] = target
@@ -3362,6 +3409,9 @@ def build_chunk_plan(
         _, stride, *_, width, own_min, own_max = lattice
         plain = (stride == 0) | ((src1 == own_min) & (src2 == own_max))
         edge = src2 + 2 * _GRID_SNAP_RTOL * width if src2.dtype.kind == "f" else src2
+        # labels read from the sources of rows stating no step (`with_labels`)
+        labels = kept_df.get(f"_{name}_labels")
+        labels = None if labels is None else labels.to_numpy()
     has_dtype = "_dtype" in sorted_df.columns
     if has_dtype:
         # The element dtype resolves per *output*, not per partition: a
@@ -3513,6 +3563,7 @@ def build_chunk_plan(
         rel_out = np.repeat(np.arange(n_out), m_counts)
         offsets = np.repeat(np.cumsum(m_counts) - m_counts, m_counts)
         rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
+        none = np.zeros(total, dtype=bool)
         lo = np.maximum(s1[rel_src], reach[0][rel_out])
         hi = np.minimum(s2[rel_src], reach[1][rel_out])
         if regular:
@@ -3521,8 +3572,10 @@ def build_chunk_plan(
             whole = plain[rows] & (windows[0] <= lo) & (edge[rows] < windows[1])
             if not whole.all():
                 lo, hi = _member_samples(lo, hi, *windows, [x[rows] for x in lattice])
+            if labels is not None:
+                lo, hi, none = _labelled(lo, hi, s1[rel_src], *windows, labels[rows])
         # A member whose window holds none of its samples drops (#1008).
-        overlap_ok = lo <= hi
+        overlap_ok = (lo <= hi) & ~none
         if not overlap_ok.all():
             rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
             lo, hi = lo[overlap_ok], hi[overlap_ok]
@@ -4328,6 +4381,26 @@ def _member_samples(firsts, lasts, starts, ends, lattice):
     if kind in "Mm":
         lo, hi = (x.astype(np.int64).view(unit).astype(firsts.dtype) for x in (lo, hi))
     return lo, hi
+
+
+def _labelled(lo, hi, firsts, starts, ends, labels):
+    """
+    Place each member whose row holds its labels by those labels.
+
+    Such a member spans its labels from its ``first`` (past any an earlier
+    row overlapped) in its window ``[start, end)``; the mask returned marks
+    those holding none. Other members keep ``lo`` and ``hi``.
+    """
+    lo, hi, none = lo.copy(), hi.copy(), np.zeros(len(lo), dtype=bool)
+    for num in np.flatnonzero([isinstance(x, np.ndarray) for x in labels]):
+        held = labels[num].astype(lo.dtype, copy=False)
+        first = np.searchsorted(held, max(firsts[num], starts[num]))
+        stop = np.searchsorted(held, ends[num])
+        if first < stop:
+            lo[num], hi[num] = held[first], held[stop - 1]
+        else:
+            none[num] = True
+    return lo, hi, none
 
 
 def _snapped_cuts(cuts, start, step) -> list:

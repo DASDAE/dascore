@@ -40,6 +40,7 @@ from rich.text import Text
 import dascore as dc
 from dascore.compat import UPath, is_array
 from dascore.constants import (
+    _DASCORE_DIR,
     CONFLICT,
     ENRICH_CONFLICT,
     ON_MISSING,
@@ -124,6 +125,7 @@ from dascore.utils.chunk_plan import (
     stack_plans,
     subdivision_pieces,
     window_plan,
+    with_labels,
     with_runs,
 )
 from dascore.utils.concurrency import _prefetch
@@ -177,6 +179,7 @@ from dascore.utils.pd import (
 )
 from dascore.utils.remote_io import ensure_local_file
 from dascore.utils.time import to_float, to_timedelta64
+from dascore.warnings import DASCoreWarning
 
 if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
@@ -2529,7 +2532,11 @@ class Spool(NodeRepr, NamespaceOwner):
     # --- restructuring (materializing) operations -----------------------
 
     def _plan_frames(
-        self, dim: str | None = None, *cut_dims: str, runs: bool = True
+        self,
+        dim: str | None = None,
+        *cut_dims: str,
+        runs: bool = True,
+        labels: bool = False,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Return (source_rows, working) frames for planning along ``dim``.
@@ -2542,7 +2549,8 @@ class Spool(NodeRepr, NamespaceOwner):
         (loaded through the plan resolver). Patch-local sample and relative
         residuals adjust the working envelopes so plans reflect the
         loading truth. Rows are cut between their segments along `dim`
-        and `cut_dims`, unless not `runs`.
+        and `cut_dims`, unless not `runs`, and rows stating no step on
+        `dim` hold their labels, read from their sources, if `labels`.
         """
         from dascore.io.index.planned import (  # noqa: PLC0415
             PlanResolver,
@@ -2569,6 +2577,15 @@ class Spool(NodeRepr, NamespaceOwner):
             base = with_untrimmed_origins(base, dim, self._catalog)
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
+        # the index holds only the ends of a coordinate with no step, so a
+        # plan needing its labels reads them
+        key = "_index_row" if "_index_row" in working.columns else "_patch_row"
+        files, names = {}, set()
+
+        def read(row, name):
+            names.add(name)
+            return self._read_coord(row, name, key, files)
+
         # a member a selection emptied holds nothing to plan
         selected = {x for coords, _, _ in self._catalog.residuals for x in coords}
         working = _drop_emptied(working, selected)
@@ -2577,6 +2594,16 @@ class Spool(NodeRepr, NamespaceOwner):
         local = any(s or r for _, s, r in self._catalog.residuals)
         for name in (dim, *cut_dims) if cut and dim is not None and not local else ():
             working = self._with_runs(working, name, modified=True)
+        if labels and dim is not None:
+            working = with_labels(working, dim, partial(read, name=dim))
+        if files:
+            msg = (
+                f"Planning read the {', '.join(map(repr, sorted(names)))} labels "
+                f"of {len(files)} file(s), since the index holds only the ends "
+                "of a coordinate with no step. To plan from the index alone, "
+                "write the data on a grid, eg snapped with Spool.snap_coords."
+            )
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
         base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
@@ -2598,20 +2625,21 @@ class Spool(NodeRepr, NamespaceOwner):
             # a sample or relative selection resolves against the loaded
             # coordinate, which the stored runs do not know, so it is read
             indexed = dict.fromkeys(indexed)
-
-        def read(row):
-            """The row's coordinate, read from its source and selected as it loads."""
-            rows = catalog.to_df()
-            (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
-            # a selection on another coordinate needs that one to replay
-            whole = any(set(x) - {dim} for x, _, _ in residuals)
-            projection = None if whole else dim
-            coords = _source_manager(catalog.resolver, source, files, projection)
-            if coords is None:
-                return None
-            return _select_manager(coords, residuals).coord_map.get(dim)
-
+        read = partial(self._read_coord, name=dim, key=key, files=files)
         return with_runs(df, dim, indexed, read, modified=modified, key=key)
+
+    def _read_coord(self, row, name: str, key: str, files: dict):
+        """The row's coordinate, read from its source and selected as it loads."""
+        catalog = self._catalog
+        residuals, rows = catalog.residuals, catalog.to_df()
+        (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
+        # a selection on another coordinate needs that one to replay
+        whole = any(set(x) - {name} for x, _, _ in residuals)
+        projection = None if whole else name
+        coords = _source_manager(catalog.resolver, source, files, projection)
+        if coords is None:
+            return None
+        return _select_manager(coords, residuals).coord_map.get(name)
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build one plan from this spool's current source rows."""
@@ -2628,7 +2656,11 @@ class Spool(NodeRepr, NamespaceOwner):
         if isinstance(fill, _PendingFill) and fill.dim == dim and not own:
             if fill.merge["conflict"] == "raise":  # else attrs need whole stretches
                 return fill.frames[0], fill.windows(params, dim_kwargs)
-        source_rows, working = self._plan_frames(dim)
+        # windows cut a patch with no step by its labels
+        value = dim_kwargs.get(dim)
+        source_rows, working = self._plan_frames(
+            dim, labels=value is not None and value is not Ellipsis
+        )
         plan = build_chunk_plan(working, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
 
@@ -3007,7 +3039,9 @@ class Spool(NodeRepr, NamespaceOwner):
         except from a stretch holding a patch with no step, which keeps
         its labels as recorded. So does a stretch needing a fractional step
         under 100 ticks, the only one kept for want of a grid: time
-        stretches of any practical length get a grid.
+        stretches of any practical length get a grid. The index holds only
+        the ends of a coordinate with no step, so planning windows over it
+        reads its labels from each source, with a warning.
 
         Data-size chunks measure only the data array and round sample counts down.
         Mixed dtypes are sized after promotion.
