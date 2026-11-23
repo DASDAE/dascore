@@ -431,6 +431,26 @@ class TestNamespace:
         assert type(fast.data) is np.ndarray and fast.equals(spool[0])
         assert _Fast().owns(fast.data) and fast._backend == _Fast()
 
+    def test_a_name_which_is_no_library_s(self, spool, strict):
+        """A backend of any name states the library its arrays are of."""
+
+        class Named(ArrayAPIBackend):
+            """Someone's own kernels, on another library's arrays."""
+
+            name = "any_name_at_all"
+            library = STRICT
+
+        try:
+            patch = spool.set_backend("any_name_at_all")[0]
+            assert backend_name(patch.data) == STRICT and patch._backend == Named()
+            assert patch._kernel_key == "any_name_at_all"
+            # With no kernel of its own it runs what the library's arrays do.
+            with pytest.warns(NumpyFallbackWarning, match=f"no {STRICT} impl"):
+                out = _Doubles()(patch)
+            assert out._backend == Named()
+        finally:
+            backends_module._BACKENDS.pop("any_name_at_all", None)
+
     def test_its_kernel_runs(self, spool, fast):
         """An operation with a kernel for the namespace runs it."""
         np.testing.assert_array_equal(_Tripled()(fast).data, fast.data * 3)

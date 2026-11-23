@@ -10,10 +10,11 @@ instance. A spool with no backend set hands out whatever its files' readers
 return.
 
 A backend is registered by subclassing `ArrayBackend` and giving the class a
-`name`, which is also what its kernels are registered under. The first class
-in a line to state a name is named for its array library, as
-[`backend_name`](`dascore.utils.array_api.backend_name`) reports it. A
-subclass which states another name is a namespace over the same arrays: an
+`name`, which is also what its kernels are registered under. The name can
+be anything if the class states its `library`, which is what
+[`backend_name`](`dascore.utils.array_api.backend_name`) reports for its
+arrays; a class which states none is named for its library. A subclass
+which states another name is a namespace over the same arrays: an
 operation runs the kernel registered for the namespace, and where there is
 none, the one its library would run. A package can have DASCore import its
 backend the first time the name is asked for, by declaring the module as a
@@ -84,7 +85,8 @@ class ArrayBackend(BaseModel, ABC):
         kernels are registered under.
     library
         What [`backend_name`](`dascore.utils.array_api.backend_name`)
-        reports for the backend's arrays: the name of the first class in
+        reports for the backend's arrays. A class may state it, so a name
+        can be anything; left unstated it is the name of the first class in
         its line to state one, so a subclass with a name of its own is a
         namespace over the same arrays.
     lazy
