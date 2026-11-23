@@ -24,6 +24,7 @@ backend the first time the name is asked for, by declaring the module as a
 from __future__ import annotations
 
 import re
+import sys
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -88,7 +89,13 @@ class ArrayBackend(BaseModel, ABC):
         reports for the backend's arrays. A class may state it, so a name
         can be anything; left unstated it is the name of the first class in
         its line to state one, so a subclass with a name of its own is a
-        namespace over the same arrays.
+        namespace over the same arrays. It says which kernels run where the
+        backend has none of its own.
+    array_type
+        The class of the backend's arrays, or a string of where it is, such
+        as ``"cupy.ndarray"``, which imports nothing. Its arrays are then
+        the instances of it. None, the default, takes them to be whatever
+        `backend_name` reports as the library's.
     lazy
         Whether `from_recipe` returns an array which is not read yet.
     """
@@ -97,6 +104,7 @@ class ArrayBackend(BaseModel, ABC):
 
     name: ClassVar[str]
     library: ClassVar[str]
+    array_type: ClassVar[type | str | None] = None
     lazy: ClassVar[bool] = False
 
     @classmethod
@@ -159,7 +167,12 @@ class ArrayBackend(BaseModel, ABC):
 
     def owns(self, array: Any) -> bool:
         """Return True if an array is one this backend would have made."""
-        return backend_name(array) == self.library
+        kind = self.array_type
+        if kind is None:
+            return backend_name(array) == self.library
+        if isinstance(kind, str):
+            kind = _named_class(kind)
+        return kind is not None and isinstance(array, kind)
 
     def __str__(self) -> str:
         """Return the string which names this backend with default options."""
@@ -172,7 +185,8 @@ class NumpyBackend(ArrayBackend):
 
     An array-like which is not of another array library is NumPy's to
     handle, and is left as it is: one which keeps its values some other way,
-    compressed say, is not converted to an `ndarray`.
+    compressed say, is not converted to an `ndarray`. So the backend states
+    no `array_type`: its arrays are more than the instances of `ndarray`.
 
     Examples
     --------
@@ -226,8 +240,8 @@ class ArrayAPIBackend(ArrayBackend):
     device: Any = None
 
     def owns(self, array: Any) -> bool:
-        """Return True for the library's arrays on this backend's device."""
-        if backend_name(array) != self.library:
+        """Return True for the backend's arrays on this backend's device."""
+        if not super().owns(array):
             return False
         return self.device is None or device(array) == self.device
 
@@ -410,6 +424,17 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
         )
         raise ParameterError(msg)
     return _BACKENDS[name].from_string(found.group(2))
+
+
+def _named_class(where: str) -> type | None:
+    """Return the class a dotted name is, or None if it is not imported."""
+    # Nothing is imported for it: an array of a library which is not
+    # imported yet cannot be one of its arrays.
+    top, *rest = where.split(".")
+    found: Any = sys.modules.get(top)
+    for part in rest:
+        found = getattr(found, part, None)
+    return found if isinstance(found, type) else None
 
 
 def backend_library(name: str) -> str:

@@ -351,13 +351,13 @@ class Patch(NamespaceOwner, PatchMeta):
         Keep the backend whose namespace this patch's kernels are of.
 
         Only a namespace is kept: a backend named for its array library says
-        nothing the array does not. And only while the data are of its
-        library, so a patch given data of another library drops it.
+        nothing the array does not. And only while the data are arrays of
+        its own, so a patch given other data drops it.
         """
         kept = (
             backend is not None
             and backend.name != backend.library
-            and backend.library == backend_name(self._data)
+            and backend.owns(self._data)
         )
         self._backend = backend if kept else None
 

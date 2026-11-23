@@ -15,6 +15,7 @@ import dascore as dc
 from dascore import backends as backends_module
 from dascore.backends import (
     ArrayAPIBackend,
+    ArrayBackend,
     JaxBackend,
     LazyBackend,
     NumpyBackend,
@@ -450,6 +451,57 @@ class TestNamespace:
             assert out._backend == Named()
         finally:
             backends_module._BACKENDS.pop("any_name_at_all", None)
+
+    def test_arrays_told_by_their_class(self, spool):
+        """A backend which states its array type owns the instances of it."""
+
+        class Wrapped:
+            """An array type of the backend's own, of no array library."""
+
+            def __init__(self, data):
+                self.shape, self.dtype, self.ndim = data.shape, data.dtype, data.ndim
+                self._data = data
+
+            def __array__(self, dtype=None, copy=None):
+                """Return the values."""
+                return self._data
+
+        class Wrapping(ArrayBackend):
+            """A backend which makes its own arrays, and has its own kernels."""
+
+            name = "wrapping"
+            library = "numpy"
+            array_type = Wrapped
+
+            def from_array(self, array):
+                """Return the array wrapped, or as it is if it is already."""
+                return array if self.owns(array) else Wrapped(np.asarray(array))
+
+        try:
+            patch = spool.set_backend("wrapping")[0]
+            assert type(patch.data) is Wrapped and patch._backend == Wrapping()
+            # An array of the same library which is not one of its own is not
+            # of its namespace, though NumPy handles both.
+            plain = patch.new(data=np.asarray(patch.data))
+            assert plain._backend is None and not Wrapping().owns(plain.data)
+            assert NumpyBackend().owns(patch.data)
+        finally:
+            backends_module._BACKENDS.pop("wrapping", None)
+
+    @pytest.mark.parametrize(
+        "where, owned",
+        (("numpy.ndarray", True), ("not_imported.Array", False), ("numpy.no", False)),
+    )
+    def test_array_type_by_name(self, where, owned):
+        """A string says where the class is, and imports nothing for it."""
+
+        class Named(NumpyBackend):
+            """NumPy's arrays, told by a class named in a string."""
+
+            array_type = where
+
+        assert Named().owns(np.ones(2)) is owned
+        assert "not_imported" not in sys.modules
 
     def test_its_kernel_runs(self, spool, fast):
         """An operation with a kernel for the namespace runs it."""
