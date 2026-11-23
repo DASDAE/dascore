@@ -10,6 +10,7 @@ explicitly.
 from __future__ import annotations
 
 import pickle
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -759,6 +760,77 @@ class TestBoundBetweenSamples:
         kwargs = {"time": length, "keep_partial": True}
         TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", kwargs)
 
+    @pytest.mark.parametrize("relative", [False, True])
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_holding_no_sample_left_out(self, kind, relative, on_disk, tmp_path):
+        """A range between two samples leaves the patch out (#1703)."""
+        labels, _, (low, _) = kind
+        spool = dc.spool(self._patches(labels, count=2))
+        if on_disk:
+            path = dc.examples.spool_to_directory(spool, path=tmp_path)
+            spool = dc.spool(path).update()
+        step = labels[1] - labels[0]
+        out = self._select(spool, labels, (low, low + step / 5), relative)
+        assert len(out) == len(out.get_contents()) == len(list(out)) == 0
+
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_positions_count_patches_held(self, kind, on_disk, tmp_path):
+        """Items, slices and masks skip the patch a range holds no sample of."""
+        labels, _, (low, _) = kind
+        (first,) = self._patches(labels)
+        # half a step later, so it holds the label the range is about
+        second = first.update_coords(time=labels[:12] + (low - labels[2]))
+        spool = dc.spool([first, second])
+        if on_disk:
+            path = dc.examples.spool_to_directory(spool, path=tmp_path)
+            spool = dc.spool(path).update()
+        step = labels[1] - labels[0]
+        out = spool.select(time=(low - step / 5, low + step / 5))
+        assert len(out) == 1
+        held = [out[0], out[-1], out[0:1][0], out[np.ones(1, dtype=bool)][0]]
+        assert all(x.get_coord("time").values.tolist() == [low] for x in held)
+
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_ranges_on_one_dimension(self, on_disk, tmp_path):
+        """Ranges on two coordinates of a dimension, holding no sample together."""
+        coords = {"x": np.arange(10.0), "y": ("x", 2 * np.arange(10.0))}
+        spool = dc.spool([dc.Patch(data=np.arange(10.0), coords=coords, dims=("x",))])
+        if on_disk:
+            path = dc.examples.spool_to_directory(spool, path=tmp_path)
+            spool = dc.spool(path).update()
+        out = spool.select(x=(0, 3)).select(y=(12, 18))
+        assert len(out) == len(out.get_contents()) == len(list(out)) == 0
+
+    def test_two_kinds_left_out(self):
+        """Beside another kind of the coordinate, the patch is still left out."""
+        dated = np.datetime64("2020-01-01") + np.arange(5) * np.timedelta64(1, "s")
+        patches = [
+            dc.Patch(data=np.zeros(5), coords={"time": x}, dims=("time",))
+            for x in (np.arange(5.0), dated)
+        ]
+        out = dc.spool(patches).select(time=(1.2, 1.4))
+        assert len(out) == len(list(out)) == 0
+
+    def test_text_range_counts_in_sql(self):
+        """Text labels have no lattice to fall between, so a range counts in SQL."""
+        coords = {"station": ["a", "b", "c"], "time": np.arange(4.0)}
+        patch = dc.Patch(data=np.zeros((3, 4)), coords=coords, dims=("station", "time"))
+        out = dc.spool([patch]).select(station=("a", "b"))
+        backend = out._catalog.backend
+        with mock.patch.object(backend, "_pivot_coords") as pivot:
+            assert len(out) == 1
+        pivot.assert_not_called()
+
+    def test_wide_range_counts_in_sql(self, kind):
+        """A range a step wide holds a sample, so counting it projects nothing."""
+        labels, _, _ = kind
+        spool = dc.spool(self._patches(labels, count=2))
+        out = spool.select(time=(labels[3], labels[4]))
+        backend = out._catalog.backend
+        with mock.patch.object(backend, "_pivot_coords") as pivot:
+            assert len(out) == 1
+        pivot.assert_not_called()
+
     def test_joined_patches_keep_labels(self, kind):
         """Patches joined after a selection keep their labels."""
         labels, _, (low, high) = kind
@@ -1392,7 +1464,8 @@ class TestEmptiedMembers:
         """A spool whose members a selection emptied plans to no outputs."""
         patches = [self._patch(np.arange(5.0) + x) for x in (0.0, 5.0)]
         spool = dc.spool(patches).select(time=(1.2, 1.4), relative=relative)
-        assert len(spool) and all(0 in x.shape for x in spool)
+        # the selection leaves them out already (#1703)
+        assert len(spool) == len(list(spool)) == 0
         assert PLANS[plan](spool) == []
 
     @pytest.mark.parametrize(

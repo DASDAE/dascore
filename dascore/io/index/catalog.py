@@ -63,6 +63,7 @@ from dascore.utils.misc import (
     is_range,
 )
 from dascore.utils.paths import coerce_to_local_path, is_local_path, is_memory_uri
+from dascore.utils.time import to_int
 
 if TYPE_CHECKING:
     from dascore.core.coords import BaseCoord
@@ -723,6 +724,21 @@ def _extremes_coord(envelope, units=None) -> object | None:
     return get_coord(values=np.array(values), units=units)
 
 
+def _bound_numbers(value, unit, kind: str) -> list:
+    """
+    A range's bounds as numbers, in ``unit`` or as epoch or duration ns.
+
+    A quantity on a coordinate with no unit gives its SI magnitudes.
+    """
+    if hasattr(value, "magnitudes"):
+        nameless = unit is None or pd.isna(unit)
+        value = value.magnitudes if nameless else value.magnitudes_in(unit)
+    if kind == "num":
+        return [None if x is None else float(x) for x in value]
+    convert = dc.to_datetime64 if kind == "time" else dc.to_timedelta64
+    return [None if x is None else to_int(convert(x)) for x in value]
+
+
 _SOURCE_SUFFIX = "_source_envelope"
 
 
@@ -1234,7 +1250,7 @@ class PatchCatalog:
         the membership unfiltered would ignore them entirely, and letting
         SQL order the result would undo the arrangement.
         """
-        if self._has_relative_selection():
+        if self._drops_sql_rows():
             return tuple(self.to_df()["_patch_row"])
         if self._ids is not None and self._order is None:
             if not self._queries:
@@ -1261,7 +1277,7 @@ class PatchCatalog:
         start = 0 if item.start is None else operator.index(item.start)
         stop = None if item.stop is None else operator.index(item.stop)
         step = 1 if item.step is None else operator.index(item.step)
-        if ids is None and self._has_relative_selection():
+        if ids is None and self._drops_sql_rows():
             ids = self.ordered_rows()
         if (
             ids is None
@@ -1536,9 +1552,55 @@ class PatchCatalog:
             df = clip_to_runs(df, name, indexed, read)
         return df
 
-    def _has_relative_selection(self) -> bool:
-        """Whether patch-relative bounds can remove SQL candidate rows."""
-        return any(relative and not samples for _, samples, relative in self._residuals)
+    def _ranges_may_empty(self) -> bool:
+        """
+        Whether value ranges may leave a row SQL kept holding no sample.
+
+        A range narrower than a step may fall between two samples, so the
+        widest step the index states for the coordinate in each unit settles
+        it; ranges on one coordinate bound it together, and one open on a
+        side reaches the row's last label. Ranges on coordinates sharing a
+        dimension trim each other, which SQL can't see.
+        """
+        ranges: dict[str, list] = {}
+        for coords, samples, relative in self._residuals:
+            for name, value in () if samples or relative else coords.items():
+                ranges.setdefault(name, []).append(value)
+        dims = self.backend.coord_dims_map() if len(ranges) > 1 else {}
+        along = Counter(y for x in ranges for y in set(dims.get(x, "").split(",")))
+        if any(count > 1 for dim, count in along.items() if dim):
+            return True
+        for name, values in ranges.items():
+            meta = self.backend.coord_meta([name])
+            kinds = {
+                "dur" if kind == "time" and relative else kind
+                for kind, relative in zip(meta["value_kind"], meta["is_relative"])
+            }
+            if kinds <= {"str"}:  # labels have no lattice
+                continue
+            if len(kinds) > 1:
+                return True
+            kind = kinds.pop()
+            for unit, (number, ticks) in self.backend.widest_steps(name).items():
+                if (step := number if kind == "num" else ticks) is None:
+                    continue
+                try:
+                    bounds = [_bound_numbers(x, unit, kind) for x in values]
+                except (TypeError, ValueError, NotImplementedError):
+                    return True
+                lows, highs = (
+                    [y[i] for y in bounds if y[i] is not None] for i in (0, 1)
+                )
+                if not (lows and highs):
+                    break
+                if min(highs) - max(lows) < step:
+                    return True
+        return False
+
+    def _drops_sql_rows(self) -> bool:
+        """Whether the relation can drop rows SQL kept, so positions need it."""
+        relative = any(rel and not samples for _, samples, rel in self._residuals)
+        return relative or self._ranges_may_empty()
 
     def _requires_full_relation(self) -> bool:
         """Keep exact positional filtering for regex and complex coordinate trims."""
@@ -1558,7 +1620,7 @@ class PatchCatalog:
                 )
             ):
                 return True
-        return self._runs_may_trim()
+        return self._runs_may_trim() or self._ranges_may_empty()
 
     def __len__(self) -> int:
         with self._revision.lock:
@@ -1579,8 +1641,9 @@ class PatchCatalog:
                     patch_local = True
                 elif patch_local:
                     return len(self._load_df())
-            # A range landing in a hole drops a row SQL kept.
-            if self._runs_may_trim():
+            # A range landing in a hole, or holding no sample, drops a row SQL
+            # kept.
+            if self._runs_may_trim() or self._ranges_may_empty():
                 return len(self._load_df())
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.

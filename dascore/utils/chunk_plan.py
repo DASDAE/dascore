@@ -673,10 +673,10 @@ def _snap_to_samples(before, after, coords, uncertain) -> pd.DataFrame:
     last samples inside it, which loading keeps (#1127): on its lattice
     (`_sample_lattices`) for ticks, on its grid (`_float_samples`) for
     floats. An end stays the bound where neither is known, an exact
-    fractional grid was trimmed before (its phase and origin may part), the
-    row holds no sample inside, a relative selection cut it without knowing
-    where, or its float labels are stored narrower than float64 (they
-    rebuild only to their rounding).
+    fractional grid was trimmed before (its phase and origin may part), a
+    relative selection cut it without knowing where, or its float labels
+    are stored narrower than float64 (they rebuild only to their rounding).
+    A row holding no sample inside is dropped, since it loads none.
     """
     for name in coords:
         cols = [f"{name}_min", f"{name}_max"]
@@ -709,11 +709,12 @@ def _snap_to_samples(before, after, coords, uncertain) -> pd.DataFrame:
             np.where(fit & y[cut], x, e)
             for x, y, e in zip(got, moved, part, strict=True)
         ]
-        empty = new[0] > new[1]  # no sample inside: the row may hold nothing
         ends = [x.copy() for x in ends]
-        for end, old, snapped in zip(ends, part, new, strict=True):
-            end[cut] = np.where(empty, old, snapped)
-        after = after.assign(**dict(zip(cols, ends, strict=True)))
+        for end, snapped in zip(ends, new, strict=True):
+            end[cut] = snapped
+        held = np.ones(len(after), dtype=bool)
+        held[np.flatnonzero(cut)[new[0] > new[1]]] = False  # no sample inside
+        after = after.assign(**dict(zip(cols, ends, strict=True)))[held]
     return after
 
 

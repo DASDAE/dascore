@@ -1258,12 +1258,9 @@ class TestSelectSharedDimension:
         assert (load["distance_min"].iloc[0], load["distance_max"].iloc[0]) == (10, 20)
 
     def test_range_between_samples(self, sensor_spool):
-        """A range holding no sample leaves the other envelopes whole."""
-        contents = sensor_spool.select(sensor=(1020.5, 1021.5)).get_contents()
-        assert (contents["distance_min"].iloc[0], contents["distance_max"].iloc[0]) == (
-            0,
-            299,
-        )
+        """A range holding no sample leaves the patch out (#1703)."""
+        out = sensor_spool.select(sensor=(1020.5, 1021.5))
+        assert len(out) == len(out.get_contents()) == len(list(out)) == 0
 
 
 class TestSelectAfterTrimOnExactGrid:
@@ -1311,13 +1308,12 @@ class TestSelectAfterTrimOnExactGrid:
         _assert_contents_match_patches(out, ["utc"])
 
     def test_samples_after_range_between_samples(self, grid_spool):
-        """A range holding no sample leaves nothing to count positions from."""
+        """A range holding no sample leaves the patch out (#1703)."""
         inside = self.start + np.timedelta64(100_100, "us")
         trimmed = grid_spool.select(time=(self._ms(100), inside))
         for name in ("time", "utc"):
             out = trimmed.select(**{name: (0, 1)}, samples=True)
-            assert len(out.get_contents()) == len(out) == 1
-            assert not len(out[0].get_coord("time"))
+            assert len(out.get_contents()) == len(out) == len(list(out)) == 0
 
 
 class TestSelectSharedDimensionManyPatches:
