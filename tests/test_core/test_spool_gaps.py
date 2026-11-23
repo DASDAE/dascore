@@ -507,6 +507,22 @@ class TestGappedPatchRows:
         assert spool.get_gaps().empty
         assert spool.get_coverage()["coverage"].iloc[0] == 1
 
+    def test_beside_a_patch_with_no_step(self):
+        """Durations with no step beside ones in runs plan as each alone (#1680)."""
+        grids = [get_coord(start=x * ONE_MS, step=ONE_MS, shape=(2,)) for x in (10, 14)]
+        times = [np.array([2, 5, 6]) * ONE_MS, concat_coords(*grids)]
+        patches = [
+            dc.Patch(data=np.zeros(len(x)), coords={"time": x}, dims=("time",))
+            for x in times
+        ]
+        alone = [dc.spool([x]) for x in patches]
+        got = list(dc.spool(patches).chunk(time=2 * ONE_MS))
+        expected = [y for x in alone for y in x.chunk(time=2 * ONE_MS)]
+        assert len(got) == len(expected) == 4
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+        (gap,) = dc.spool(patches).get_gaps().to_dict("records")
+        assert (gap["time_min"], gap["time_max"]) == (11 * ONE_MS, 14 * ONE_MS)
+
     def test_identity_is_stable(self):
         """A gapped patch given again is the same entry."""
         patch = _time_runs_patch(3)

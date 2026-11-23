@@ -356,7 +356,7 @@ def _trim_to_member_windows(
     ]
     if not windows:
         return joined
-    cut = joined.copy(deep=False)
+    cut, whole = joined.copy(deep=False), joined.copy(deep=False)
     for name in windows:
         native = joined.get(_source_units_column(name), joined.get(f"_{name}_units"))
         planned = members.get(f"_{name}_units")
@@ -368,12 +368,18 @@ def _trim_to_member_windows(
             native = pd.Series(native.to_numpy(), dtype=object)
             planned = pd.Series(planned.to_numpy(), dtype=object)
             same = (native.isna() | native.eq(planned)).to_numpy()
-        for end in ("min", "max"):
-            column = f"{name}_{end}"
+        for end, src in zip(("min", "max"), ("low", "high"), strict=True):
+            column, source = f"{name}_{end}", source_range_column(name, src)
             window = pd.Series(members[column].to_numpy(), index=joined.index)
             cut[column] = window.where(same, joined[column])
-    tracker = _SampleTracker(joined)
-    tracker.follow_values(joined, cut, dict.fromkeys(windows), False, {})
+            if source not in joined:
+                continue
+            # an earlier plan's member is cut from its source but states its
+            # riders whole, so its samples count from the source's range
+            if (use := same & joined[source].notna().to_numpy()).any():
+                whole[column] = joined[column].mask(use, joined[source])
+    tracker = _SampleTracker(whole)
+    tracker.follow_values(whole, cut, dict.fromkeys(windows), False, {})
     return tracker.trim(cut, windows)
 
 
@@ -436,6 +442,8 @@ def _aux_coord_info(
     if not len(members) or not coord_dims_map:
         return out
     cols = [c for c in ("output_id", "_patch_row", "_modified") if c in members.columns]
+    if "_modified" in cols:  # a re-plan's sources are members which state it too
+        source_rows = source_rows.drop(columns="_modified", errors="ignore")
     whole = members[cols].merge(source_rows, on="_patch_row", how="left")
     joined = _trim_to_member_windows(whole, members, coord_dims_map, source_trimmed)
     grouped = joined.groupby("output_id", sort=True)

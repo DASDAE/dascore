@@ -261,6 +261,20 @@ class TestSamples:
             assert coord.min() == row.time_min
             assert coord.max() == row.time_max
 
+    def test_chunk_output_of_one_label_beside_a_rider(self):
+        """An output holding one label with no step selects as alone (#1679)."""
+        stepless = {"time": np.array([2.0, 5.0, 6.0])}
+        ridden = {"time": np.array([10.0, 11.0]), "label": ("time", np.array([0, 2.0]))}
+        patches = [
+            dc.Patch(data=np.zeros(len(x["time"])), coords=x, dims=("time",))
+            for x in (stepless, ridden)
+        ]
+        chunked = dc.spool(patches).chunk(time=2, keep_partial=True)
+        selected = chunked.select(time=(-2, None), samples=True)
+        expected = [x.select(time=(-2, None), samples=True) for x in chunked]
+        assert len(selected.get_contents()) == len(expected) == 4
+        assert all(x.equals(y) for x, y in zip(selected, expected, strict=True))
+
     def test_union_keeps_emptied_members(self, spool):
         """An emptied sample window keeps its members."""
         out = spool.select(time=(5000, 6000), samples=True)

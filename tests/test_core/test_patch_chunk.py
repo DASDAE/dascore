@@ -1458,6 +1458,25 @@ class TestChainedChunk:
         assert len(rechunk) == 8
         assert {x.shape for x in rechunk} == {(300, 500)}
 
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_same_dim_rechunk_cuts_a_rider(self, tmp_path, on_disk):
+        """A re-chunk states a rider its windows cut as one chunk does (#1679)."""
+        time = np.arange(8.0)
+        # the windows trim an evenly sampled rider; one with no step stays whole
+        riders = {"label": 2 * time, "irregular": np.array([0, 1, 3, 4, 6, 7, 9.0, 10])}
+        coords = {"time": time} | {x: ("time", y) for x, y in riders.items()}
+        spool = dc.spool([dc.Patch(data=time, coords=coords, dims=("time",))])
+        if on_disk:
+            spool = dc.spool(ex.spool_to_directory(spool, path=tmp_path)).update()
+        once, twice = spool.chunk(time=2), spool.chunk(time=4).chunk(time=2)
+        columns = [f"{x}_{y}" for x in riders for y in ("min", "max", "step")]
+        columns += [f"_{x}_def_key" for x in riders]  # neither claims to be uncut
+        assert twice._df[columns].equals(once._df[columns])
+        # each output's first sample, then those past label 3
+        later = twice.select(label=(0, 1), samples=True).select(label=(3, None))
+        assert [x.get_array("label").tolist() for x in later] == [[4], [8], [12]]
+        assert len(later) == 3
+
     def test_size_after_merge(self, random_spool):
         """A merged spool still knows its dtype."""
         target = dc.get_quantity("1 MB")

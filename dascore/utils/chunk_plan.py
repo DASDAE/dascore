@@ -217,6 +217,10 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
         split["_modified"] = True
     kept = df.drop(index=df.index[cut])
     out = pd.concat([kept, split], ignore_index=True)
+    if out[names[0]].dtype.kind in "Mm" and out[names[2]].dtype == object:
+        # rows stating no step held objects, so segments' steps join them as
+        # objects; hold them as durations, the missing ones as NaT
+        out[names[2]] = pd.to_timedelta(out[names[2]])
     if modified:
         out["_modified"] = out["_modified"].astype("boolean").fillna(False).astype(bool)
     return out
@@ -669,9 +673,11 @@ def _set_cells(frame, column, rows, values) -> None:
     frame[column] = cells
 
 
-def _grid_terms(coord) -> tuple:
-    """The exact grid a relation row states for an evenly sampled coordinate."""
-    return (*coord.runs[0].canonical()[1:], len(coord))
+def _grid_terms(coord) -> tuple | None:
+    """The exact grid a relation row states for a coordinate; None for labels."""
+    if not isinstance(run := coord.runs[0], Grid):
+        return None
+    return (*run.canonical()[1:], len(coord))
 
 
 def _alike(columns) -> tuple[np.ndarray, np.ndarray]:
