@@ -1379,7 +1379,12 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 array[wrap_around] = array[wrap_around] + max_val + 1
         else:
             min_val, max_val = self.min(), self.max()
-            array = _onto_grid(self, self._get_compatible_value(array, relative))
+            array = self._get_compatible_value(array, relative)
+            # NaN compares false with both ends, so it would pass the bounds check
+            if np.any(pd.isnull(array)):
+                msg = f"A NaN or NaT value has no index in {self}"
+                raise ValueError(msg)
+            array = _onto_grid(self, array)
         # handle out of bounds cases
         is_gt, is_lt = array > max_val, array < min_val
         if not allow_out_of_bounds and np.any(is_gt | is_lt):
@@ -1392,8 +1397,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             # For samples mode, just return the raw indices (no clamping)
             if samples:
                 return array if input_array_like else array[0]
-            # For absolute mode with evenly sampled coords, compute index from value
-            if hasattr(self, "step") and self.step is not None:
+            # A nonzero step places values past either end; a zero step clamps
+            if getattr(self, "step", None):
                 indices = self._out_of_bounds_indices(array)
                 return indices if input_array_like else indices[0]
 
@@ -3061,9 +3066,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         sample or one just outside the coord.
         """
         start = self.min()
-        if forward:  # index of the first sample >= value
-            return 0 if value <= start else len(self)
-        return 0 if value >= start else -1
+        # forward: the first sample >= value; backward: the last <= value
+        hit = value <= start if forward else value >= start
+        miss = len(self) if forward else -1
+        out = np.where(hit, 0, miss)
+        return out if isinstance(value, Sized) else int(out)
 
     def _bound_ticks(self, values, forward: bool) -> np.ndarray:
         """
@@ -3104,6 +3111,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return out if isinstance(value, Sized) else int(out[0])
         start, step = grid.origin, grid.step_num
         if isinstance(value, Sized):
+            if not step:
+                return self._get_zero_step_index(value, forward)
             func = np.ceil if forward else np.floor
             # Due to float weirdness we need a little bit of a fudge factor here.
             fraction = func(
@@ -3470,7 +3479,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return Blank(run.shape, *ends), np.result_type(self.dtype, *known)
         if isinstance(run, Labels):
             # a genuinely new array: it enters a store of its own, hashed once
-            values = convert_units(self._run_labels(run), units, self.units)
+            # asarray, since a 0-d array's label converts to a numpy scalar
+            values = np.asarray(convert_units(self._run_labels(run), units, self.units))
             return values, values.dtype
         if run.exact and run.step_den != 1:
             msg = (
