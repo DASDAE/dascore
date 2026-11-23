@@ -215,6 +215,16 @@ class TestListSerToStr:
 class TestFilterDfAdvanced:
     """Tests for advanced filtering of dataframes."""
 
+    def test_lone_datetime_min_column(self):
+        """A datetime column ending in _min, with no _max beside it, leaves a
+        number column it shares a stem with numeric.
+        """
+        df = pd.DataFrame(
+            {"time_minute": [1, 2], "time_minute_min": pd.to_datetime(["2020", "2021"])}
+        )
+        out = filter_df(df, time_minute_max=1)
+        assert list(out) == [True, False]
+
     def test_col(self, example_df_2):
         """Test column names that end with max."""
         vals = [100, 125]
