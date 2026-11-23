@@ -92,7 +92,7 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
-from dascore.core.patch import _is_lazy
+from dascore.core.patch import _is_lazy, _namespace
 from dascore.exceptions import (
     CoordError,
     InsufficientMemoryError,
@@ -428,13 +428,6 @@ def _bytes_to_load(df: pd.DataFrame, lazy: Container[str] = frozenset()) -> int:
         samples = samples.where(~held, 0.0)
     itemsize = df.get("_dtype", none).map(_itemsize)
     return int(np.nansum(samples.to_numpy() * itemsize.to_numpy(dtype=float)))
-
-
-def _changes_kernels(patch: dc.Patch, backend: ArrayBackend) -> bool:
-    """Whether keeping a backend would change the kernels a patch runs."""
-    # Only a namespace is kept, so another backend is no backend at all.
-    namespace = backend if backend.name != backend.library else None
-    return patch._backend != namespace
 
 
 def _loaded(patch: dc.Patch) -> dc.Patch:
@@ -990,17 +983,18 @@ class Spool(NodeRepr, NamespaceOwner):
             data = data._with_backend(backend).load()
         # Whatever the read made, or the spool held, as the backend's own.
         new = backend.from_array(data)
-        # An array in memory under a lazy backend is the one it computes on's.
-        in_memory = isinstance(backend, LazyBackend) and not isinstance(new, LazyArray)
-        kept = backend.compute if in_memory else backend
-        if new is patch.data and not _changes_kernels(patch, kept):
+        # The namespace its kernels are of: the backend's own, or the one a
+        # lazy backend computes on.
+        lazy = isinstance(backend, LazyBackend)
+        kept = _namespace(backend.compute if lazy else backend, new)
+        if new is patch.data and kept == patch._backend:
             return patch
         # Inside an operation, so the attrs are taken to describe the array.
         with operation_context():
             out = patch.update(data=new)
         # Where its file is stands, so it can still say what it was read from.
         out._source = patch._source
-        out._keep_backend(kept)
+        out._backend = kept
         return out
 
     def set_backend(self, backend: str | ArrayBackend | None) -> Self:

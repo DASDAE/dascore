@@ -576,7 +576,7 @@ class PatchProcessor(DascoreBaseModel):
             # gets them as any other result does, below.
             attrs = _unrecorded_attrs(attrs)
         out = out.update(attrs=attrs)
-        if meta._kernel_key == LAZY_BACKEND:
+        if backend_library(meta._kernel_key) == LAZY_BACKEND:
             result = self._settled(result, out)
         new = out if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.

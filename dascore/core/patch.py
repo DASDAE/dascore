@@ -60,6 +60,20 @@ def _is_lazy(data) -> bool:
     return isinstance(data, LazyArray) or backend_name(data) == "dask"
 
 
+def _namespace(backend: ArrayBackend | None, data) -> ArrayBackend | None:
+    """
+    Return a backend if it is a namespace which `data` are of, else None.
+
+    Only a namespace counts: a backend named for its array library says
+    nothing the array does not. The data are of it while they are arrays of
+    its own, or a lazy array which computes on it.
+    """
+    if backend is None or backend.name == backend.library:
+        return None
+    computes_on = isinstance(data, LazyArray) and data._backend == backend
+    return backend if computes_on or backend.owns(data) else None
+
+
 def _handed_array_attrs(attrs):
     """Return the attrs of an array a constructor was handed; see `__init__`."""
     if attrs is None or inside_operation():
@@ -344,22 +358,20 @@ class Patch(NamespaceOwner, PatchMeta):
     def _kernel_key(self) -> str:
         """Return the name this patch's kernels are resolved under."""
         backend = self._backend
-        return backend_name(self._data) if backend is None else backend.name
+        # A lazy array is not one of its namespace's own until it is loaded:
+        # its steps wait, and run that namespace's kernels when it is.
+        if backend is not None and backend.owns(self._data):
+            return backend.name
+        return backend_name(self._data)
 
     def _keep_backend(self, backend: ArrayBackend | None) -> None:
         """
         Keep the backend whose namespace this patch's kernels are of.
 
-        Only a namespace is kept: a backend named for its array library says
-        nothing the array does not. And only while the data are arrays of
-        its own, so a patch given other data drops it.
+        Kept only while the data are of that namespace, so a patch given
+        other data drops it; see `_namespace`.
         """
-        kept = (
-            backend is not None
-            and backend.name != backend.library
-            and backend.owns(self._data)
-        )
-        self._backend = backend if kept else None
+        self._backend = _namespace(backend, self._data)
 
     def drop_data(self) -> PatchMeta:
         """
@@ -424,11 +436,7 @@ class Patch(NamespaceOwner, PatchMeta):
             # A lazy array loads itself, so an error from one of its steps
             # is the one raised.
             lazy = isinstance(data, LazyArray)
-            out = self.update(data=data.load() if lazy else to_numpy(data))
-        if lazy:
-            # In memory, its kernels are those of the backend it computed on.
-            out._keep_backend(data._backend)
-        return out
+            return self.update(data=data.load() if lazy else to_numpy(data))
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

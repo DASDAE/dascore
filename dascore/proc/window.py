@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 from pydantic import ConfigDict
 
+from dascore.backends import backend_library
 from dascore.core.coordmanager import _cell_edge_names
 from dascore.core.coords import Grid, get_coord
 from dascore.core.processor import PatchProcessor, _via_numpy, captured_operation
@@ -773,7 +774,7 @@ class Windowed(PatchProcessor):
         halo = self._halo(window, factor, inner)
         # A lazy patch and a dask one both compute later, so both are told
         # now what dtype the blended windows have.
-        deferred = meta._kernel_key in (LAZY_BACKEND, "dask")
+        deferred = backend_library(meta._kernel_key) in (LAZY_BACKEND, "dask")
         plan = {
             "axes": axes,
             "size": size,

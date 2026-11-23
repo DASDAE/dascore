@@ -576,6 +576,44 @@ class TestNamespace:
         # In memory it is still of the namespace it was computed on.
         assert type(loaded.data) is np.ndarray and loaded._backend == _Fast()
 
+    def test_merged_by_the_spool_is_of_it(self, spool):
+        """What a spool set to the namespace merges is of the namespace too."""
+        for name in ("fast_numpy", "lazy[fast_numpy]"):
+            merged = spool.set_backend(name).chunk(time=None)[0]
+            assert merged._backend == _Fast()
+
+    def test_operation_which_reads_lazy_data_keeps_it(self, spool, fast):
+        """Read into memory for an operation, the patch is still of the namespace."""
+        lazy = spool.set_backend("lazy[fast_numpy]")[0]
+        with config_context(numpy_fallback="ignore"):
+            out = lazy.detrend("time")
+        assert type(out.data) is np.ndarray and out._backend == _Fast()
+        np.testing.assert_allclose(out.data, fast.detrend("time").data)
+
+    def test_over_arrays_which_compute_later(self):
+        """A namespace over a library which computes later is planned as it is."""
+        dask_array = pytest.importorskip("dask.array")
+
+        class Flavour(_Dask):
+            """Dask arrays, under a name of its own."""
+
+            name = "dask_flavour"
+
+        data = np.ones((12, 400), np.uint8)
+        coords = {"distance": np.arange(12.0), "time": np.arange(400.0)}
+        patch = dc.Patch(data, coords, ("distance", "time"))
+        patch = patch.new(data=dask_array.from_array(data, chunks=(12, 100)))
+        try:
+            there = dc.spool([patch]).set_backend("dask_flavour")[0]
+            assert there._backend == Flavour()
+            # Windows a detrend widens only where one holds NaN: stated
+            # before anything is computed, as for the library's own arrays.
+            out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
+            blocks = [x.compute().dtype for x in out.data.blocks]
+            assert set(blocks) == {np.dtype(out.dtype)} == {np.dtype(np.float64)}
+        finally:
+            backends_module._BACKENDS.pop("dask_flavour", None)
+
     def test_spool_load_keeps_it(self, spool, fast):
         """Loaded by the spool, lazily or not, the patches are of the namespace."""
         for name in ("fast_numpy", "lazy[fast_numpy]"):
