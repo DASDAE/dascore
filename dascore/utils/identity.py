@@ -523,8 +523,35 @@ def with_ids(attrs):
     return attrs.model_copy(update=update)
 
 
+def window_data_id(base: str, windows: Sequence, extent: Sequence[int]) -> str:
+    """
+    Return the id of the samples some windows take of an array.
+
+    Parameters
+    ----------
+    base
+        The data id of the whole array.
+    windows
+        A half-open `(start, stop)` sample range for each axis, counted
+        from the whole array's start, so the selections which led to them
+        do not matter.
+    extent
+        The whole array's shape; windows taking all of it are the array.
+
+    Examples
+    --------
+    >>> from dascore.utils.identity import window_data_id
+    >>> assert window_data_id("a", [(0, 3)], (3,)) == "a"
+    >>> assert window_data_id("a", [(0, 2)], (3,)) != "a"
+    """
+    windows = tuple((int(start), int(stop)) for start, stop in windows)
+    if not windows or windows == tuple((0, int(x)) for x in extent):
+        return base
+    return H("window", [base, windows])
+
+
 def merge_operation(params: Mapping[str, Any] | None = None) -> str:
-    """Return the id of merging patches into one, under these merge options."""
+    """Return the id of merging patches into one, laid out as ``params`` say."""
     return operation_id("Merge", dict(params or {}))
 
 

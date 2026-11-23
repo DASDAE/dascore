@@ -9,6 +9,9 @@ import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.utils.patch_assembly as assembly
+from dascore.config import config_context
+from dascore.core.coordmanager import get_coord_manager
 from dascore.io.core import scan_payloads
 from dascore.utils.downloader import fetch
 from dascore.utils.identity import narrowed_data_id, read_operation_id
@@ -158,6 +161,105 @@ class TestChunkRouteParity:
         assert len(first) == len(second) > 1
         assert len(set(first)) == len(first), first
         assert first == second
+
+
+class TestChunkLayout:
+    """
+    A chunk output is named by what was done (#1643): its members, the
+    samples each gives, and where they go, not how the plan asked for them.
+    """
+
+    @staticmethod
+    def _patch(start, size=6):
+        """A float time coordinate, which a read widens its bounds on."""
+        time = np.arange(float(size)) + start
+        data = np.arange(float(size))
+        return dc.Patch(data=data, coords={"time": time}, dims=("time",))
+
+    def test_a_window_ignores_the_read_pad(self, monkeypatch):
+        """However wide the assembler reads, a window names its samples."""
+        spool = dc.spool([self._patch(0)])
+        first = spool.chunk(time=3)[0]
+        monkeypatch.setattr(assembly, "_READ_PAD", 0.3)
+        again = spool.chunk(time=3)[0]
+        assert again == first
+        assert again.attrs.data_id == first.attrs.data_id
+
+    def test_windows_of_one_member_differ(self):
+        """Each window is its own samples, and none is the whole member."""
+        patch = self._patch(0)
+        ids = [x.attrs.data_id for x in dc.spool([patch]).chunk(time=3)]
+        assert len(set(ids)) == len(ids) == 2
+        assert patch.attrs.data_id not in ids
+
+    def test_a_setting_which_changes_nothing(self):
+        """Two max_shifts which merge the same members alike give one id."""
+        members = [self._patch(0), self._patch(6.25)]
+        with config_context(max_shift=0.3):
+            first = dc.spool(members).chunk(time=None)
+        with config_context(max_shift=0.45):
+            second = dc.spool(members).chunk(time=None)
+        assert len(first) == len(second) == 1
+        assert first[0] == second[0]
+        assert first[0].attrs.data_id == second[0].attrs.data_id
+
+    def test_a_setting_which_changes_the_members(self):
+        """A max_shift too small to join the members gives other outputs."""
+        members = [self._patch(0), self._patch(6.25)]
+        with config_context(max_shift=0.3):
+            merged = dc.spool(members).chunk(time=None)
+        apart = dc.spool(members).chunk(time=None)
+        assert (len(merged), len(apart)) == (1, 2)
+        ids = {x.attrs.data_id for x in [*merged, *apart]}
+        assert len(ids) == 3
+
+    def test_the_same_plan_twice(self):
+        """Re-chunking names each output as it did before."""
+        spool = dc.spool([self._patch(0), self._patch(6)])
+        first = [x.attrs.data_id for x in spool.chunk(time=4)]
+        second = [x.attrs.data_id for x in spool.chunk(time=4)]
+        again = [x.attrs.data_id for x in spool.chunk(time=None).chunk(time=4)]
+        assert first == second == again
+        assert len(set(first)) == len(first)
+
+    def test_labels_moved_by_a_little(self):
+        """A grid which moves the labels at all names another array."""
+        members = [self._patch(0), self._patch(6.00001)]
+        snapped = dc.spool(members).chunk(time=None)[0]
+        spread = dc.spool(members).chunk(time=None, max_shift=1e-8, tolerance=1.5)[0]
+        labels = [x.get_coord("time").values for x in (snapped, spread)]
+        assert not np.array_equal(*labels)
+        assert snapped.attrs.data_id != spread.attrs.data_id
+
+    def test_a_grid_named_by_its_labels(self):
+        """A window's grid is named by its labels, not the stretch it is cut from."""
+        members = [self._patch(0), self._patch(6.25), self._patch(12.25)]
+        two = dc.spool(members[:2]).chunk(time=4, max_shift=0.3)[1]
+        three = dc.spool(members).chunk(time=4, max_shift=0.3)[1]
+        assert two == three
+        assert two.attrs.data_id == three.attrs.data_id
+
+    def test_a_regrid_is_named_by_its_labels(self):
+        """Stretches of other lengths which label a slice alike name it alike."""
+        labels = dc.get_coord(data=np.arange(4) * 0.1 + 0.4 + 1e-9)
+        coords = get_coord_manager({"time": labels}, dims=("time",))
+        attrs = dc.PatchAttrs(data_id="a" * 32)
+        placed, ids = [], []
+        for count in (12, 14):  # a float slice remembers its parent's length
+            row = {"_time_stretch": (0.0, 0.1, 0, count, 0, 4, 4, "float64")}
+            out_coords, out_attrs = assembly._regridded(coords, attrs, "time", row)
+            placed.append(out_coords.coord_map["time"].values)
+            ids.append(out_attrs.data_id)
+        assert np.array_equal(*placed)
+        assert ids[0] == ids[1] != attrs.data_id
+
+    def test_a_file_window_is_the_read_window(self, terra15_dir, terra15_path):
+        """A chunk of a file names what reading that window names."""
+        out = dc.spool(terra15_dir).update().chunk(time=0.05)[1]
+        time = out.get_coord("time")
+        read = dc.read(terra15_path, time=(time.min(), time.max()))[0]
+        assert read == out
+        assert out.attrs.data_id == read.attrs.data_id
 
 
 class TestWindowComposition:

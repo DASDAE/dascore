@@ -7,6 +7,7 @@ import inspect
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from itertools import accumulate
 from typing import Any, Literal, Protocol, cast, overload
 
 import numpy as np
@@ -660,8 +661,23 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
     # filling happens once the whole output is assembled, which is the
     # only point at which every missing sample is known
     merge_kwargs.pop("fill_value", None)
-    merge_kwargs.pop("max_shift", None)  # the plan's, which names the merge
+    merge_kwargs.pop("max_shift", None)  # the plan's, which joined the members
     return merge_kwargs, coord_kwargs
+
+
+def merge_layout(dim: str, offsets: Sequence[int], conflict: str = "raise") -> dict:
+    """
+    What a merge did, which its result's id records.
+
+    The members go along ``dim``, each from its sample offset in the result.
+    A `conflict` other than "raise" decides what members which disagree
+    keep, so it is part of what was done; the options which only decided
+    which members merge, or onto which grid, are not.
+    """
+    out: dict = {"dim": dim, "offsets": [int(x) for x in offsets]}
+    if conflict != "raise":
+        out["conflict"] = conflict
+    return out
 
 
 def _get_merged_coord(merge_dim, coords, **kwargs):
@@ -721,7 +737,13 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     new_data = join(data, axis=axis)
     new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
     warn_if_histories_differ(attrs, "Merging")
-    new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
+    # each member's place in the data, which may run against the plan's order
+    sizes = [x.shape[axis] for x in ordered]
+    starts = dict(zip(map(id, ordered), [0, *accumulate(sizes)], strict=False))
+    layout = merge_layout(
+        merge_dim, [starts[id(x)] for x in patches], coord_kwargs["conflict"]
+    )
+    new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=layout)
     # The fold named the result; building it is not another array.
     with operation_context():
         patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)

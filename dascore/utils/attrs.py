@@ -58,8 +58,9 @@ def combine_patch_attrs(
     drop_attrs
         If provided, attributes which should be dropped.
     merge_params
-        The merge options which decide the result, such as `tolerance`;
-        they are part of the operation the result's `data_id` records.
+        What the merge did, such as where each member went (see
+        [`merge_layout`](`dascore.utils.patch.merge_layout`)); it is part
+        of the operation the result's `data_id` records.
     """
     validate_conflict(conflict)
 

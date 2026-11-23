@@ -55,10 +55,15 @@ from dascore.utils.attrs import (
 from dascore.utils.chunk import _READ_PAD
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
 from dascore.utils.identity import (
+    derive,
+    encode,
     ids_enabled,
+    merge_operation,
     operation_context,
+    operation_id,
     stamp,
     try_operation_id,
+    window_data_id,
 )
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
@@ -66,6 +71,7 @@ from dascore.utils.patch import (
     _get_merge_dim,
     _get_merged_coord,
     _split_coord_merge_kwargs,
+    merge_layout,
 )
 from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
@@ -401,6 +407,61 @@ def _units_converted(row: Mapping, dim: str) -> bool:
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
 
 
+def stored_window_id(row: Mapping, stored: Mapping) -> str | None:
+    """
+    The data id of the samples a trimmed row keeps of its stored array.
+
+    Worked out from the rows alone, as loading names a window (see
+    [`window_data_id`](`dascore.utils.identity.window_data_id`)): `stored`
+    is the index's row for the whole array, and the samples of each of its
+    ranges inside the row's are the window. None where the two rows name
+    different arrays, a range is not evenly sampled or is in other units,
+    or the row keeps none of a range's samples.
+    """
+    found = _stored_window(row, stored)
+    return None if found is None else found[0]
+
+
+def _stored_window(row: Mapping, stored: Mapping):
+    """`stored_window_id`, and the coordinates of the samples the row keeps."""
+    base, dims = stored.get("data_id"), stored.get("dims")
+    if _is_missing(base) or not dims or row.get("dims") != dims:
+        return None
+    if not _same_array(row, stored):
+        return None
+    windows, extent, coords = [], [], {}
+    for dim in str(dims).split(","):
+        units = {_stated_unit(x.get(f"_{dim}_units")) for x in (row, stored)}
+        if _units_converted(row, dim) or len(units) > 1:
+            return None
+        whole = coord_from_row(stored, dim, units=units.pop())
+        bounds = _row_bounds(row, dim)
+        if whole is None or bounds is None:
+            return None
+        kept, index = whole.select(bounds)  # one run: the grid is even
+        if not len(kept):
+            return None
+        windows.append(index.indices(len(whole))[:2])
+        extent.append(len(whole))
+        coords[dim] = coord_at_stored_unit(kept, stored, dim) or kept
+    return window_data_id(str(base), windows, extent), coords
+
+
+def _same_array(row: Mapping, stored: Mapping) -> bool:
+    """Whether a row names the array an index row does; its path may be rooted."""
+    path, named = (
+        str(x.get("source_path") or "").replace("\\", "/") for x in (row, stored)
+    )
+    keys = [x.get("source_patch_key") or "" for x in (row, stored)]
+    located = bool(named) and (path == named or path.endswith(f"/{named}"))
+    return located and keys[0] == keys[1]
+
+
+def _stated_unit(value) -> str | None:
+    """A row's units for a range, None where it states none."""
+    return None if _is_null(value) or value == "" else str(value)
+
+
 # What a source's own range is called beside a member's trim of it. Not
 # min/max/step: code scanning a frame for `<x>_min`/`<x>_max`/`<x>_step`
 # triples would read these as a dimension named `<dim>_src`.
@@ -561,16 +622,77 @@ def on_stretch_grid(coords: CoordManager, dim: str, row: Mapping) -> CoordManage
     return coords._update_grid(dim, **{dim: coord})
 
 
+def _regridded(coords: CoordManager, attrs, dim: str, row: Mapping):
+    """
+    The coordinates and attrs of an output on its stretch's grid.
+
+    Moving the labels onto the grid is part of what was done, so the grid
+    joins the id where it changes them; an id nobody knows stays unknown.
+    """
+    placed = on_stretch_grid(coords, dim, row)
+    if placed is coords or not (ids_enabled() and attrs.data_id):
+        return placed, attrs
+    coord = placed.coord_map[dim]
+    if _same_labels(coord, coords.coord_map[dim]):
+        return placed, attrs
+    # The labels themselves: a grid's own id also says which stretch it
+    # was cut from, which the labels may not show.
+    labels = [encode(x.values) for x in _label_blocks(coord)]
+    params = {"dim": dim, "dtype": str(coord.dtype), "units": coord.units}
+    operation = operation_id("Regrid", params | {"labels": labels})
+    return placed, stamp(attrs, [attrs], operation)
+
+
+def _same_labels(first, second) -> bool:
+    """Whether two coordinates hold exactly the same labels, dtype and units."""
+    if first.data_id == second.data_id:
+        return True
+    if (first.shape, first.dtype, first.units) != (
+        second.shape,
+        second.dtype,
+        second.units,
+    ):
+        return False
+    # coordinate equality forgives rounding, which an id must not
+    pairs = zip(_label_blocks(first), _label_blocks(second), strict=True)
+    return all(np.array_equal(x.values, y.values) for x, y in pairs)
+
+
+def _label_blocks(coord, size: int = 2**18):
+    """A coordinate a few megabytes at a time, so no grid is spelled out whole."""
+    return (coord[x : x + size] for x in range(0, len(coord), size))
+
+
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
     """The patch with its ``dim`` labels on its stretch's grid (see above)."""
-    coords = on_stretch_grid(patch.coords, dim, row)
+    coords, attrs = _regridded(patch.coords, patch.attrs, dim, row)
     if coords is patch.coords:
         return patch
-    # relabelling is part of the merge the plan named, not another operation
     with operation_context():
-        return dc.Patch(
-            data=patch.data, coords=coords, attrs=patch.attrs, dims=patch.dims
-        )
+        return dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
+
+
+def _as_window(whole: dc.Patch, cut: dc.Patch, query: Mapping) -> dc.Patch:
+    """
+    The cut a plan made of a member, named as the window of it it is.
+
+    The id is the member's and the samples the cut keeps, however the
+    bounds asking for them were spelled. A cut its stored source loads is
+    named by the same rule already, counted from the whole stored array.
+    """
+    base, source = whole.attrs.data_id, cut._source
+    if not ids_enabled() or not base or cut.attrs.data_id == base:
+        return cut
+    if source is not None and source.loadable and source.data_id == cut.attrs.data_id:
+        return cut
+    _, indexers = whole.coords.select_indexers(**query)
+    windows = []
+    for dim, size in zip(whole.dims, whole.shape, strict=True):
+        index = indexers.get(dim, slice(None))
+        if not isinstance(index, slice) or index.step not in (None, 1):
+            return cut  # not one run of samples, so not a window
+        windows.append(index.indices(size)[:2])
+    return cut.update_attrs(data_id=window_data_id(base, windows, whole.shape))
 
 
 def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
@@ -792,7 +914,8 @@ class PatchAssembler:
         # and its trim dims are narrowed, everything else loads untouched.
         trims = (self.plan_dim, self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
-            patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
+            query = _as_plan_units(patch, select_kwargs, patch_kwargs)
+            patch = _as_window(patch, patch.select(**query), query)
         # Already in the plan's units, spelled as the plan spells them,
         # there is nothing to convert, and a lazy member is not asked to
         # run what would do nothing. The same quantity spelled another way
@@ -914,6 +1037,67 @@ class PatchAssembler:
             meta.attrs = meta.attrs.update(data_id=source.data_id)
         return source
 
+    def layout_data_id(self, rows, stored=None) -> str | None:
+        """
+        The data id loading gives one output, from its member rows alone.
+
+        Nothing is read. Each member is its array's id, or the window a
+        trim keeps of it (`stored_window_id`), laid out and put on a grid
+        as assembly does. `stored` holds, beside each row, the index's row
+        for the array the member is cut from, which a member row trimmed
+        before planning no longer states itself. None where loading could
+        name the output otherwise: a member converted to other units, or
+        one the rows cannot place.
+        """
+        dim, stored = self.plan_dim, stored or [None] * len(rows)
+        if len({_stated_unit(x.get("data_units")) for x in rows}) > 1:
+            return None  # loading converts the later members
+        # members in the output coordinate's order, as assembly sorts them
+        descending = all(to_float(_as_numpy(x[f"{dim}_step"])) < 0 for x in rows)
+        order = sorted(
+            range(len(rows)), key=lambda x: rows[x][f"{dim}_min"], reverse=descending
+        )
+        members = [self._member_layout(rows[x], stored[x]) for x in order]
+        if None in members:
+            return None
+        ids, coords = zip(*members, strict=True)
+        data_id = ids[0]
+        if len(ids) > 1:
+            offsets = [0, *accumulate(len(x) for x in coords)][:-1]
+            conflict = self.merge_kwargs.get("conflict") or "raise"
+            data_id = derive(ids, merge_operation(merge_layout(dim, offsets, conflict)))
+        first = rows[order[0]]
+        if not isinstance(first.get(f"_{dim}_stretch"), tuple):
+            return data_id  # only a stretch's grid moves labels
+        each = [get_coord_manager({dim: x}, dims=(dim,)) for x in coords]
+        joined = _get_merged_coord(dim, each)
+        attrs = dc.PatchAttrs(data_id=data_id)
+        return _regridded(joined, attrs, dim, first)[1].data_id
+
+    def _member_layout(self, row: Mapping, stored: Mapping | None):
+        """A member's id and its labels along the plan's dimension, or None."""
+        dim, data_id = self.plan_dim, row.get("data_id")
+        if row.get("_modified") or _is_missing(data_id):
+            whole = self._whole_source(row) or stored
+            found = None if whole is None else _stored_window(row, whole)
+            # the array's own labels: an envelope only rounds them
+            return None if found is None else (found[0], found[1][dim])
+        if any(_units_converted(row, x) for x in str(row["dims"]).split(",")):
+            return None
+        units = _stated_unit(row.get(f"_{dim}_units"))
+        coord = coord_from_row(row, dim, units=units)
+        if coord is None:
+            return None
+        return data_id, coord_at_stored_unit(coord, row, dim) or coord
+
+    def _whole_source(self, row: Mapping) -> Mapping | None:
+        """The row for the whole array a cut member's row trims, if it says."""
+        ends = [source_range_column(self.plan_dim, x) for x in SOURCE_RANGE_ENDS]
+        if any(_is_null(row.get(x)) for x in ends) or self.trim_dims:
+            return None
+        names = [f"{self.plan_dim}_{x}" for x in ("min", "max", "step")]
+        return {**row, **{x: row[y] for x, y in zip(names, ends, strict=True)}}
+
     def describe_output(self, rows, units=None) -> OutputMeta | None:
         """
         What one output is, from its member rows in order; nothing is read.
@@ -956,9 +1140,9 @@ class PatchAssembler:
                 [x.attrs for x in metas],
                 rows,
             )
-        coords = on_stretch_grid(coords, self.plan_dim, rows[0])
         if not all(known):
             attrs = attrs.update(data_id="")
+        coords, attrs = _regridded(coords, attrs, self.plan_dim, rows[0])
         return OutputMeta(dims, coords, attrs, chain[-1], metas)
 
     def _stream(self, joined, df_dict_list, merge_dim, samples, units=None):
@@ -1121,11 +1305,14 @@ class PatchAssembler:
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
         new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
         warn_if_histories_differ(attrs, "Merging")
+        lengths = [x.shape[x.dims.index(merge_dim)] for x in coords]
         new_attrs = combine_patch_attrs(
             attrs,
             **attr_kwargs,
             drop_attrs=self.stamped,
-            merge_params=self.merge_kwargs,
+            merge_params=merge_layout(
+                merge_dim, [0, *accumulate(lengths)][:-1], coord_kwargs["conflict"]
+            ),
         )
         return new_coord, new_attrs
 

@@ -17,9 +17,11 @@ syncer, and views never write.
 from __future__ import annotations
 
 import secrets
+import sqlite3
 from collections.abc import Mapping
 from dataclasses import replace
 from functools import cache, cached_property, partial
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -29,7 +31,7 @@ from upath import UPath
 import dascore as dc
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.core.source import ArraySource, _text_offsets
-from dascore.exceptions import UnknownFiberFormatError
+from dascore.exceptions import InvalidIndexError, UnknownFiberFormatError
 from dascore.io.core import FiberIO
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
@@ -748,6 +750,7 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         trim_dims: tuple[str, ...] = (),
+        parent_backend=None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -781,6 +784,24 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
+        # The index the members' `_index_row` numbers rows of, which only
+        # equality consults: a file by its path, so no handle is held on
+        # it (one open blocks removing it on Windows), and one in memory
+        # as it is.
+        self.parent_index = _index_named(parent_backend)
+
+    def __getstate__(self) -> dict:
+        """
+        Pickle without an index held in memory, which cannot be pickled.
+
+        Without it a member a selection trimmed before planning compares
+        by metadata.
+        """
+        state = dict(self.__dict__)
+        for name in ("_stored_by_row", "_members_by_output", "_member_records"):
+            state.pop(name, None)
+        index = self.parent_index
+        return state | {"parent_index": index if isinstance(index, str) else None}
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -1097,6 +1118,48 @@ class PlanResolver(PatchResolver):
                 patch = fill_on_grid(patch, dim, grid, merge, row.get("_dtype"))
         return self._stamp(patch, row)
 
+    def layout_data_id(self, output: int) -> str | None:
+        """
+        The data id an output of files loads with, reading nothing.
+
+        See `PatchAssembler.layout_data_id`. A member a selection trimmed
+        before planning is named from its parent's index row. None for any
+        output but a chunk's, one holding a member which is not a file, one
+        whose selections name a coordinate beside its dimensions (loading
+        derives that select), and one which fills or restates attrs.
+        """
+        fills = self.merge_kwargs.get("fill_value") is not None
+        if self.mode != "chunk" or self.stamped or fills:
+            return None
+        records = self._member_records
+        rows = [records[x] for x in self._members_by_output[output]]
+        paths = [_row_str(x.get("source_path")) for x in rows]
+        if any(is_memory_uri(x) or x.startswith(PLAN_SCHEME) for x in paths):
+            return None
+        named = {name for coords, _, _ in self.parent_residuals for name in coords}
+        if any(named - set(str(x["dims"]).split(",")) for x in rows):
+            return None
+        stored = [self._stored_by_row.get(_cut_index_row(x)) for x in rows]
+        return self._assembler().layout_data_id(rows, stored)
+
+    @cached_property
+    def _member_records(self) -> list[dict]:
+        """Every member row as a mapping, made once for every output."""
+        return self._assembler()._df_to_dict_list(self.member_rows)
+
+    @cached_property
+    def _members_by_output(self) -> dict:
+        """The positions of each output's member rows, found once."""
+        return self.member_rows.groupby("output_id", sort=False).indices
+
+    @cached_property
+    def _stored_by_row(self) -> dict:
+        """The parent's index rows of every cut member, queried once."""
+        rows = (_cut_index_row(x) for x in self._member_records)
+        wanted = sorted({x for x in rows if x is not None})
+        found = _index_rows(self.parent_index, wanted) if wanted else None
+        return {} if found is None else {x["_patch_row"]: x for x in found}
+
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
         Apply the attrs the outputs state about themselves, if any.
@@ -1114,6 +1177,47 @@ class PlanResolver(PatchResolver):
         if not self.stamped:
             return patch
         return patch.update_attrs(**{x: row[x] for x in self.stamped})
+
+
+def _index_named(backend):
+    """An index by what reopens it: its file's path, or itself if in memory."""
+    path = getattr(backend, "_path", ":memory:")
+    return backend if path == ":memory:" else path
+
+
+def _index_rows(index, patch_rows: list[int]) -> list[dict] | None:
+    """
+    The rows an index holds under these numbers, or None if it is gone.
+
+    An index file is opened read-only for the query and closed after.
+    """
+    if index is None or (isinstance(index, str) and not Path(index).is_file()):
+        return None
+    if not isinstance(index, str):
+        return index.query(patch_rows=patch_rows).to_dict("records")
+    backend = None
+    try:
+        backend = get_backend(index, read_only=True)
+        return backend.query(patch_rows=patch_rows).to_dict("records")
+    except (sqlite3.Error, pd.errors.DatabaseError, InvalidIndexError):
+        return None  # rewritten since, by another version, or damaged
+    finally:
+        if backend is not None:
+            backend.close()
+
+
+def _cut_index_row(member: Mapping) -> int | None:
+    """
+    The parent's index row of a member cut from its array, else None.
+
+    A member the plan cut, or one a selection cut before planning (which
+    states no id until it loads), is part of the array that row states.
+    """
+    row = member.get("_index_row")
+    cut = member.get("_modified") or _is_missing(member.get("data_id"))
+    if not cut or row is None or _is_missing(row):
+        return None
+    return int(row)
 
 
 def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
@@ -1390,6 +1494,7 @@ def derived_catalog(
         stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
         trim_dims=plan.trim_dims,
+        parent_backend=None if parent is None else parent.backend,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for

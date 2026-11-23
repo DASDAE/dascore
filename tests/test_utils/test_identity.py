@@ -1232,20 +1232,39 @@ class TestCombinations:
             exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
         assert snapped.attrs.data_id == exact.attrs.data_id
 
-    @pytest.mark.parametrize("kwargs", [{"max_shift": 0.4}, {"tolerance": 1.5}])
-    def test_joining_options_are_part_of_it(self, members, kwargs):
-        """`max_shift` and `tolerance` can change the labels, so the id too."""
+    @pytest.fixture()
+    def late(self, members):
+        """Members whose seams are 1.15 steps: no stated step fits under 0.2."""
         step = members[0].get_coord("time").step
-        late = [  # each seam 1.15 steps: no stated step fits under 0.2
+        return [
             x.update_coords(time_min=x.coords.min("time") + num * (step * 15) // 100)
             for num, x in enumerate(members)
         ]
+
+    def test_options_which_change_the_labels(self, late):
+        """A wider `max_shift` keeps the stated step, so the id changes."""
         default = dc.spool(late).chunk(time=None)[0]
-        other = dc.spool(late).chunk(time=None, **kwargs)[0]
+        other = dc.spool(late).chunk(time=None, max_shift=0.4)[0]
+        assert other.get_coord("time").step == late[0].get_coord("time").step
+        assert default.get_coord("time") != other.get_coord("time")
         assert default.attrs.data_id != other.attrs.data_id
-        if "max_shift" in kwargs:  # a wider slack keeps the stated step
-            assert other.get_coord("time").step == step
-            assert default.get_coord("time") != other.get_coord("time")
+
+    def test_options_which_change_nothing(self, late):
+        """A `tolerance` which merges the same way names the same array."""
+        default = dc.spool(late).chunk(time=None)[0]
+        other = dc.spool(late).chunk(time=None, tolerance=1.5)[0]
+        assert default == other
+        assert default.attrs.data_id == other.attrs.data_id
+
+    def test_a_conflict_policy_is_part_of_it(self, members):
+        """It can decide what conflicting members keep."""
+        noted = [x.update_attrs(note=str(num)) for num, x in enumerate(members)]
+        dropped, kept = (
+            dc.spool(noted).chunk(time=None, conflict=x)[0]
+            for x in ("drop", "keep_first")
+        )
+        assert (dropped.attrs.get("note"), kept.attrs.get("note")) == (None, "0")
+        assert dropped.attrs.data_id != kept.attrs.data_id
 
     def test_unencodable_merge_options(self, members):
         """The merge still happens; its id is nobody else's."""

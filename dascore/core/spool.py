@@ -475,14 +475,24 @@ class _LoadsReader:
         self._members: dict[int, tuple] = {}
         self._routes: dict[int, Mapping] = {}
 
-    def row(self, path, data_id, resolver, source_id=None) -> _Loads:
-        """What one row loads through its resolver; `source_id` names its source."""
+    def row(
+        self, path, data_id, resolver, source_id=None, window_id=None, whole=True
+    ) -> _Loads:
+        """
+        What one row loads through its resolver.
+
+        `source_id` names the source of a row a selection trimmed, and
+        `window_id` the samples it keeps of a stored one. Unless `whole`, a
+        selection may still trim what the row loads.
+        """
         path, stated = str(path), _stated_id(data_id)
         live = resolver.live_entries().get(path) if is_memory_uri(path) else None
         if live is not None:
             source = _Loads.of(live)
         elif (route := self._route(resolver, path)) is not None:
-            return self._output(*route)
+            return self._output(*route, whole=whole)
+        elif window_id is not None and not stated:
+            return _Loads(data_id=window_id)  # a window of a file
         else:
             source = _Loads(data_id=stated or _stated_id(source_id))
         # A row a selection trimmed states no id: it loads part of its source.
@@ -500,8 +510,13 @@ class _LoadsReader:
                 return plan, path.removeprefix(prefix)
         return None
 
-    def _output(self, plan, output: str) -> _Loads:
-        """What a plan output loads: its members, put together as planned."""
+    def _output(self, plan, output: str, whole=True) -> _Loads:
+        """
+        What a plan output loads: its members, put together as planned.
+
+        Unless `whole`, a selection trims the output as it loads, so the
+        id of the whole of it names something else.
+        """
         if getattr(plan, "mode", None) is None:
             return _Loads()  # a route which is not a plan says nothing of its rows
         if (members := self._members.get(id(plan))) is None:
@@ -511,13 +526,41 @@ class _LoadsReader:
             members = by_output, rows["source_path"].tolist(), ids.tolist()
             self._members[id(plan)] = members
         by_output, paths, ids = members
+        # a chunk of files is named by what it does (see `layout_data_id`)
+        if whole and (laid := getattr(plan, "layout_data_id", None)) is not None:
+            if (data_id := laid(int(output))) is not None:
+                return _Loads(data_id=data_id)
+        cut = bool(plan.parent_residuals)  # trims the members as they load
         sources = tuple(
-            self.row(paths[x], ids[x], plan.loader) for x in by_output[int(output)]
+            self.row(paths[x], ids[x], plan.loader, whole=not cut)
+            for x in by_output[int(output)]
         )
         if plan.mode == "identity" and not plan.merge_kwargs:
             return sources[0]  # one member, untouched but for the view's selection
         recipe = {"mode": plan.mode, "dim": plan.dim, "trim_dims": plan.trim_dims}
         return _Loads(recipe=recipe | plan.merge_kwargs, sources=sources)
+
+
+def _window_ids(rows: pd.DataFrame, where, stored: pd.DataFrame, residuals) -> dict:
+    """
+    The id of the window each trimmed row keeps of its file, by its position.
+
+    Only where loading names one: a selection naming a coordinate beside
+    a row's dimensions is derived as a select instead.
+    """
+    # Circular import: patch assembly reads files through the I/O framework.
+    from dascore.utils.patch_assembly import stored_window_id  # noqa: PLC0415
+
+    named = {name for coords, _, _ in residuals for name in coords}
+    sources = {x["_patch_row"]: x for x in stored.to_dict("records")}
+    out = {}
+    for index, row in zip(where, rows.to_dict("records"), strict=True):
+        source = sources.get(row.get("_patch_row"))
+        if source is None or named - set(str(row.get("dims")).split(",")):
+            continue
+        if (window := stored_window_id(row, source)) is not None:
+            out[index] = window
+    return out
 
 
 def _compare(one: _Loads, two: _Loads, memo: dict) -> bool | None:
@@ -3687,10 +3730,12 @@ class Spool(NodeRepr, NamespaceOwner):
         Rows compare in order: first their metadata (`_eq_state`), then
         what each loads. A patch in memory compares as a patch; a file row,
         or a patch against a file row, compares `data_id`; a selection or
-        plan compares its sources by the same rules, and what it does to
-        them. Where those cannot tell, a row of patches in memory compares
-        as the patch it loads, so a view equals its loaded result; one of
-        files is known only once read, and compares by metadata alone.
+        chunk of files compares the `data_id` its rows say it loads with
+        (`stored_window_id`, `PlanResolver.layout_data_id`); any other
+        selection or plan compares its sources by the same rules, and what
+        it does to them. Where those cannot tell, a row of patches in memory
+        compares as the patch it loads, so a view equals its loaded result;
+        one of files is known only once read, and compares by metadata alone.
         """
         if self is other:
             return True
@@ -3731,16 +3776,26 @@ class Spool(NodeRepr, NamespaceOwner):
         df, catalog = self._df, self._catalog
         none = pd.Series(None, index=df.index, dtype=object)
         ids, rows = df.get("data_id", none), df.get("_patch_row", none)
-        # A row a selection trimmed states no id; the index holds its source's.
-        stored = {}
+        # A row a selection trimmed states no id; the index holds its source's,
+        # and the samples the row keeps of it name a window of a file.
+        stored, windows = {}, {}
         if (blank := ids.isna()).any() and "data_id" in df:
             found = catalog.backend.query(patch_rows=rows[blank].tolist())
             stored = dict(zip(found["_patch_row"], found.get("data_id", none)))
+            where = np.flatnonzero(blank.to_numpy())
+            windows = _window_ids(df[blank], where, found, catalog.residuals)
         reader, out = _LoadsReader(), []
         for index, (path, data_id, row) in enumerate(
             zip(df.get("source_path", none), ids, rows, strict=True)
         ):
-            loads = reader.row(path, data_id, catalog.resolver, stored.get(row))
+            loads = reader.row(
+                path,
+                data_id,
+                catalog.resolver,
+                stored.get(row),
+                windows.get(index),
+                whole=not catalog.residuals,
+            )
             if loads.recipe is not None and loads.in_memory:
                 loads = loads._replace(load=partial(catalog.get_patch, index))
             out.append(loads)

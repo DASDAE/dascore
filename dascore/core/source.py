@@ -11,7 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.proc.coords import _fill_scalar
-from dascore.utils.identity import H, dtype_description
+from dascore.utils.identity import H, dtype_description, window_data_id
 from dascore.utils.paths import coerce_to_local_path, is_local_path
 
 # Where an array is, which names it when nothing better does.
@@ -187,10 +187,7 @@ class ArraySource:
             return H("constant", content)
         location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
         base = self.origin_id or H("location", location)
-        whole = tuple((0, size) for size in self.extent)
-        if not self.windows or self.windows == whole:
-            return base
-        return H("window", [base, self.windows])
+        return window_data_id(base, self.windows, self.extent)
 
     def anchored(self) -> ArraySource:
         """
