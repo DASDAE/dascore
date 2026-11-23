@@ -841,9 +841,9 @@ def _span(coord, low, high, narrow=False) -> tuple[int, int, int, int]:
     float label is known only to rounding, so a bound within three float
     allowances of one may or may not keep it, as the selected coordinate's
     own ends take it (`_float_samples`), in float32 where ``narrow`` says
-    the labels are stored so; time and integer labels are exact and the
-    two agree. None leaves an end open. An empty span has its first
-    position past its last.
+    the labels are stored so, and never past a read's pad; time and
+    integer labels are exact and the two agree. None leaves an end open.
+    An empty span has its first position past its last.
     """
     # Circular import: patch assembly imports the index and its plan utilities.
     from dascore.utils.patch_assembly import _as_numpy  # noqa: PLC0415
@@ -852,7 +852,8 @@ def _span(coord, low, high, narrow=False) -> tuple[int, int, int, int]:
     pads = [0]
     if np.asarray(coord.min()).dtype.kind == "f":
         step = abs(to_float(coord.step))
-        pad = 3 * _precision(False, step, narrow, coord.min(), coord.max())[()]
+        allowance = _precision(False, step, narrow, coord.min(), coord.max())[()]
+        pad = np.fmin(3 * allowance, _READ_PAD * step)
         pads = [pad, -pad]
     out = []
     for pad in pads:

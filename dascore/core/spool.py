@@ -606,9 +606,9 @@ def _same_rows(one: Spool, two: Spool) -> bool:
     Whether two spools' rows (`Spool._eq_state`) state the same.
 
     A float coordinate's ends match within twice the float allowance, as a
-    looked-up value matches a grid label: a row restates the labels it
-    keeps from its ends and step, where a patch cut from a longer grid
-    counts them from its parent's start.
+    looked-up value matches a grid label, and less than half a step: a row
+    restates the labels it keeps from its ends and step, where a patch cut
+    from a longer grid counts them from its parent's start.
     """
     mine, theirs = one._eq_state()["rows"], two._eq_state()["rows"]
     if list(mine.columns) != list(theirs.columns) or len(mine) != len(theirs):
@@ -631,7 +631,10 @@ def _same_rows(one: Spool, two: Spool) -> bool:
         narrow = _narrow(one._df, name) | _narrow(two._df, name)
         slack = 2 * _precision(False, step, narrow, *these.T, *those.T)[:, None]
         same = (these == those) | (np.isnan(these) & np.isnan(those))
-        if not (same | (np.abs(these - those) <= slack)).all():
+        # never half a step apart, as on a grid at its dtype's precision
+        apart = np.abs(these - those)
+        near = (apart <= slack) & ~(apart >= step[:, None] / 2)
+        if not (same | near).all():
             return False
     return True
 

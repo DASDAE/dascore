@@ -1517,6 +1517,7 @@ class TestFloatEndsStateWhatLoads:
             # a bound just past a label leaves it out of both coordinates
             ({"lat": (50.5, 70)}, [2, 3, 60, 70]),
             ({"distance": (1.05, 3)}, [2, 3, 60, 70]),
+            ({"distance": (2, 2)}, [2, 2, 60, 60]),
         ],
     )
     def test_riders_state_their_labels(self, rider, kwargs, ends):
@@ -1543,14 +1544,35 @@ class TestFloatEndsStateWhatLoads:
         chunked = spool_of(patch.isel(distance=cut)).chunk(distance=3.85)
         self._states_what_loads(chunked, ["distance"])
 
-    def test_ends_a_sample_apart_differ(self):
-        """Float ends compare within the float allowance, not a sample."""
-        distance = 0.1 * np.arange(10)
+    def test_rider_on_a_grid_at_its_precision(self):
+        """Labels a float32 ulp apart are followed sample for sample."""
+        distance = (1e7 + np.arange(100)).astype(np.float32)
+        coords = {"distance": distance, "lat": ("distance", np.arange(100.0))}
+        patch = dc.Patch(data=np.zeros(100), coords=coords, dims=("distance",))
+        view = dc.spool([patch]).select(distance=(10000030, 10000050))
+        assert view.get_contents()[["lat_min", "lat_max"]].values.tolist() == [[30, 50]]
+        assert view == dc.spool(list(view))
+
+    @pytest.mark.parametrize(
+        "distance, first, last",
+        [
+            (0.1 * np.arange(10), (0.1, 0.5), (0.1, 0.6)),
+            # labels a float32 ulp apart, where the allowance spans samples
+            (
+                (1e7 + np.arange(20)).astype(np.float32),
+                (1e7 + 2, 1e7 + 10),
+                (1e7 + 2, 1e7 + 11),
+            ),
+        ],
+    )
+    def test_ends_a_sample_apart_differ(self, distance, first, last):
+        """Float ends compare within the float allowance, never a sample."""
+        coords = {"distance": distance}
         patch = dc.Patch(
-            data=np.zeros(10), coords={"distance": distance}, dims=("distance",)
+            data=np.zeros(len(distance)), coords=coords, dims=("distance",)
         )
         spool = dc.spool([patch])
-        assert spool.select(distance=(0.1, 0.5)) != spool.select(distance=(0.1, 0.6))
+        assert spool.select(distance=first) != spool.select(distance=last)
 
 
 class TestUnselect:
