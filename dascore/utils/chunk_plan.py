@@ -1882,7 +1882,8 @@ def _prepare_relation(
             "on_missing_dim='drop' to exclude them."
         )
         raise ChunkError(msg)
-    return df[~unusable]
+    # the rows left may hold one kind of several, still as objects
+    return _own_dtypes(df[~unusable], name)
 
 
 def _cell_columns(df, name) -> list[str]:

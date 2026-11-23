@@ -457,6 +457,25 @@ class TestMixedKinds:
         assert (gap["time_min"], gap["time_max"], gap["time_step"]) == (1, 3, 1)
         assert spool.get_coverage("time")["coverage"].tolist()[-1] == 0.5
 
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_drop_leaves_one_kind(self, tmp_path, on_disk):
+        """Rows a drop leaves of one kind plan as that kind alone (#1701)."""
+        time = TIME_KINDS["durations"]
+        durations = [self._patch(time), self._patch(time + 10 * ONE_SECOND)]
+        coords = {"sample": np.arange(5), "time": ("sample", TIME_KINDS["absolute"])}
+        dated = dc.Patch(data=np.zeros(5), coords=coords, dims=("sample",))
+        spool, alone = dc.spool([*durations, dated]), dc.spool(durations)
+        if on_disk:
+            spool = dc.spool(spool_to_directory(spool, path=tmp_path)).update()
+        got = spool.chunk(time=None, on_missing_dim="drop")
+        assert [x.get_array("time").tolist() for x in got] == [
+            x.get_array("time").tolist() for x in alone.chunk(time=None)
+        ]
+        assert len(got) == 2
+        for method in ("get_gaps", "get_coverage"):
+            got, expected = getattr(spool, method)(), getattr(alone, method)()
+            assert self._values(got, expected) == self._values(expected, expected)
+
 
 def _time_runs_patch(count, samples=10):
     """A patch whose time coordinate holds ``count`` runs a minute apart."""
