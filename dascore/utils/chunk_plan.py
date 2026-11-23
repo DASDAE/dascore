@@ -1510,13 +1510,15 @@ def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
     return df if empty is None else df[~empty]
 
 
-def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
+def _drop_emptied(df: pd.DataFrame, names, read) -> pd.DataFrame:
     """
     Drop rows a selection of ``names`` left holding no sample, for planning.
 
     A sample selection marks the rows it empties; a value or relative one
     between two samples leaves an envelope holding none of the row's labels.
-    A row whose labels are not known to lie on a lattice is kept.
+    The index holds only the ends of a coordinate stating no step, so such
+    a row is judged by its coordinate as ``read(row, name)`` gives it, and
+    kept where that is None.
     """
     df = _drop_patch_local_empty(df)
     if "_modified" not in df or df.empty:
@@ -1527,10 +1529,18 @@ def _drop_emptied(df: pd.DataFrame, names) -> pd.DataFrame:
         for name in names:
             if not {f"{name}_{x}" for x in ("min", "max", "step")} <= set(part):
                 continue
-            low, high, step = (part[f"{name}_{x}"] for x in ("min", "max", "step"))
-            # an envelope a step wide holds a sample; only a narrower one may not
-            narrow = ((high - low) < 2 * step.abs()).to_numpy(dtype=bool)
-            held = trimmed & _structural(part, name) & narrow
+            step = part[f"{name}_step"]
+            held = trimmed & _structural(part, name)
+            stepless = held & step.isna().to_numpy()
+            for index in part.index[stepless]:
+                coord = read(part.loc[index], name)
+                if coord is not None and not len(coord):
+                    emptied.append(index)
+            held &= ~stepless
+            if held.any():
+                low, high = (part.loc[held, f"{name}_{x}"] for x in ("min", "max"))
+                # an envelope a step wide holds a sample; only a narrower one may not
+                held[held] = ((high - low) < 2 * step[held].abs()).to_numpy(bool)
             if not held.any():
                 continue
             # only the columns a row's lattice is read from: the frame is wide

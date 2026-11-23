@@ -2588,7 +2588,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         # a member a selection emptied holds nothing to plan
         selected = {x for coords, _, _ in self._catalog.residuals for x in coords}
-        working = _drop_emptied(working, selected)
+        working = _drop_emptied(working, selected, read)
         # a sample or relative selection resolves against the whole patch at
         # load, so its runs cannot be planned apart
         local = any(s or r for _, s, r in self._catalog.residuals)
