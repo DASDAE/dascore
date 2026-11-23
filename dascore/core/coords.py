@@ -2916,6 +2916,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _window(self, value_1, value_2) -> slice:
         """The samples of a monotonic coordinate inside [value_1, value_2]."""
         values = self.values
+        # Promote as a comparison does; numpy's search takes durations in
+        # years or months beside fixed units by their raw ticks instead.
+        bounds = (x for x in (value_1, value_2) if x is not None)
+        np.result_type(self.dtype, *(np.asarray(x).dtype for x in bounds))
         if self.reverse_sorted:
             value_1, value_2 = value_2, value_1
             values = _negate_for_search(values)

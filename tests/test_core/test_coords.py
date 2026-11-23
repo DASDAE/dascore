@@ -1955,6 +1955,16 @@ class TestMonotonicCoord:
         assert coord.sorted
         assert not coord.reverse_sorted
 
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    def test_select_calendar_durations_by_fixed_unit(self, unit):
+        """Durations in years or months selected by nanoseconds raise, as
+        comparing them does, rather than selecting nothing.
+        """
+        coord = get_coord(data=np.arange(5).astype(f"m8[{unit}]"))
+        bound = np.timedelta64(400, "D").astype("m8[ns]")
+        with pytest.raises(TypeError, match="incompatible nonlinear base time"):
+            coord.select((bound, None))
+
 
 class TestNonOrderedArrayCoords:
     """Tests for non-ordered array coords."""
