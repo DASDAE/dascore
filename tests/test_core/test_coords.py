@@ -2685,6 +2685,27 @@ class TestGetNextIndex:
         "monotonic_float_coord",
     ]
 
+    @pytest.mark.parametrize(
+        ("labels", "outside"),
+        [
+            (np.array([1.0, 2.5, 7.0]), np.array([0.0, 9.0])),
+            (
+                np.array(["2020", "2021", "2022"], dtype="M8[Y]"),
+                np.array(["2019", "2030"], dtype="M8[Y]"),
+            ),
+        ],
+    )
+    def test_keeps_input(self, labels, outside):
+        """Labels find their own indices, and clamping out-of-bounds values
+        leaves the array passed in alone.
+        """
+        coord = get_coord(data=labels)
+        assert np.array_equal(coord.get_next_index(coord.values), [0, 1, 2])
+        before = outside.copy()
+        out = coord.get_next_index(outside, allow_out_of_bounds=True)
+        assert np.array_equal(out, [0, 2])
+        assert np.array_equal(outside, before)
+
     def test_samples(self, evenly_sampled_coord):
         """Ensure samples argument allows samples to be passed in."""
         coord = evenly_sampled_coord

@@ -215,6 +215,16 @@ class TestListSerToStr:
 class TestFilterDfAdvanced:
     """Tests for advanced filtering of dataframes."""
 
+    def test_lone_datetime_min_column(self):
+        """A datetime column ending in _min, with no _max beside it, leaves a
+        number column it shares a stem with numeric.
+        """
+        df = pd.DataFrame(
+            {"time_minute": [1, 2], "time_minute_min": pd.to_datetime(["2020", "2021"])}
+        )
+        out = filter_df(df, time_minute_max=1)
+        assert list(out) == [True, False]
+
     def test_col(self, example_df_2):
         """Test column names that end with max."""
         vals = [100, 125]
@@ -466,6 +476,17 @@ class TestAdjustSegments:
         assert row["frequency_min"] == 121.0
         assert row["frequency_max"] == 125.0
         assert not row["_modified"]
+
+    @pytest.mark.parametrize("name", ["time", "time_minute"])
+    def test_converts_datetime_bounds(self, name):
+        """Number bounds on datetime columns are seconds since 1970, also for a
+        dimension whose name holds "_min".
+        """
+        ends = {f"{name}_min": [to_datetime64(0)], f"{name}_max": [to_datetime64(10)]}
+        df = pd.DataFrame(ends).assign(**{f"{name}_step": to_timedelta64(1)})
+        out = adjust_segments(df, **{name: (2, 5)})
+        assert out[f"{name}_min"].iloc[0] == to_datetime64(2)
+        assert out[f"{name}_max"].iloc[0] == to_datetime64(5)
 
     def test_missing_interval_col_raises_parameter_error(self, adjacent_df):
         """Ensure a missing interval column raises ParameterError."""

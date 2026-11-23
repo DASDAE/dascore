@@ -1366,7 +1366,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             msg = f"Coords must be sorted to use get_next_index, {self} is not."
             raise CoordError(msg)
         input_array_like = isinstance(value, Sized)
-        array = np.atleast_1d(value)
+        # a copy, since clamping below writes into it
+        array = np.atleast_1d(value).copy()
 
         # handle samples
         if samples:

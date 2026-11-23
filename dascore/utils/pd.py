@@ -461,20 +461,17 @@ def _convert_times(df, some_dict):
     """Convert query values to datetime/timedelta values."""
     if not some_dict:
         return some_dict
-    # convert queries related to datetime into datetime64
-    datetime_cols = set(df.select_dtypes(include=np.datetime64).columns)
-    non_min_max_cols = {x.replace("_min", "") for x in datetime_cols}
-    datetime_keys = (datetime_cols & set(some_dict)) | (
-        non_min_max_cols & set(some_dict)
-    )
-    for key in datetime_keys:
-        some_dict[key] = _convert_range_bounds(some_dict[key], to_datetime64)
-    # convert queries related to time delta into timedelta64, the range of a
-    # duration dimension included
-    timedelta_cols = set(df.select_dtypes(include=np.timedelta64).columns)
-    dims = {x for x in some_dict if {f"{x}_min", f"{x}_max"} <= timedelta_cols}
-    for key in (timedelta_cols & set(some_dict)) | dims:
-        some_dict[key] = _convert_range_bounds(some_dict[key], to_timedelta64)
+    # Queries on datetime or timedelta columns, and on dimensions whose
+    # {key}_min and {key}_max columns both are, take that kind.
+    keys = set(some_dict)
+    for kind, func in (
+        (np.datetime64, to_datetime64),
+        (np.timedelta64, to_timedelta64),
+    ):
+        cols = set(df.select_dtypes(include=kind).columns)
+        dims = {x for x in keys if {f"{x}_min", f"{x}_max"} <= cols}
+        for key in (cols & keys) | dims:
+            some_dict[key] = _convert_range_bounds(some_dict[key], func)
     return some_dict
 
 
