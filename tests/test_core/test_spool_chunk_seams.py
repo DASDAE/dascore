@@ -804,10 +804,13 @@ class TestSteplessWindows:
         stated, loaded = self._ends(windows)
         assert stated == loaded and len(stated) == 6
 
-    def test_emptied_along_time(self):
+    @pytest.mark.parametrize(
+        "channel", [np.array([0, 10, 25, 30]), np.arange(0, 100, 25, dtype="float32")]
+    )
+    def test_emptied_along_time(self, channel):
         """A patch a selection on a coordinate along time empties is no window."""
         patch = _patch(np.array([0.0, 1, 3, 6]))
-        patch = patch.update_coords(channel=("time", np.array([0, 10, 25, 30])))
+        patch = patch.update_coords(channel=("time", channel))
         assert not len(dc.spool([patch]).select(channel=(11, 20)).chunk(time=2))
 
     def test_warns_once_per_plan(self, tmp_path):

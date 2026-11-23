@@ -1562,12 +1562,14 @@ class TestWindowEdgeCases:
         open_row = np.array([[None, None], [10 * m, 20 * m]], dtype=object)
         assert len(spool.select(distance=open_row)) == 3
 
+    @pytest.mark.parametrize("dtype", ["float64", "float32"])
     @pytest.mark.parametrize("method", ["select", "cut"])
-    def test_empty_recovered_coordinate(self, method):
+    def test_empty_recovered_coordinate(self, method, dtype):
         """A source whose selected coordinate holds no labels gives nothing."""
+        depth = (np.arange(4.0) * 10).astype(dtype)
         patch = dc.Patch(
             data=np.arange(4.0),
-            coords={"x": np.arange(4.0), "depth": ("x", np.arange(4.0) * 10)},
+            coords={"x": np.arange(4.0), "depth": ("x", depth)},
             dims=("x",),
         )
         narrowed = dc.spool(patch).select(depth=(1, 2))
