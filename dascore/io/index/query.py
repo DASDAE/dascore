@@ -34,6 +34,7 @@ from dascore.units import convert_units, get_quantity
 from dascore.utils.misc import glob_to_regex, is_range
 from dascore.utils.misc import stated_units as _normalize_unit
 from dascore.utils.pd import resolve_selector_namespaces
+from dascore.utils.time import to_timedelta64
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -562,6 +563,36 @@ def _add_exists_clause(
     )
 
 
+def _numbers_on_times(conditions: list, params: list, lo, hi) -> tuple[list, list]:
+    """
+    Widen a bare number range's conditions to definitions held as times.
+
+    `Patch.select` reads a number on a datetime as seconds since 1970 and on
+    a duration as seconds, the same count of nanoseconds, which the index
+    holds both kinds as. A bound past what nanoseconds hold opens its side,
+    or leaves no time inside the range, as its sign says.
+    """
+    branch: list = ["cd.value_kind = ?"]
+    args: list = ["time"]
+    for bound, column, op, side in (
+        (lo, "max_int", ">=", -1),
+        (hi, "min_int", "<=", 1),
+    ):
+        if bound is None:
+            continue
+        try:
+            typed = typed_value(to_timedelta64(bound))
+        except TimeOverflowError:
+            if np.sign(bound) == side:
+                continue
+            return conditions, params
+        if typed is not None:  # an infinity is NaT, an open side
+            branch.append(f"cd.{column} {op} ?")
+            args.append(typed.value)
+    numbers, times = (" AND ".join(x) for x in (conditions[1:], branch))
+    return [conditions[0], f"(({numbers}) OR ({times}))"], [*params, *args]
+
+
 def build_coord_clause(
     where: _Where,
     coord_meta: MetaRows,
@@ -585,7 +616,9 @@ def build_coord_clause(
     kinds = set(rows["value_kind"]) or {"time", "num", "str"}
     typed_values = []
     if is_range(value):
-        kind, lo, hi, typed_values = _range_bounds(value, kinds)
+        # times take numbers too (see `_numbers_on_times`), reversed or not
+        takes = kinds | {"num"} if "time" in kinds else kinds
+        kind, lo, hi, typed_values = _range_bounds(value, takes)
     else:
         # Scalars, value membership, and boolean masks have no exact
         # patch-level meaning spool-wide; resolve_query rejects them
@@ -636,6 +669,8 @@ def build_coord_clause(
         for bound, _typed, bound_col, op in sides:
             conditions.append(f"cd.{bound_col} {op} ?")
             params.append(bound)
+        if kind == "num" and "time" in kinds:
+            conditions, params = _numbers_on_times(conditions, params, lo, hi)
     elif not compatible_units:
         conditions.append("cd.units IS NULL")
     else:
