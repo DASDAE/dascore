@@ -289,7 +289,8 @@ def clip_to_runs(df: pd.DataFrame, dim: str, indexed, read) -> pd.DataFrame:
     rows = bounds.index.to_numpy(dtype=np.int64)
     for col, values in ((f"{dim}_min", bounds["low"]), (f"{dim}_max", bounds["high"])):
         column = out[col].astype(object).to_numpy(copy=True)
-        column[rows] = values.to_numpy()
+        # as objects, so times stay times in a column holding several kinds
+        column[rows] = values.astype(object).to_numpy()
         _set_column(out, col, column, df)
     empty = sorted(set(cut) - set(rows.tolist()))
     return out.drop(index=out.index[empty])

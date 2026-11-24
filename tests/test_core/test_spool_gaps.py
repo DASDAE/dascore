@@ -478,6 +478,19 @@ class TestMixedKinds:
             columns = [x for x in expected if x != "group_id"]
             assert self._values(got, columns) == self._values(expected, columns)
 
+    @pytest.mark.parametrize("kind", ["absolute", "durations"])
+    def test_value_range_beside_runs(self, kind):
+        """A value range on times in runs beside numbers keeps them times (#1738)."""
+        time = TIME_KINDS[kind]
+        later = time[2:] + 5 * ONE_SECOND
+        runs = concat_coords(get_coord(data=time[:2]), get_coord(data=later))
+        spool = dc.spool([self._patch(runs), self._patch(np.arange(50.0, 55.0))])
+        selected = spool.select(time=(0, None))
+        columns = ["time_min", "time_max"]
+        got, expected = selected.get_contents(), spool.get_contents()
+        assert self._values(got, columns) == self._values(expected, columns)
+        assert len(selected.chunk(time=None)) == len(spool.chunk(time=None))
+
     @pytest.mark.parametrize("on_disk", [False, True])
     def test_drop_leaves_one_kind(self, tmp_path, on_disk):
         """Rows a drop leaves of one kind plan as that kind alone (#1701)."""
