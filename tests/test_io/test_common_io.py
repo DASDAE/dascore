@@ -18,7 +18,6 @@ from functools import cache
 from io import BufferedIOBase, BytesIO, UnsupportedOperation
 from operator import eq, ge, le
 from pathlib import Path
-from tempfile import mkdtemp
 
 import h5py
 import numpy as np
@@ -89,60 +88,65 @@ from tests.test_io.test_sac.test_sac import write_sac
 from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 
 # No shipped file is DASDAE version 2 yet: the current writer makes one
-# (see `_write_dasdae_v2`) so the format sits in the same matrix as the
+# (see `written_matrix_dir`) so the format sits in the same matrix as the
 # version it succeeds.
-_DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
+_DASDAE_V2_FILE = "example_dasdae_v2.h5"
 # Nor any Arrow patch; one is written from the same example when pyarrow
 # is installed.
 _ARROW_IOS = (ArrowV1(),) if importlib.util.find_spec("pyarrow") else ()
-_ARROW_PATH = Path(mkdtemp("arrow")) / "example.arrow"
+_ARROW_FILE = "example.arrow"
 # Nor is any zarr store; one is written for each zarr format when the
 # optional dependencies are installed.
 _HAS_ZARR = all(importlib.util.find_spec(x) for x in ("zarr", "xarray"))
 _ZARR_IOS = (ZarrV3(), ZarrV2()) if _HAS_ZARR else ()
-_ZARR_PATHS = {io: Path(mkdtemp("zarr")) / "example.zarr" for io in _ZARR_IOS}
+_ZARR_FILES = {io: f"example_v{io.version}.zarr" for io in _ZARR_IOS}
 # The shipped NetCDF file is XDAS's layout, so generic NetCDF gets its own,
 # with and without a CF version.
 _HAS_NETCDF = all(importlib.util.find_spec(x) for x in ("h5netcdf", "xarray"))
 _NETCDF_IOS = (NetCDFCFV18(), NetCDFNoCF()) if _HAS_NETCDF else ()
-_NETCDF_PATHS = {io: Path(mkdtemp("netcdf")) / "example.nc" for io in _NETCDF_IOS}
+_NETCDF_FILES = {io: f"example_v{io.version}.nc" for io in _NETCDF_IOS}
 # WITSML DTS logs are written from the synthetic examples their tests build.
-_WITSML_DIR = Path(mkdtemp("witsml"))
 _WITSML_FILES = {
-    WITSMLV1411(): (_WITSML_DIR / "brady_like.xml", brady_like),
-    WITSMLV1400(): (_WITSML_DIR / "cranfield_like.xml", cranfield_like),
+    WITSMLV1411(): ("brady_like.xml", brady_like),
+    WITSMLV1400(): ("cranfield_like.xml", cranfield_like),
 }
 # No shipped file is seismic ASDF, so the example its tests build is written.
-_ASDF_PATH = Path(mkdtemp("asdf")) / "example_asdf.h5"
+_ASDF_FILE = "example_asdf.h5"
 # Nor SAC: one file per version, the second in the other byte order, each
 # big enough for the scan to be held to reading only its header.
-_SAC_DIR = Path(mkdtemp("sac"))
-_SAC_PATHS = {SacV6(): _SAC_DIR / "v6.sac", SacV7(): _SAC_DIR / "v7.sac"}
+_SAC_FILES = {SacV6(): "v6.sac", SacV7(): "v7.sac"}
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _write_dasdae_v2():
-    """Write the version 2 example before any fixture fetches it."""
-    dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
-    if _ARROW_IOS:
-        dc.write(dc.get_example_patch("random_das"), _ARROW_PATH, "DASARROW")
-    for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
-        writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
-        writer.write(dc.get_example_patch("random_das"), path)
-    for io, path in _NETCDF_PATHS.items():
-        # H5Simple also claims a root "data" beside "time"; not under test here.
-        with h5py.File(path, "r+") as handle:
-            handle.move("data", "strain")
-            if isinstance(io, NetCDFNoCF):
-                del handle.attrs["Conventions"]
-    for path, make_text in _WITSML_FILES.values():
-        path.write_text(make_text())
-    write_asdf(_ASDF_PATH)
-    for (io, path), byte_order in zip(_SAC_PATHS.items(), "<>", strict=True):
-        write_sac(path, 300_000, byte_order=byte_order, version=int(io.version))
+def _written(name: str) -> FixtureFile:
+    """The matrix entry for a file `written_matrix_dir` writes."""
+    return FixtureFile("written_matrix_dir", name)
 
 
 # --- Fixtures
+
+
+@pytest.fixture(scope="session")
+def written_matrix_dir(tmp_path_factory):
+    """Write the matrix files no registry entry provides, and return their folder."""
+    path = tmp_path_factory.mktemp("common_io")
+    dc.write(dc.get_example_patch("random_das"), path / _DASDAE_V2_FILE, "dasdae")
+    if _ARROW_IOS:
+        dc.write(dc.get_example_patch("random_das"), path / _ARROW_FILE, "DASARROW")
+    for io, name in (_ZARR_FILES | _NETCDF_FILES).items():
+        writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
+        writer.write(dc.get_example_patch("random_das"), path / name)
+    for io, name in _NETCDF_FILES.items():
+        # H5Simple also claims a root "data" beside "time"; not under test here.
+        with h5py.File(path / name, "r+") as handle:
+            handle.move("data", "strain")
+            if isinstance(io, NetCDFNoCF):
+                del handle.attrs["Conventions"]
+    for name, make_text in _WITSML_FILES.values():
+        (path / name).write_text(make_text())
+    write_asdf(path / _ASDF_FILE)
+    for (io, name), byte_order in zip(_SAC_FILES.items(), "<>", strict=True):
+        write_sac(path / name, 300_000, byte_order=byte_order, version=int(io.version))
+    return path
 
 
 @pytest.fixture(scope="session")
@@ -163,10 +167,10 @@ def puniu_matrix_file(tmp_path_factory):
 COMMON_IO_READ_TESTS = {
     AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
-    **{io: (str(_ARROW_PATH),) for io in _ARROW_IOS},
-    ASDFV1(): (str(_ASDF_PATH),),
+    **{io: (_written(_ARROW_FILE),) for io in _ARROW_IOS},
+    ASDFV1(): (_written(_ASDF_FILE),),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
-    DASDAEV2(): (str(_DASDAE_V2_PATH),),
+    DASDAEV2(): (_written(_DASDAE_V2_FILE),),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
     Febus1(): ("valencia_febus_example.h5",),
     Febus2(): ("febus_1.h5", "febus_2.h5"),
@@ -193,7 +197,7 @@ COMMON_IO_READ_TESTS = {
     ProdMLFlatV1(): ("prodml_flat_1.h5",),
     PuniuV1(): (FixtureFile("puniu_matrix_file"),),
     RSFV1(): ("example_dascore.rsf",),
-    **{io: (str(path),) for io, path in _SAC_PATHS.items()},
+    **{io: (_written(name),) for io, name in _SAC_FILES.items()},
     TDMSFormatterV4713(): ("sample_tdms_file_v4713.tdms",),
     SegyV1_0(): ("conoco_segy_1.sgy",),
     SentekV5(): ("DASDMSShot00_20230328155653619.das",),
@@ -212,8 +216,8 @@ COMMON_IO_READ_TESTS = {
     NetCDF3V1(): ("kolsass_dts_netcdf3.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
-    **{io: (str(path),) for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items()},
-    **{io: (str(path),) for io, (path, _) in _WITSML_FILES.items()},
+    **{io: (_written(name),) for io, name in (_ZARR_FILES | _NETCDF_FILES).items()},
+    **{io: (_written(name),) for io, (name, _) in _WITSML_FILES.items()},
 }
 
 # This tuple is for fiber io which support a write method and can write
