@@ -342,6 +342,13 @@ class TestBasics:
         assert out.shape == f_array.shape
         assert np.allclose(f_array, out.values)
 
+    def test_convert_units_zero_dim(self):
+        """A zero-dimensional coordinate converts its one label (#1709)."""
+        out = get_coord(data=np.array(-5.0), units="cm").convert_units("m")
+        assert out.shape == ()
+        assert np.isclose(out.values, -0.05)
+        assert dc.get_unit(out.units) == dc.get_unit("m")
+
     def test_unit_str(self, evenly_sampled_coord):
         """Ensure the unit string returns a string."""
         coord = evenly_sampled_coord.set_units("m/s")
@@ -2847,6 +2854,31 @@ class TestGetNextIndex:
         values = np.array([0.0, 1.0, 3.0, 7.0])
         coord = get_coord(data=values)
         assert list(coord.get_next_index(values)) == [0, 1, 2, 3]
+
+    @pytest.mark.parametrize(
+        ("coord", "value"),
+        [
+            (get_coord(start=0.0, stop=1.0, step=0.25), np.nan),
+            (get_coord(start=0, stop=10, step=1), np.array([np.nan, 5])),
+            (get_coord(data=np.array([0.0, 0.3, 0.7, 2.0])), np.nan),
+            (get_coord(start=_DAY, stop=_DAY + 10 * _SECOND, step=_SECOND), "NaT"),
+        ],
+    )
+    def test_null_raises(self, coord, value):
+        """A NaN or NaT has no index (#1707)."""
+        with pytest.raises(ValueError, match="no index"):
+            coord.get_next_index(value)
+
+    def test_zero_step(self):
+        """A coordinate with a zero step finds its one label (#1708)."""
+        ints = get_coord(data=np.array([-2], dtype=np.int8), step=0)
+        assert ints.get_next_index(-2) == 0
+        assert list(ints.get_next_index([-2, -2])) == [0, 0]
+        floats = get_coord(data=np.array([1.5]), step=0)
+        assert floats.get_next_index(0, relative=True) == 0
+        assert list(floats.get_next_index([1.5, 1.5])) == [0, 0]
+        outside = floats.get_next_index([0.5, 2.5], allow_out_of_bounds=True)
+        assert list(outside) == [0, 0]
 
 
 class TestUpdate:
