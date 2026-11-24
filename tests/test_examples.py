@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pathlib
 import pickle
+import tempfile
 from pathlib import Path
 
 import h5py
@@ -244,6 +245,12 @@ class TestTunnelInventory:
     def original(self, inventory):
         """The optical path as it was before the repair."""
         return inventory.networks[0].fiber_arrays[0].optical_paths[0]
+
+    def test_leaves_no_files(self, tmp_path, monkeypatch):
+        """The files it is read from are gone once it is loaded."""
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        dc.get_example_inventory("tunnel")
+        assert not any(tmp_path.iterdir())
 
     def test_repair_is_two_epochs_of_one_location(self, inventory):
         """One location code carries two paths which do not overlap."""

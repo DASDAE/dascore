@@ -675,7 +675,7 @@ def random_directory_spool(path=None, **kwargs):
     ----------
     path
         If provided, the path to save the directory spool. If None, use
-        a temporary path.
+        a new temporary directory, which the caller owns and removes.
 
     kwargs are passed to [`random_spool`](`dascore.examples.random_spool`)
     """
@@ -764,7 +764,8 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
     spool
         The spool to save to
     path
-        The path to the directory, if None, create tempdir.
+        The path to the directory. If None, create a temporary directory,
+        which the caller owns and removes.
     file_format
         The file format for the saved files.
     extension
@@ -1389,5 +1390,6 @@ def write_tunnel_inventory(path, repaired: bool = True) -> Path:
 @register_func(EXAMPLE_INVENTORIES, key="tunnel")
 def tunnel_inventory() -> Inventory:
     """The tunnel deployment the tunnel recipe builds, read from its files."""
-    directory = Path(tempfile.mkdtemp()) / "tunnel_inventory"
-    return dc.inventory(write_tunnel_inventory(directory))
+    with tempfile.TemporaryDirectory() as folder:
+        directory = Path(folder) / "tunnel_inventory"
+        return dc.inventory(write_tunnel_inventory(directory))

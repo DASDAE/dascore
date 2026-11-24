@@ -3,22 +3,22 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import pytest
 
 import dascore as dc
-from dascore.utils.downloader import fetch
 from dascore.utils.misc import iterate, suppress_warnings
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
+    get_matrix_path,
     get_representative_io_test,
     skip_missing,
     skip_on_timeout,
-    skip_timeout,
 )
 from tests.test_io.test_common_io import _HAS_NETCDF, COMMON_IO_READ_TESTS
-from tests.test_io.test_common_io import _write_dasdae_v2 as _write_dasdae_v2
+
+# Imported so `get_matrix_path` can request it from this module.
+from tests.test_io.test_common_io import written_matrix_dir as written_matrix_dir
 
 # The localhost HTTP + fsspec/aiohttp streaming path can intermittently deadlock
 # on Windows (the async read stalls while h5py probes remote HDF5 metadata),
@@ -98,36 +98,34 @@ def isolated_remote_cache(tmp_path_factory, permanent_config):
         yield
 
 
-def _get_remote_case(fetch_name: str, to_http_range_path):
-    """Return a range-capable HTTP path for one fetched local test file."""
-    with skip_timeout():
-        local_path = fetch(fetch_name)
-    return to_http_range_path(local_path)
+def _get_remote_case(entry, request, to_http_range_path):
+    """Return a range-capable HTTP path for one local matrix file."""
+    return to_http_range_path(get_matrix_path(entry, request))
 
 
 @pytest.fixture(
     scope="session",
     params=REMOTE_GET_FORMAT_CASES,
-    ids=lambda case: f"{case[0].name}-{case[0].version}-{Path(case[1]).name}",
+    ids=lambda case: f"{case[0].name}-{case[0].version}",
 )
 def remote_get_format_case(request, to_http_range_path):
     """Return one remote get-format case per IO/file pairing."""
-    io, fetch_name = request.param
-    return io, _get_remote_case(fetch_name, to_http_range_path)
+    io, entry = request.param
+    return io, _get_remote_case(entry, request, to_http_range_path)
 
 
 @pytest.fixture(scope="session", params=REMOTE_REPRESENTATIVE_CASES)
 def remote_read_case(request, to_http_range_path):
     """Return one representative remote read case per FiberIO entry."""
-    io, fetch_name = request.param
-    return io, _get_remote_case(fetch_name, to_http_range_path)
+    io, entry = request.param
+    return io, _get_remote_case(entry, request, to_http_range_path)
 
 
 @pytest.fixture(scope="session", params=REMOTE_REPRESENTATIVE_CASES)
 def remote_scan_case(request, to_http_range_path):
     """Return one representative remote scan case per FiberIO entry."""
-    io, fetch_name = request.param
-    return io, _get_remote_case(fetch_name, to_http_range_path)
+    io, entry = request.param
+    return io, _get_remote_case(entry, request, to_http_range_path)
 
 
 class TestRemoteGetFormat:
