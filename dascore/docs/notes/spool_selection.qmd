@@ -57,9 +57,44 @@ A single range in native units can be pushed into the reader on even or uneven c
 - several ranges composed on an uneven or float16/float32 coordinate, since stored ranges can't reliably tell which samples earlier selections left;
 - selections involving associated coordinates, so a trim on one coordinate can make a later trim on another coordinate along the same axis a no-op.
 
-The spool's contents follow such a trim before anything loads: selecting on one coordinate narrows the advertised range of every evenly sampled coordinate on its dimension, so `get_contents`, `get_coverage` and `chunk` see what the patch will hold. Times and integers are advertised exactly, and so are float labels on a grid the index records, short of its precision, and float grids whose labels need no rounding. Other float ends between a patch's first and last labels are rebuilt from its start and step, which can differ in the last places from the labels a patch cut from a longer grid counts from that grid's start, so they are moved out by 4 ulp of the patch's largest label, or a tenth of a step where that is less, as are `chunk`'s. Spools compare float ends within twice the float allowance of the [coordinate contract](coordinates.qmd), within which a looked-up value is that label, so a view equals the spool of the patches it loads. A coordinate with no step, or on several dimensions, keeps its whole range.
+The spool's contents follow such a trim before anything loads: selecting on one coordinate narrows the advertised range of every evenly sampled coordinate on its dimension, so `get_contents`, `get_coverage` and `chunk` see what the patch will hold. Times and integers are advertised exactly, and so are float labels on a grid the index records, short of its precision, and float grids whose labels need no rounding. Other float ends between a patch's first and last labels are rebuilt from its start and step, which can differ in the last places from the labels a patch cut from a longer grid counts from that grid's start, so they are moved out by 4 ulp of the patch's largest label, or a tenth of a step where that is less, as are `chunk`'s. Spools compare float ends within twice the float allowance of the [coordinate contract](coordinates.qmd), within which a looked-up value is that label, so a view equals the spool of the patches it loads. A coordinate on several dimensions keeps its whole range; one riding the dimension with no step states an unknown one (see [Riders](#riders)).
 
 Attribute filters, including on `data_id`, always query the indexed file metadata, not ids generated when a selected patch loads.
+
+## Riders
+
+A rider is a coordinate along a dimension other than the dimension's own, such as latitude and longitude along a fiber's distance. A selection or a chunk window that cuts a dimension cuts its riders by the same samples, and the view states each rider as follows:
+
+- **A rider with a step**, or on a float grid the index records, states the exact range and step of the samples kept, worked out from its start and the positions kept. Nothing is read.
+- **A rider with no step** keeps a known number of samples, but only its file says which labels they are. Its range is unknown: `get_contents` shows NaN for its ends, and no step.
+- **A rider left uncut**, or one whose patch keeps every sample, states the range the index holds.
+
+An output joining parts of a rider states it unknown where any part is. A chunk window along a dimension an earlier selection trimmed states every rider it cuts unknown, step or not, since the trimmed rows don't say which of their samples the window keeps. A selection on a rider with no step leaves the rest of its dimension's coordinates as they were, since the index can't say which samples it keeps.
+
+`Spool.unresolved_coords` names the coordinates some row states unknown, and reads nothing. `Spool.load_coords` returns a view stating them exactly. It reads their labels, without the data, from each file a row with one comes from, and warns how many files it read; a spool of patches in memory reads them from its patches without warning. With nothing unknown, it reads nothing and returns the same spool. A fill's output holding filled samples keeps its riders unknown, since their labels are known only once it loads.
+
+Two operations read what they need first:
+
+- a selection on a rider some row states unknown, which keeps and drops patches by the labels they hold; plans then leave out a patch it empties, as for any rider with no step;
+- spool `==`, so a view equals the spool of the patches it loads.
+
+Nothing else reads them: `len`, `get_contents`, selections and chunks on other coordinates, and loading, which reads the labels anyway.
+
+```{python}
+import numpy as np
+
+patch = dc.get_example_patch()
+distance = patch.get_coord("distance").values
+lat = 40 + np.cumsum(np.random.default_rng(0).random(len(distance))) / 1000
+patch = patch.update_coords(lat=("distance", lat), depth=("distance", 2.0 * distance))
+view = dc.spool([patch]).select(distance=(10, 20))
+assert view.unresolved_coords == ("lat",)  # depth has a step, so its range is known
+assert view.get_contents()[["lat_min", "lat_max"]].isna().all(axis=None)
+
+known = view.load_coords()
+assert known.get_contents()["lat_min"].iloc[0] == lat[10]
+assert view == dc.spool(list(view))
+```
 
 ## Views
 
