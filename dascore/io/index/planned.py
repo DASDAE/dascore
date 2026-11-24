@@ -163,6 +163,7 @@ def _coord_record_from_row(
     dims: tuple[str, ...] | None = None,
     name_is_held: bool = False,
     planned: bool = False,
+    identified: bool = True,
 ) -> CoordRecord | None:
     """
     Build the envelope coord record for one output coordinate.
@@ -176,7 +177,8 @@ def _coord_record_from_row(
     written even when nothing about its values can be stated: the patch
     will carry it, and a catalog which omitted it would deny it.
     `planned` says the row is the plan's own output along ``name``, whose
-    grid describes its samples without a def key.
+    grid describes its samples without a def key. `identified` False
+    states a range without the identity its ends and step would rebuild.
     """
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
@@ -284,7 +286,8 @@ def _coord_record_from_row(
         data_id=data_id,
         **exact,
     )
-    return _coord_record(name, summary)
+    record = _coord_record(name, summary)
+    return record if identified or record is None else replace(record, data_id=None)
 
 
 def _group_extreme(group: pd.Series, how: str):
@@ -423,9 +426,10 @@ def _aux_coord_info(
     which permit value-identity claims) is kept only when every member
     shares one def key and the values provably survive assembly: a
     coordinate riding the planned dimension is trimmed/merged with it,
-    so only a lone unmodified member keeps identity there. Envelopes
-    always aggregate — the catalog contract is candidacy, with exact
-    values re-established at load.
+    so only a lone unmodified member keeps identity there, though a lone
+    member's window keeps the rider's step. Envelopes always aggregate —
+    the catalog contract is candidacy, with exact values re-established
+    at load.
 
     A concatenation joins a rider's segments rather than merging them, so
     a rider whose members share one step and meet end to end keeps that
@@ -491,9 +495,16 @@ def _aux_coord_info(
             # member keeps identity — unless nobody states any values,
             # which every member says the same way
             keep = keep & ((single & ~modified) | all_null)
-        step_ok, step_first = no_gate, None
+        step_ok, step_first, bare = no_gate, None, no_gate
         if step_col in joined.columns:
-            step_ok = keep & (grouped[step_col].nunique().to_numpy() == 1)
+            one_step = grouped[step_col].nunique().to_numpy() == 1
+            step_ok = keep & one_step
+            if rides and not (trimmed or concat):
+                # a window of a lone member keeps its rider's grid, and so
+                # its step, though not the values its identity describes;
+                # a fractional grid's whole-tick step restates no labels
+                bare = one_step & single & ~step_ok & ~_fractional(joined, grid_col)
+                step_ok = step_ok | bare
             step_first = grouped[step_col].first().to_numpy()
             if rides and concat:
                 # the joined coordinate is a range when the segments are
@@ -550,6 +561,7 @@ def _aux_coord_info(
             absent |= (held < size) & lacks.to_numpy()  # per output
             none = np.full(len(held), None, dtype=object)
             lows, highs = (np.where(held > 0, x, none) for x in (lows, highs))
+            step_ok = step_ok & (held >= size)  # a filled sample has no label
         for index in np.flatnonzero(~absent):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
@@ -564,9 +576,17 @@ def _aux_coord_info(
                 unit_col: unit if unit_ok[index] else None,
                 "dims": dims,
                 "windowed": bool(windowed[index]),
+                "identified": not bare[index],
             }
             out.setdefault(int(output_ids[index]), {})[name] = info
     return out
+
+
+def _fractional(joined: pd.DataFrame, grid_col: str) -> np.ndarray:
+    """Per output, whether a member states a fractional exact grid."""
+    grids = joined.get(grid_col, pd.Series(None, index=joined.index, dtype=object))
+    found = grids.map(lambda x: isinstance(x, tuple) and x[1] > 1).astype(bool)
+    return found.groupby(joined["output_id"], sort=True).any().to_numpy()
 
 
 def _with_windowed_dims(outputs: pd.DataFrame, aux_info, plan_dim: str):
@@ -672,7 +692,12 @@ def _output_records(
             if name in dim_names:
                 continue
             record = _record_once(
-                coord_cache, info, name, dims=info["dims"], name_is_held=True
+                coord_cache,
+                info,
+                name,
+                dims=info["dims"],
+                name_is_held=True,
+                identified=info["identified"],
             )
             if record is not None:
                 coords.append(record)

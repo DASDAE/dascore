@@ -1573,6 +1573,51 @@ class TestFloatEndsStateWhatLoads:
         chunked = spool_of(patch.isel(distance=cut)).chunk(distance=3.85)
         self._states_what_loads(chunked, ["distance"])
 
+    @staticmethod
+    def _cut_grid(spool_of, count, first, cut, last):
+        """A spool of two consecutive parts of one float grid."""
+        coords = {"distance": -38.449 + np.arange(count) * 2.111}
+        data = np.arange(count, dtype=np.float64)
+        parent = dc.Patch(data=data, coords=coords, dims=("distance",))
+        parts = (parent.isel(distance=slice(*x)) for x in ((first, cut), (cut, last)))
+        return spool_of(*parts)
+
+    def test_chunk_across_files_cut_from_one_grid(self, spool_of):
+        """Files cut from the stretch's own grid name what they load (#1697)."""
+        spool = self._cut_grid(spool_of, 7, 0, 3, 7)
+        chunked = spool.chunk(distance=5.0, keep_partial=True)
+        self._states_what_loads(chunked, ["distance"])
+        # named, not just alike: other data with the same rows differs
+        assert chunked != dc.spool([x * 2 for x in chunked])
+
+    @pytest.mark.parametrize(
+        "cuts, derive",
+        [
+            # an output joining the two files
+            ((7, 0, 3, 7), lambda x: x.chunk(distance=10.0, keep_partial=True)),
+            # a re-chunk of such outputs
+            (
+                (19, 0, 8, 19),
+                lambda x: x.chunk(distance=3.5 * 2.111, keep_partial=True).chunk(
+                    distance=4.5 * 2.111, keep_partial=True
+                ),
+            ),
+            # files cut from a longer grid than the stretch's
+            ((13, 3, 6, 10), lambda x: x.chunk(distance=5.0, keep_partial=True)),
+            # a stretch starting inside a file
+            (
+                (7, 0, 3, 7),
+                lambda x: x.select(distance=(-37, None)).chunk(
+                    distance=5.0, keep_partial=True
+                ),
+            ),
+        ],
+    )
+    def test_chunks_of_files_cut_from_one_grid(self, spool_of, cuts, derive):
+        """Chunks of files cut from one grid equal what they load (#1697)."""
+        chunked = derive(self._cut_grid(spool_of, *cuts))
+        self._states_what_loads(chunked, ["distance"])
+
     def test_rider_on_a_grid_at_its_precision(self):
         """Labels a float32 ulp apart are followed sample for sample."""
         distance = (1e7 + np.arange(100)).astype(np.float32)
