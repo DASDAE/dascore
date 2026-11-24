@@ -610,7 +610,9 @@ class PatchProcessor(DascoreBaseModel):
         out = out.update(attrs=attrs)
         if meta._kernel_key == LAZY_BACKEND:
             result = self._settled(result, out)
-        new = out if reconciled else out.to_patch(result)
+        # A patch `reconcile` made is of the backend its input was of, as
+        # one made from the metadata is.
+        new = out._with_backend(patch._backend) if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
         if out._source is not meta._source:
             new._source = out._source
@@ -956,7 +958,7 @@ def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, .
     backend
         The backend it is for, as
         [`backend_name`](`dascore.utils.array_api.backend_name`) spells
-        it -- "numpy", "cupy", "dask" -- or the namespace of an
+        it -- "numpy", "cupy", "dask" -- or the name of an
         [`ArrayBackend`](`dascore.backends.ArrayBackend`), or a tuple of
         them.
     """

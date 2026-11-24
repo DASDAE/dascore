@@ -245,6 +245,7 @@ def load(array: LazyArray) -> np.ndarray:
         # Written in place, so only one box is held beside the whole.
         first, out = out, np.empty(array.shape, array.dtype)
         out[boxes[0]] = first
+        del first
         for box in boxes[1:]:
             out[box] = compute(array, box)
     elif len(boxes) > 1:

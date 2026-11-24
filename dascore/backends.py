@@ -65,6 +65,10 @@ _BACKENDS: dict[str, type[ArrayBackend]] = {}
 # What `backend_name` reports for the arrays a backend class makes; see
 # `ArrayBackend._native`.
 _NATIVE: dict[type[ArrayBackend], str] = {}
+# What a backend is handed to see what it makes: empty, and of a dtype every
+# array library keeps, so one which holds 64-bit numbers in 32 is not
+# refused before it is given any.
+_PROBE = np.empty(0, np.float32)
 # A backend's name, and in brackets what it is handed to make itself from.
 _SPELLING = re.compile(r"\s*(\w+)\s*(?:\[(.*)\])?\s*")
 # The backend reads hand their recipes to, or None when reads fill memory
@@ -84,8 +88,9 @@ class ArrayBackend(BaseModel, ABC):
     Attributes
     ----------
     name
-        Any name in lower case: what a string calls the backend, whatever
-        the string's case, and what its kernels are registered under.
+        Any name of lower-case letters, digits and underscores: what a
+        string calls the backend, whatever the string's case, and what its
+        kernels are registered under.
     array_type
         The class of the backend's arrays, or a string of where it is, such
         as ``"cupy.ndarray"``, which imports nothing. Its arrays are the
@@ -109,10 +114,11 @@ class ArrayBackend(BaseModel, ABC):
                 "array_type: a backend says which class its arrays are."
             )
             raise TypeError(msg)
-        if cls.name != cls.name.lower():
+        if not re.fullmatch(r"[a-z0-9_]+", cls.name):
             msg = (
-                f"The name {cls.name!r} of {cls.__name__} must be in "
-                "lower case: kernels are registered under it exactly as it is."
+                f"The name {cls.name!r} of {cls.__name__} must be lower-case "
+                "letters, digits and underscores: a string names the backend "
+                "by it, and kernels are registered under it exactly as it is."
             )
             raise TypeError(msg)
         holder = _BACKENDS.get(cls.name)
@@ -169,9 +175,9 @@ class ArrayBackend(BaseModel, ABC):
         ----------
         array
             An array of any backend. One of this backend's own is handed
-            back as it is. A spool set to the backend hands it an empty
-            one-dimensional array first, so a backend which cannot be used
-            says so then and not at the first patch.
+            back as it is. A spool or patch set to the backend hands it an
+            empty one-dimensional `float32` array first, so a backend which
+            cannot be used says so then and not at the first patch.
         """
 
     def _owns(self, array: Any) -> bool:
@@ -188,7 +194,7 @@ class ArrayBackend(BaseModel, ABC):
 
     def _check(self) -> None:
         """Raise if the backend does not make arrays of its array type."""
-        made = self.from_array(np.empty(0))
+        made = self.from_array(_PROBE)
         if not self._owns(made):
             msg = (
                 f"The {self.name} backend made a {_where(type(made))}, "
@@ -209,7 +215,7 @@ class ArrayBackend(BaseModel, ABC):
         """
         kind = type(self)
         if kind not in _NATIVE:
-            _NATIVE[kind] = backend_name(self.from_array(np.empty(0)))
+            _NATIVE[kind] = backend_name(self.from_array(_PROBE))
         return _NATIVE[kind]
 
     def __str__(self) -> str:
@@ -311,7 +317,7 @@ class ArrayAPIBackend(ArrayBackend):
         # with 64-bit numbers unless told otherwise, would change them under
         # the same id: refused rather than trusted.
         made = _as_numpy_dtype(out.dtype)
-        if held.size and made != held.dtype:
+        if made != held.dtype:
             msg = (
                 f"{package} holds {held.dtype} data as {made}, which would "
                 f"change their values. Configure {package} to keep "
@@ -391,6 +397,11 @@ class LazyBackend(ArrayBackend):
         """Raise if the backend computed on does not make its own arrays."""
         self.compute._check()
 
+    @property
+    def _native(self) -> str:
+        """Return what the arrays are once loaded: the computing backend's."""
+        return self.compute._native
+
     @classmethod
     def from_string(cls, argument: str | None = None) -> Self:
         """Return the lazy backend computing on the one named in brackets."""
@@ -458,9 +469,9 @@ def _refuse_mixed(arrays, doing: str) -> None:
     kinds = {x._backend._native if _LAZY._owns(x) else backend_name(x) for x in arrays}
     if len(kinds) > 1:
         msg = (
-            f"{doing} needs arrays of one kind, and these are of "
-            f"{', '.join(sorted(kinds))}. Put the patches on one backend "
-            "first, with set_backend."
+            f"{doing} needs arrays of one array library, and these are of "
+            f"{', '.join(sorted(kinds))}. Load them, or put the patches on "
+            "one backend with set_backend, first."
         )
         raise IncompatiblePatchError(msg)
 
@@ -500,8 +511,12 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
     found = _SPELLING.fullmatch(str(backend))
     name = found.group(1).lower() if found else None
     if name is not None and name not in _BACKENDS:
-        # A package's backend is registered when its module is imported.
-        load_backend_plugins(name)
+        # A package's backend is registered when its module is imported. One
+        # whose module failed part way is not left registered half made.
+        before = dict(_BACKENDS)
+        if not load_backend_plugins(name):
+            _BACKENDS.clear()
+            _BACKENDS.update(before)
     if found is None or name not in _BACKENDS:
         known = ", ".join(sorted({x.name for x in _BACKENDS.values()}))
         msg = (

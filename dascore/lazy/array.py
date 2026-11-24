@@ -228,10 +228,11 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     Lazy arrays with nothing pending are a window of what is stored, and
     are joined by their recipes, reading nothing: the result is lazy. Any
     other arrays held on one library are joined there, by the library's
-    own `concat`, so they are never taken through NumPy. What cannot be
-    joined either way -- lazy arrays with operations pending, a mix of lazy
-    and in-memory arrays or of libraries, or a new axis on lazy arrays --
-    is read or converted only as the `numpy_fallback` setting allows.
+    own `concat`, so they are never taken through NumPy. Arrays of
+    different libraries are not joined at all. What cannot be joined either
+    way -- lazy arrays with operations pending, a mix of lazy and in-memory
+    arrays, or a new axis on lazy arrays -- is read or converted only as
+    the `numpy_fallback` setting allows.
 
     Parameters
     ----------

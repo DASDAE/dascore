@@ -67,6 +67,8 @@ Patches of different kinds are never combined, whatever their coordinates. What 
 | `stack` | skipped, per `check_behavior` (`"warn"` by default, `"raise"`, or `"ignore"`) — it operates relative to the first patch |
 | `Spool.chunk`, `Spool.concatenate` | separate outputs, never an error — a spool operation partitions |
 
+Patches of one kind whose arrays are of different array libraries, NumPy and dask say, are another matter: neither is put on the other's library, so `chunk`, `concatenate`, `stack` and operators raise `IncompatiblePatchError` for them. In arithmetic a NumPy patch of no backend is still taken in by the other's library. [Lazy Operations](lazy_operations.qmd#backends) says how a spool or a patch is put on one backend.
+
 ```{python}
 import numpy as np
 import pytest

@@ -17,6 +17,7 @@ from pint import DimensionalityError
 from pydantic import TypeAdapter
 
 import dascore as dc
+from dascore.backends import _refuse_mixed
 from dascore.config import get_config
 from dascore.constants import (
     _DASCORE_DIR,
@@ -1929,6 +1930,8 @@ def stack_patches(
     kept = []
     for p in patches:
         refuse_lazy("stack", (p.data,))
+        # Of one array library: none is put on another's to be added.
+        _refuse_mixed((init_patch.data, p.data), "Stacking patches")
         # check kind, then dimensions and coords of patch against init_patch.
         # Kind is compared strictly: a collection is being combined, so a
         # missing value is a value.

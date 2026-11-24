@@ -165,7 +165,7 @@ def _abs_mybackend(processor, data):
     return np.abs(data)
 ```
 
-The data backend selects the kernel. A registered kernel takes precedence over the same class's `numpy_kernel` and `kernel`; a subclass's own implementation takes precedence over its parent's registrations.
+The kernel is selected by the name of the backend the patch is of, if it has one and a kernel is registered under it, and otherwise by the data's array library. A registered kernel takes precedence over the same class's `numpy_kernel` and `kernel`; a subclass's own implementation takes precedence over its parent's registrations.
 
 The operation may also be named by its registry tag -- bare for one of DASCore's own, `package:name` otherwise -- and one kernel may serve several backends:
 
@@ -175,7 +175,7 @@ def _abs_shared(processor, data):
     return np.abs(data)
 ```
 
-Kernels are registered when their module is imported. To have DASCore import it, rather than asking users to, declare the module as a `dascore.kernels` entry point for each backend it serves, named exactly as [`backend_name`](`dascore.utils.array_api.backend_name`) spells that backend. DASCore imports it the first time data of that backend meet a processor, or the first time a spool is set to a backend of that name, so the same module can define the package's [`ArrayBackend`](`dascore.backends.ArrayBackend`) subclass. A package of other kernels for arrays DASCore already has a backend for, such as Numba kernels for NumPy arrays, subclasses that backend under a `name` of its own and registers its kernels under it; an operation it has no kernel for runs what the array would anyway:
+Kernels are registered when their module is imported. To have DASCore import it, rather than asking users to, declare the module as a `dascore.kernels` entry point for each backend it serves, named for it: the `name` of an [`ArrayBackend`](`dascore.backends.ArrayBackend`), or, for an array library with no backend of its own, exactly as [`backend_name`](`dascore.utils.array_api.backend_name`) spells it. DASCore imports it the first time data of that backend meet a processor, or the first time a spool is set to a backend of that name, so the same module can define the package's [`ArrayBackend`](`dascore.backends.ArrayBackend`) subclass. A package of other kernels for arrays DASCore already has a backend for, such as Numba kernels for NumPy arrays, subclasses that backend under a `name` of its own and registers its kernels under it; an operation it has no kernel for runs what the array would anyway:
 
 ```toml
 [project.entry-points."dascore.kernels"]

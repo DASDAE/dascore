@@ -815,12 +815,6 @@ def _apply_binary_ufunc(
     # Whether the operand which is not `patch` is one, before alignment
     # replaces it with its data.
     other_is_patch = isinstance(other, dc.Patch)
-    if other_is_patch and not any(_is_plain_numpy(x) for x in (patch, other)):
-        # Of one array library: neither patch's data are put on the other's.
-        # A NumPy patch of no backend is taken in by the other's library, as
-        # it always was. The result is of the first patch's backend.
-        name = getattr(operator, "__name__", str(operator))
-        _refuse_mixed((patch.data, other.data), f"{name} of two patches")
 
     # Taken before the operands are aligned and possibly replaced below:
     # what went in is what decides which data comes out.
@@ -1311,6 +1305,14 @@ def apply_ufunc(ufunc, *args, **kwargs):
         raise ParameterError(msg)
     # Whichever operand is lazy, before any is converted or applied.
     refuse_lazy(getattr(ufunc, "__name__", "operation"), _operand_arrays(args, kwargs))
+    patches = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
+    if len(patches) > 1 and not any(_is_plain_numpy(x) for x in patches):
+        # Of one array library: no patch's data are put on another's, by a
+        # fallback through NumPy or otherwise. A NumPy patch of no backend
+        # is taken in by the other's library, as it always was, and the
+        # result is of the first patch's backend.
+        name = getattr(ufunc, "__name__", "operation")
+        _refuse_mixed([x.data for x in patches], f"{name} of two patches")
     data = _get_foreign_data(args, kwargs)
     if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
         out = func(ufunc, *args, **kwargs)

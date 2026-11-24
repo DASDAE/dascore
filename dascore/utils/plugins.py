@@ -48,8 +48,13 @@ def maybe_load_entry_point(entry_point_group: str, name: str) -> Any:
 
 
 @functools.cache
-def load_backend_plugins(backend: str) -> None:
-    """Load every `dascore.kernels` entry point named for a backend, once."""
+def load_backend_plugins(backend: str) -> bool:
+    """
+    Load every `dascore.kernels` entry point named for a backend, once.
+
+    Returns whether every one of them loaded.
+    """
+    loaded = True
     for entry_point in entry_points(group=KERNEL_GROUP, name=backend):
         # The error is caught inside the cache, so a broken plugin warns once.
         try:
@@ -61,3 +66,5 @@ def load_backend_plugins(backend: str) -> None:
             )
             prefix = str(Path(__file__).parent.parent)
             warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
+            loaded = False
+    return loaded

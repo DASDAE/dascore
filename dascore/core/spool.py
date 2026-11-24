@@ -1012,7 +1012,7 @@ class Spool(NodeRepr, NamespaceOwner):
             which are not read until [`load`](`dascore.Patch.load`).
             ``"lazy"`` computes each chunk on NumPy, and ``"lazy[jax]"``
             names another backend to compute on. Operations on the
-            patches run the kernels registered for the backend's namespace,
+            patches run the kernels registered under the backend's name,
             where it has any. None unsets the backend.
 
         Raises
@@ -1175,7 +1175,7 @@ class Spool(NodeRepr, NamespaceOwner):
         attaching and enriching the union would; two different ones raise.
         So is the backend set by `set_backend`: the union is on the first
         one its operands were set to, and backends which make arrays of
-        different kinds raise.
+        different array libraries raise.
 
         Examples
         --------
@@ -1204,14 +1204,15 @@ class Spool(NodeRepr, NamespaceOwner):
         for backend in (x._backend for x in spools):
             if backend is not None and backend not in backends:
                 backends.append(backend)
-        # Arrays of one kind, counting a lazy backend as the one it computes
+        # Arrays of one library, counting a lazy backend as the one it computes
         # on: the union is on the first backend, whose kernels its patches run.
         inner = [x.compute if isinstance(x, LazyBackend) else x for x in backends]
         kinds = sorted({x._native for x in inner})
         if len(kinds) > 1:
             msg = (
-                "Spools whose backends make arrays of different kinds cannot "
-                f"be added: {', '.join(kinds)}. Set them to one backend first."
+                "Spools whose backends make arrays of different array "
+                f"libraries cannot be added: {', '.join(kinds)}. Set them to "
+                "one backend first."
             )
             raise ParameterError(msg)
         new._backend = backends[0] if backends else None
