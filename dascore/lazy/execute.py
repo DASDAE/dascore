@@ -214,7 +214,7 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         run = partial(kernel, processor, **node.plan)
         # A step with no kernel for the library was let through, or
         # refused, when it was chained: it is not asked again for each box.
-        with fallbacks_decided(_converted(processor, backend)), running_under(under):
+        with fallbacks_decided(_converted(processor, backend)), running_under(backend):
             data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.

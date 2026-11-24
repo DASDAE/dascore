@@ -97,6 +97,7 @@ from dascore.utils.patch_registry import (
 from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
+    from dascore.backends import ArrayBackend
     from dascore.core.attrs import PatchAttrs
     from dascore.lazy.contract import ChunkContract
 
@@ -110,20 +111,34 @@ _RECORD: ContextVar[bool] = ContextVar("dascore_record_call", default=True)
 # `captured_operation`.
 _CAPTURE: ContextVar[list | None] = ContextVar("dascore_capture", default=None)
 
-# The name of the backend an operation is running under, so that an
-# operation it runs inside itself, as a window does, is resolved under it
-# too; see `running_under`.
-_UNDER: ContextVar[str | None] = ContextVar("dascore_kernel_name", default=None)
+# The backend the operation now running is of, so that an operation it
+# runs inside itself, as a window does, can be resolved under it too; see
+# `running_under` and `running_name`.
+_UNDER: ContextVar[ArrayBackend | None] = ContextVar("dascore_running", default=None)
 
 
 @contextmanager
-def running_under(name: str | None):
-    """Resolve the kernels asked for inside the block under a backend's name."""
-    token = _UNDER.set(name)
+def running_under(backend: ArrayBackend | None):
+    """Say which backend the operation run inside the block is of."""
+    token = _UNDER.set(backend)
     try:
         yield
     finally:
         _UNDER.reset(token)
+
+
+def running_name(data) -> str | None:
+    """
+    Return the name of the running operation's backend, if `data` are its arrays.
+
+    For an operation which runs another inside its own kernel, as a window
+    does: the name to resolve that other one's kernel under, so the
+    backend's kernels are not passed over. None where no backend is in
+    force, or the data at hand are not its arrays, as they are not once a
+    fallback has made NumPy arrays of them.
+    """
+    backend = _UNDER.get()
+    return backend.name if backend is not None and backend._owns(data) else None
 
 
 class PatchProcessor(DascoreBaseModel):
@@ -406,9 +421,7 @@ class PatchProcessor(DascoreBaseModel):
         them, and `name` that of the backend their patch is of, if any. A
         kernel a class has registered under the name answers before
         whatever the class runs for the data as they are, which takes no
-        conversion. Asked from inside another operation's kernel, as a
-        window asks for the operation it runs, the name is that
-        operation's unless one is given.
+        conversion. With no name, the kernel is the array's own.
 
         The lazy backend never falls back unasked: the first class which
         computes anything is answered by its own registered lazy kernel, or
@@ -416,8 +429,6 @@ class PatchProcessor(DascoreBaseModel):
         runs the operation by its chunk contract, or refuses it unless the
         `numpy_fallback` setting lets the data be read into memory.
         """
-        # An operation run inside another's kernel is of the same backend.
-        name = _UNDER.get() if name is None else name
         _load_plugins(backend, name)
         for klass in cls.__mro__:
             contents = klass.__dict__
@@ -583,9 +594,8 @@ class PatchProcessor(DascoreBaseModel):
         data = patch.data
         # A kernel says "nothing to do" by handing its argument back, so it
         # must not write into that argument and return it.
-        # Under its backend's name, unless the data are lazy and only chained.
-        lazy = meta._kernel_key == LAZY_BACKEND
-        with running_under(None if lazy else name):
+        # What it runs inside itself is of the patch's backend too.
+        with running_under(meta._backend):
             result = kernel(self, data, **plan)
         if out is meta and result is data:
             return self._finished(patch, self._unchanged(patch, record), record)

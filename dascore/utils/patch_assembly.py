@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.backends import _refuse_mixed, read_backend
+from dascore.backends import _refuse_mixed, read_backend, spool_backend
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.source import ArraySource
@@ -694,6 +694,13 @@ def _label_blocks(coord, size: int = 2**18):
     return (coord[x : x + size] for x in range(0, len(coord), size))
 
 
+def _of_the_spool(patch: dc.Patch) -> dc.Patch:
+    """Return a member as one of the backend of the spool putting it together."""
+    # Before the members are joined, so those of another kind are its own.
+    backend = spool_backend()
+    return patch if backend is None else patch._with_backend(backend)
+
+
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
     """The patch with its ``dim`` labels on its stretch's grid (see above)."""
     coords, attrs = _regridded(patch.coords, patch.attrs, dim, row)
@@ -933,8 +940,8 @@ class PatchAssembler:
         # is still converted, which restates its units.
         stated = get_quantity(patch.attrs.data_units)
         if units is None or str(stated) == str(get_quantity(units)):
-            return patch
-        return patch.convert_units(units)
+            return _of_the_spool(patch)
+        return _of_the_spool(patch.convert_units(units))
 
     def _merge_patches_streaming(
         self, joined, df_dict_list, merge_dim, samples, units=None

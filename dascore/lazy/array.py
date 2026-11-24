@@ -333,8 +333,9 @@ def cast_on_library(array, dtype: np.dtype):
 
 def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:
     """Return lazy arrays joined by their recipes, or None if they cannot be."""
+    # Of one kind of array already, so on the first one's backend.
     backend = arrays[0]._backend
-    if any(x._backend != backend or len(x.chain) for x in arrays):
+    if any(len(x.chain) for x in arrays):
         return None
     # Of one dtype only: a recipe joined with another of a wider dtype casts
     # its stored samples straight to it, skipping any rounding its own

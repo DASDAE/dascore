@@ -442,8 +442,6 @@ def _settled(backend: ArrayBackend | None, array: Any) -> tuple[Any, Any]:
     """
     if backend is None:
         return array, None
-    if isinstance(array, np.generic):
-        array = np.asarray(array)
     array = backend.from_array(array)
     if isinstance(backend, LazyBackend) and not backend._owns(array):
         backend = backend.compute
@@ -528,8 +526,6 @@ def reading_onto(backend: ArrayBackend | None) -> Iterator[None]:
     [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) rather
     than read.
     """
-    if backend is not None and type(backend).from_recipe is ArrayBackend.from_recipe:
-        backend = None
     token = _READING.set(backend)
     try:
         yield
@@ -539,4 +535,12 @@ def reading_onto(backend: ArrayBackend | None) -> Iterator[None]:
 
 def read_backend() -> ArrayBackend | None:
     """Return the backend reads hand their recipes to, or None when eager."""
+    backend = _READING.get()
+    if backend is None or type(backend).from_recipe is ArrayBackend.from_recipe:
+        return None
+    return backend
+
+
+def spool_backend() -> ArrayBackend | None:
+    """Return the backend of the spool a patch is being read for, if it has one."""
     return _READING.get()

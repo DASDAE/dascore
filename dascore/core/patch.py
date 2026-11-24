@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal, Self
+from uuid import uuid4
 
 import numpy as np
 from numpy.typing import NDArray
@@ -160,6 +161,8 @@ class Patch(NamespaceOwner, PatchMeta):
             data = dascore.utils.io.xarray_to_patch(data)
         # Init Patch from Patch-like
         if isinstance(data, Patch):
+            # Of the backend the patch it is made from is of.
+            self._backend = data._backend
             data, attrs, coords = data._data, data.attrs, data.coords
         elif isinstance(data, PatchMeta):
             # Metadata describes data; it is not data, and no patch can be
@@ -421,6 +424,9 @@ class Patch(NamespaceOwner, PatchMeta):
         # Of no backend while the data are put, so they are not made the
         # old one's again.
         out = copy.copy(self)
+        # Another patch than the one it was made from, which a spool
+        # holding both tells apart.
+        out._instance_id = uuid4().hex
         out._backend = None
         if new is not self._data:
             # Inside an operation, so the attrs are taken to describe the array.

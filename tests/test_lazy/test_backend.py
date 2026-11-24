@@ -754,6 +754,71 @@ class TestNamespace:
             assert len(chunk_boxes(lazy.data)) > 3
             np.testing.assert_allclose(lazy.load().data, fast.data * 3)
 
+    def test_kernel_asked_for_with_no_name_is_the_array_s(self, spool, fast):
+        """Inside a backend's kernel, the array's own kernel is still to be had."""
+        inside = []
+
+        class Wraps(dc.PatchProcessor):
+            """An operation whose named kernel is the array's own, and more."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Return the data doubled."""
+                return data * 2
+
+        @register_kernel(Wraps, "fast_numpy")
+        def _wraps_fast(self, data):
+            """Run the array's own kernel, and an operation on another patch."""
+            own = type(self).kernel_for("numpy")
+            # A patch of no backend runs its array's kernel in here too.
+            inside.append(_triples(spool[0]))
+            return own(self, data) + 1
+
+        np.testing.assert_array_equal(Wraps()(fast).data, fast.data * 2 + 1)
+        assert inside == [False]
+
+    def test_spool_set_to_a_backend_puts_kinds_on_it(self, spool, strict):
+        """Members of different kinds are made the spool's backend's, then joined."""
+        held = dc.spool([spool[0].set_backend(STRICT), *list(spool)[1:]])
+        expected = spool.chunk(time=None)[0]
+        for call in ("chunk", "concatenate"):
+            out = getattr(held.set_backend(STRICT), call)(time=None)[0]
+            assert out.backend == _Strict()
+            np.testing.assert_array_equal(to_numpy(out.data), expected.data)
+        # Files and a member in memory, of another kind than the files' are.
+        mixed = (spool[1:] + dc.spool([spool[0].set_backend(STRICT)])).set_backend(
+            STRICT
+        )
+        out = mixed.chunk(time=None)[0]
+        assert out.backend == _Strict() and out.shape == expected.shape
+
+    def test_patch_set_to_a_backend_is_another_patch(self, spool):
+        """A spool holding a patch and the same one of a backend holds two."""
+        plain = spool[0]
+        there = plain.set_backend("numpy")
+        both = dc.spool([plain, there])
+        assert len(both) == 2
+        assert [x.backend for x in both] == [None, NumpyBackend()]
+
+    def test_stacked_and_copied_patches_are_of_it(self, fast):
+        """A stack of patches, and a patch made of one, are of its backend."""
+        assert dc.Patch(fast).backend == _Fast()
+        stacked = dc.spool([fast, fast.update_attrs(station="b")]).stack(
+            dim_vary="time"
+        )
+        assert stacked.backend == _Fast() and _triples(stacked)
+
+    def test_lazy_patches_of_one_kind_join_on_the_first_s(self, spool, reads):
+        """Lazy patches on unequal backends of one kind are joined, unread."""
+        lazy = list(spool.set_backend("lazy"))
+        fast = list(spool.set_backend("lazy[fast_numpy]"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = dc.spool([fast[0], *lazy[1:]]).concatenate(time=None)[0]
+        assert isinstance(out.data, LazyArray) and not reads
+        assert out.backend == LazyBackend(compute=_Fast()) and _triples(out.load())
+
     def test_lazy_steps_are_handed_its_arrays(self, spool):
         """Between two steps of a lazy patch the data are the backend's own."""
 
@@ -794,7 +859,9 @@ class TestNamespace:
         with pytest.raises(PatchError, match="must make the array the recipe"):
             lazy.load()
 
-    def test_merge_of_kinds_is_refused_before_anything_is_read(self, spool, reads):
+    def test_merge_of_kinds_is_refused_before_anything_is_read(
+        self, spool, strict, reads
+    ):
         """Members of different libraries are refused, lazy ones unread."""
         lazy = list(spool.set_backend("lazy"))
         first = spool[0].new(data=spool[0].data.astype(np.float32))
@@ -1359,7 +1426,7 @@ class TestSpoolSetBackend:
             and backend_name(spool[0].data) == "numpy"
         )
 
-    def test_added_spools_keep_their_backend(self, spool, reads):
+    def test_added_spools_keep_their_backend(self, spool, strict, reads):
         """A sum of spools on one backend is on it; of two, it is refused."""
         lazy = spool.set_backend("lazy")
         both = lazy[:2] + lazy[2:]

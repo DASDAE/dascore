@@ -102,7 +102,7 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     # If the operation has no kernel for that library either, it says so
     # itself, as it does for data in memory.
     loaded = data.load()
-    with running_under(backend.name):
+    with running_under(backend):
         out = kernel(processor, loaded, **plan)
     # Handed back unchanged is "nothing to do", as it is in memory: the
     # patch is left as it was, lazy and under its own id.

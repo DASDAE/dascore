@@ -24,7 +24,12 @@ from pydantic import ConfigDict
 
 from dascore.core.coordmanager import _cell_edge_names
 from dascore.core.coords import Grid, get_coord
-from dascore.core.processor import PatchProcessor, _via_numpy, captured_operation
+from dascore.core.processor import (
+    PatchProcessor,
+    _via_numpy,
+    captured_operation,
+    running_name,
+)
 from dascore.exceptions import ParameterError, PatchError
 from dascore.lazy.contract import (
     Halo,
@@ -885,7 +890,7 @@ class Windowed(PatchProcessor):
         """
         operation = self.operation
         backend = backend_name(data)
-        kernel = type(operation).kernel_for(backend)
+        kernel = type(operation).kernel_for(backend, running_name(data))
         if kernel is None:
             return data
         where = {"axes": axes, "size": size, "stride": stride, "length": length}
@@ -1034,7 +1039,7 @@ class Windowed(PatchProcessor):
     def _blend(self, data, *, axes, size, stride, length, factor, halo, inner, tiles):
         """Return the blended windows, and the dtype the operation made."""
         operation = self.operation
-        kernel = type(operation).kernel_for("numpy")
+        kernel = type(operation).kernel_for("numpy", running_name(data))
         plan = get_tile_plan(length, size, stride)
         tiles = tiles or tuple((0, count) for count in plan.grid)
         ndim = len(axes)

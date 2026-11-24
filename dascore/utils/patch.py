@@ -1951,7 +1951,9 @@ def stack_patches(
     )
 
     with operation_context():
-        return dc.Patch(stack_arr, init_patch.coords, init_patch.dims, stack_attrs)
+        out = dc.Patch(stack_arr, init_patch.coords, init_patch.dims, stack_attrs)
+    # Made of several, it is of the first one's backend.
+    return out._with_backend(init_patch._backend)
 
 
 def swap_kwargs_dim_to_axis(patch, kwargs):

@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 from pydantic import ConfigDict
 
-from dascore.core.processor import PatchProcessor, captured_operation
+from dascore.core.processor import PatchProcessor, captured_operation, running_name
 from dascore.exceptions import ParameterError, PatchDataError
 from dascore.lazy.contract import Halo
 from dascore.utils.array_api import _as_numpy_dtype, array_namespace, backend_name
@@ -478,7 +478,7 @@ class Impulsed(PatchProcessor):
     def numpy_kernel(self, data, *, inner, halo, like, shape):
         """Return the operation's result on the data, computed as it computes it."""
         _refuse_cut_nonfinite(data, halo, shape)
-        kernel = type(self.operation).kernel_for("numpy")
+        kernel = type(self.operation).kernel_for("numpy", running_name(data))
         return kernel(self.operation, data, **inner)
 
     def kernel(self, data, *, inner, halo, like, shape):
@@ -513,7 +513,7 @@ class Impulsed(PatchProcessor):
             # Chunks shorter than the reach are joined to it; the result is
             # cut back into the chunks the data came in.
             return out.rechunk(data.chunks)
-        kernel = type(operation).kernel_for(backend_name(data))
+        kernel = type(operation).kernel_for(backend_name(data), running_name(data))
         return kernel(operation, data, **inner)
 
 
