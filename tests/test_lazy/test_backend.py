@@ -33,12 +33,14 @@ from dascore.exceptions import (
     LazyOperationError,
     NumpyFallbackError,
     ParameterError,
+    PatchError,
 )
 from dascore.io import core as io_core
 from dascore.lazy import execute
 from dascore.lazy.array import LazyArray
 from dascore.lazy.execute import chunk_boxes
 from dascore.lazy.recipe import Recipe
+from dascore.proc.window import Windowed
 from dascore.utils import array_api as array_api_module
 from dascore.utils import patch_assembly as assembly
 from dascore.utils.array_api import backend_name, to_numpy
@@ -80,6 +82,10 @@ class _Wrapped:
     def __array__(self, dtype=None, copy=None):
         """Return the values, which costs something."""
         return self._data
+
+    def __getitem__(self, index):
+        """Return NumPy's values, as a chunk of a lazy array is cut from it."""
+        return self._data[index]
 
 
 @pytest.fixture(autouse=True)
@@ -736,6 +742,86 @@ class TestNamespace:
         out = there.window(time=8, samples=True, fill=np.nan).detrend("time")
         blocks = [x.compute().dtype for x in out.data.blocks]
         assert set(blocks) == {np.dtype(out.dtype)} == {np.dtype(np.float64)}
+
+    def test_operation_run_in_a_window(self, spool, fast):
+        """An operation a window runs is of the backend its patch is of."""
+        windowed = Windowed(_Tripled(), time=100, samples=True)
+        np.testing.assert_allclose(windowed(fast).data, fast.data * 3)
+        np.testing.assert_allclose(windowed(spool[0]).data, fast.data * 2)
+        # And in each chunk of a lazy patch computing on the backend.
+        lazy = windowed(spool.set_backend("lazy[fast_numpy]")[0])
+        with config_context(lazy_block_size=fast.data.nbytes // 6):
+            assert len(chunk_boxes(lazy.data)) > 3
+            np.testing.assert_allclose(lazy.load().data, fast.data * 3)
+
+    def test_lazy_steps_are_handed_its_arrays(self, spool):
+        """Between two steps of a lazy patch the data are the backend's own."""
+
+        class Wrapping(ArrayBackend):
+            """A backend which makes its own arrays, and has a kernel for them."""
+
+            name = "wrapping_steps"
+            array_type = _Wrapped
+
+            def from_array(self, array):
+                """Return the array wrapped, or as it is if it is already."""
+                return array if self._owns(array) else _Wrapped(np.asarray(array))
+
+        @register_kernel(_Tripled, "wrapping_steps")
+        def _tripled_wrapped(self, data):
+            """Read the wrapper's own storage, as a kernel written for it does."""
+            return _Wrapped(data._data * 3)
+
+        lazy = spool.set_backend("lazy[wrapping_steps]")[0]
+        expected = np.abs(spool[0].data) * 3
+        # NumPy's `abs` makes an ndarray of the wrapper; the next step, as
+        # the same two operations in memory, is handed a wrapper again.
+        for patch in (_Tripled()(lazy.abs()).load(), _Tripled()(lazy.load().abs())):
+            assert type(patch.data) is _Wrapped
+            np.testing.assert_array_equal(np.asarray(patch.data), expected)
+
+    def test_lazy_read_which_is_not_the_stored_array(self, spool):
+        """A backend which reads another array than is stored is refused at load."""
+
+        class Narrowing(NumpyBackend):
+            """NumPy's arrays, reading each recipe into fewer bits."""
+
+            def from_recipe(self, recipe):
+                """Return the recipe's array in another dtype."""
+                return recipe.load().astype(np.float32)
+
+        lazy = spool.set_backend(LazyBackend(compute=Narrowing()))[0].abs()
+        with pytest.raises(PatchError, match="must make the array the recipe"):
+            lazy.load()
+
+    def test_merge_of_kinds_is_refused_before_anything_is_read(self, spool, reads):
+        """Members of different libraries are refused, lazy ones unread."""
+        lazy = list(spool.set_backend("lazy"))
+        first = spool[0].new(data=spool[0].data.astype(np.float32))
+        mixed = dc.spool([first.set_backend(STRICT), *lazy[1:]])
+        reads.clear()
+        with config_context(numpy_fallback="ignore"):
+            with pytest.raises(IncompatiblePatchError, match="arrays of one kind"):
+                mixed.chunk(time=None)[0]
+        assert not reads
+
+    def test_promise_of_another_kind_loads_to_numpy(self, spool):
+        """A dask patch of a backend which makes dask arrays loads to NumPy's."""
+        pytest.importorskip("dask.array")
+        there = spool[0].set_backend("dask")
+        assert there.backend == _Dask()
+        loaded = there.load()
+        assert type(loaded.data) is np.ndarray and loaded.backend is None
+        assert loaded.load() is loaded and loaded.equals(spool[0])
+
+    def test_array_of_no_library_in_arithmetic(self, spool, strict):
+        """An array-like of no library, with no backend, is NumPy's there too."""
+        plain = spool[0]
+        held = plain.new(data=_Wrapped(np.asarray(plain.data)))
+        there = plain.set_backend(STRICT)
+        out = there + held
+        assert backend_name(out.data) == STRICT
+        np.testing.assert_array_equal(to_numpy(out.data), plain.data * 2)
 
     def test_spool_load_keeps_it(self, spool):
         """Loaded by the spool, lazily or not, the patches are of the namespace."""

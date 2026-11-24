@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.backends import read_backend
+from dascore.backends import _refuse_mixed, read_backend
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.source import ArraySource
@@ -1299,6 +1299,8 @@ class PatchAssembler:
             data.append(patch.data)
             coords.append(patch.coords)
             attrs.append(patch.attrs)
+        # Refused before anything is read or cast for them.
+        _refuse_mixed(data, "Merging patches")
         dtypes = [_as_numpy_dtype(x.dtype) for x in data]
         if len(set(dtypes)) > 1:
             # Promoted a member at a time, rounding where the buffer of NumPy

@@ -31,6 +31,7 @@ from dascore.units import (
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
+    backend_name,
     is_foreign,
     is_numpy,
     nan_reduce,
@@ -410,8 +411,9 @@ _OFFSET_UNIT_OPERATORS = frozenset(
 
 
 def _is_plain_numpy(patch) -> bool:
-    """Whether a patch holds a NumPy array and was set to no backend."""
-    return patch.backend is None and is_numpy(patch.data)
+    """Whether a patch holds an array of NumPy's and was set to no backend."""
+    # Any array of no other library, as an array-like of none is NumPy's.
+    return patch.backend is None and backend_name(patch.data) == "numpy"
 
 
 def _apply_binary_ufunc(

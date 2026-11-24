@@ -493,8 +493,11 @@ class Patch(NamespaceOwner, PatchMeta):
         with operation_context():
             # A lazy array loads itself, so an error from one of its steps
             # is the one raised.
-            lazy = isinstance(data, LazyArray)
-            return self.update(data=data.load() if lazy else to_numpy(data))
+            if isinstance(data, LazyArray):
+                return self.update(data=data.load())
+            # Another kind of promise, which in memory is NumPy's: of no
+            # backend, since its own would make a promise of it again.
+            return self._with_backend(None).update(data=to_numpy(data))
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""

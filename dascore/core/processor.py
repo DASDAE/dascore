@@ -43,6 +43,7 @@ import numbers
 import sys
 import textwrap
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
@@ -108,6 +109,21 @@ _RECORD: ContextVar[bool] = ContextVar("dascore_record_call", default=True)
 # operation a patch method builds rather than its result; see
 # `captured_operation`.
 _CAPTURE: ContextVar[list | None] = ContextVar("dascore_capture", default=None)
+
+# The name of the backend an operation is running under, so that an
+# operation it runs inside itself, as a window does, is resolved under it
+# too; see `running_under`.
+_UNDER: ContextVar[str | None] = ContextVar("dascore_kernel_name", default=None)
+
+
+@contextmanager
+def running_under(name: str | None):
+    """Resolve the kernels asked for inside the block under a backend's name."""
+    token = _UNDER.set(name)
+    try:
+        yield
+    finally:
+        _UNDER.reset(token)
 
 
 class PatchProcessor(DascoreBaseModel):
@@ -390,7 +406,9 @@ class PatchProcessor(DascoreBaseModel):
         them, and `name` that of the backend their patch is of, if any. A
         kernel a class has registered under the name answers before
         whatever the class runs for the data as they are, which takes no
-        conversion.
+        conversion. Asked from inside another operation's kernel, as a
+        window asks for the operation it runs, the name is that
+        operation's unless one is given.
 
         The lazy backend never falls back unasked: the first class which
         computes anything is answered by its own registered lazy kernel, or
@@ -398,6 +416,8 @@ class PatchProcessor(DascoreBaseModel):
         runs the operation by its chunk contract, or refuses it unless the
         `numpy_fallback` setting lets the data be read into memory.
         """
+        # An operation run inside another's kernel is of the same backend.
+        name = _UNDER.get() if name is None else name
         _load_plugins(backend, name)
         for klass in cls.__mro__:
             contents = klass.__dict__
@@ -563,7 +583,10 @@ class PatchProcessor(DascoreBaseModel):
         data = patch.data
         # A kernel says "nothing to do" by handing its argument back, so it
         # must not write into that argument and return it.
-        result = kernel(self, data, **plan)
+        # Under its backend's name, unless the data are lazy and only chained.
+        lazy = meta._kernel_key == LAZY_BACKEND
+        with running_under(None if lazy else name):
+            result = kernel(self, data, **plan)
         if out is meta and result is data:
             return self._finished(patch, self._unchanged(patch, record), record)
         out = self.reconcile(result, out, meta)

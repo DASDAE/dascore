@@ -49,7 +49,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dascore.core.processor import PatchProcessor, _computes
+from dascore.core.processor import PatchProcessor, _computes, running_under
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Unchanged
@@ -102,7 +102,8 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     # If the operation has no kernel for that library either, it says so
     # itself, as it does for data in memory.
     loaded = data.load()
-    out = kernel(processor, loaded, **plan)
+    with running_under(backend.name):
+        out = kernel(processor, loaded, **plan)
     # Handed back unchanged is "nothing to do", as it is in memory: the
     # patch is left as it was, lazy and under its own id.
     return data if out is loaded else out
