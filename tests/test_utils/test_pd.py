@@ -8,7 +8,7 @@ import pydantic
 import pytest
 
 import dascore as dc
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, TimeOverflowError
 from dascore.utils.pd import (
     adjust_segments,
     dataframe_to_patch,
@@ -487,6 +487,23 @@ class TestAdjustSegments:
         out = adjust_segments(df, **{name: (2, 5)})
         assert out[f"{name}_min"].iloc[0] == to_datetime64(2)
         assert out[f"{name}_max"].iloc[0] == to_datetime64(5)
+
+    @pytest.mark.parametrize("big", [1e12, 1e308])
+    def test_numbers_past_nanoseconds(self, example_df_2, example_df_timedeltas, big):
+        """A number no nanosecond time holds opens its side or keeps no row,
+        by its sign, as the index query reads it.
+        """
+        for df in (example_df_2, example_df_timedeltas):
+            for bounds in [(-big, None), (None, big), (-big, big)]:
+                out = adjust_segments(df, time=bounds)
+                assert out.drop(columns="_modified").equals(df)
+            assert adjust_segments(df, time=(big, None)).empty
+            assert adjust_segments(df, time=(None, -big)).empty
+
+    def test_date_past_nanoseconds_raises(self, example_df_2):
+        """A date no nanosecond time holds still raises."""
+        with pytest.raises(TimeOverflowError):
+            filter_df(example_df_2, time=(None, "3000-01-01"))
 
     def test_missing_interval_col_raises_parameter_error(self, adjacent_df):
         """Ensure a missing interval column raises ParameterError."""
