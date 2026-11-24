@@ -1849,6 +1849,21 @@ class TestFloatEndsStateWhatLoads:
         assert sorted(loaded) == sorted(inside)
         self._states_exactly(chunked, find=False)
 
+    def test_selection_of_a_plan(self, spool_of):
+        """A plan's outputs keep the grid of a coordinate it left alone."""
+        labels = (-1000.3 + np.arange(11000) * 0.1).astype(np.float32)
+        start, step = np.datetime64("2020-01-01"), np.timedelta64(1, "s")
+        time = dc.get_coord(start=start, step=step, shape=(6,))
+        coords = {"distance": labels, "time": time}
+        parent = dc.Patch(
+            data=np.zeros((11000, 6)), coords=coords, dims=("distance", "time")
+        )
+        patch = parent.isel(distance=slice(10003, 10103))
+        chunked = spool_of(patch).chunk(time=np.timedelta64(2, "s"))
+        ordered = np.sort(patch.get_array("distance").astype(np.float64))
+        view = chunked.select(distance=(ordered[7] + 0.037, ordered[41] + 0.041))
+        self._states_exactly(view, find=False)
+
     @pytest.mark.parametrize("dtype", ["float32", "float64"])
     @pytest.mark.parametrize("cut", [slice(None), slice(10004, 10994)])
     def test_rider_states_its_samples(self, spool_of, dtype, cut):
