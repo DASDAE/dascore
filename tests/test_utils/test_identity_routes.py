@@ -162,6 +162,22 @@ class TestChunkRouteParity:
         assert len(set(first)) == len(first), first
         assert first == second
 
+    def test_joined_float_grid(self, tmp_path):
+        """Files cut from one float grid join to one data_id either way (#1718)."""
+        patch = dc.get_example_patch()
+        grid = dc.get_coord(start=0.0, step=0.1, shape=(patch.shape[0],))
+        whole = patch.update_coords(distance=grid)
+        paths = [tmp_path / f"p{num}.h5" for num in range(2)]
+        for path, cut in zip(paths, [(0, 150), (150, None)], strict=True):
+            whole.select(distance=cut, samples=True).io.write(path, "DASDAE")
+        directory = dc.spool(tmp_path).update().chunk(distance=None)
+        memory = dc.spool([dc.read(x)[0] for x in paths]).chunk(distance=None)
+        (first,), (second,) = directory, memory
+        assert first.equals(second)
+        assert first.attrs.data_id == second.attrs.data_id
+        # and the directory chunk predicts the id it loads with
+        assert directory == dc.spool([first])
+
 
 class TestChunkLayout:
     """

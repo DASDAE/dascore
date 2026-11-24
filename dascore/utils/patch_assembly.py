@@ -990,12 +990,42 @@ class PatchAssembler:
                 # the resource did not hold the array its row described: a
                 # different shape, or fewer axes than the windows name
                 return None
-        coords = [meta.coords for meta in metas]
+        coords = self._held_coords(df_dict_list, metas, merge_dim)
+        if coords is None:
+            return None
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])
         return self._assemble(
             data, dims, merge_dim, coords, attrs, df_dict_list, defaults
         )
+
+    def _held_coords(self, rows, metas, dim) -> list | None:
+        """
+        The members' coordinates, ``dim`` as their files hold it, or None.
+
+        A float stretch's grid joins the id where it moves a member's
+        labels, and a row rebuilds them only to the last place, so each
+        member takes the labels `_held_labels` confirms, as the patch path
+        merges the files' own. None where it confirms none.
+        """
+        coords = [meta.coords for meta in metas]
+        spec = rows[0].get(f"_{dim}_stretch")
+        if not isinstance(spec, tuple) or coords[0].coord_map[dim].dtype.kind != "f":
+            return coords
+        out, at = [], 0
+        for row, coord in zip(rows, coords, strict=True):
+            labels = coord.coord_map[dim]
+            if row.get("_modified"):  # a window of the array its source row states
+                layout = self._member_layout(row, None)
+                array = None if layout is None else layout[2]
+            else:  # the whole array, as `_member_layout` rebuilds it
+                array = (0, labels, def_key_data_id(row.get(f"_{dim}_def_key")))
+            held = None if array is None else _held_labels(labels, array, at, spec)
+            if held is None:
+                return None
+            out.append(coord if held is labels else coord.update(**{dim: held}))
+            at += len(labels)
+        return out
 
     def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
@@ -1056,8 +1086,8 @@ class PatchAssembler:
         before planning no longer states itself. None where loading could
         name the output otherwise: a member converted to other units, one
         the rows cannot place, or a float grid whose labels they cannot
-        confirm (see `_held_labels`) or, joined with other members, cannot
-        rebuild, so whether loading moves one is unknown.
+        confirm (see `_held_labels`), so whether loading moves one is
+        unknown.
         """
         dim, stored = self.plan_dim, stored or [None] * len(rows)
         if len({_stated_unit(x.get("data_units")) for x in rows}) > 1:
@@ -1084,19 +1114,11 @@ class PatchAssembler:
         ]
         if None in held:
             return None
-
-        def placed(labels) -> str:
-            """The id the output takes when its members hold ``labels``."""
-            each = [get_coord_manager({dim: x}, dims=(dim,)) for x in labels]
-            joined = _get_merged_coord(dim, each)
-            attrs = dc.PatchAttrs(data_id=data_id)
-            return _regridded(joined, attrs, dim, first)[1].data_id
-
-        # Members merged from the index keep the labels their rows rebuild,
-        # and merged as patches the files' own; the id stands where both
-        # name the output alike. One member always loads as a patch.
-        named = {placed(x) for x in ([held] if len(held) == 1 else [held, coords])}
-        return named.pop() if len(named) == 1 else None
+        # either route merges the labels the files hold (`_held_coords`)
+        each = [get_coord_manager({dim: x}, dims=(dim,)) for x in held]
+        joined = _get_merged_coord(dim, each)
+        attrs = dc.PatchAttrs(data_id=data_id)
+        return _regridded(joined, attrs, dim, first)[1].data_id
 
     def _member_layout(self, row: Mapping, stored: Mapping | None):
         """
