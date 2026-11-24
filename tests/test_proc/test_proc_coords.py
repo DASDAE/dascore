@@ -2631,6 +2631,55 @@ class TestFillGaps:
         assert patch.fill_gaps("time") is patch
 
 
+class TestFilledSpoolWindowRiders:
+    """A window of a spool's fill cuts its riders, as a select of the fill does."""
+
+    @staticmethod
+    def _part(start: int, count: int = 100) -> dc.Patch:
+        """A patch starting ``start`` seconds in, with float and integer riders."""
+        patch = dc.get_example_patch().select(time=(0, count), samples=True)
+        time = patch.get_coord("time")
+        labels = time.values - time.min() + np.datetime64("2020-01-01")
+        patch = patch.update_coords(time=labels + np.timedelta64(start, "s"))
+        steps = np.arange(count) + start * count
+        depth = get_coord(data=steps + 0.25, units="m")
+        return patch.update_coords(depth=("time", depth), gain=("time", steps))
+
+    @staticmethod
+    def _assert_windows_of(spool, whole):
+        """Each output holds the fill's riders within its time range."""
+        for patch in spool:
+            time = patch.get_coord("time")
+            expected = whole.select(time=(time.min(), time.max()))
+            for name in ("depth", "gain"):
+                if name in expected.coords.coord_map:
+                    got, want = (x.get_coord(name).values for x in (patch, expected))
+                    np.testing.assert_array_equal(got, want)
+
+    @pytest.mark.parametrize("conflict", ["raise", "drop", "keep_first"])
+    def test_window_of_a_gap_fill(self, conflict):
+        """A window keeps the float rider the fill carries across its gap."""
+        filled = dc.spool([self._part(0), self._part(1)]).fill_gaps(
+            time=1, conflict=conflict
+        )
+        with pytest.warns(DASCoreWarning, match="dropped associated"):
+            whole = filled[0]  # the gap leaves no value for the integer rider
+        start = whole.get_coord("time").min()
+        window = (start, start + np.timedelta64(200, "ms"))
+        self._assert_windows_of(filled.select(time=window), whole)
+        self._assert_windows_of(filled.chunk(time=0.25, conflict=conflict), whole)
+
+    @pytest.mark.parametrize("conflict", ["drop", "keep_first"])
+    def test_window_of_a_join_with_nothing_to_fill(self, conflict):
+        """With no gap, windows cut riders of every kind and warn of none."""
+        parts = [self._part(0, 250), self._part(1, 250)]  # the second continues
+        filled = dc.spool(parts).fill_gaps(time=1, conflict=conflict)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            (whole,) = filled
+            self._assert_windows_of(filled.chunk(time=0.3, conflict=conflict), whole)
+
+
 class TestAddDistanceToMetadata:
     """add_distance_to needs no data, so metadata runs it too."""
 

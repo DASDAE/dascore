@@ -1568,9 +1568,17 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
 
 
 def _fill_riders(coords, dim: str, length: int, blocks, action: str):
-    """The coordinates, and riders along ``dim`` placed as the data is (NaN/NaT)."""
+    """
+    The coordinates, and riders along ``dim`` placed as the data is (NaN/NaT).
+
+    Blocks filling nothing can still cut ``dim`` (a window of a fill), which
+    cuts the riders as a selection does.
+    """
     riders = {}
     if sum(stop - start for start, stop, _ in blocks) == length:  # none filled
+        start, stop = (blocks[0][0], blocks[-1][1]) if blocks else (0, 0)
+        if (start, stop) != (0, len(coords.coord_map[dim])):
+            coords = coords.select(samples=True, **{dim: (start, stop)})[0]
         return coords, riders
     for name, dims in coords.dim_map.items():
         kind = coords.coord_map[name].dtype.kind
