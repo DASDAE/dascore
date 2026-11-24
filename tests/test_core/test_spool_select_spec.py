@@ -496,12 +496,12 @@ class TestRelative:
             )
             assert selected.equals(expected)
 
-    @pytest.mark.parametrize("dtype", ["int64", "float32"])
+    @pytest.mark.parametrize("dtype", ["int64", "float32", "float16"])
     @pytest.mark.parametrize("first_relative", [False, True])
     def test_relative_drops_off_sample_window(self, first_relative, dtype):
         """
         A later relative trim drops a regular window that fell between samples,
-        including float32 labels the index can't place.
+        including on float32 labels.
         """
         coord = dc.get_coord(data=np.arange(4).astype(dtype), units="m")
         patch = dc.Patch(

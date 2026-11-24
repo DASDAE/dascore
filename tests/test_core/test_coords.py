@@ -26,6 +26,7 @@ from dascore.core.coords import (
     Blank,
     CoordString,
     CoordSummary,
+    Grid,
     NumericCoord,
     _blank_coord,
     concat_coords,
@@ -470,6 +471,45 @@ class TestCoordSummary:
         """A fractional grid in a coarse time unit summarizes with no step."""
         data = (np.arange(1000, dtype=np.int64) * 9999 // 10).astype("timedelta64[us]")
         assert get_coord(data=data).to_summary().step is None
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    @pytest.mark.parametrize("window", [slice(10003, 10103), slice(4, 504, 5)])
+    def test_cut_float_grid_rebuilds_its_labels(self, dtype, window):
+        """
+        A float grid cut from a longer one keeps that grid's terms, which
+        its summary states, so it rebuilds the labels it holds.
+        """
+        labels = (-1000.3 + np.arange(11000) * 0.1).astype(dtype)
+        coord = get_coord(data=labels)[window]
+        summary = coord.to_summary()
+        assert (summary.grid_count, summary.grid_first) == (11000, window.start)
+        rebuilt = summary.to_coord()
+        assert rebuilt.dtype == coord.dtype
+        assert rebuilt.data_id == coord.data_id
+        np.testing.assert_array_equal(rebuilt.values, coord.values)
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            # a step float32 can't hold
+            lambda: get_coord(start=np.float32(0), step=0.1, shape=(10,)),
+            # terms float32 holds, but python floats, which compute in double
+            lambda: get_coord(runs=(Grid(0.0, 0.5, 0, 4),), dtype=np.float32),
+            # a python step float32 holds, times a length it doesn't
+            lambda: get_coord(
+                start=np.float32(0), step=float(np.float32(0.1)), shape=(2**24 + 1,)
+            ),
+            # a length float32 holds, but not the one before it
+            lambda: get_coord(
+                start=np.float32(0), step=np.float32(0.1), shape=(2**24 + 2,)
+            ),
+            # a float32 step beside float64 labels
+            lambda: get_coord(start=np.float64(0), step=np.float32(0.1), shape=(9,)),
+        ],
+    )
+    def test_grid_computing_otherwise_states_none(self, make):
+        """No terms state a float grid computing other than in its own dtype."""
+        assert make().to_summary().grid_count is None
 
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""

@@ -160,6 +160,15 @@ class TestSchemaValidation:
         with pytest.raises(InvalidIndexVersionError, match="delete it and rebuild"):
             get_backend(path)
 
+    def test_version_41_rejected(self, tmp_path):
+        """A version 41 index states float grids by their ends; it is rebuilt."""
+        path = tmp_path / "old.sqlite3"
+        backend = get_backend(path)
+        backend._execute("UPDATE meta_data SET index_version = 41")
+        backend.close()
+        with pytest.raises(InvalidIndexVersionError, match="delete it and rebuild"):
+            get_backend(path)
+
     def test_schema_has_foreign_keys_and_constraints(self, tmp_path):
         """SQLite enforces source/patch ownership and cascades."""
         backend = get_backend(tmp_path / "index.sqlite3")

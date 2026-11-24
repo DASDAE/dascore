@@ -11,6 +11,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
+from dascore.io.core import _returns_stored_bytes
 from dascore.io.index.catalog import LiveResolver
 from dascore.io.utils import slice_dataset
 from dascore.utils.attrs import _is_missing
@@ -129,6 +130,7 @@ class DASDAEV1(FiberIO):
         """
         return self._prepare_array_reader(resource, key=key)(windows)
 
+    @_returns_stored_bytes
     def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
         """Find the patch's data dataset once, for any number of windows."""
         return partial(slice_dataset, _get_patch_group(resource, key)["data"])

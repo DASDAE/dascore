@@ -281,6 +281,12 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    # A float grid's own terms (`_FLOAT_GRID_FIELDS`); None otherwise.
+    grid_origin: float | None = None
+    grid_step: float | None = None
+    grid_count: int | None = None
+    grid_first: int | None = None
+    grid_stride: int | None = None
     # How many segments the coordinate is; None when unknown.
     run_count: int | None = None
     # Left out of the repr, which a long list would swamp.
@@ -334,6 +340,10 @@ class CoordSummary(DascoreBaseModel):
             raise CoordError(msg)
         step = self.step
         assert step is not None  # is_range_like above rules out a null step
+        if self.grid_count is not None and self.len is not None:
+            terms = tuple(getattr(self, x) for x in _FLOAT_GRID_FIELDS)
+            run = float_grid(terms, self.len, self.dtype)
+            return get_coord(runs=(run,), dtype=self.dtype, units=self.units)
         if (num := self.step_numerator) is not None:
             if self.len is None:
                 msg = "An exact grid summary needs its length to rebuild a coord."
@@ -1498,6 +1508,17 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
 
 _EXACT_GRID_FIELDS = ("step_numerator", "step_denominator", "origin_offset")
+# A float grid's own terms (see `Grid`): the first label and step of the
+# grid its labels are spaced on and that grid's length, and where in it the
+# labels start and how far apart they are, which a slice keeps from a
+# longer grid. Its labels rebuild bit for bit from them, not from its ends.
+_FLOAT_GRID_FIELDS = (
+    "grid_origin",
+    "grid_step",
+    "grid_count",
+    "grid_first",
+    "grid_stride",
+)
 # Nanoseconds per second: the tick of every exact time grid.
 _NS_PER_S = 10**9
 # A float spacing this close to a whole number of steps is on the grid;
@@ -1831,14 +1852,7 @@ class Grid:
         num = self.count if self.parent_count is None else self.parent_count
         if num == 1 or np.dtype(dtype).kind in "mMO":
             return np.asarray(start + indices * step, dtype=dtype)
-        # Match linspace's inferred floating dtype, rounding, and exact endpoint.
-        last = (start + step * num) - step
-        wide = np.result_type(start, last, 0.0)
-        delta = np.subtract(last, start, dtype=wide)
-        spacing = delta / (num - 1)
-        scaled = indices.astype(wide)
-        scaled = scaled / (num - 1) * delta if spacing == 0 else scaled * spacing
-        return np.where(indices == num - 1, last, scaled + start).astype(dtype)
+        return _linspace_labels(start, step, num, indices, dtype)
 
     def sliced(self, first: int, stride: int, count: int) -> Grid:
         """The run of the samples first, first + stride, ... (count of them)."""
@@ -3605,6 +3619,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             else:
                 terms = grid.canonical()[1:]
                 update.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+        elif grid is not None and (terms := _float_grid_terms(grid, self.dtype)):
+            update.update(zip(_FLOAT_GRID_FIELDS, terms, strict=True))
         return update
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
@@ -4485,6 +4501,64 @@ def _grid_terms(grid: Grid, dtype) -> tuple[int, int, int]:
     first = _to_tick(grid.labels(0, dtype)[()])
     offset = (grid.origin - first) * grid.step_den + grid.phase
     return grid.step_num, grid.step_den, offset
+
+
+def _linspace_labels(start, step, num, indices, dtype) -> np.ndarray:
+    """
+    A float grid's labels at ``indices``, as `Grid.labels` makes them.
+
+    They match linspace's inferred floating dtype, rounding and exact last
+    label. The terms may be arrays, each element a grid of more than one
+    label; ``num`` is then in the grids' dtype, as a python int would be.
+    """
+    last = (start + step * num) - step
+    wide = np.result_type(start, last, 0.0)
+    delta = np.subtract(last, start, dtype=wide)
+    spacing = delta / (num - 1)
+    scaled = np.asarray(indices).astype(wide)
+    if np.ndim(spacing):
+        scaled = np.where(spacing == 0, scaled / (num - 1) * delta, scaled * spacing)
+    else:
+        scaled = scaled / (num - 1) * delta if spacing == 0 else scaled * spacing
+    return np.where(indices == num - 1, last, scaled + start).astype(dtype)
+
+
+def _float_grid_terms(grid: Grid, dtype) -> tuple | None:
+    """
+    The ``_FLOAT_GRID_FIELDS`` terms of a float grid, or None.
+
+    Only a grid whose terms compute as the dtype's own scalars would has
+    them: numpy scalars of the dtype, or python numbers it holds beside
+    one, and a length it counts exactly to. A python float step of 0.1
+    beside float32 labels, or a float32 step beside float64 ones, rounds
+    otherwise. Only float32 and float64 labels are placed from their grid.
+    """
+    dtype, terms = np.dtype(dtype), (grid.origin, grid.step_num)
+    count = grid.count if grid.parent_count is None else grid.parent_count
+    if grid.exact or dtype not in (np.float32, np.float64):
+        return None
+    own = (isinstance(x, int | float) or np.asarray(x).dtype == dtype for x in terms)
+    if np.result_type(*terms) != dtype or not all(own):
+        return None
+    held = (float(dtype.type(x)) == float(x) for x in terms)
+    if count > 2 ** (np.finfo(dtype).nmant + 1) or not all(held):
+        return None
+    return float(grid.origin), float(grid.step_num), count, grid.k0, grid.stride
+
+
+def float_grid(terms, count: int, dtype) -> Grid:
+    """The grid of ``count`` labels that ``_FLOAT_GRID_FIELDS`` terms state."""
+    origin, step, parent, first, stride = terms
+    kind = np.dtype(dtype).type
+    return Grid(
+        kind(origin),
+        kind(step),
+        0,
+        int(count),
+        k0=int(first),
+        parent_count=int(parent),
+        stride=int(stride),
+    )
 
 
 def _grid_coord(terms, units=None, dtype=None, **spec) -> BaseCoord:

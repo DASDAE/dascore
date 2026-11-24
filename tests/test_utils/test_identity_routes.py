@@ -178,6 +178,29 @@ class TestChunkRouteParity:
         # and the directory chunk names it without loading (`Spool.__eq__`)
         assert [x.data_id for x in directory._loads()] == [first.attrs.data_id]
 
+    def test_selected_range_of_joined_float_grid(self, tmp_path):
+        """
+        A chunk of a selected range of files cut from one float grid is
+        named before it loads, as either route loads it: the rows rebuild
+        the labels the files hold, so they confirm the plan's grid.
+        """
+        patch = dc.get_example_patch()
+        grid = dc.get_coord(start=-10.3, step=0.1, shape=(patch.shape[0],))
+        whole = patch.update_coords(distance=grid)
+        paths = [tmp_path / f"p{num}.h5" for num in range(10)]
+        for num, path in enumerate(paths):
+            cut = (num * 30, (num + 1) * 30)
+            whole.select(distance=cut, samples=True).io.write(path, "DASDAE")
+        directory = dc.spool(tmp_path).update(progress=None)
+        memory = dc.spool([dc.read(x)[0] for x in paths])
+        bounds = (grid.values[35] + 0.031, grid.values[265] + 0.047)
+        outputs = [
+            x.select(distance=bounds).chunk(distance=4.0) for x in (directory, memory)
+        ]
+        loaded = [[x.attrs.data_id for x in out] for out in outputs]
+        assert loaded[0] == loaded[1]
+        assert [x.data_id for x in outputs[0]._loads()] == loaded[0]
+
 
 class TestChunkLayout:
     """

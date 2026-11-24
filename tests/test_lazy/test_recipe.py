@@ -1006,7 +1006,7 @@ class TestLoad:
 
     def test_keys_of_one_file(self, two_keys, handles, reads):
         """Several keys, logical or stored, are read through one handle."""
-        first, second = (x._source for x in two_keys)
+        first, second = (x._source._without_layout() for x in two_keys)
         one, two = (x.data for x in two_keys)
         raw = replace(first, key=f"/waveforms/{first.key}/data")
         parts = [first[0:4], second[4:8], raw[8:12], second[12:16], first[16:]]

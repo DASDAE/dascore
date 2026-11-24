@@ -96,7 +96,8 @@ class TestLoad:
             name = next(f"{x.name}/_coord_time" for x in fi["waveforms"].values())
             shape, dtype, expected = fi[name].shape, fi[name].dtype, fi[name][3:9]
         assert name.startswith("/")
-        coord = replace(source, key=name).describe(shape, dtype)
+        # the offsets the source holds are where the patch's data is
+        coord = replace(source._without_layout(), key=name).describe(shape, dtype)
         assert np.array_equal(coord[3:9].load(), expected)
 
     def test_stored_array_needs_hdf5(self, random_patch, tmp_path):

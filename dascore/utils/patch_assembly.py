@@ -28,7 +28,7 @@ import pandas as pd
 import dascore as dc
 from dascore.backends import _refuse_mixed, read_backend, spool_backend
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import _grid_coord, get_coord
+from dascore.core.coords import Grid, _grid_coord, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     CoordMergeError,
@@ -505,10 +505,11 @@ def coord_from_row(row: Mapping, dim: str, units=None):
 
     The exact grid a row carries rebuilds the coordinate the file holds,
     either way it runs; the whole-tick envelope only approximates a
-    fractional step and states no direction. The grid counts ticks in the
-    file's units and dtype, so a unit-converted row, or one stating only
-    the float dtype the frame holds every envelope as, is rebuilt from
-    its envelope alone.
+    fractional step and states no direction. So does a float grid's own
+    `Grid`, where the row's ends are its first and last labels. A grid
+    counts in the file's units and dtype, so a unit-converted row, or one
+    stating only the float dtype the frame holds every envelope as, is
+    rebuilt from its envelope alone.
     """
     values = _row_values(row, dim)
     if values is None:
@@ -520,6 +521,11 @@ def coord_from_row(row: Mapping, dim: str, units=None):
         *terms, length = grid
         start = hi if terms[0] < 0 else lo
         return _grid_coord(terms, units, start=start, shape=(length,))
+    if isinstance(grid, Grid) and not _units_converted(row, dim):
+        # the file's own float labels, where the row states all of them
+        coord = get_coord(runs=(grid,), dtype=np.asarray(lo).dtype, units=units)
+        if (coord.min(), coord.max()) == (lo, hi):
+            return coord
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)

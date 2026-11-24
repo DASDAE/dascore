@@ -24,14 +24,13 @@ from dascore.core.coords import (
     _scalar_dtype,
     get_coord,
 )
-from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
     CoordError,
     InvalidFiberFileError,
     PatchAttributeError,
 )
-from dascore.io.core import SNAPPED_DIMS, STORED_ORIGIN_ID
+from dascore.io.core import SNAPPED_DIMS, STORED_ORIGIN_ID, _dataset_source
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
     decode_pytables_attr,
@@ -599,12 +598,14 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=None):
             f"{group.name} data and coordinate shapes disagree."
         )
     dtype = str(data_node.dtype)
+    # where the data's bytes are, so a read from the index need not open it
+    source = _dataset_source(data_node, key=group.name.rsplit("/", maxsplit=1)[-1])
     return dc.PatchMeta(
         attrs=_get_attrs_class(group).from_dict(attr_info),
         coords=coords,
         dims=dims,
         dtype=dtype,
-        source=ArraySource(key=group.name.rsplit("/", maxsplit=1)[-1]),
+        source=source,
     )
 
 

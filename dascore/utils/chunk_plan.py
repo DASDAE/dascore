@@ -39,6 +39,7 @@ from dascore.core.coords import (
     _MIN_FRACTION_TICKS,
     Grid,
     _in_calendar_unit,
+    _linspace_labels,
     get_coord,
 )
 from dascore.exceptions import (
@@ -607,12 +608,15 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
     """
     The float64 labels a row keeps inside ``ends``, as `Grid.labels` makes them.
 
-    The grid is the row's own where it is whole, else its source envelope's.
-    Loading takes a bound within twice the float allowance of a label as
-    that label (`_onto_grid`), so each end first moves out by that and one
-    allowance more, for rounding: a label in that margin may or may not
-    load, and is kept. A label between the grid's ends is rebuilt, so it
-    moves out as a rider's does (`_outward`) unless the grid needs no
+    Loading takes a bound within twice the float allowance of a label, in
+    the dtype the labels are stored in, as that label (`_onto_grid`), so
+    each end first moves out by that and one allowance more, for rounding:
+    a label in that margin may or may not load, and is kept. The labels are
+    those of the grid the index records for the row's source
+    (`_recorded_samples`), short of its precision (`_sharp`). Otherwise the
+    grid is the row's own where it is whole, else its source envelope's,
+    which only float64 labels restate: a label between its ends is rebuilt,
+    so it moves out as a rider's does (`_outward`) unless the grid needs no
     rounding. Integer labels are exact. Returns each end's labels and the
     rows with such a grid.
     """
@@ -633,24 +637,24 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
     stored = rows.get(f"_{name}_coord_dtype", blank).astype(str)
     dtypes = rows.get(f"_{name}_coord_dtype", blank).to_numpy(dtype=object)
     units, source = (rows.get(f"_{name}_{x}", blank) for x in ("units", "units_source"))
-    exact = rows.get(f"_{name}_grid", blank).map(lambda x: isinstance(x, tuple))
+    grids = rows.get(f"_{name}_grid", blank).to_numpy(dtype=object)
+    exact = np.array([isinstance(x, tuple) for x in grids], dtype=bool)
+    recorded = np.array([isinstance(x, Grid) for x in grids], dtype=bool)
+    recorded &= _sharp(step, dtypes, low, high, _grid_scales(grids))
     fit = np.isfinite(low + high + step) & (step != 0)
-    fit &= ~(
-        exact
-        | stored.isin(("float16", "float32"))
-        | (source.notna() & (source != units))
-    ).to_numpy()
-    allowance = np.maximum(
-        _GRID_RTOL * np.abs(step),
-        _GRID_ULPS * np.spacing(np.maximum(np.abs(low), np.abs(high))),
-    )
+    fit &= ~(exact | (source.notna() & (source != units))).to_numpy()
+    sure = fit & recorded
+    allowance = _precision(False, np.abs(step), _narrow(rows, name), low, high)
     allowance = np.where(stored.str.match("u?int"), 0, allowance)
     origin, last = np.where(step > 0, low, high), np.where(step > 0, high, low)
     with np.errstate(invalid="ignore", divide="ignore"):  # rows with no grid
         count = np.rint((high - low) / np.abs(step)) + 1
-        fit &= count > 1  # one sample has no spacing to count by
+        # one sample has no spacing to count by, and labels stored narrower
+        # than float64 are rounded copies of the grid's
+        rebuilt = (count > 1) & ~stored.isin(("float16", "float32")).to_numpy()
         spacing = (last - origin) / (count - 1)
-        loose = ~_exact_grids(origin, step, count, dtypes)
+        loose = np.ones(len(rows), dtype=bool)  # placed from their grids below
+        loose[~sure] = ~_exact_grids(*(x[~sure] for x in (origin, step, count, dtypes)))
         scales = np.maximum(np.abs(low), np.abs(high))
         got = []
         for end, sign in zip(ends, (-1, 1), strict=True):
@@ -662,7 +666,120 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
             inner = loose & (k > 0) & (k < count - 1)
             wide = _outward(label, scales, step, dtypes, sign)
             got.append(np.where(inner, wide, label))
-    return got, fit
+    if sure.any():
+        ends = [x[sure] for x in ends]
+        found = _recorded_samples(grids[sure], ends, 3 * allowance[sure])
+        for out, labels in zip(got, found, strict=True):
+            out[sure] = labels
+    return got, fit & (recorded | rebuilt)
+
+
+def _sharp(steps, dtypes, *values) -> np.ndarray:
+    """
+    Whether each float grid's labels are known well inside half a step.
+
+    At its precision, where three float allowances reach half a step,
+    loading may take a bound to a label other than its nearest
+    (`_onto_grid`), so a row can't state which label loads. ``values``
+    give the scale the labels round at.
+    """
+    narrow = pd.Series(dtypes, dtype=object).astype(str).eq("float32").to_numpy()
+    steps = np.abs(np.asarray(steps, dtype=np.float64))
+    with np.errstate(invalid="ignore"):
+        return 6 * _precision(False, steps, narrow, *values) < steps
+
+
+def _grid_scales(grids) -> np.ndarray:
+    """
+    The largest value each row's float `Grid` computes a label from, NaN
+    for none: a patch cut from a longer grid rounds at that grid's scale.
+    """
+    return np.array(
+        [
+            abs(float(x.origin)) + abs(float(x.step_num)) * (x.parent_count or x.count)
+            if isinstance(x, Grid)
+            else np.nan
+            for x in grids
+        ]
+    )
+
+
+def _float_terms(grids) -> list[tuple]:
+    """
+    The terms of each row's float `Grid`, in arrays by the dtype they compute
+    in: the rows, the dtype, then start, step, length, first and stride.
+    """
+    out = []
+    dtypes = np.array([np.asarray(x.origin).dtype.str for x in grids])
+    for name in np.unique(dtypes):
+        rows = np.flatnonzero(dtypes == name)
+        dtype, part = np.dtype(name), [grids[x] for x in rows]
+        terms = [
+            (x.origin, x.step_num, x.parent_count or x.count, x.k0, x.stride)
+            for x in part
+        ]
+        start, step, num, first, stride = (np.array(x)[:, None] for x in zip(*terms))
+        out.append(
+            (rows, dtype, start.astype(dtype), step.astype(dtype), num, first, stride)
+        )
+    return out
+
+
+def _grid_labels(terms, positions) -> np.ndarray:
+    """The labels of each row's float grid (`_float_terms`) at its ``positions``."""
+    positions = np.asarray(positions, dtype=np.int64)
+    out = np.empty(positions.shape, dtype=np.float64)
+    for rows, dtype, start, step, num, first, stride in terms:
+        at = first + positions[rows] * stride
+        with np.errstate(invalid="ignore", divide="ignore"):
+            labels = _linspace_labels(start, step, num.astype(dtype), at, dtype)
+        out[rows] = np.where(num == 1, start, labels)
+    return out
+
+
+def _grid_frame(grids):
+    """Each row's float grid's terms, last position, and first and last labels."""
+    terms, last = _float_terms(grids), np.array([x.count - 1 for x in grids])
+    first, final = _grid_labels(terms, np.stack([0 * last, last], axis=1)).T
+    return terms, last, first, final
+
+
+def _nearest_labels(grids, values) -> np.ndarray:
+    """The label of each row's float `Grid` nearest each of ``values``."""
+    terms, last, first, final = _grid_frame(grids)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        at = np.nan_to_num((np.asarray(values) - first) * last / (final - first))
+    return _grid_labels(terms, np.clip(np.rint(at), 0, last)[:, None])[:, 0]
+
+
+def _recorded_samples(grids, ends, margins) -> list[np.ndarray]:
+    """
+    The least and greatest labels of each row's float `Grid` inside ``ends``.
+
+    Each end first moves out by its row's margin. Labels come from
+    `Grid.labels`, so they are the ones the row's file holds; a row with
+    none inside states its least label past its greatest (inf and -inf).
+    """
+    lows, highs = (np.asarray(x, dtype=np.float64) for x in ends)
+    lows, highs = lows - margins, highs + margins
+    terms, last, first, final = _grid_frame(grids)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        at = [(x - first) * last / (final - first) for x in (lows, highs)]
+    at = np.sort(np.nan_to_num(np.array(at)), axis=0)
+    # the first and last positions inside are within a sample of these
+    picks = []
+    for base, pick in zip((np.ceil(at[0]), np.floor(at[1])), (np.min, np.max)):
+        tried = np.clip(base[:, None] + np.arange(-1, 2), 0, last[:, None])
+        labels = _grid_labels(terms, tried)
+        inside = (labels >= lows[:, None]) & (labels <= highs[:, None])
+        fill = (last + 1)[:, None] if pick is np.min else -1
+        picks.append(pick(np.where(inside, tried, fill), axis=1))
+    held = picks[0] <= picks[1]
+    kept = _grid_labels(terms, np.clip(np.stack(picks, axis=1), 0, last[:, None]))
+    kept = np.sort(kept, axis=1)
+    out = [np.full(len(lows), np.inf), np.full(len(lows), -np.inf)]
+    out[0][held], out[1][held] = kept[held, 0], kept[held, 1]
+    return out
 
 
 def _snap_to_samples(before, after, coords, uncertain) -> pd.DataFrame:
@@ -1263,8 +1380,15 @@ class _SampleTracker:
                 (x.origin, x.step_num, x.parent_count or x.count) if x else [np.nan] * 3
                 for x in grids
             ]
+            # labels on the grid the index records for the file are its own
+            cells = source.get(f"_{name}_grid", pd.Series(index=source.index))
+            cells = cells.to_numpy(dtype=object)[rows[firsts]]
+            recorded = [isinstance(y, Grid) and x == y for x, y in zip(grids, cells)]
             origins, grid_steps, counts = np.array(terms, dtype=np.float64)[codes].T
             floats &= ~_exact_grids(origins, grid_steps, counts, dtypes)
+            recorded = np.array(recorded, dtype=bool)[codes]
+            sharp = _sharp(steps, dtypes, low, high, _grid_scales(cells)[codes])
+            floats &= ~(recorded & sharp)
             out_min = np.where(floats, _outward(mins, scales, steps, dtypes, -1), mins)
             out_max = np.where(floats, _outward(maxs, scales, steps, dtypes, 1), maxs)
             mins = np.where(np.where(down, last, first), low, out_min)
@@ -1811,6 +1935,8 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                 df.loc[idx, col] = pd.Series(held, index=idx, dtype=object)
             if f"_{name}_coord_dtype" in df.columns:  # converted labels are floats
                 df.loc[idx, f"_{name}_coord_dtype"] = "float64"
+            if (col := f"_{name}_grid") in df.columns:  # it counts the old unit
+                _set_cells(df, col, idx, [None] * len(idx))
         df.loc[rows, unit_col] = target
     return df
 
@@ -2512,9 +2638,11 @@ def _grid_members(windows, kept, kcodes, offsets, lattice, ticks, name):
     ``offsets`` numbers every partition's positions apart, so one search
     over all rows finds each window's. Returns each pair's window and kept
     row, the row's own first and last label inside the window (value
-    space), a float one between the row's ends moved out as a rider's is
-    (`_outward`). Pairs go in window order, and within one in the plan's
-    row order, which `conflict="keep_first"` and the carried attrs read.
+    space): a float one is the file's own where the index records its grid
+    (`_nearest_labels`), else between the row's ends it is moved out as a
+    rider's is (`_outward`). Pairs go in window order, and within one in
+    the plan's row order, which `conflict="keep_first"` and the carried
+    attrs read.
     """
     parts, firsts, lasts = windows
     pos, count = kept["_pos"].to_numpy(), kept["_count"].to_numpy()
@@ -2538,7 +2666,15 @@ def _grid_members(windows, kept, kcodes, offsets, lattice, ticks, name):
         blank = pd.Series(None, index=kept.index, dtype=object)
         dtypes = kept.get(f"_{name}_coord_dtype", blank).to_numpy(dtype=object)
         exact = _exact_grids(begin, own, size, dtypes[rel_src])
-        loose = np.isfinite(own) & ~exact
+        grids = kept.get(f"_{name}_grid", blank).to_numpy(dtype=object)[rel_src]
+        # a grid counts in its file's units, which a member may not state in
+        units, stated = (
+            kept.get(f"_{name}_{x}", blank) for x in ("units", "units_source")
+        )
+        same = (stated.isna() | (stated == units)).to_numpy()[rel_src]
+        recorded = np.array([isinstance(x, Grid) for x in grids], dtype=bool) & same
+        recorded &= _sharp(own, dtypes[rel_src], begin, finish, _grid_scales(grids))
+        loose = np.isfinite(own) & ~exact & ~recorded
         scales = np.maximum(np.abs(begin), np.abs(finish))
     edges = []
     for local, after in ((local0, True), (local1, False)):
@@ -2552,6 +2688,9 @@ def _grid_members(windows, kept, kcodes, offsets, lattice, ticks, name):
         whole = begin if after else finish
         edge = local == 0 if after else local == size - 1
         edges.append(np.where(edge, whole, label) * sign)
+    if not ticks and recorded.any():
+        for values in edges:
+            values[recorded] = _nearest_labels(grids[recorded], values[recorded])
     low, high = np.minimum(*edges), np.maximum(*edges)
     order = np.lexsort((rel_src, rel_out))
     return rel_out[order], rel_src[order], low[order], high[order]
