@@ -2437,6 +2437,12 @@ class TestFillGaps:
         np.testing.assert_array_equal(gain, np.r_[0:5, [np.nan] * 3, 5:9])
         assert np.isnat(stamp[5:8]).all() and np.array_equal(stamp[8:], stamps[5:])
 
+    def test_associated_coords_keep_units(self, gapped):
+        """A filled coordinate along the dimension keeps its units."""
+        gain = get_coord(data=np.arange(gapped.shape[1]) * 1.0, units="m")
+        out = gapped.update_coords(gain=("time", gain)).fill_gaps("time")
+        assert out.get_coord("gain").units == gain.units
+
     def test_drops_associated_coords(self, gapped):
         """A coordinate along the dimension no NaN fits is dropped, with a warning."""
         size = gapped.shape[1]
@@ -2653,8 +2659,10 @@ class TestFilledSpoolWindowRiders:
             expected = whole.select(time=(time.min(), time.max()))
             for name in ("depth", "gain"):
                 if name in expected.coords.coord_map:
-                    got, want = (x.get_coord(name).values for x in (patch, expected))
-                    np.testing.assert_array_equal(got, want)
+                    got, want = (x.get_coord(name) for x in (patch, expected))
+                    np.testing.assert_array_equal(got.values, want.values)
+                    stated = get_quantity("m") if name == "depth" else None
+                    assert got.units == want.units == stated
 
     @pytest.mark.parametrize("conflict", ["raise", "drop", "keep_first"])
     def test_window_of_a_gap_fill(self, conflict):

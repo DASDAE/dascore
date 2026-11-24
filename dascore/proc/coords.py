@@ -1585,10 +1585,10 @@ def _fill_riders(coords, dim: str, length: int, blocks, action: str):
         edge = name in (f"{dim}_start", f"{dim}_stop")
         if name == dim or dim not in dims or edge or kind not in "fcMm":
             continue
-        values = coords.coord_map[name].values
-        fill = np.array("NaT", values.dtype) if kind in "Mm" else np.nan
-        placed = _place_blocks(values, dims.index(dim), length, blocks, fill)
-        riders[name] = (dims, placed)
+        coord = coords.coord_map[name]
+        fill = np.array("NaT", coord.dtype) if kind in "Mm" else np.nan
+        placed = _place_blocks(coord.values, dims.index(dim), length, blocks, fill)
+        riders[name] = (dims, coord.update(data=placed))  # keeping its units
     return coords.drop_coords(*riders)[0].drop_associated(dim, action), riders
 
 
