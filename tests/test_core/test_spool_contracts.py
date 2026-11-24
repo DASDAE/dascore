@@ -89,6 +89,39 @@ class TestEqualityContract:
         assert dir_spool == live_spool
 
 
+class TestEqualityOfMixedKinds:
+    """Float ends compare within rounding where durations sit beside numbers."""
+
+    @pytest.fixture(scope="class")
+    def mixed(self):
+        """A patch timed by durations, and the same timed by numbers."""
+        patch = dc.get_example_patch()
+        steps = np.arange(patch.get_coord("time").shape[0])
+        durations = patch.update_coords(time=steps * np.timedelta64(4, "ms"))
+        return [durations, patch.update_coords(time=steps * 0.004)]
+
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda x: x.select(time=(1, 2), relative=True),
+            lambda x: x.chunk(time=1.0),
+        ],
+        ids=["relative", "chunk"],
+    )
+    def test_view_equals_what_it_loads(self, mixed, make):
+        """A trimmed view of both kinds equals the spool of its patches."""
+        view = make(dc.spool(mixed))
+        assert view == dc.spool(list(view))
+
+    def test_float32_view_equals_what_it_loads(self):
+        """Ends stated as float32 equal the float64 ends of the loaded patches."""
+        patch = dc.get_example_patch()
+        distance = np.arange(patch.shape[0], dtype=np.float32) * 0.5
+        view = dc.spool([patch.update_coords(distance=distance)])
+        view = view.select(distance=(1, 20), relative=True)
+        assert view == dc.spool(list(view))
+
+
 class TestEqualityComparesLoads:
     """Equality compares what each spool would load, reading no file (#1642)."""
 
