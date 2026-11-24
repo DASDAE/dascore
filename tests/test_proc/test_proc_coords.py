@@ -2437,6 +2437,12 @@ class TestFillGaps:
         np.testing.assert_array_equal(gain, np.r_[0:5, [np.nan] * 3, 5:9])
         assert np.isnat(stamp[5:8]).all() and np.array_equal(stamp[8:], stamps[5:])
 
+    def test_associated_coords_keep_units(self, gapped):
+        """A filled coordinate along the dimension keeps its units."""
+        gain = get_coord(data=np.arange(gapped.shape[1]) * 1.0, units="m")
+        out = gapped.update_coords(gain=("time", gain)).fill_gaps("time")
+        assert out.get_coord("gain").units == gain.units
+
     def test_drops_associated_coords(self, gapped):
         """A coordinate along the dimension no NaN fits is dropped, with a warning."""
         size = gapped.shape[1]
@@ -2629,6 +2635,57 @@ class TestFillGaps:
         """An integer patch with nothing to fill ignores the default NaN."""
         patch = random_patch.new(data=random_patch.data.astype(np.int32))
         assert patch.fill_gaps("time") is patch
+
+
+class TestFilledSpoolWindowRiders:
+    """A window of a spool's fill cuts its riders, as a select of the fill does."""
+
+    @staticmethod
+    def _part(start: int, count: int = 100) -> dc.Patch:
+        """A patch starting ``start`` seconds in, with float and integer riders."""
+        patch = dc.get_example_patch().select(time=(0, count), samples=True)
+        time = patch.get_coord("time")
+        labels = time.values - time.min() + np.datetime64("2020-01-01")
+        patch = patch.update_coords(time=labels + np.timedelta64(start, "s"))
+        steps = np.arange(count) + start * count
+        depth = get_coord(data=steps + 0.25, units="m")
+        return patch.update_coords(depth=("time", depth), gain=("time", steps))
+
+    @staticmethod
+    def _assert_windows_of(spool, whole):
+        """Each output holds the fill's riders within its time range."""
+        for patch in spool:
+            time = patch.get_coord("time")
+            expected = whole.select(time=(time.min(), time.max()))
+            for name in ("depth", "gain"):
+                if name in expected.coords.coord_map:
+                    got, want = (x.get_coord(name) for x in (patch, expected))
+                    np.testing.assert_array_equal(got.values, want.values)
+                    stated = get_quantity("m") if name == "depth" else None
+                    assert got.units == want.units == stated
+
+    @pytest.mark.parametrize("conflict", ["raise", "drop", "keep_first"])
+    def test_window_of_a_gap_fill(self, conflict):
+        """A window keeps the float rider the fill carries across its gap."""
+        filled = dc.spool([self._part(0), self._part(1)]).fill_gaps(
+            time=1, conflict=conflict
+        )
+        with pytest.warns(DASCoreWarning, match="dropped associated"):
+            whole = filled[0]  # the gap leaves no value for the integer rider
+        start = whole.get_coord("time").min()
+        window = (start, start + np.timedelta64(200, "ms"))
+        self._assert_windows_of(filled.select(time=window), whole)
+        self._assert_windows_of(filled.chunk(time=0.25, conflict=conflict), whole)
+
+    @pytest.mark.parametrize("conflict", ["drop", "keep_first"])
+    def test_window_of_a_join_with_nothing_to_fill(self, conflict):
+        """With no gap, windows cut riders of every kind and warn of none."""
+        parts = [self._part(0, 250), self._part(1, 250)]  # the second continues
+        filled = dc.spool(parts).fill_gaps(time=1, conflict=conflict)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            (whole,) = filled
+            self._assert_windows_of(filled.chunk(time=0.3, conflict=conflict), whole)
 
 
 class TestAddDistanceToMetadata:

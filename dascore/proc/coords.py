@@ -1568,19 +1568,27 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
 
 
 def _fill_riders(coords, dim: str, length: int, blocks, action: str):
-    """The coordinates, and riders along ``dim`` placed as the data is (NaN/NaT)."""
+    """
+    The coordinates, and riders along ``dim`` placed as the data is (NaN/NaT).
+
+    Blocks filling nothing can still cut ``dim`` (a window of a fill), which
+    cuts the riders as a selection does.
+    """
     riders = {}
     if sum(stop - start for start, stop, _ in blocks) == length:  # none filled
+        start, stop = (blocks[0][0], blocks[-1][1]) if blocks else (0, 0)
+        if (start, stop) != (0, len(coords.coord_map[dim])):
+            coords = coords.select(samples=True, **{dim: (start, stop)})[0]
         return coords, riders
     for name, dims in coords.dim_map.items():
         kind = coords.coord_map[name].dtype.kind
         edge = name in (f"{dim}_start", f"{dim}_stop")
         if name == dim or dim not in dims or edge or kind not in "fcMm":
             continue
-        values = coords.coord_map[name].values
-        fill = np.array("NaT", values.dtype) if kind in "Mm" else np.nan
-        placed = _place_blocks(values, dims.index(dim), length, blocks, fill)
-        riders[name] = (dims, placed)
+        coord = coords.coord_map[name]
+        fill = np.array("NaT", coord.dtype) if kind in "Mm" else np.nan
+        placed = _place_blocks(coord.values, dims.index(dim), length, blocks, fill)
+        riders[name] = (dims, coord.update(data=placed))  # keeping its units
     return coords.drop_coords(*riders)[0].drop_associated(dim, action), riders
 
 
