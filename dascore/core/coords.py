@@ -4529,7 +4529,7 @@ def _float_grid_terms(grid: Grid, dtype) -> tuple | None:
 
     Only a grid whose terms compute as the dtype's own scalars would has
     them: numpy scalars of the dtype, or python numbers it holds beside
-    one, and a length it counts exactly to. A python float step of 0.1
+    one, and a length, not zero, it counts exactly to. A python float step of 0.1
     beside float32 labels, or a float32 step beside float64 ones, rounds
     otherwise. Only float32 and float64 labels are placed from their grid.
     """
@@ -4541,7 +4541,7 @@ def _float_grid_terms(grid: Grid, dtype) -> tuple | None:
     if np.result_type(*terms) != dtype or not all(own):
         return None
     held = (float(dtype.type(x)) == float(x) for x in terms)
-    if count > 2 ** (np.finfo(dtype).nmant + 1) or not all(held):
+    if not 0 < count <= 2 ** (np.finfo(dtype).nmant + 1) or not all(held):
         return None
     return float(grid.origin), float(grid.step_num), count, grid.k0, grid.stride
 

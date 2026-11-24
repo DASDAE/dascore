@@ -511,6 +511,14 @@ class TestCoordSummary:
         """No terms state a float grid computing other than in its own dtype."""
         assert make().to_summary().grid_count is None
 
+    def test_empty_float_grid_states_none(self):
+        """An empty float grid states no terms, so a spool holding it builds."""
+        coord = get_coord(start=0.0, step=0.5, shape=(4,)).change_length(0)
+        assert coord.to_summary().grid_count is None
+        coords = {"x": coord, "y": np.arange(3)}
+        patch = dc.Patch(data=np.zeros((0, 3)), coords=coords, dims=("x", "y"))
+        assert len(dc.spool([patch])) == 1
+
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""
         if not coord.evenly_sampled:
