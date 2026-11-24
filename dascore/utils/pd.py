@@ -447,6 +447,13 @@ def _filter_multicolumn_range(query_dict, df, bool_index):
     return bool_index
 
 
+def _is_number(value) -> bool:
+    """Whether a bound is a bare number; a Python int past 64 bits is one too."""
+    if hasattr(value, "units"):  # a quantity
+        return False
+    return isinstance(value, int) or np.asarray(value).dtype.kind in "iuf"
+
+
 def _convert_range_bounds(range_tuple, func):
     """
     Apply a time conversion to each bound of a range.
@@ -462,7 +469,7 @@ def _convert_range_bounds(range_tuple, func):
         try:
             return func(bound)
         except OverflowError:
-            if np.asarray(bound).dtype.kind not in "iuf":
+            if not _is_number(bound):
                 raise
             extreme = np.timedelta64(np.iinfo(np.int64).max, "ns")
             return func(0) + extreme * int(np.sign(bound))

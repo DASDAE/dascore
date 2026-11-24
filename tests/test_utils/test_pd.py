@@ -488,7 +488,7 @@ class TestAdjustSegments:
         assert out[f"{name}_min"].iloc[0] == to_datetime64(2)
         assert out[f"{name}_max"].iloc[0] == to_datetime64(5)
 
-    @pytest.mark.parametrize("big", [1e12, 1e308])
+    @pytest.mark.parametrize("big", [1e12, 1e308, 10**20])
     def test_numbers_past_nanoseconds(self, example_df_2, example_df_timedeltas, big):
         """A number no nanosecond time holds opens its side or keeps no row,
         by its sign, as the index query reads it.

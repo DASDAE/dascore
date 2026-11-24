@@ -945,6 +945,7 @@ class TestDurationBounds:
             ("1 seconds", "3 seconds"),
             (1 * s, 3 * s),
             (get_quantity("1000 ms"), 3.0),
+            (np.timedelta64(1, "s"), 3),
         ],
     )
     def test_as_patch_select(self, durations, patch, bounds):
