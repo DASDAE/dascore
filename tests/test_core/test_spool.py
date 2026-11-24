@@ -1342,7 +1342,6 @@ class TestUnknownRiders:
             lambda x: x.select(distance=(5, 24)).chunk(time=3, keep_partial=True),
             lambda x: x.select(distance=(5, 24)).chunk(distance=4, keep_partial=True),
             lambda x: x.chunk(distance=5).chunk(time=3, keep_partial=True),
-            lambda x: x.chunk(distance=5).load_coords().select(distance=(1, 13)),
         ],
     )
     def test_equals_what_loads(self, spool, derive):
@@ -1393,6 +1392,63 @@ class TestUnknownRiders:
         assert len(chunked) == 9
         assert chunked.unresolved_coords == ("clock", "lat", "lon")
         assert len(view.select(time=(None, dc.to_datetime64("2020-01-01T00:00:04"))))
+
+    def test_open_selection_reads_nothing(self, spool, monkeypatch):
+        """A selection bounding no rider reads none of its labels."""
+        view = spool.select(distance=(5, 24))
+        monkeypatch.setattr(Spool, "_read_coord", _refuse_reading)
+        for value in (None, ..., (None, None), (..., ...)):
+            assert len(view.select(lat=value)) == 3
+
+    def test_union_resolves_selected_rider(self, spool):
+        """A union holding a cut rider resolves it before selecting on it."""
+        union = spool.chunk(distance=5) + dc.spool(spool[0])
+        assert union.unresolved_coords == ("lat", "lon")
+        lat = spool[0].get_array("lat")
+        out = union.select(lat=(lat[1], lat[3]))
+        assert len(out) == 2
+        assert all(len(x.get_coord("lat")) == 3 for x in out)
+
+    def test_concatenate_known_beside_unknown(self, spool):
+        """Sections a cut left unknown join one that stayed whole."""
+        out = spool.select(distance=(5, 24)).concatenate(distance=None)
+        assert out.unresolved_coords == ("lat", "lon")
+        (row,), (patch,) = out.load_coords().get_contents().iterrows(), list(out)
+        lat = patch.get_coord("lat")
+        assert (row[1]["lat_min"], row[1]["lat_max"]) == (lat.min(), lat.max())
+
+    def test_unfollowed_selection(self):
+        """A cut no row can follow leaves its riders unknown, never stepped."""
+        coords = {
+            "t": np.arange(2.0),
+            "x": np.arange(10.0) ** 2,
+            "r": ("x", 3 * np.arange(10.0)),
+        }
+        patch = dc.Patch(data=np.zeros((2, 10)), dims=("t", "x"), coords=coords)
+        out = dc.spool([patch]).select(x=(4, 36))
+        assert out.unresolved_coords == ("r",)
+        chunked = out.chunk(t=None)
+        assert chunked.get_contents()[["r_min", "r_step"]].isna().all(axis=None)
+        assert chunked == dc.spool(list(chunked))
+
+    def test_rider_of_another_dimension(self):
+        """A rider of a dimension no window cuts stays known on each member."""
+
+        def make(along):
+            """A patch whose rider rides ``along``."""
+            size = 10 if along == "x" else 3
+            coords = {
+                "t": np.arange(3.0),
+                "x": np.arange(10.0),
+                "r": (along, 2 * np.arange(float(size))),
+            }
+            patch = dc.Patch(data=np.zeros((3, 10)), dims=("t", "x"), coords=coords)
+            return patch.update_attrs(tag=along)
+
+        spool = dc.spool([make("x"), make("t")]).select(tag="t")
+        out = spool.select(x=(2, 6)).chunk(x=2, keep_partial=True)
+        assert out.unresolved_coords == ()
+        assert out.get_contents()["r_step"].tolist() == [2.0] * len(out)
 
     def test_warns_once_counting_files(self, fiber_patches, tmp_path):
         """Resolving many files warns once, counting them; memory never warns."""
@@ -1613,7 +1669,7 @@ class TestSelectSharedDimensionHoldsWhatLoads:
         assert len(end.get_contents()) == len(end) == 1
 
     def test_samples_after_an_unfollowed_selection(self):
-        """Samples counted after a selection no row can follow keep a superset."""
+        """Samples counted after a selection no row can follow state riders unknown."""
         arc = np.array([0, 1, 3, 6, 10, 15, 21, 28, 36, 45], dtype=np.float64)
         patch = dc.get_example_patch().select(distance=(0, 10), samples=True)
         patch = patch.update_coords(distance=np.arange(10.0))
@@ -1622,7 +1678,9 @@ class TestSelectSharedDimensionHoldsWhatLoads:
         )
         out = dc.spool([patch]).select(arc=(6, 28))
         out = out.select(distance=(1, 3), samples=True)
-        _assert_contents_hold_patches(out, ["distance", "sensor", "arc"])
+        _assert_contents_hold_patches(out, ["distance"])
+        assert out.unresolved_coords == ("arc", "sensor")
+        _assert_contents_hold_patches(out.load_coords(), ["sensor", "arc"])
         assert np.array_equal(out[0].get_array("sensor"), [1008, 1010])
         assert len(out.select(sensor=(1007, 1011)).get_contents()) == 1
 
@@ -1660,7 +1718,10 @@ class TestSelectSharedDimensionHoldsWhatLoads:
         # or may not be kept as far as the envelopes can tell
         out = spool.select(distance=(9.999998, 40))
         out = out.select(distance=second, relative=True)
-        _assert_contents_hold_patches(out, ["distance", "sensor"])
+        # the sensor samples kept are in doubt, so unknown until read
+        _assert_contents_hold_patches(out, ["distance"])
+        assert out.unresolved_coords == ("sensor",)
+        _assert_contents_hold_patches(out.load_coords(), ["sensor"])
 
     def test_patch_without_the_rider(self):
         """A patch lacking the rider leaves its neighbours' rows their own."""

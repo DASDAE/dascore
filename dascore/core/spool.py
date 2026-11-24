@@ -68,6 +68,7 @@ from dascore.core._spool_inventory import (
     UNRESOLVED_WARNING,
     VALID_ON_UNRESOLVED,
     InventoryRef,
+    _fully_open,
     acquisition_conflicts,
     check_stampable,
     combine_inventories,
@@ -541,8 +542,7 @@ class _LoadsReader:
             for x in by_output[int(output)]
         )
         if plan.mode == "identity" and not plan.merge_kwargs:
-            # one member, untouched but for the view's selection, if any
-            return sources[0] if whole else _Loads(recipe=_SELECTION, sources=sources)
+            return sources[0]  # one member, untouched but for the view's selection
         recipe = {"mode": plan.mode, "dim": plan.dim, "trim_dims": plan.trim_dims}
         return _Loads(recipe=recipe | plan.merge_kwargs, sources=sources)
 
@@ -1392,21 +1392,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> # one box per row on two dimensions; row two's time end is open
         >>> boxes = spool.select(distance=ranges, time=[time, [time[0], None]])
         """
-        # Circular import: the plan resolver imports the spool's catalog.
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
-        # a selection on a rider an earlier cut left unknown needs its labels;
-        # only a cut (a selection or a plan) leaves one so
-        named = {*kwargs, *selector_spec_names(_coords)}
-        if isinstance(_coords, Mapping):
-            named |= {str(x) for x in _coords}
-        catalog, spool = self._catalog, self
-        dims = catalog.backend.coord_dims_map()
-        riders = {x for x in named if dims.get(x, x) != x}
-        if riders and (catalog.residuals or isinstance(catalog.resolver, PlanResolver)):
-            if unknown := riders & set(self.unresolved_coords):
-                spool = self.load_coords(*unknown)
-        out, unjudged = spool._select_counted(
+        out, unjudged = self._resolving(_coords, kwargs)._select_counted(
             _attrs=_attrs,
             _coords=_coords,
             samples=samples,
@@ -1415,6 +1401,32 @@ class Spool(NodeRepr, NamespaceOwner):
         )
         report_unjudged(unjudged)
         return out
+
+    def _resolving(self, _coords, kwargs) -> Self:
+        """
+        The spool, stating exactly the riders a selection needs.
+
+        A selection keeps patches by the labels of a rider it bounds, so
+        those some row states unknown are read first. Only a cut (a
+        selection or a plan) leaves one unknown.
+        """
+        catalog = self._catalog
+        # a bare name is an attribute's first, as the selection resolves it
+        tagged, attrs = selector_spec_names(_coords), catalog.backend.attr_names()
+        bounds = {k: v for k, v in kwargs.items() if k in tagged or k not in attrs}
+        if isinstance(_coords, Mapping):
+            bounds |= {str(k): v for k, v in _coords.items()}
+        riders = catalog.backend.associated_coord_names()
+        names = {
+            k
+            for k, v in bounds.items()
+            if k in riders and v is not None and v is not ... and not _fully_open(v)
+        }
+        plans = names and getattr(catalog.resolver, "plan_entries", dict)()
+        if not (names and (catalog.residuals or plans)):
+            return self
+        unknown = names & set(self.unresolved_coords)
+        return self.load_coords(*unknown) if unknown else self
 
     def _select_counted(
         self,

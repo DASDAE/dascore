@@ -376,9 +376,10 @@ def _trim_to_member_windows(
     for name in blind:
         dim, ends = coord_dims_map[name], [f"{name}_min", f"{name}_max"]
         moved = (members[ends].to_numpy() != joined[ends].to_numpy()).any(axis=1)
-        for rider in (x for x, y in coord_dims_map.items() if y == dim):
-            if rider not in (dim, name):
-                _forget(cut, rider, joined.index[moved])
+        for rider in set(coord_dims_map) - {dim, name}:
+            # each member says which dimension its rider rides
+            if (dims := joined.get(f"_{rider}_dims")) is not None:
+                _forget(cut, rider, joined.index[moved & (dims == dim).to_numpy()])
     for name in windows:
         native = joined.get(_source_units_column(name), joined.get(f"_{name}_units"))
         planned = members.get(f"_{name}_units")
@@ -524,7 +525,7 @@ def _aux_coord_info(
         if step_col in joined.columns:
             one_step = grouped[step_col].nunique().to_numpy() == 1
             step_ok = keep & one_step
-            if not (rides and concat):
+            if not (rides and (trimmed or concat)):
                 # a lone member's rider keeps the grid its row states, and
                 # so its step, as do members stating one rider of another
                 # dimension alike, though not the values its identity

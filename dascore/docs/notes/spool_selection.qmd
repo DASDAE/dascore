@@ -69,7 +69,7 @@ A rider is a coordinate along a dimension other than the dimension's own, such a
 - **A rider with no step** keeps a known number of samples, but only its file says which labels they are. Its range is unknown: `get_contents` shows NaN for its ends, and no step.
 - **A rider left uncut**, or one whose patch keeps every sample, states the range the index holds.
 
-An output joining parts of a rider states it unknown where any part is. A chunk window along a dimension an earlier selection trimmed states every rider it cuts unknown, step or not, since the trimmed rows don't say which of their samples the window keeps. A selection on a rider with no step leaves the rest of its dimension's coordinates as they were, since the index can't say which samples it keeps.
+A cut the index can't place on the samples states every rider it cuts unknown, step or not, and leaves the dimension's own coordinate its whole range: a selection on a coordinate with no step, a sample or relative selection whose first sample is in doubt, and a chunk window along a dimension an earlier selection trimmed. An output joining parts of a rider states it unknown where any part is.
 
 `Spool.unresolved_coords` names the coordinates some row states unknown, and reads nothing. `Spool.load_coords` returns a view stating them exactly. It reads their labels, without the data, from each file a row with one comes from, and warns how many files it read; a spool of patches in memory reads them from its patches without warning. With nothing unknown, it reads nothing and returns the same spool. A fill's output holding filled samples keeps its riders unknown, since their labels are known only once it loads.
 
