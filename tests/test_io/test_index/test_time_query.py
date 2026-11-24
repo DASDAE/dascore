@@ -224,7 +224,7 @@ class TestNumbersOnTimes:
         numbers = patch.update_coords(time=steps * 0.004)
         tagged = [durations.update_attrs(tag="d"), numbers.update_attrs(tag="n")]
         spool = make_spool(tagged)
-        for big in (1e12, 1e308):
+        for big in (1e12, 1e308, 10**20):
             for bounds in [(None, big), (-big, 1)]:  # open on the big side
                 assert len(spool.select(tag="n", time=bounds)) == 1
                 # the duration patch stays, and raises as its select does
@@ -233,6 +233,19 @@ class TestNumbersOnTimes:
                 with pytest.raises(OverflowError):
                     durations[0]
             assert len(spool.select(time=(big, None))) == 0
+
+    @pytest.mark.parametrize("big", [1e12, 10**20])
+    def test_numbers_past_nanoseconds_on_durations(self, make_spool, big):
+        """On durations alone, such a number plans too; only the load raises."""
+        patch = dc.get_example_patch()
+        steps = np.arange(patch.get_coord("time").shape[0])
+        spool = make_spool([patch.update_coords(time=steps * np.timedelta64(4, "ms"))])
+        for bounds in [(None, big), (-big, 1)]:
+            selected = spool.select(time=bounds)
+            assert len(selected) == len(selected.get_contents()) == 1
+            with pytest.raises(OverflowError):
+                selected[0]
+        assert len(spool.select(time=(big, None))) == 0
 
     def test_durations_beside_numbers(self, make_spool):
         """Each patch reads the number in its own kind: seconds on durations."""

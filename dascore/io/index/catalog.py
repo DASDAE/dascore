@@ -63,6 +63,7 @@ from dascore.utils.misc import (
     is_range,
 )
 from dascore.utils.paths import coerce_to_local_path, is_local_path, is_memory_uri
+from dascore.utils.pd import _is_number
 from dascore.utils.time import to_float, to_int, to_timedelta64
 
 if TYPE_CHECKING:
@@ -75,7 +76,15 @@ _DIRECTORY_ORDER = ("coord", "time", True)
 
 
 def _as_durations(value: tuple) -> tuple:
-    """A range on durations: numbers and text in seconds, time quantities too."""
+    """
+    A range on durations: numbers and text in seconds, time quantities too.
+
+    A range of numbers alone stays one, which the query reads in seconds on
+    durations (`_numbers_on_times`), so a number past what nanoseconds hold
+    raises only at load, as `Patch.select` does.
+    """
+    if all(x is None or _is_number(x) for x in value):
+        return value
     out = []
     for bound in value:
         if hasattr(bound, "units"):
