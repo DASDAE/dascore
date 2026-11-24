@@ -513,10 +513,8 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
     if name is not None and name not in _BACKENDS:
         # A package's backend is registered when its module is imported. One
         # whose module failed part way is not left registered half made.
-        before = dict(_BACKENDS)
         if not load_backend_plugins(name):
-            _BACKENDS.clear()
-            _BACKENDS.update(before)
+            _BACKENDS.pop(name, None)
     if found is None or name not in _BACKENDS:
         known = ", ".join(sorted({x.name for x in _BACKENDS.values()}))
         msg = (

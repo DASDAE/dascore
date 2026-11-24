@@ -1930,8 +1930,6 @@ def stack_patches(
     kept = []
     for p in patches:
         refuse_lazy("stack", (p.data,))
-        # Of one array library: none is put on another's to be added.
-        _refuse_mixed((init_patch.data, p.data), "Stacking patches")
         # check kind, then dimensions and coords of patch against init_patch.
         # Kind is compared strictly: a collection is being combined, so a
         # missing value is a value.
@@ -1940,6 +1938,9 @@ def stack_patches(
         coords_ok = dims_ok and check_coords(init_patch, p, check_behavior, dim_vary)
         # actually do the stacking of data
         if coords_ok and check_data_units(init_patch, p, check_behavior):
+            # Of one array library: none is put on another's to be added.
+            # Asked of a patch which is added, not of one passed over.
+            _refuse_mixed((init_patch.data, p.data), "Stacking patches")
             stack_arr = stack_arr + p.data
             kept.append(p.attrs)
 

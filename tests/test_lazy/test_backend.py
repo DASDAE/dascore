@@ -833,9 +833,9 @@ class TestNamespace:
     def test_stacked_and_copied_patches_are_of_it(self, fast):
         """A stack of patches, and a patch made of one, are of its backend."""
         assert dc.Patch(fast).backend == _Fast()
-        stacked = dc.spool([fast, fast.update_attrs(station="b")]).stack(
-            dim_vary="time"
-        )
+        stacked = dc.spool([fast, fast.new(data=fast.data * 2)]).stack(dim_vary="time")
+        # Both were added, and the sum is of the backend they were of.
+        np.testing.assert_array_equal(stacked.data, fast.data * 3)
         assert stacked.backend == _Fast() and _triples(stacked)
 
     def test_stack_of_another_library_is_refused(self, spool, strict):
@@ -843,7 +843,11 @@ class TestNamespace:
         plain = spool[0]
         there = plain.new(data=strict.asarray(plain.data))
         with pytest.raises(IncompatiblePatchError, match="arrays of one array lib"):
-            dc.spool([plain, there.update_attrs(station="b")]).stack(dim_vary="time")
+            dc.spool([plain, there]).stack(dim_vary="time")
+        # One which is passed over, being of another kind, is not asked.
+        other = there.update_attrs(station="another")
+        out = dc.spool([plain, other]).stack(dim_vary="time", check_behavior="ignore")
+        np.testing.assert_array_equal(out.data, plain.data)
 
     def test_lazy_patches_of_one_kind_join_on_the_first_s(self, spool, reads):
         """Lazy patches on unequal backends of one kind are joined, unread."""
@@ -1061,8 +1065,11 @@ class TestNamespace:
             held = dc.spool([first[0], *rest[1:]])
             assert held.chunk(time=None)[0].backend == expected
             assert held.concatenate(time=None)[0].backend == expected
-            same = dc.spool([first[0], rest[0].update_attrs(station="b")])
-            assert same.stack(dim_vary="time").backend == expected
+            stacked = dc.spool([first[0], rest[0].new(data=rest[0].data * 2)]).stack(
+                dim_vary="time"
+            )
+            np.testing.assert_array_equal(stacked.data, first[0].data * 3)
+            assert stacked.backend == expected
 
     def test_kinds_are_told_before_a_fallback(self, spool, strict):
         """Two patches of other libraries are refused, not met in NumPy."""
