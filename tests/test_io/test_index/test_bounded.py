@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.units import m
 
 
@@ -222,6 +223,23 @@ class TestBoundedMetadata:
             backend, "_pivot_coords", wraps=backend._pivot_coords
         ) as pivot:
             assert len(spool) == 12
+        pivot.assert_not_called()
+        spool._catalog.close()
+
+    def test_mixed_unit_count_stays_in_sql(self):
+        """Steps in other units do not make a wide range look narrow (#1703)."""
+        coords = [
+            get_coord(start=0, step=1, shape=(400,), units="m"),
+            get_coord(start=0, step=1000, shape=(400,), units="mm"),
+        ]
+        patches = [
+            dc.Patch(data=np.zeros(400), coords={"distance": x}, dims=("distance",))
+            for x in coords
+        ]
+        spool = dc.spool(patches).select(distance=(100 * m, 200 * m))
+        backend = spool._catalog.backend
+        with mock.patch.object(backend, "_pivot_coords") as pivot:
+            assert len(spool) == 2
         pivot.assert_not_called()
         spool._catalog.close()
 

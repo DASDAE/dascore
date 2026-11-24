@@ -2550,6 +2550,18 @@ class TestLongFractionalGrid:
         assert [x.shape[1] for x in out] == [1] * 30
         assert np.array_equal(np.hstack([x.data for x in out]), whole.data)
 
+    @pytest.mark.parametrize("on_disk", [False, True])
+    def test_durations(self, tmp_path, on_disk):
+        """Durations on an exact fractional grid chunk whole (#1700)."""
+        time = get_coord(start=np.timedelta64(5003, "ms"), step=(11, 3000), shape=(4,))
+        patch = dc.Patch(data=np.arange(4.0), coords={"time": time}, dims=("time",))
+        spool = dc.spool([patch])
+        if on_disk:
+            spool = dc.spool(ex.spool_to_directory(spool, path=tmp_path)).update()
+        (out,) = spool.chunk(time=None)
+        assert out.get_coord("time") == time
+        assert np.array_equal(out.data, patch.data)
+
 
 class TestChunkWithAssociatedCoords:
     """Chunking must not trim on coordinates riding another dimension."""

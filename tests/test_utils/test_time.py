@@ -690,6 +690,11 @@ class TestToInt:
         out = to_int(np.timedelta64(1, "s"))
         assert out == 1_000_000_000
 
+    @pytest.mark.parametrize("value", [pd.Timedelta(1, "s"), timedelta(seconds=1)])
+    def test_timedelta(self, value):
+        """Python and pandas durations return the ns, as timedelta64 does (#1700)."""
+        assert to_int(value) == 1_000_000_000
+
     def test_datetime64(self):
         """Ensure int ns is returned for datetime64."""
         out = to_int(to_datetime64("1970-01-01") + np.timedelta64(1, "ns"))

@@ -949,10 +949,9 @@ class TestSharedDimensionEnvelopes:
         )
 
     def test_range_narrower_than_rounding(self, frame):
-        """A range holding no sample, closer than rounding, keeps the rider whole."""
+        """A range holding no sample, closer than rounding, drops the row (#1703)."""
         residuals = (({"sensor": (1020.95, 1021.05)}, False, False),)
-        out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
-        assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
+        assert patch_local_adjusted_envelopes(frame, residuals, drop_empty=False).empty
 
     def test_coordinate_on_two_dimensions(self, frame):
         """A coordinate on two dimensions trims neither of them."""

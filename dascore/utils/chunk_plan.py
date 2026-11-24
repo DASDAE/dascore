@@ -213,8 +213,10 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
         return df
     split = df.iloc[[x[0] for x in stretches]].copy()
     names = (f"{dim}_min", f"{dim}_max", f"{dim}_step")
+    # ends of several kinds, held as objects, keep each segment's step in its kind
+    like = df if df[names[0]].dtype != object else df[[]]
     for num, col in enumerate(names, start=1):
-        _set_column(split, col, [x[num] for x in stretches], df)
+        _set_column(split, col, [x[num] for x in stretches], like)
     # each stretch's samples count from its own first label
     split[f"_{dim}_source_envelope"] = [{names[0]: x[4]} for x in stretches]
     # a segment is no longer its source's whole range
@@ -671,10 +673,10 @@ def _snap_to_samples(before, after, coords, uncertain) -> pd.DataFrame:
     last samples inside it, which loading keeps (#1127): on its lattice
     (`_sample_lattices`) for ticks, on its grid (`_float_samples`) for
     floats. An end stays the bound where neither is known, an exact
-    fractional grid was trimmed before (its phase and origin may part), the
-    row holds no sample inside, a relative selection cut it without knowing
-    where, or its float labels are stored narrower than float64 (they
-    rebuild only to their rounding).
+    fractional grid was trimmed before (its phase and origin may part), a
+    relative selection cut it without knowing where, or its float labels
+    are stored narrower than float64 (they rebuild only to their rounding).
+    A row holding no sample inside is dropped, since it loads none.
     """
     for name in coords:
         cols = [f"{name}_min", f"{name}_max"]
@@ -707,11 +709,12 @@ def _snap_to_samples(before, after, coords, uncertain) -> pd.DataFrame:
             np.where(fit & y[cut], x, e)
             for x, y, e in zip(got, moved, part, strict=True)
         ]
-        empty = new[0] > new[1]  # no sample inside: the row may hold nothing
         ends = [x.copy() for x in ends]
-        for end, old, snapped in zip(ends, part, new, strict=True):
-            end[cut] = np.where(empty, old, snapped)
-        after = after.assign(**dict(zip(cols, ends, strict=True)))
+        for end, snapped in zip(ends, new, strict=True):
+            end[cut] = snapped
+        held = np.ones(len(after), dtype=bool)
+        held[np.flatnonzero(cut)[new[0] > new[1]]] = False  # no sample inside
+        after = after.assign(**dict(zip(cols, ends, strict=True)))[held]
     return after
 
 
@@ -1589,7 +1592,10 @@ def _drop_emptied(df: pd.DataFrame, names, read) -> pd.DataFrame:
                 continue
             step = part[f"{name}_step"]
             held = trimmed & _structural(part, name)
-            stepless = held & step.isna().to_numpy()
+            # one with no step is judged by its labels, a rider's too
+            rides = part.get(f"_{name}_dims", pd.Series("", index=part.index))
+            stepless = held | (trimmed & rides.fillna("").astype(bool).to_numpy())
+            stepless &= step.isna().to_numpy()
             for index in part.index[stepless]:
                 coord = read(part.loc[index], name)
                 if coord is not None and not len(coord):
@@ -1880,7 +1886,8 @@ def _prepare_relation(
             "on_missing_dim='drop' to exclude them."
         )
         raise ChunkError(msg)
-    return df[~unusable]
+    # the rows left may hold one kind of several, still as objects
+    return _own_dtypes(df[~unusable], name)
 
 
 def _cell_columns(df, name) -> list[str]:

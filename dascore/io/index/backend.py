@@ -1596,6 +1596,21 @@ class SQLiteIndexBackend:
         """Whether any coordinate the index holds is several runs."""
         return not self._fetch_df(_SEVERAL_RUNS + " LIMIT 1").empty
 
+    def widest_steps(self, name: str) -> dict:
+        """The largest step a coordinate states per unit: a number, and ns (or None)."""
+        sql = (
+            "SELECT units, MAX(ABS(step_float)) AS f, MAX(ABS(step_int)) AS i "
+            "FROM coord_defs WHERE coord_row IN "
+            "(SELECT coord_row FROM patch_coords WHERE coord_name = ?) GROUP BY units"
+        )
+        # plain rows: `len` asks on every selection, and a frame costs far
+        # more than these few rows
+        rows = self._cached(
+            ("widest_steps", name),
+            lambda: tuple(self._con.execute(sql, (name,)).fetchall()),
+        )
+        return {unit: (number, ticks) for unit, number, ticks in rows}
+
     def coord_runs(self, name: str, patch_rows) -> dict[int, tuple | None]:
         """
         The runs of coordinate ``name``, by patch row, where it holds several.
