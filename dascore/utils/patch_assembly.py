@@ -55,6 +55,7 @@ from dascore.utils.attrs import (
 )
 from dascore.utils.chunk import _READ_PAD
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS, stretch_coordinate
+from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.identity import (
     derive,
     encode,
@@ -665,13 +666,23 @@ def _held_labels(coord, array: tuple, at: int, spec: tuple):
     start, whole, coord_id = array
     if np.dtype(whole.dtype).kind != "f" or whole.data_id == coord_id:
         return coord
+    grid = _held_grid(spec, at - start, len(whole), whole.units, coord_id)
+    return None if grid is None else grid[start : start + len(coord)]
+
+
+def _held_grid(spec: tuple, at: int, size: int, units, coord_id):
+    """
+    The stretch's grid over an array of ``size`` samples, if the array holds it.
+
+    `at` is where the array's first sample falls in the output, and
+    `coord_id` the id of the coordinate the array holds.
+    """
     origin, num, den, count, phase, first, _, dtype = spec
-    begin = first + at - start  # the array's first sample on the stretch
-    if not 0 <= begin <= count - len(whole):
+    if not 0 <= first + at <= count - size:
         return None
-    terms = (origin, num, den, count, phase, begin, len(whole), dtype)
-    grid = stretch_coordinate(terms, whole.units)
-    return grid[start : start + len(coord)] if grid.data_id == coord_id else None
+    terms = (origin, num, den, count, phase, first + at, size, dtype)
+    grid = stretch_coordinate(terms, units)
+    return grid if grid.data_id == coord_id else None
 
 
 def _same_labels(first, second) -> bool:
@@ -990,42 +1001,41 @@ class PatchAssembler:
                 # the resource did not hold the array its row described: a
                 # different shape, or fewer axes than the windows name
                 return None
-        coords = self._held_coords(df_dict_list, metas, merge_dim)
-        if coords is None:
-            return None
+        coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])
+        grid = self._stretch_held(df_dict_list, metas)
         return self._assemble(
-            data, dims, merge_dim, coords, attrs, df_dict_list, defaults
+            data, dims, merge_dim, coords, attrs, df_dict_list, defaults, grid
         )
 
-    def _held_coords(self, rows, metas, dim) -> list | None:
+    def _stretch_held(self, rows, metas):
         """
-        The members' coordinates, ``dim`` as their files hold it, or None.
+        The output's grid where every member's file holds its stretch's grid.
 
-        A float stretch's grid joins the id where it moves a member's
-        labels, and a row rebuilds them only to the last place, so each
-        member takes the labels `_held_labels` confirms, as the patch path
-        merges the files' own. None where it confirms none.
+        A float stretch's grid joins the id where it moves the members'
+        labels, and the rows rebuild those only to the last place (see
+        `_held_labels`). A file cut from that grid keeps its terms, which
+        its coordinate id confirms; the members' labels then join to the
+        grid itself, as the files' own do on the patch path, and the grid
+        moves none. None at the first member it does not confirm.
         """
-        coords = [meta.coords for meta in metas]
-        spec = rows[0].get(f"_{dim}_stretch")
-        if not isinstance(spec, tuple) or coords[0].coord_map[dim].dtype.kind != "f":
-            return coords
-        out, at = [], 0
-        for row, coord in zip(rows, coords, strict=True):
-            labels = coord.coord_map[dim]
-            if row.get("_modified"):  # a window of the array its source row states
-                layout = self._member_layout(row, None)
-                array = None if layout is None else layout[2]
-            else:  # the whole array, as `_member_layout` rebuilds it
-                array = (0, labels, def_key_data_id(row.get(f"_{dim}_def_key")))
-            held = None if array is None else _held_labels(labels, array, at, spec)
-            if held is None:
+        dim = self.plan_dim
+        spec, first = rows[0].get(f"_{dim}_stretch"), metas[0].coords.coord_map[dim]
+        floats = isinstance(spec, tuple) and np.dtype(first.dtype).kind == "f"
+        # a member sized from its envelope names no samples of its array
+        if not (floats and ids_enabled() and all(x.window for x in metas)):
+            return None
+        at, units = 0, first.units
+        for row, meta in zip(rows, metas, strict=True):
+            axis = meta.dims.index(dim)
+            start = meta.window[axis].indices(meta.extent[axis])[0]
+            coord_id = def_key_data_id(row.get(f"_{dim}_def_key"))
+            size = meta.extent[axis]
+            if _held_grid(spec, at - start, size, units, coord_id) is None:
                 return None
-            out.append(coord if held is labels else coord.update(**{dim: held}))
-            at += len(labels)
-        return out
+            at += meta.coords.shape[axis]
+        return stretch_coordinate(spec, units) if at == spec[6] else None
 
     def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
@@ -1086,8 +1096,8 @@ class PatchAssembler:
         before planning no longer states itself. None where loading could
         name the output otherwise: a member converted to other units, one
         the rows cannot place, or a float grid whose labels they cannot
-        confirm (see `_held_labels`), so whether loading moves one is
-        unknown.
+        confirm (see `_held_labels`) or, joined with other members, cannot
+        rebuild, so whether loading moves one is unknown.
         """
         dim, stored = self.plan_dim, stored or [None] * len(rows)
         if len({_stated_unit(x.get("data_units")) for x in rows}) > 1:
@@ -1114,11 +1124,22 @@ class PatchAssembler:
         ]
         if None in held:
             return None
-        # either route merges the labels the files hold (`_held_coords`)
-        each = [get_coord_manager({dim: x}, dims=(dim,)) for x in held]
-        joined = _get_merged_coord(dim, each)
-        attrs = dc.PatchAttrs(data_id=data_id)
-        return _regridded(joined, attrs, dim, first)[1].data_id
+
+        def placed(labels) -> str:
+            """The id the output takes when its members hold ``labels``."""
+            each = [get_coord_manager({dim: x}, dims=(dim,)) for x in labels]
+            joined = _get_merged_coord(dim, each)
+            attrs = dc.PatchAttrs(data_id=data_id)
+            return _regridded(joined, attrs, dim, first)[1].data_id
+
+        # Members merged from the index keep the labels their rows rebuild
+        # unless every file holds the stretch's grid (`_stretch_held`), and
+        # merged as patches the files' own; the id stands where both name
+        # the output alike. One member always loads as a patch.
+        on_grid = all(x is not y for x, y in zip(held, coords, strict=True))
+        both = [held] if len(held) == 1 or on_grid else [held, coords]
+        named = {placed(x) for x in both}
+        return named.pop() if len(named) == 1 else None
 
     def _member_layout(self, row: Mapping, stored: Mapping | None):
         """
@@ -1193,6 +1214,8 @@ class PatchAssembler:
                 [x.attrs for x in metas],
                 rows,
             )
+        if (grid := self._stretch_held(rows, metas)) is not None:
+            coords = coords._update_grid(self.plan_dim, **{self.plan_dim: grid})
         if not all(known):
             attrs = attrs.update(data_id="")
         coords, attrs = _regridded(coords, attrs, self.plan_dim, rows[0])
@@ -1328,9 +1351,11 @@ class PatchAssembler:
             raise CoordMergeError(msg) from e
         return self._assemble(merged, dims, merge_dim, coords, attrs, rows)
 
-    def _assemble(self, data, dims, merge_dim, coords, attrs, rows, defaults=None):
+    def _assemble(
+        self, data, dims, merge_dim, coords, attrs, rows, defaults=None, grid=None
+    ):
         """Build the merged patch from the members' data, coords and attrs."""
-        coords, attrs = self._merged_meta(merge_dim, coords, attrs, rows)
+        coords, attrs = self._merged_meta(merge_dim, coords, attrs, rows, grid)
         # The merge drops empty and conflicting attrs, which the first
         # member's vendor model fills with its defaults; rows rebuild base
         # attrs, so restate them.
@@ -1343,8 +1368,13 @@ class PatchAssembler:
         with operation_context():
             return dc.Patch(data=data, coords=coords, attrs=attrs, dims=list(dims))
 
-    def _merged_meta(self, merge_dim, coords, attrs, rows):
-        """The coordinates and attrs members merged along ``merge_dim`` have."""
+    def _merged_meta(self, merge_dim, coords, attrs, rows, grid=None):
+        """
+        The coordinates and attrs members merged along ``merge_dim`` have.
+
+        ``grid`` is the merged coordinate where the members are known to
+        hold it (`_stretch_held`), so their labels need not be joined.
+        """
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
         summary_df = pd.DataFrame([coord._get_dim_summary() for coord in coords])
@@ -1356,7 +1386,12 @@ class PatchAssembler:
             )
             raise CoordMergeError(msg)
         attr_kwargs, coord_kwargs = _split_coord_merge_kwargs(self.merge_kwargs)
-        new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
+        if grid is None:
+            new_coord = _get_merged_coord(merge_dim, coords, **coord_kwargs)
+        else:
+            new_coord = merge_coord_managers(
+                coords, dim=merge_dim, dim_coord=grid, **coord_kwargs
+            )
         warn_if_histories_differ(attrs, "Merging")
         lengths = [x.shape[x.dims.index(merge_dim)] for x in coords]
         new_attrs = combine_patch_attrs(

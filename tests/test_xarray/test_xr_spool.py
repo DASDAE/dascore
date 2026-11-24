@@ -1449,6 +1449,29 @@ class TestTreeMatchesChunk:
         tree = spool.io.to_xarray(dim="distance", group=[])
         self._assert_matches(tree, spool.chunk(distance=None, group=[]))
 
+    @pytest.mark.parametrize("source", ["memory", "dasdae"])
+    def test_members_cut_from_one_float_grid(self, tmp_path, source):
+        """
+        Members cut from one float grid state the id chunk gives (#1718).
+
+        They hold that grid's labels, which their rows rebuild only to the
+        last place, so the grid moves none of them.
+        """
+        patch = dc.get_example_patch()
+        grid = dc.get_coord(start=0.0, step=0.1, shape=(patch.shape[0],))
+        whole = patch.update_coords(distance=grid)
+        cuts = [(0, 150), (150, None)]
+        members = [whole.select(distance=x, samples=True) for x in cuts]
+        spool = dc.spool(members)
+        if source == "dasdae":
+            # members sharing a time range need a directory each
+            for num, member in enumerate(members):
+                spool_to_directory([member], tmp_path / str(num))
+            spool = dc.spool(tmp_path).update()
+        tree = spool.io.to_xarray(dim="distance", group=[])
+        assert all("data_id" in x.attrs for x in _segments(tree))
+        self._assert_matches(tree, spool.chunk(distance=None, group=[]))
+
     def test_mixed_dtypes(self, patches, to_spool):
         """int16 and float32 members merge to float32 as chunk merges them."""
         mixed = [
