@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import TimeOverflowError
+from dascore.exceptions import InvalidSpoolQueryError, TimeOverflowError
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.query import Query, build_sql
@@ -162,6 +162,87 @@ class TestTimeQuery:
         spool = dc.get_example_spool("random_das")
         with pytest.raises(TimeOverflowError):
             len(spool.select(time=(None, "3000-01-01")))
+
+
+class TestNumbersOnTimes:
+    """A bare number on a time coordinate reads as `Patch.select` reads it."""
+
+    @pytest.fixture(params=["memory", "directory"])
+    def make_spool(self, request, tmp_path):
+        """Build a memory spool, or a directory spool of the patches' files."""
+
+        def _make(patches):
+            if request.param == "memory":
+                return dc.spool(patches)
+            for index, patch in enumerate(patches):
+                patch.io.write(tmp_path / f"patch_{index}.h5", "DASDAE")
+            return dc.spool(tmp_path).update()
+
+        return _make
+
+    @staticmethod
+    def _assert_selects_as_patches(spool, patches, bounds):
+        """Each patch loads, and its row states, what its own select keeps."""
+        selected = spool.select(time=bounds)
+        want = {x.get_coord("time").dtype.kind: x.select(time=bounds) for x in patches}
+        contents = selected.get_contents()
+        assert len(selected) == len(want)
+        for patch, low, high in zip(
+            selected, contents["time_min"], contents["time_max"], strict=True
+        ):
+            coord = patch.get_coord("time")
+            assert coord == want[coord.dtype.kind].get_coord("time")
+            # a float end is stated within its rounding
+            stated, loaded = (low, high), (coord.min(), coord.max())
+            if coord.dtype.kind == "f":
+                assert np.allclose(stated, loaded, rtol=0, atol=1e-12)
+            else:
+                assert stated == loaded
+
+    def test_seconds_since_1970(self, make_spool):
+        """A number on absolute times is seconds since 1970."""
+        patch = dc.get_example_patch()
+        start = patch.get_coord("time").min()
+        seconds = (start - np.datetime64(0, "s")) / np.timedelta64(1, "s")
+        spool = make_spool([patch])
+        for bounds in [(seconds + 1, seconds + 2), (seconds + 1, None)]:
+            self._assert_selects_as_patches(spool, [patch], bounds)
+
+    def test_reversed_seconds_refused(self, make_spool):
+        """Reversed numbers are refused on absolute times, as on numbers."""
+        patch = dc.get_example_patch()
+        start = patch.get_coord("time").min()
+        seconds = (start - np.datetime64(0, "s")) / np.timedelta64(1, "s")
+        with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
+            len(make_spool([patch]).select(time=(seconds + 2, seconds + 1)))
+
+    def test_numbers_past_nanoseconds(self, make_spool):
+        """A number no nanosecond time holds still selects among numbers."""
+        patch = dc.get_example_patch()
+        steps = np.arange(patch.get_coord("time").shape[0])
+        durations = patch.update_coords(time=steps * np.timedelta64(4, "ms"))
+        numbers = patch.update_coords(time=steps * 0.004)
+        tagged = [durations.update_attrs(tag="d"), numbers.update_attrs(tag="n")]
+        spool = make_spool(tagged)
+        for big in (1e12, 1e308):
+            for bounds in [(None, big), (-big, 1)]:  # open on the big side
+                assert len(spool.select(tag="n", time=bounds)) == 1
+                # the duration patch stays, and raises as its select does
+                durations = spool.select(tag="d", time=bounds)
+                assert len(durations) == 1
+                with pytest.raises(OverflowError):
+                    durations[0]
+            assert len(spool.select(time=(big, None))) == 0
+
+    def test_durations_beside_numbers(self, make_spool):
+        """Each patch reads the number in its own kind: seconds on durations."""
+        patch = dc.get_example_patch()
+        steps = np.arange(patch.get_coord("time").shape[0])
+        durations = patch.update_coords(time=steps * np.timedelta64(4, "ms"))
+        numbers = patch.update_coords(time=steps * 0.004)
+        spool = make_spool([durations, numbers])
+        for bounds in [(1.0, 2.0), (None, 0.5), (-np.inf, 1)]:
+            self._assert_selects_as_patches(spool, [durations, numbers], bounds)
 
 
 class TestPlannedTimeQueries:
