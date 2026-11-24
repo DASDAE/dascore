@@ -527,6 +527,7 @@ _WIDEN_SPAN = (
     "UPDATE meta_data SET max_time_span = "
     "CAST(max(max_time_span, coalesce({}, 0)) AS INTEGER)"
 )
+_WIDEN_NEW = f"{_WIDEN_SPAN.format(_SPAN.format('NEW.'))}; END"
 # Triggers keeping the patch and coordinate variant counts and the time
 # span. Living in the database, they count writes however they arrive,
 # including cascaded deletes and rows written straight through SQL;
@@ -543,10 +544,10 @@ TRIGGERS = MappingProxyType(
             "AFTER DELETE ON patches BEGIN "
             "UPDATE meta_data SET patch_count = patch_count - 1; END"
         ),
-        # deletes leave the span alone: too wide is still exact
-        "widen_time_span": (
-            "AFTER INSERT ON patches BEGIN "
-            f"{_WIDEN_SPAN.format(_SPAN.format('NEW.'))}; END"
+        # deletes and narrowing updates leave the span: too wide is still exact
+        "widen_time_span": f"AFTER INSERT ON patches BEGIN {_WIDEN_NEW}",
+        "widen_time_span_updated": (
+            f"AFTER UPDATE OF time_min, time_max ON patches BEGIN {_WIDEN_NEW}"
         ),
         "count_variant_added": (
             "AFTER INSERT ON patch_coords BEGIN "

@@ -430,6 +430,16 @@ class TestTimeSpan:
         assert self._span(backend) == expected
         backend.close()
 
+    def test_updated_through_sql(self):
+        """Times widened through SQL widen it; narrowed, they leave it."""
+        backend = get_backend(":memory:")
+        backend.write_sources([_timed("a", 0, _MINUTE)])
+        backend._con.execute("UPDATE patches SET time_max = ?", (3 * _MINUTE,))
+        assert self._span(backend) == 3 * _MINUTE
+        backend._con.execute("UPDATE patches SET time_max = 10")
+        assert self._span(backend) == 3 * _MINUTE
+        backend.close()
+
 
 class TestOneCommit:
     """A selection reads the span and the rows from one commit."""
@@ -475,7 +485,8 @@ class TestOlderIndex:
         con = sqlite3.connect(path)
         try:
             con.executescript(
-                "DROP TRIGGER widen_time_span; DROP INDEX idx_patches_time; "
+                "DROP TRIGGER widen_time_span; DROP TRIGGER widen_time_span_updated; "
+                "DROP INDEX idx_patches_time; "
                 "ALTER TABLE meta_data DROP COLUMN max_time_span; "
                 "UPDATE meta_data SET index_version = 40;"
             )
