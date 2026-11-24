@@ -335,6 +335,91 @@ class TestAuxiliaryCoords:
         # loading still yields the trimmed coord
         assert derived[0].get_coord("sensor").min() == 5.0
 
+    @pytest.fixture()
+    def lat_two_ways(self):
+        """Patches with `lat` along distance, then along time (high at its ends)."""
+        patch = dc.get_example_patch()
+        distance, time = patch.shape
+        along_distance = patch.update_coords(
+            lat=("distance", np.linspace(0, 1, distance))
+        )
+        later = patch.get_coord("time").values + np.timedelta64(100, "s")
+        along_time = patch.update_coords(time=later).update_coords(
+            lat=("time", np.abs(np.linspace(-1, 1, time)))
+        )
+        return along_distance, along_time
+
+    @pytest.mark.parametrize("method", ["select", "cut"])
+    @pytest.mark.parametrize("first", [0, 1])
+    def test_rider_dims_of_each_output(self, lat_two_ways, method, first):
+        """
+        An output states the dims `lat` rides in its own members, so a window
+        over the time the `lat` range removed keeps nothing (#1720).
+        """
+        along_time = lat_two_ways[1]
+        start = along_time.get_coord("time").min()
+        window = (start + np.timedelta64(3, "s"), start + np.timedelta64(5, "s"))
+        spool = dc.spool([lat_two_ways[first], lat_two_ways[1 - first]])
+        view = spool.select(distance=np.array([[0, 300]])).select(lat=(0.6, 1.0))
+        out = getattr(view, method)(time=np.array([window]))
+        assert len(out) == 0 and list(out) == []
+        # a window over samples the range kept loads them
+        window = (start, start + np.timedelta64(1, "s"))
+        (patch,) = getattr(view, method)(time=np.array([window]))
+        expected = along_time.select(lat=(0.6, 1.0), time=window)
+        assert patch.get_coord("time") == expected.get_coord("time")
+
+    @pytest.mark.parametrize("method", ["chunk", "concatenate"])
+    def test_rider_joined_along_the_plan_dim(self, method):
+        """
+        Where `lat` rides time in an output's members but distance in the
+        first patch, the time-joined output is judged on time, so a window
+        after a selection on `lat` finds its samples (#1720).
+        """
+
+        def make(times, along):
+            lat = np.arange(10.0) if along == "time" else np.arange(3.0)
+            coords = {"distance": np.arange(3.0), "time": times, "lat": (along, lat)}
+            dims = ("distance", "time")
+            return dc.Patch(data=np.zeros((3, 10)), coords=coords, dims=dims)
+
+        patches = [
+            make(np.arange(-100.0, -90), "distance"),
+            make(np.arange(10.0), "time"),
+            make(np.arange(10.0, 20), "time"),
+        ]
+        joined = getattr(dc.spool(patches).select(time=(5, 14)), method)(time=None)
+        (patch,) = joined.select(lat=(0, 4)).select(time=np.array([[10, 13]]))
+        assert patch.get_array("time").tolist() == [10, 11, 12, 13]
+
+    @pytest.mark.parametrize("first", ["distance", "time"])
+    def test_concatenated_rider_a_selection_trimmed(self, first):
+        """
+        A rider a selection on its dimension trimmed claims no joined step,
+        whichever dims the first patch has it on.
+        """
+
+        def make(times, along):
+            n = 10 if along == "time" else 3
+            sensor = np.abs(np.linspace(-1, 1, n))
+            coords = {
+                "distance": np.arange(3.0),
+                "time": times,
+                "lat": (along, np.arange(float(n))),
+                "sensor": (along, sensor),
+            }
+            dims = ("distance", "time")
+            return dc.Patch(data=np.zeros((3, 10)), coords=coords, dims=dims)
+
+        spool = dc.spool(
+            [make(np.arange(-100.0, -90), first), make(np.arange(10.0), "time")]
+        )
+        later = spool.select(time=(0, None)).select(sensor=(0.5, 1))
+        joined = later.concatenate(time=None)
+        (patch,) = joined
+        assert patch.get_coord("lat").step is None
+        assert pd.isnull(joined.get_contents()["lat_step"].iloc[0])
+
     def test_string_aux_coord(self):
         """String-valued aux coords survive with a lexicographic envelope."""
         p = dc.get_example_patch()

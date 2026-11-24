@@ -458,7 +458,7 @@ def _aux_coord_info(
         if "_modified" in joined.columns
         else np.zeros(len(output_ids), dtype=bool)
     )
-    for name, dims_str in coord_dims_map.items():
+    for name, dims_str, stated in _dims_by_output(joined, grouped, coord_dims_map):
         cmin, cmax = f"{name}_min", f"{name}_max"
         if cmin not in joined.columns or name == plan_dim:
             # the planned dimension is described by its output row (a
@@ -512,7 +512,7 @@ def _aux_coord_info(
                 order = {v: i for i, v in enumerate(output_ids)}
                 codes = joined["output_id"].map(order).to_numpy()
                 step_first = _concatenated_steps(joined, codes, name)
-                step_ok = ~pd.isnull(step_first)
+                step_ok = ~pd.isnull(step_first) & (not trimmed)
         unit_ok, unit_first = no_gate, None
         if unit_col in joined.columns:
             unit_ok = grouped[unit_col].nunique().to_numpy() == 1
@@ -562,7 +562,7 @@ def _aux_coord_info(
             none = np.full(len(held), None, dtype=object)
             lows, highs = (np.where(held > 0, x, none) for x in (lows, highs))
             step_ok = step_ok & (held >= size)  # a filled sample has no label
-        for index in np.flatnonzero(~absent):
+        for index in np.flatnonzero(~absent & stated):
             step = step_first[index] if step_first is not None else None
             key = key_first[index] if key_first is not None else None
             unit = unit_first[index] if unit_first is not None else None
@@ -580,6 +580,23 @@ def _aux_coord_info(
             }
             out.setdefault(int(output_ids[index]), {})[name] = info
     return out
+
+
+def _dims_by_output(joined: pd.DataFrame, grouped, coord_dims_map: Mapping):
+    """
+    Each coordinate, dims it rides, and the outputs whose members ride them.
+
+    A coordinate can ride other dims in other patches; the map's dims, the
+    first patch's, stand in where an output's members state none or
+    disagree.
+    """
+    for name, dims_str in coord_dims_map.items():
+        stated = np.full(grouped.ngroups, dims_str, dtype=object)
+        if (column := f"_{name}_dims") in joined.columns:
+            each = grouped[column]
+            stated = each.first().where(each.nunique() == 1, dims_str).to_numpy()
+        for dims in pd.unique(stated):
+            yield name, dims, stated == dims
 
 
 def _fractional(joined: pd.DataFrame, grid_col: str) -> np.ndarray:
@@ -1253,12 +1270,20 @@ def _cut_index_row(member: Mapping) -> int | None:
     return int(row)
 
 
-def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
-    """The dimensions a residual (load-time) selection trims."""
+def _trimmed_dims(
+    residuals, coord_dims_map: Mapping, rows: pd.DataFrame | None = None
+) -> frozenset[str]:
+    """
+    The dimensions a residual (load-time) selection trims.
+
+    With ``rows``, also those a selected coordinate rides in any of them.
+    """
     names = {n for coords, _, _ in residuals for n in coords}
-    return frozenset(
-        d for n in names for d in str(coord_dims_map.get(n, n)).split(",") if d
-    )
+    stated = [coord_dims_map.get(n, n) for n in names]
+    if rows is not None:
+        found = [f"_{n}_dims" for n in names if f"_{n}_dims" in rows.columns]
+        stated += [x for column in found for x in rows[column].dropna()]
+    return frozenset(d for x in stated for d in str(x).split(",") if d)
 
 
 def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
@@ -1532,7 +1557,7 @@ def derived_catalog(
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
-    trimmed_dims = _trimmed_dims(residuals, coord_dims_map)
+    trimmed_dims = _trimmed_dims(residuals, coord_dims_map, sources)
     outputs = plan.outputs
     stale_keys = stale_def_keys(residuals, coord_dims_map, outputs.columns)
     if stale_keys:
