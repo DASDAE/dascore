@@ -4497,7 +4497,7 @@ def _coerce(values: pd.Series, family: str) -> pd.Series:
         return pd.to_timedelta(values)
     if family == "text":
         return values.astype(str)
-    if values.dtype.kind in "mM":  # only nulls, which a time column holds as NaT
+    if values.dtype.kind in "mMO":  # nulls a time column or objects hold as NaT
         values = values.astype(object).where(values.notna())
     return pd.to_numeric(values)
 

@@ -458,6 +458,27 @@ class TestMixedKinds:
         assert spool.get_coverage("time")["coverage"].tolist()[-1] == 0.5
 
     @pytest.mark.parametrize("on_disk", [False, True])
+    @pytest.mark.parametrize("kind", ["absolute", "durations"])
+    def test_stepless_numbers_beside_runs(self, tmp_path, kind, on_disk):
+        """Numbers with no step beside times in runs and on a grid (#1740)."""
+        time = TIME_KINDS[kind]
+        later = time[2:] + 5 * ONE_SECOND
+        runs = concat_coords(get_coord(data=time[:2]), get_coord(data=later))
+        numbers = self._patch(TIME_KINDS["stepless"])
+        timed = [self._patch(runs), self._patch(time + 60 * ONE_SECOND)]
+        spool, alone = dc.spool([*timed, numbers]), dc.spool([numbers])
+        if on_disk:
+            spool = dc.spool(spool_to_directory(spool, path=tmp_path)).update()
+        chunked = [x.get_array("time") for x in spool.chunk(time=None)]
+        numbered = [x.tolist() for x in chunked if x.dtype.kind == "f"]
+        assert numbered == [TIME_KINDS["stepless"].tolist()]
+        for method in ("get_gaps", "get_coverage"):
+            got, expected = getattr(spool, method)(), getattr(alone, method)()
+            got = got[[pd.api.types.is_float(x) for x in got["time_min"]]]
+            columns = [x for x in expected if x != "group_id"]
+            assert self._values(got, columns) == self._values(expected, columns)
+
+    @pytest.mark.parametrize("on_disk", [False, True])
     def test_drop_leaves_one_kind(self, tmp_path, on_disk):
         """Rows a drop leaves of one kind plan as that kind alone (#1701)."""
         time = TIME_KINDS["durations"]
