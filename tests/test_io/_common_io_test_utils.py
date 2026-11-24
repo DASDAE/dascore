@@ -57,16 +57,19 @@ class FixtureFile:
 
     Use it for a format with no registry file, such as one whose tests write
     a synthetic file. The fixture must be session scoped, like the matrix
-    fixtures which request it.
+    fixtures which request it. Given a `file`, the fixture returns a folder
+    and the entry is the file of that name in it.
     """
 
     name: str
+    file: str | None = None
 
 
 def get_matrix_path(entry: str | FixtureFile, request: pytest.FixtureRequest):
     """Return the local path of a matrix entry, fetching registry files."""
     if isinstance(entry, FixtureFile):
-        return request.getfixturevalue(entry.name)
+        path = request.getfixturevalue(entry.name)
+        return path if entry.file is None else path / entry.file
     with skip_timeout():
         return fetch(entry)
 
