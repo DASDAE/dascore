@@ -225,8 +225,13 @@ class TestNumbersOnTimes:
         tagged = [durations.update_attrs(tag="d"), numbers.update_attrs(tag="n")]
         spool = make_spool(tagged)
         for big in (1e12, 1e308):
-            assert len(spool.select(tag="n", time=(None, big))) == 1
-            assert len(spool.select(tag="n", time=(-big, 1))) == 1
+            for bounds in [(None, big), (-big, 1)]:  # open on the big side
+                assert len(spool.select(tag="n", time=bounds)) == 1
+                # the duration patch stays, and raises as its select does
+                durations = spool.select(tag="d", time=bounds)
+                assert len(durations) == 1
+                with pytest.raises(OverflowError):
+                    durations[0]
             assert len(spool.select(time=(big, None))) == 0
 
     def test_durations_beside_numbers(self, make_spool):
