@@ -556,6 +556,7 @@ class TestNanosecondRange:
             pd.Timestamp("2500-01-01"),
             2e10,
             -9_223_372_036.854775808,  # rounds onto the NaT sentinel
+            1e308,  # its nanoseconds overflow a float
             np.array([np.iinfo(np.int64).max / 1e9]),
         ],
     )
@@ -568,6 +569,7 @@ class TestNanosecondRange:
         "value",
         [
             1e12,
+            -1e308,  # its nanoseconds overflow a float
             np.array([1e12]),
             np.array([9_223_372_037]),
             np.array([np.iinfo(np.int64).min]),
