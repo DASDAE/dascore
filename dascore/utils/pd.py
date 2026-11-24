@@ -453,8 +453,21 @@ def _convert_range_bounds(range_tuple, func):
 
     Unbounded (None) ends are left alone; converting them would produce NaT,
     which compares False against everything and would silently empty the query.
+    A number past what nanosecond times hold becomes the nearest time they
+    do, so it opens its side or leaves no time inside, as the index query
+    reads it (see `_numbers_on_times`); the load raises as `Patch.select` does.
     """
-    return tuple(None if x is None else func(x) for x in range_tuple)
+
+    def _convert(bound):
+        try:
+            return func(bound)
+        except OverflowError:
+            if np.asarray(bound).dtype.kind not in "iuf":
+                raise
+            extreme = np.timedelta64(np.iinfo(np.int64).max, "ns")
+            return func(0) + extreme * int(np.sign(bound))
+
+    return tuple(None if x is None else _convert(x) for x in range_tuple)
 
 
 def _convert_times(df, some_dict):

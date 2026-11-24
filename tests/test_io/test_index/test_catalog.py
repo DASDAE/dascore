@@ -48,7 +48,9 @@ class TestResolveTextsAgainstRoot:
         paths = ["a.h5", "sub/b.h5", ".", "/abs/c.h5", "s3://bucket/d.h5"]
         out = resolve_texts_against_root(pd.Series(paths), root)
         assert out == [str(resolve_against_root(x, root)) for x in paths]
-        assert out[:4] == [str(root / x) for x in paths[:4]]
+        # Windows before Python 3.13 takes "/abs/c.h5" as absolute, so it
+        # passes through there rather than joining as pathlib joins it
+        assert out[:3] == [str(root / x) for x in paths[:3]]
 
 
 class TestLaziness:

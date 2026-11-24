@@ -967,8 +967,9 @@ class TestDurationBounds:
     def test_beside_numbers(self, patch):
         """Beside numbers, a bare number keeps meaning each patch's own units."""
         numbers = patch.update_coords(time=np.arange(5.0))
-        (got,) = dc.spool([patch, numbers]).select(time=(1.0, 3.0))
-        assert got.equals(numbers.select(time=(1.0, 3.0)))
+        out = dc.spool([patch, numbers]).select(time=(1.0, 3.0))
+        expected = [x.select(time=(1.0, 3.0)) for x in (patch, numbers)]
+        assert all(x.equals(y) for x, y in zip(out, expected, strict=True))
 
 
 class TestTwoKinds:
