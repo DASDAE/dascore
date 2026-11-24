@@ -175,8 +175,8 @@ class TestChunkRouteParity:
         (first,), (second,) = directory, memory
         assert first.equals(second)
         assert first.attrs.data_id == second.attrs.data_id
-        # and the directory chunk predicts the id it loads with
-        assert directory == dc.spool([first])
+        # and the directory chunk names it without loading (`Spool.__eq__`)
+        assert [x.data_id for x in directory._loads()] == [first.attrs.data_id]
 
 
 class TestChunkLayout:
