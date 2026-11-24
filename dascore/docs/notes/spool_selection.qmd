@@ -83,6 +83,8 @@ Nothing else reads them: `len`, `get_contents`, selections and chunks on other c
 ```{python}
 import numpy as np
 
+import dascore as dc
+
 patch = dc.get_example_patch()
 distance = patch.get_coord("distance").values
 lat = 40 + np.cumsum(np.random.default_rng(0).random(len(distance))) / 1000
