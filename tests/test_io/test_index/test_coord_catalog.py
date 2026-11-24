@@ -444,6 +444,7 @@ class TestTimeSpan:
 class TestOneCommit:
     """A selection reads the span and the rows from one commit."""
 
+    @pytest.mark.concurrency
     def test_commit_after_span_read(self, tmp_path, monkeypatch):
         """A commit landing after the span is read is seen whole or not at all."""
         path = tmp_path / "index.sqlite3"
