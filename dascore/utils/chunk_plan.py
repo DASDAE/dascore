@@ -660,7 +660,7 @@ def _float_samples(rows: pd.DataFrame, name: str, ends) -> tuple[list, np.ndarra
             k = np.clip(k, 0, count - 1)  # a margin past the grid's ends
             label = np.where(k == count - 1, last, k * spacing + origin)
             inner = loose & (k > 0) & (k < count - 1)
-            wide = _outward(label, scales, dtypes, sign)
+            wide = _outward(label, scales, step, dtypes, sign)
             got.append(np.where(inner, wide, label))
     return got, fit
 
@@ -904,23 +904,26 @@ def _relative_span(
     return min(firsts), max(lasts), max(in_firsts), min(in_lasts)
 
 
-def _outward(values, scales, dtypes, sign) -> np.ndarray:
+def _outward(values, scales, steps, dtypes, sign) -> np.ndarray:
     """
     Float labels moved toward ``sign`` by `_GRID_ULPS` ulp of ``scales``.
 
     A label rebuilt from a row's start and step can differ in its last
     places from the one that loads, which a patch cut from a longer grid
     counts from its parent's start. ``scales`` is each row's largest
-    label in size, the ulp measured in the dtype the file stores.
+    label in size, the ulp measured in the dtype the file stores. The
+    move is never past a read's pad of ``steps``, so it takes in no
+    neighbour where an ulp is a step or more.
     """
     out = values.astype(np.float64)
+    pads = _READ_PAD * np.abs(np.asarray(steps, dtype=np.float64))
     names = pd.Series(dtypes, dtype=object)
     names = names.where(names.map(lambda x: isinstance(x, str)), "float64").to_numpy()
     for name in pd.unique(names):
         dtype = np.dtype(name) if np.dtype(name).kind == "f" else np.dtype("float64")
         rows = names == name
         ulp = np.spacing(scales[rows].astype(dtype)).astype(np.float64)
-        out[rows] += sign * _GRID_ULPS * ulp
+        out[rows] += sign * np.fmin(_GRID_ULPS * ulp, pads[rows])
     return out
 
 
@@ -1262,8 +1265,8 @@ class _SampleTracker:
             ]
             origins, grid_steps, counts = np.array(terms, dtype=np.float64)[codes].T
             floats &= ~_exact_grids(origins, grid_steps, counts, dtypes)
-            out_min = np.where(floats, _outward(mins, scales, dtypes, -1), mins)
-            out_max = np.where(floats, _outward(maxs, scales, dtypes, 1), maxs)
+            out_min = np.where(floats, _outward(mins, scales, steps, dtypes, -1), mins)
+            out_max = np.where(floats, _outward(maxs, scales, steps, dtypes, 1), maxs)
             mins = np.where(np.where(down, last, first), low, out_min)
             maxs = np.where(np.where(down, first, last), high, out_max)
         return mins, maxs, kept, codes
@@ -2544,7 +2547,7 @@ def _grid_members(windows, kept, kcodes, offsets, lattice, ticks, name):
             guess, lattice, rel_src, ticks, sign, begin, own, after, snap=False
         )
         if not ticks:  # forward numbers: the first label moves down
-            wide = _outward(label, scales, dtypes[rel_src], -1 if after else 1)
+            wide = _outward(label, scales, own, dtypes[rel_src], -1 if after else 1)
             label = np.where(loose, wide, label)
         whole = begin if after else finish
         edge = local == 0 if after else local == size - 1

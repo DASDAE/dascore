@@ -1627,6 +1627,18 @@ class TestFloatEndsStateWhatLoads:
         assert view.get_contents()[["lat_min", "lat_max"]].values.tolist() == [[30, 50]]
         assert view == dc.spool(list(view))
 
+    @pytest.mark.parametrize("bounds", [(None, None), (1e7 + 10, 1e7 + 100)])
+    def test_chunk_on_a_grid_at_its_precision(self, spool_of, bounds):
+        """Windows on labels a float32 ulp apart hold their own samples (#1716)."""
+        distance = (1e7 + np.arange(120)).astype(np.float32)
+        coords = {"distance": distance}
+        patch = dc.Patch(data=np.zeros(120), coords=coords, dims=("distance",))
+        view = spool_of(patch).select(distance=bounds)
+        chunked = view.chunk(distance=7, keep_partial=True)
+        self._states_what_loads(chunked, ["distance"])
+        loaded = np.concatenate([x.get_array("distance") for x in chunked])
+        assert np.array_equal(loaded, view[0].get_array("distance"))
+
     @pytest.mark.parametrize(
         "distance, first, last",
         [
