@@ -457,6 +457,28 @@ class TestMixedKinds:
         assert (gap["time_min"], gap["time_max"], gap["time_step"]) == (1, 3, 1)
         assert spool.get_coverage("time")["coverage"].tolist()[-1] == 0.5
 
+    @pytest.mark.parametrize("kind", ["absolute", "durations"])
+    def test_runs_and_grid_beside_stepless(self, kind):
+        """Times in runs and on a grid beside stepless numbers plan alone (#1740)."""
+        times = TIME_KINDS[kind][:4]
+        later = times[2:] + 5 * ONE_SECOND
+        runs = concat_coords(get_coord(data=times[:2]), get_coord(data=later))
+        grid = times + 60 * ONE_SECOND
+        numbers = np.array([0.0, 1.0, 3.0, 4.5])
+        patches = [self._patch(x) for x in (runs, grid, numbers)]
+        spool = dc.spool(patches)
+        alone = [dc.spool(patches[:2]), dc.spool(patches[2:])]
+        got = list(spool.chunk(time=None))
+        expected = [y for x in alone for y in x.chunk(time=None)]
+        assert len(got) == len(expected)
+        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
+        for method in ("get_gaps", "get_coverage"):
+            report = getattr(spool, method)("time")
+            parts = [getattr(x, method)("time") for x in alone]
+            columns = [x for x in parts[0] if x != "group_id"]
+            want = pd.concat(parts, ignore_index=True)
+            assert self._values(report, columns) == self._values(want, columns)
+
     @pytest.mark.parametrize("on_disk", [False, True])
     def test_drop_leaves_one_kind(self, tmp_path, on_disk):
         """Rows a drop leaves of one kind plan as that kind alone (#1701)."""
