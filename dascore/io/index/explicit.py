@@ -25,6 +25,10 @@ class _SchemaBackend:
         """Return names from the parent schema."""
         return self.catalog.parent.backend.coord_names()
 
+    def associated_coord_names(self):
+        """Return riders from the parent schema."""
+        return self.catalog.parent.backend.associated_coord_names()
+
     def coord_held_everywhere(self, name):
         """Return whether every parent patch holds it, as each piece then does."""
         return self.catalog.parent.backend.coord_held_everywhere(name)

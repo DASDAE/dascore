@@ -1097,8 +1097,15 @@ class _Kept:
         self.size, self.lo, self.hi, self.in_lo, self.in_hi = (
             np.zeros(count, dtype=np.int64) for _ in range(5)
         )
-        # rows a selection moved since the envelopes were last trimmed
+        # rows a selection moved since the envelopes were last trimmed, and
+        # rows it cut but could not follow
         self.moved = np.zeros(count, dtype=bool)
+        self.blind = np.zeros(count, dtype=bool)
+
+    def lose(self, rows) -> None:
+        """Stop following ``rows``, which a selection cut where it can't say."""
+        self.status[rows] = _LOST
+        self.blind[rows] = True
 
     def narrow(self, rows, lo, hi, in_lo, in_hi) -> None:
         """Keep, of ``rows``, the samples inside the spans given."""
@@ -1108,7 +1115,7 @@ class _Kept:
         self.in_hi[rows] = np.minimum(self.in_hi[rows], in_hi)
         gone = self.lo[rows] > self.hi[rows]
         # a row that may hold nothing is left to the selected coordinate
-        self.status[rows[gone]] = _LOST
+        self.lose(rows[gone])
         self.moved[rows[~gone]] = True
 
 
@@ -1203,7 +1210,7 @@ class _SampleTracker:
             return
         for cell, part in self._parts(name, rows):
             for key in cell.split(","):
-                self._state(key).status[part] = _LOST
+                self._state(key).lose(part)
 
     def lost(self, name, rows) -> np.ndarray:
         """Whether an earlier selection on its dimension left each row unfollowed."""
@@ -1239,7 +1246,7 @@ class _SampleTracker:
             told &= held.sizes[part] == state.size[part]
             if sure:
                 told &= state.in_lo[part] <= state.in_hi[part]
-            state.status[part[~told]] = _LOST
+            state.lose(part[~told])
             if told.any():
                 yield state, part[told]
 
@@ -1259,7 +1266,7 @@ class _SampleTracker:
             empty = (lasts < firsts).any(axis=0)
             state.lo[part], state.in_lo[part] = firsts.min(axis=0), firsts.max(axis=0)
             state.hi[part], state.in_hi[part] = lasts.max(axis=0), lasts.min(axis=0)
-            state.status[part[empty]] = _LOST
+            state.lose(part[empty])
             state.moved[part[~empty]] = True
 
     def by_bounds(self, name, rows, lows, highs) -> None:
@@ -1431,22 +1438,33 @@ class _SampleTracker:
         A coordinate the selection named keeps the envelope its own
         selection drew, unless another on its dimension was named beside
         it: then each is cut to the samples both keep. ``riders`` False
-        leaves the coordinates it did not name as they were.
+        leaves the coordinates it did not name as they were. A rider is
+        unknown (`unknown_riders`) where the selection cut it but its labels
+        can't be placed, or the selection couldn't be followed at all.
         """
         for key, state in self.kept.items():
             rows = np.flatnonzero(state.moved & (state.status == _FOLLOWED))
-            state.moved[:] = False
-            if not len(rows):
+            blind = np.flatnonzero(state.blind)
+            state.moved[:] = state.blind[:] = False
+            if not (len(rows) or len(blind)):
                 continue
-            on = [x for x in self.names if (self.dims[x][rows] == key).any()]
+            on = [x for x in self.names if (self.dims[x][[*rows, *blind]] == key).any()]
             named = [x for x in on if x in names]
+            # the rows keeping each of their samples
+            whole = (state.in_lo[rows] == 0) & (
+                state.in_hi[rows] == state.size[rows] - 1
+            )
             for name in on:
                 if (name in named and len(named) < 2) or not (riders or name in named):
                     continue
                 sizes = self.held(name).sizes[rows]
-                part = rows[
-                    (self.dims[name][rows] == key) & (sizes == state.size[rows])
-                ]
+                mine = self.dims[name][rows] == key
+                if name not in named and name != key:
+                    lost = rows[mine & (sizes != state.size[rows]) & ~whole]
+                    lost = np.r_[lost, blind[self.dims[name][blind] == key]]
+                    place = after.index.get_indexer(self.source.index[lost])
+                    _forget(after, name, after.index[place[place >= 0]])
+                part = rows[mine & (sizes == state.size[rows])]
                 place = after.index.get_indexer(self.source.index[part])
                 part, place = part[place >= 0], place[place >= 0]
                 if not len(part):
@@ -1474,6 +1492,27 @@ class _SampleTracker:
                 terms = {x: _grid_terms(kept[x]) for x in set(codes[sure])}
                 _set_cells(after, col, labels[sure], [terms[x] for x in codes[sure]])
         return after
+
+
+def _forget(frame: pd.DataFrame, name: str, rows) -> None:
+    """State ``name`` unknown on ``rows``: no range, step or identity."""
+    columns = [f"{name}_{x}" for x in ("min", "max", "step")] + [f"_{name}_def_key"]
+    frame.loc[rows, [x for x in columns if x in frame]] = None
+
+
+def unknown_riders(df: pd.DataFrame, name: str) -> np.ndarray:
+    """
+    Whether each row holds the rider ``name`` with an unknown range.
+
+    A cut rider the index can't place states no range and no identity,
+    where a rider whose labels are all NaN states its identity.
+    """
+    dims = df.get(f"_{name}_dims")
+    if dims is None or f"{name}_min" not in df:
+        return np.zeros(len(df), dtype=bool)
+    key = df.get(f"_{name}_def_key", pd.Series(None, index=df.index, dtype=object))
+    out = dims.notna() & (dims != name) & key.isna()
+    return (out & df[f"{name}_min"].isna() & df[f"{name}_max"].isna()).to_numpy()
 
 
 def _kind_parts(df: pd.DataFrame) -> list[pd.DataFrame]:
@@ -3001,7 +3040,8 @@ def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
     member holds it, and on which dims, is policed. Each row's own
     coordinate dims decide, so the same name on another dim is still
     compared by value.
-    A null envelope (a member without the coordinate) stays null.
+    A null envelope (a member without the coordinate) stays null, but for
+    an unknown one (`unknown_riders`) beside a member stating one.
     Returns the marked frame and the marked columns.
     """
     marked = {}
@@ -3011,9 +3051,12 @@ def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
         rides = pd.Series(_names_dim(dims, name), index=dims.index)
         if not rides.any():
             continue
+        unknown = unknown_riders(df, coord)
         for suffix in ("_min", "_max", "_step"):
             if (col := f"{coord}{suffix}") in df.columns:
-                marked[col] = df[col].where(~rides | df[col].isna(), _RIDES + dims)
+                stated = df[col].notna()
+                held = stated | (unknown & (stated & rides).any())
+                marked[col] = df[col].where(~(rides & held), _RIDES + dims)
     return df.assign(**marked), set(marked)
 
 

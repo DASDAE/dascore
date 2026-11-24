@@ -954,7 +954,7 @@ class TestSharedDimensionEnvelopes:
         assert patch_local_adjusted_envelopes(frame, residuals, drop_empty=False).empty
 
     def test_coordinate_on_two_dimensions(self, frame):
-        """A coordinate on two dimensions trims neither of them."""
+        """A coordinate on two dimensions trims neither, leaving riders unknown."""
         frame = frame.assign(
             xy_min=[0.0], xy_max=[10.0], xy_step=[1.0], _xy_dims=["distance,time"]
         )
@@ -962,7 +962,7 @@ class TestSharedDimensionEnvelopes:
         out = patch_local_adjusted_envelopes(frame, residuals, drop_empty=False)
         assert (out["xy_min"].iloc[0], out["xy_max"].iloc[0]) == (2, 4)
         assert (out["distance_min"].iloc[0], out["distance_max"].iloc[0]) == (0, 299)
-        assert (out["sensor_min"].iloc[0], out["sensor_max"].iloc[0]) == (1000, 1598)
+        assert out[["sensor_min", "sensor_max"]].isna().all(axis=None)
 
 
 class TestTwoKindEnvelopes:

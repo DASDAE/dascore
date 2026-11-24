@@ -1515,6 +1515,14 @@ class TestSelectPartlyHeldCoord:
         out = lazy.select(tag="held").select(y=(40.005, 40.02))
         assert self._extents(out) == [("held", 15, 49)]
 
+    def test_view_without_holders(self, spool):
+        """A view whose rows all lack the coordinate leaves the fiber to judge."""
+        bare = spool.select(tag="bare")
+        out = bare.select(y=(40.02, 40.03))
+        enriched = dc.spool(list(bare.enrich(attrs=False, coords=("y",))))
+        expected = enriched.select(y=(40.02, 40.03))
+        assert self._extents(out) == self._extents(expected) == [("bare", 60, 90)]
+
     def test_open_range_does_not_veto_a_flag(self, spool):
         """A range open at both ends asks nothing, so `samples` still works."""
         out = spool.select(distance=(0, 10), y=(None, None), samples=True)

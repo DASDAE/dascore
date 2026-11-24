@@ -140,6 +140,19 @@ class TestExplicitSelect:
             5,
         )
 
+    def test_schema_answers_without_pieces(self, monkeypatch):
+        """Which coordinates every patch holds is known before pieces are built."""
+        spool = dc.spool(_patch(np.arange(10)))
+        windowed = spool.select(distance=np.array([[0, 5]]))
+
+        def forbidden(_self):
+            raise AssertionError("the pieces were built")
+
+        monkeypatch.setattr(PatchCatalog, "to_df", forbidden)
+        backend = windowed._catalog.backend
+        assert backend.coord_held_everywhere("distance")
+        assert backend.associated_coord_names() == set()
+
     def test_array_with_inventory_attribute(self):
         """Inventory-only filters apply before independent coordinate windows."""
         patch, inventory = inventory_patch_pair()

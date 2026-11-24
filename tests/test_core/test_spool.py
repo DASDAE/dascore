@@ -25,6 +25,7 @@ from dascore.core.coords import get_coord
 from dascore.core.spool import BaseSpool, Spool, _bytes_to_load
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
+    CoordError,
     CoordMergeError,
     IncompatiblePatchError,
     InsufficientMemoryError,
@@ -1222,18 +1223,15 @@ class TestSelectSharedDimension:
         out = dc.spool(patches).select(x=(1, 2))
         _assert_contents_match_patches(out, ["x", "y"])
 
-    def test_irregular_rider_keeps_envelope(self, sensor_patch):
-        """A rider the row cannot rebuild keeps its whole envelope."""
+    def test_irregular_rider_is_unknown(self, sensor_patch):
+        """A cut rider the row cannot rebuild states an unknown range."""
         rng = np.random.default_rng(0)
         arc = np.cumsum(rng.uniform(1, 3, len(sensor_patch.get_coord("distance"))))
         spool = dc.spool([sensor_patch.update_coords(arc=("distance", arc))])
         out = spool.select(distance=(10, 20))
         _assert_contents_match_patches(out, ["distance", "sensor"])
         contents = out.get_contents()
-        assert (contents["arc_min"].iloc[0], contents["arc_max"].iloc[0]) == (
-            arc.min(),
-            arc.max(),
-        )
+        assert contents[["arc_min", "arc_max"]].isna().all(axis=None)
 
     def test_loading_leaves_the_last_riders(self, sensor_spool):
         """Loading skips the last selection's riders, which it never reads."""
@@ -1261,6 +1259,243 @@ class TestSelectSharedDimension:
         """A range holding no sample leaves the patch out (#1703)."""
         out = sensor_spool.select(sensor=(1020.5, 1021.5))
         assert len(out) == len(out.get_contents()) == len(list(out)) == 0
+
+
+def _refuse_reading(*args, **kwargs):
+    """Stand in for reading a coordinate where nothing may be read."""
+    raise AssertionError("a coordinate's labels were read")
+
+
+class TestUnknownRiders:
+    """A cut rider the index can't place states an unknown range."""
+
+    @pytest.fixture(scope="class")
+    def fiber_patches(self):
+        """
+        Three sections of one fiber, distance 0 to 29.
+
+        Latitude and longitude ride distance with no step, depth rides it
+        with one, and a clock rides time with no step.
+        """
+        rng = np.random.default_rng(42)
+        time = dc.to_datetime64("2020-01-01") + np.arange(8) * dc.to_timedelta64(1)
+        clock = np.cumsum(rng.uniform(0.9, 1.1, len(time)))
+        out = []
+        for num in range(3):
+            distance = 10.0 * num + np.arange(10.0)
+            coords = {
+                "time": time,
+                "distance": distance,
+                "lat": ("distance", 40 + (distance + rng.uniform(0, 0.5, 10)) / 1e3),
+                "lon": ("distance", -111 - (distance + rng.uniform(0, 0.5, 10)) / 1e3),
+                "depth": ("distance", 2.0 * distance + 5),
+                "clock": ("time", clock),
+            }
+            dims = ("time", "distance")
+            patch = dc.Patch(data=rng.random((8, 10)), coords=coords, dims=dims)
+            out.append(patch)
+        return out
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def spool(self, request, fiber_patches, tmp_path_factory):
+        """The fiber sections in an in-memory and in a directory spool."""
+        if request.param == "memory":
+            return dc.spool(fiber_patches)
+        path = tmp_path_factory.mktemp("unknown_riders")
+        for num, patch in enumerate(fiber_patches):
+            dc.write(patch, path / f"section_{num}.h5", "DASDAE")
+        return dc.spool(path).update()
+
+    def test_unresolved_until_loaded(self, spool):
+        """Cut riders with no step are unresolved until their labels are read."""
+        view = spool.select(distance=(5, 24))
+        assert spool.unresolved_coords == ()
+        assert view.unresolved_coords == ("lat", "lon")
+        assert view.load_coords("lat").unresolved_coords == ("lon",)
+        assert view.load_coords().unresolved_coords == ()
+        assert spool.load_coords() is spool
+
+    def test_contents_unknown_then_exact(self, spool):
+        """Contents state NaN for a cut rider with no step, then what loads."""
+        view = spool.select(distance=(5, 24))
+        before = view.get_contents()
+        cut = (before["distance_max"] - before["distance_min"] < 9).to_numpy()
+        assert cut.sum() == 2
+        for name in ("lat", "lon"):
+            assert before[f"{name}_min"].isna().tolist() == cut.tolist()
+            assert before[f"{name}_step"].isna().all()
+        assert before["depth_step"].tolist() == [2.0, 2.0, 2.0]
+        after = view.load_coords().get_contents()
+        for (_, row), patch in zip(after.iterrows(), view, strict=True):
+            for name in ("lat", "lon", "depth", "clock"):
+                coord = patch.get_coord(name)
+                assert (row[f"{name}_min"], row[f"{name}_max"]) == (
+                    coord.min(),
+                    coord.max(),
+                )
+
+    @pytest.mark.parametrize(
+        "derive",
+        [
+            lambda x: x.select(distance=(5, 24)),
+            lambda x: x.chunk(distance=5),
+            lambda x: x.select(distance=(5, 24)).chunk(time=3, keep_partial=True),
+            lambda x: x.select(distance=(5, 24)).chunk(distance=4, keep_partial=True),
+            lambda x: x.chunk(distance=5).chunk(time=3, keep_partial=True),
+        ],
+    )
+    def test_equals_what_loads(self, spool, derive):
+        """A view with cut riders equals the spool of the patches it loads."""
+        view = derive(spool)
+        assert view == dc.spool(list(view))
+
+    def test_stepped_rider_keeps_step(self, spool):
+        """A later plan states a cut rider's step, as it loads (#1743)."""
+        for view in (
+            spool.select(distance=(5, 24)).chunk(time=3, keep_partial=True),
+            spool.chunk(distance=5).chunk(time=3, keep_partial=True),
+        ):
+            steps = [x.get_coord("depth").step for x in view]
+            assert (
+                view.get_contents()["depth_step"].tolist() == steps == [2.0] * len(view)
+            )
+
+    def test_concatenation_keeps_step(self, fiber_patches):
+        """A concatenation along time states a cut rider's step (#1743)."""
+        later = fiber_patches[0].update_coords(time_min=np.datetime64("2020-01-02"))
+        spool = dc.spool([fiber_patches[0], later])
+        out = spool.select(distance=(2, 6)).concatenate(time=None)
+        assert out.get_contents()["depth_step"].tolist() == [2.0]
+        assert out == dc.spool(list(out))
+
+    def test_select_on_unknown_rider(self, spool, fiber_patches):
+        """A selection on a rider a cut left unknown keeps patches by its labels."""
+        view = spool.select(distance=(5, 24))
+        lat = np.concatenate([x.get_array("lat") for x in fiber_patches])
+        # first only in the part of the first section the cut left out
+        for low, high in [(lat[1], lat[4]), (lat[3], lat[12])]:
+            out = view.select(lat=(low, high))
+            held = [x for x in view if (x.get_array("lat") >= low).any()]
+            held = [x for x in held if (x.get_array("lat") <= high).any()]
+            assert len(out) == len(held) == len(list(out))
+            assert [x.shape for x in out] == [
+                x.select(lat=(low, high)).shape for x in held
+            ]
+
+    def test_reads_nothing_unasked(self, spool, monkeypatch):
+        """Length, contents, loading and plans on other coordinates read nothing."""
+        view = spool.select(distance=(5, 24))
+        monkeypatch.setattr(Spool, "_read_coord", _refuse_reading)
+        assert len(view) == len(view.get_contents()) == 3
+        assert [x.shape for x in view] == [(8, 5), (8, 10), (8, 5)]
+        chunked = view.chunk(time=3, keep_partial=True)
+        assert len(chunked) == 9
+        assert chunked.unresolved_coords == ("clock", "lat", "lon")
+        assert len(view.select(time=(None, dc.to_datetime64("2020-01-01T00:00:04"))))
+
+    def test_open_selection_reads_nothing(self, spool, monkeypatch):
+        """A selection bounding no rider reads none of its labels."""
+        view = spool.select(distance=(5, 24))
+        monkeypatch.setattr(Spool, "_read_coord", _refuse_reading)
+        for value in (None, ..., (None, None), (..., ...)):
+            assert len(view.select(lat=value)) == 3
+
+    def test_union_resolves_selected_rider(self, spool):
+        """A union holding a cut rider resolves it before selecting on it."""
+        union = spool.chunk(distance=5) + dc.spool(spool[0])
+        assert union.unresolved_coords == ("lat", "lon")
+        lat = spool[0].get_array("lat")
+        out = union.select(lat=(lat[1], lat[3]))
+        assert len(out) == 2
+        assert all(len(x.get_coord("lat")) == 3 for x in out)
+
+    def test_concatenate_known_beside_unknown(self, spool):
+        """Sections a cut left unknown join one that stayed whole."""
+        out = spool.select(distance=(5, 24)).concatenate(distance=None)
+        assert out.unresolved_coords == ("lat", "lon")
+        (row,), (patch,) = out.load_coords().get_contents().iterrows(), list(out)
+        lat = patch.get_coord("lat")
+        assert (row[1]["lat_min"], row[1]["lat_max"]) == (lat.min(), lat.max())
+
+    def test_unfollowed_selection(self):
+        """A cut no row can follow leaves its riders unknown, never stepped."""
+        coords = {
+            "t": np.arange(2.0),
+            "x": np.arange(10.0) ** 2,
+            "r": ("x", 3 * np.arange(10.0)),
+        }
+        patch = dc.Patch(data=np.zeros((2, 10)), dims=("t", "x"), coords=coords)
+        out = dc.spool([patch]).select(x=(4, 36))
+        assert out.unresolved_coords == ("r",)
+        chunked = out.chunk(t=None)
+        assert chunked.get_contents()[["r_min", "r_step"]].isna().all(axis=None)
+        assert chunked == dc.spool(list(chunked))
+
+    def test_rider_of_another_dimension(self):
+        """A rider of a dimension no window cuts stays known on each member."""
+
+        def make(along):
+            """A patch whose rider rides ``along``."""
+            size = 10 if along == "x" else 3
+            coords = {
+                "t": np.arange(3.0),
+                "x": np.arange(10.0),
+                "r": (along, 2 * np.arange(float(size))),
+            }
+            patch = dc.Patch(data=np.zeros((3, 10)), dims=("t", "x"), coords=coords)
+            return patch.update_attrs(tag=along)
+
+        spool = dc.spool([make("x"), make("t")]).select(tag="t")
+        out = spool.select(x=(2, 6)).chunk(x=2, keep_partial=True)
+        assert out.unresolved_coords == ()
+        assert out.get_contents()["r_step"].tolist() == [2.0] * len(out)
+
+    def test_warns_once_counting_files(self, fiber_patches, tmp_path):
+        """Resolving many files warns once, counting them; memory never warns."""
+        start = fiber_patches[0].get_coord("time").min()
+        patches = [
+            fiber_patches[0].update_coords(time_min=start + np.timedelta64(10 * x, "s"))
+            for x in range(20)
+        ]
+        for num, patch in enumerate(patches):
+            dc.write(patch, tmp_path / f"{num}.h5", "DASDAE")
+        view = dc.spool(tmp_path).update().select(distance=(2, 6))
+        with pytest.warns(DASCoreWarning, match="labels of 20 file") as got:
+            out = view.load_coords()
+        assert len([x for x in got if "labels of" in str(x.message)]) == 1
+        assert out.unresolved_coords == ()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            assert dc.spool(patches).select(distance=(2, 6)).load_coords()
+
+    def test_unknown_names_raise(self, spool):
+        """Only the spool's coordinates can be loaded."""
+        with pytest.raises(CoordError, match="not_a_coord"):
+            spool.load_coords("not_a_coord")
+
+    def test_fill_windows_state_no_whole_range(self):
+        """A chunk of a fill states no rider range it does not load (#1715)."""
+
+        def part(start):
+            """100 samples starting `start` seconds in, with a rider along time."""
+            patch = dc.get_example_patch().select(time=(0, 100), samples=True)
+            time = patch.get_coord("time")
+            labels = time.values - time.min() + np.datetime64("2020-01-01")
+            patch = patch.update_coords(time=labels + np.timedelta64(start, "s"))
+            return patch.update_coords(depth=("time", np.arange(100) + 100.0 * start))
+
+        spool = dc.spool([part(0), part(1)])
+        for conflict in ("raise", "drop", "keep_first"):
+            fill = spool.fill_gaps(time=1, conflict=conflict)
+            chunked = fill.chunk(time=0.25, conflict=conflict)
+            rows = chunked.get_contents()
+            for (_, row), patch in zip(rows.iterrows(), chunked, strict=True):
+                depth = patch.get_coord("depth")
+                if not pd.isnull(row["depth_min"]):
+                    assert (row["depth_min"], row["depth_max"]) == (
+                        depth.min(),
+                        depth.max(),
+                    )
 
 
 class TestSelectAfterTrimOnExactGrid:
@@ -1434,7 +1669,7 @@ class TestSelectSharedDimensionHoldsWhatLoads:
         assert len(end.get_contents()) == len(end) == 1
 
     def test_samples_after_an_unfollowed_selection(self):
-        """Samples counted after a selection no row can follow keep a superset."""
+        """Samples counted after a selection no row can follow state riders unknown."""
         arc = np.array([0, 1, 3, 6, 10, 15, 21, 28, 36, 45], dtype=np.float64)
         patch = dc.get_example_patch().select(distance=(0, 10), samples=True)
         patch = patch.update_coords(distance=np.arange(10.0))
@@ -1443,7 +1678,9 @@ class TestSelectSharedDimensionHoldsWhatLoads:
         )
         out = dc.spool([patch]).select(arc=(6, 28))
         out = out.select(distance=(1, 3), samples=True)
-        _assert_contents_hold_patches(out, ["distance", "sensor", "arc"])
+        _assert_contents_hold_patches(out, ["distance"])
+        assert out.unresolved_coords == ("arc", "sensor")
+        _assert_contents_hold_patches(out.load_coords(), ["sensor", "arc"])
         assert np.array_equal(out[0].get_array("sensor"), [1008, 1010])
         assert len(out.select(sensor=(1007, 1011)).get_contents()) == 1
 
@@ -1481,7 +1718,10 @@ class TestSelectSharedDimensionHoldsWhatLoads:
         # or may not be kept as far as the envelopes can tell
         out = spool.select(distance=(9.999998, 40))
         out = out.select(distance=second, relative=True)
-        _assert_contents_hold_patches(out, ["distance", "sensor"])
+        # the sensor samples kept are in doubt, so unknown until read
+        _assert_contents_hold_patches(out, ["distance"])
+        assert out.unresolved_coords == ("sensor",)
+        _assert_contents_hold_patches(out.load_coords(), ["sensor"])
 
     def test_patch_without_the_rider(self):
         """A patch lacking the rider leaves its neighbours' rows their own."""
