@@ -22,7 +22,12 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.core.coords import _EXACT_GRID_FIELDS
+from dascore.core.coords import (
+    _EXACT_GRID_FIELDS,
+    _FLOAT_GRID_FIELDS,
+    Grid,
+    float_grid,
+)
 from dascore.exceptions import (
     InvalidIndexError,
     InvalidIndexVersionError,
@@ -1364,19 +1369,23 @@ class SQLiteIndexBackend:
         coords["_key"] = coords["def_key"].where(is_value, None)
         return coords
 
-    def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
+    def _grids(self, def_keys=None) -> dict[str, tuple[int, ...] | Grid]:
         """
-        The exact grid and length, by def key, where the envelope cannot restate it.
+        The grid, by def key, where the envelope cannot restate it.
 
-        An ascending grid of whole ticks on their tick is what the
-        envelope already states, so only the rest are fetched (see
-        GRID_NEEDED), from the deduplicated table rather than as four more
-        columns on every link row. ``def_keys`` narrows the fetch to the
-        definitions in hand; None reads them all, for a result covering
-        most of the archive.
+        An exact grid is its terms and length, and a float one its `Grid`,
+        whose labels are the file's bit for bit. An ascending grid of whole
+        ticks on their tick is what the envelope already states, so only
+        the rest are fetched (see GRID_NEEDED), from the deduplicated table
+        rather than as more columns on every link row. ``def_keys`` narrows
+        the fetch to the definitions in hand; None reads them all, for a
+        result covering most of the archive.
         """
-        columns = ", ".join(_EXACT_GRID_FIELDS)
-        sql = f"SELECT def_key, {columns}, length FROM coord_defs WHERE ({GRID_NEEDED})"
+        columns = ", ".join((*_EXACT_GRID_FIELDS, *_FLOAT_GRID_FIELDS))
+        sql = (
+            f"SELECT def_key, dtype, length, {columns} FROM coord_defs "
+            f"WHERE ({GRID_NEEDED})"
+        )
         if def_keys is None:
             rows = self._fetch_df(sql)
         else:
@@ -1385,10 +1394,14 @@ class SQLiteIndexBackend:
                 for chunk, marks in self._iter_in_batches(list(def_keys))
             ]
             rows = pd.concat(frames, ignore_index=True)
-        rows = rows.dropna()
-        return {
-            row[0]: tuple(int(x) for x in row[1:]) for row in rows.to_numpy().tolist()
-        }
+        out, size = {}, len(_EXACT_GRID_FIELDS)
+        for key, dtype, length, *terms in rows.to_numpy().tolist():
+            exact, floats = terms[:size], terms[size:]
+            if not any(pd.isnull(x) for x in (length, *floats)):
+                out[key] = float_grid(floats, length, dtype)
+            elif not any(pd.isnull(x) for x in (length, *exact)):
+                out[key] = (*(int(x) for x in exact), int(length))
+        return out
 
     def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
         """

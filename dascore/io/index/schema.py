@@ -34,6 +34,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
 # changes, not only when a column does.
+# Version 42 keeps a float grid's own terms, so a patch cut from a longer
+# grid rebuilds the labels it holds, and DASDAE data offsets.
 # Version 41 indexes patches by start time and keeps the longest time span
 # a patch covers (`max_time_span`), so a time selection seeks, not scans.
 # Version 40 reads the data type of Febus A1 files as strain_rate, not
@@ -81,7 +83,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 41
+INDEX_VERSION = 42
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -255,6 +257,14 @@ class CoordDefRow(NamedTuple):
     step_numerator: int | None
     step_denominator: int | None
     origin_offset: int | None
+    # A float grid's own terms (see _FLOAT_GRID_FIELDS in dascore.core.coords),
+    # which rebuild labels a patch cut from a longer grid takes from that
+    # grid; NULL for other rows.
+    grid_origin: float | None
+    grid_step: float | None
+    grid_count: int | None
+    grid_first: int | None
+    grid_stride: int | None
     # Segments the coordinate is; the coord_runs table holds
     # them when there are several and no more than max_index_runs. NULL
     # where the summary said nothing of them.
@@ -506,10 +516,14 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # coord_defs(def_key), coord_runs(coord_row, run)
 # — and duplicating them measured ~25% extra file size and slower writes
 # for no query gain. `idx_cdefs_grid` lists the definitions whose grid
-# the envelope cannot restate -- a fractional step or offset, or a
-# descending run, whose start the envelope does not name -- so a query
-# need not scan them all.
-GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
+# the envelope cannot restate -- a fractional step or offset, a
+# descending run, whose start the envelope does not name, or float
+# labels, which it restates only to rounding -- so a query need not scan
+# them all.
+GRID_NEEDED = (
+    "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0 "
+    "OR grid_count IS NOT NULL"
+)
 
 # A patch_coords row's coord_variants identity, given its alias; the row's
 # definition is always joined as `cd`.

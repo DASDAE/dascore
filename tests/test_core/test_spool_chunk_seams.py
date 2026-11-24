@@ -805,7 +805,13 @@ class TestSteplessWindows:
         assert stated == loaded and len(stated) == 6
 
     @pytest.mark.parametrize(
-        "channel", [np.array([0, 10, 25, 30]), np.arange(0, 100, 25, dtype="float32")]
+        "channel",
+        [
+            np.array([0, 10, 25, 30]),
+            np.arange(0, 100, 25, dtype="float32"),
+            # labels the index places no samples of, so the plan finds it empty
+            np.arange(0, 100, 25, dtype="float16"),
+        ],
     )
     def test_emptied_along_time(self, channel):
         """A patch a selection on a coordinate along time empties is no window."""

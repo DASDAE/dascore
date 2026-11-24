@@ -1562,7 +1562,7 @@ class TestWindowEdgeCases:
         open_row = np.array([[None, None], [10 * m, 20 * m]], dtype=object)
         assert len(spool.select(distance=open_row)) == 3
 
-    @pytest.mark.parametrize("dtype", ["float64", "float32"])
+    @pytest.mark.parametrize("dtype", ["float64", "float32", "float16"])
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_empty_recovered_coordinate(self, method, dtype):
         """A source whose selected coordinate holds no labels gives nothing."""

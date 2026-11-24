@@ -386,7 +386,9 @@ class TestCut:
         plan = mock.patch.object(
             PlanResolver, "resolve", autospec=True, side_effect=PlanResolver.resolve
         )
-        file = mock.patch.object(io_core, "_array_reader", wraps=io_core._array_reader)
+        file = mock.patch.object(
+            io_core, "_open_array_reader", wraps=io_core._open_array_reader
+        )
         source = mock.patch.object(
             FileResolver, "resolve", autospec=True, side_effect=FileResolver.resolve
         )
@@ -820,7 +822,7 @@ class TestCutWindows:
         directory = dc.spool(tmp_path).update()
         cut = directory.cut(time=_windows(start, (5, 12)))
         arrays = mock.patch.object(
-            io_core, "_array_reader", wraps=io_core._array_reader
+            io_core, "_open_array_reader", wraps=io_core._open_array_reader
         )
         with arrays as reads, mock.patch.object(dc, "read", wraps=dc.read) as patches:
             (patch,) = cut

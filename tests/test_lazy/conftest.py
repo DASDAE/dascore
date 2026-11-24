@@ -60,8 +60,11 @@ def two_files(patch, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def two_sources(two_files):
-    """The source of each of the two files."""
-    return [dc.read(x)[0]._source for x in two_files]
+    """
+    The source of each of the two files, read by the reader: these test its
+    handles, which offsets of where the bytes are would skip.
+    """
+    return [dc.read(x)[0]._source._without_layout() for x in two_files]
 
 
 @pytest.fixture(scope="module")

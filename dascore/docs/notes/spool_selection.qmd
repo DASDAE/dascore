@@ -31,7 +31,7 @@ Scalars, value lists, and boolean sample masks have no exact meaning across a wh
 
 **Two stages.** The index first keeps patches whose stored ranges could overlap the request. Each patch is then trimmed exactly when it loads. `samples=True` never excludes a patch at the index stage.
 
-**Contents.** A range states the first and last samples each patch keeps, not the bounds asked for: a range from 2.5 to 10.5 over samples one apart shows 3 to 10, so `get_contents`, `get_coverage` and `chunk` count from real samples. A float bound within rounding of a sample states that sample, whether or not loading keeps it. The bound stands where the index can't place a patch's samples (no step, a trim it can't follow, labels stored as float32, or an exact fractional grid trimmed before). Where it can and no sample lies inside the range, the patch is left out, so length, contents, indexing and iteration agree.
+**Contents.** A range states the first and last samples each patch keeps, not the bounds asked for: a range from 2.5 to 10.5 over samples one apart shows 3 to 10, so `get_contents`, `get_coverage` and `chunk` count from real samples. A float bound within rounding of a sample states that sample, whether or not loading keeps it. The bound stands where the index can't place a patch's samples (no step, a trim it can't follow, float labels whose grid it doesn't record, a grid at its precision, or an exact fractional grid trimmed before). The index records each float grid's own terms: its first label, step and length, and where a patch cut from it starts and how many labels it skips. A patch cut from a longer grid keeps that grid's rounding, which its own start and step don't rebuild, so these rebuild its labels bit for bit, in the dtype they are stored in: float32 labels are placed as float64 ones are. A range from 4.8 to 50.2 over float32 samples half a unit apart shows 5 to 50, and one from 1.05 to 2.05 over float32 samples a tenth apart shows the float32 labels nearest 1.1 and 2. No grid is recorded for float16 labels, nor for float32 labels stepped by a Python float that float32 can't hold or on a grid of more labels than float32 counts exactly (2**24), whose labels round otherwise. A grid at its precision, where three float allowances reach half a step, measured at the largest value the grid a patch was cut from computes (float32 labels one apart near 1e7, or float32 labels near zero cut from a grid starting near -2e6), is not placed from its grid either: loading may take a bound there to a label other than its nearest. Where it can place them and no sample lies inside the range, the patch is left out, so length, contents, indexing and iteration agree.
 
 **Relative selection.** With `relative=True`, bounds are resolved per patch: positive offsets count from the coordinate's minimum, negative ones from its maximum. The first bound is always the lower limit and the second the upper. Crossed bounds select nothing. Equal bounds keep a sample at that value if there is one. Attribute filters in the same call are unaffected.
 
@@ -57,7 +57,7 @@ A single range in native units can be pushed into the reader on even or uneven c
 - several ranges composed on an uneven or float16/float32 coordinate, since stored ranges can't reliably tell which samples earlier selections left;
 - selections involving associated coordinates, so a trim on one coordinate can make a later trim on another coordinate along the same axis a no-op.
 
-The spool's contents follow such a trim before anything loads: selecting on one coordinate narrows the advertised range of every evenly sampled coordinate on its dimension, so `get_contents`, `get_coverage` and `chunk` see what the patch will hold. Times and integers are advertised exactly, and so are float grids whose labels need no rounding. Other float ends between a patch's first and last labels are rebuilt from its start and step, which can differ in the last places from the labels a patch cut from a longer grid counts from that grid's start, so they are moved out by 4 ulp of the patch's largest label, or a tenth of a step where that is less, as are `chunk`'s. Spools compare float ends within twice the float allowance of the [coordinate contract](coordinates.qmd), within which a looked-up value is that label, so a view equals the spool of the patches it loads. A coordinate with no step, or on several dimensions, keeps its whole range.
+The spool's contents follow such a trim before anything loads: selecting on one coordinate narrows the advertised range of every evenly sampled coordinate on its dimension, so `get_contents`, `get_coverage` and `chunk` see what the patch will hold. Times and integers are advertised exactly, and so are float labels on a grid the index records, short of its precision, and float grids whose labels need no rounding. Other float ends between a patch's first and last labels are rebuilt from its start and step, which can differ in the last places from the labels a patch cut from a longer grid counts from that grid's start, so they are moved out by 4 ulp of the patch's largest label, or a tenth of a step where that is less, as are `chunk`'s. Spools compare float ends within twice the float allowance of the [coordinate contract](coordinates.qmd), within which a looked-up value is that label, so a view equals the spool of the patches it loads. A coordinate with no step, or on several dimensions, keeps its whole range.
 
 Attribute filters, including on `data_id`, always query the indexed file metadata, not ids generated when a selected patch loads.
 
@@ -101,6 +101,27 @@ assert float(coord.min()) >= 20 and float(coord.max()) <= 60  # 20-60 ft
 
 with pytest.raises(InvalidSpoolQueryError):
     dc.spool([ft_patch]).select(distance=100)  # a scalar is not a range
+```
+
+Float32 labels state the samples a range keeps, so a chunk of it counts only those, and so does a patch cut from a longer grid:
+
+```{python}
+import numpy as np
+
+half = (np.arange(120) * 0.5).astype(np.float32)
+patch = dc.Patch(data=np.zeros(120), coords={"distance": half}, dims=("distance",))
+view = dc.spool([patch]).select(distance=(4.8, 50.2))
+ends = view.get_contents()[["distance_min", "distance_max"]]
+assert ends.values.tolist() == [[5.0, 50.0]]
+assert len(view.chunk(distance=3.5, keep_partial=True)) == 13  # 91 samples, 7 a window
+
+tenth = (-1000.3 + np.arange(11000) * 0.1).astype(np.float32)
+patch = dc.Patch(data=np.zeros(11000), coords={"distance": tenth}, dims=("distance",))
+cut = patch.select(distance=(10003, 10103), samples=True)  # labels near zero
+view = dc.spool([cut]).select(distance=(0.15, 0.95))
+kept = view[0].get_coord("distance")
+ends = view.get_contents()[["distance_min", "distance_max"]]
+assert ends.values.tolist() == [[float(kept.min()), float(kept.max())]]
 ```
 
 Relative selection never swaps crossed bounds to pull data from the other end of a short patch:

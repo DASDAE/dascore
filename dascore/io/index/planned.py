@@ -29,7 +29,13 @@ import pandas as pd
 from upath import UPath
 
 import dascore as dc
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.coords import (
+    _EXACT_GRID_FIELDS,
+    _FLOAT_GRID_FIELDS,
+    CoordSummary,
+    Grid,
+    _float_grid_terms,
+)
 from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import InvalidIndexError, UnknownFiberFormatError
 from dascore.io.core import FiberIO
@@ -275,6 +281,8 @@ def _coord_record_from_row(
     if isinstance(grid, tuple):
         *terms, length = grid
         exact = dict(zip(_EXACT_GRID_FIELDS, terms))
+    elif isinstance(grid, Grid) and (terms := _float_grid_terms(grid, dtype)):
+        exact, length = dict(zip(_FLOAT_GRID_FIELDS, terms)), grid.count
     summary = CoordSummary(
         dtype=dtype,
         min=lo,

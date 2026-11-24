@@ -1573,18 +1573,30 @@ class TestFloatEndsStateWhatLoads:
         chunked = spool_of(patch.isel(distance=cut)).chunk(distance=3.85)
         self._states_what_loads(chunked, ["distance"])
 
-    @staticmethod
-    def _cut_grid(spool_of, count, first, cut, last):
-        """A spool of two consecutive parts of one float grid."""
-        coords = {"distance": -38.449 + np.arange(count) * 2.111}
-        data = np.arange(count, dtype=np.float64)
-        parent = dc.Patch(data=data, coords=coords, dims=("distance",))
-        parts = (parent.isel(distance=slice(*x)) for x in ((first, cut), (cut, last)))
-        return spool_of(*parts)
+    @pytest.fixture(params=["recorded", "unrecorded"])
+    def cut_grid(self, request, spool_of):
+        """
+        Make a spool of two consecutive parts of one float grid: float64, or
+        float32 on a python step the index records no terms for.
+        """
 
-    def test_chunk_across_files_cut_from_one_grid(self, spool_of):
+        def _make(count, first, cut, last):
+            if request.param == "recorded":
+                coord = -38.449 + np.arange(count) * 2.111
+            else:
+                start, shape = np.float32(-38.449), (count,)
+                coord = dc.get_coord(start=start, step=2.111, shape=shape)
+            data = np.arange(count, dtype=np.float64)
+            coords = {"distance": coord}
+            parent = dc.Patch(data=data, coords=coords, dims=("distance",))
+            cuts = ((first, cut), (cut, last))
+            return spool_of(*(parent.isel(distance=slice(*x)) for x in cuts))
+
+        return _make
+
+    def test_chunk_across_files_cut_from_one_grid(self, cut_grid):
         """Files cut from the stretch's own grid name what they load (#1697)."""
-        spool = self._cut_grid(spool_of, 7, 0, 3, 7)
+        spool = cut_grid(7, 0, 3, 7)
         chunked = spool.chunk(distance=5.0, keep_partial=True)
         self._states_what_loads(chunked, ["distance"])
         # named, not just alike: other data with the same rows differs
@@ -1613,9 +1625,9 @@ class TestFloatEndsStateWhatLoads:
             ),
         ],
     )
-    def test_chunks_of_files_cut_from_one_grid(self, spool_of, cuts, derive):
+    def test_chunks_of_files_cut_from_one_grid(self, cut_grid, cuts, derive):
         """Chunks of files cut from one grid equal what they load (#1697)."""
-        chunked = derive(self._cut_grid(spool_of, *cuts))
+        chunked = derive(cut_grid(*cuts))
         self._states_what_loads(chunked, ["distance"])
 
     def test_rider_on_a_grid_at_its_precision(self):
@@ -1627,7 +1639,10 @@ class TestFloatEndsStateWhatLoads:
         assert view.get_contents()[["lat_min", "lat_max"]].values.tolist() == [[30, 50]]
         assert view == dc.spool(list(view))
 
-    @pytest.mark.parametrize("bounds", [(None, None), (1e7 + 10, 1e7 + 100)])
+    @pytest.mark.parametrize(
+        "bounds",
+        [(None, None), (1e7 + 10, 1e7 + 100), (1e7 + 10.3, 1e7 + 100.7)],
+    )
     def test_chunk_on_a_grid_at_its_precision(self, spool_of, bounds):
         """Windows on labels a float32 ulp apart hold their own samples (#1716)."""
         distance = (1e7 + np.arange(120)).astype(np.float32)
@@ -1638,6 +1653,271 @@ class TestFloatEndsStateWhatLoads:
         self._states_what_loads(chunked, ["distance"])
         loaded = np.concatenate([x.get_array("distance") for x in chunked])
         assert np.array_equal(loaded, view[0].get_array("distance"))
+
+    @pytest.fixture()
+    def float32_half(self, spool_of):
+        """A spool of one patch on float32 labels half a unit apart."""
+        distance = (np.arange(120) * 0.5).astype(np.float32)
+        coords = {"distance": distance}
+        patch = dc.Patch(data=np.zeros(120), coords=coords, dims=("distance",))
+        return spool_of(patch)
+
+    @pytest.mark.parametrize(
+        "kwargs, ends",
+        [
+            ({"distance": (4.8, 50.2)}, [5.0, 50.0]),
+            ({"distance": (1.2, -2.3), "relative": True}, [1.5, 57.0]),
+        ],
+    )
+    def test_float32_selection_states_samples(self, float32_half, kwargs, ends):
+        """A selection on float32 labels needing no rounding states its samples."""
+        view = float32_half.select(**kwargs)
+        columns = ["distance_min", "distance_max"]
+        assert view.get_contents()[columns].values.tolist() == [ends]
+        self._states_what_loads(view, ["distance"])
+
+    def test_float32_selection_between_samples(self, float32_half):
+        """A float32 range holding no sample keeps no patch to count or load."""
+        view = float32_half.select(distance=(5.1, 5.3))
+        assert len(view) == len(list(view)) == 0
+
+    def test_chunk_after_float32_selection(self, float32_half):
+        """A chunk after a float32 selection counts only its samples (#1728)."""
+        view = float32_half.select(distance=(4.8, 50.2))
+        chunked = view.chunk(distance=3.5, keep_partial=True)
+        assert len(chunked) == 13  # 91 samples, 7 to a window
+        self._states_what_loads(chunked, ["distance"])
+        loaded = np.concatenate([x.get_array("distance") for x in chunked])
+        assert np.array_equal(loaded, view[0].get_array("distance"))
+
+    def test_rounded_float32_states_samples(self, spool_of):
+        """Float32 labels needing rounding in float32 state the samples kept too."""
+        distance = (np.arange(1000) * 0.1).astype(np.float32)
+        coords = {"distance": distance}
+        patch = dc.Patch(data=np.arange(1000), coords=coords, dims=("distance",))
+        view = spool_of(patch).select(distance=(1.05, 2.05))
+        columns = ["distance_min", "distance_max"]
+        ends = [float(distance[11]), float(distance[20])]
+        assert view.get_contents()[columns].values.tolist() == [ends]
+        assert view[0].data.tolist() == list(range(11, 21))
+
+    @pytest.mark.parametrize(
+        "labels, cut, size, pad",
+        [
+            # float32 labels near zero round as labels near 1000 do
+            ((-1000.3 + np.arange(11000) * 0.1).astype(np.float32), 10003, 100, 0),
+            ((-1000.3 + np.arange(11000) * 0.1).astype(np.float32), 10004, 990, 0),
+            ((-1000.3 + np.arange(18001) * 0.1).astype(np.float32), 10003, 1401, 0),
+            ((-100.3 + np.arange(2000) * 0.1).astype(np.float32), 987, 715, 0),
+            (-100.3 + np.arange(2000) * 0.1, 1003, 100, 0.01),
+        ],
+    )
+    def test_cut_from_a_grid_crossing_zero(self, spool_of, labels, cut, size, pad):
+        """A patch cut near zero from a longer grid holds what loads, chunked too."""
+        coords = {"distance": labels}
+        data = np.arange(len(labels))
+        parent = dc.Patch(data=data, coords=coords, dims=("distance",))
+        patch = parent.isel(distance=slice(cut, cut + size))
+        first, last = patch.get_array("distance")[[1, 10]].tolist()
+        view = spool_of(patch).select(distance=(first - pad, last + pad))
+        assert view[0].data.tolist() == list(range(cut + 1, cut + 11))
+        _assert_contents_hold_patches(view, ["distance"])
+        for value in (first, last):
+            assert len(view.select(distance=(value, value))) == 1
+        chunked = view.chunk(distance=0.35, keep_partial=True)
+        loaded = np.concatenate([x.data for x in chunked])
+        assert np.array_equal(loaded, view[0].data)
+
+    @pytest.mark.parametrize(
+        "labels, cut, derive",
+        [
+            # every fifth float32 label 0.3 apart, on a step of 1.5
+            (
+                (np.arange(100) * 0.3).astype(np.float32),
+                slice(None, None, 5),
+                lambda x: x.chunk(distance=4.5, keep_partial=True),
+            ),
+            (
+                (-1000.3 + np.arange(11000) * 0.1).astype(np.float32),
+                slice(10003, None, 5),
+                lambda x: x.select(distance=(1, 4)),
+            ),
+            # float64 labels rounded to an eighth near 1e15, descending
+            (
+                1e15 + np.arange(30) * 1.1,
+                slice(None, None, -1),
+                lambda x: x.select(distance=(1e15 + 1.625, 1e15 + 11.5)),
+            ),
+        ],
+    )
+    def test_slice_whose_step_needs_no_rounding(self, spool_of, labels, cut, derive):
+        """A slice keeping a rounded grid's labels holds them, its step exact."""
+        coords = {"distance": labels}
+        data = np.arange(len(labels))
+        patch = dc.Patch(data=data, coords=coords, dims=("distance",)).isel(
+            distance=cut
+        )
+        view = derive(spool_of(patch))
+        _assert_contents_hold_patches(view, ["distance"])
+        for found in view:
+            for value in found.get_array("distance")[[0, -1]].tolist():
+                assert len(view.select(distance=(value, value))) >= 1
+        chunked = view.chunk(distance=3.3, keep_partial=True)
+        loaded = np.concatenate([x.data for x in chunked])
+        assert np.array_equal(loaded, np.concatenate([x.data for x in view]))
+
+    def test_rider_slice_whose_step_needs_no_rounding(self, spool_of):
+        """A float32 rider sliced to an exact step holds its rounded labels."""
+        lat = ("distance", (np.arange(100) * 0.3).astype(np.float32))
+        coords = {"distance": np.arange(100), "lat": lat}
+        patch = dc.Patch(data=np.arange(100), coords=coords, dims=("distance",))
+        view = spool_of(patch.isel(distance=slice(None, None, 5)))
+        view = view.select(distance=(5, 45))
+        _assert_contents_hold_patches(view, ["lat"])
+        last = float(view[0].get_array("lat")[-1])
+        assert len(view.select(lat=(last, last))) == 1
+
+    @pytest.mark.parametrize(
+        "labels, cut",
+        [
+            (
+                (-3294 + np.arange(11000) * 0.3).astype(np.float32),
+                slice(10985, None, 7),
+            ),
+            ((-35 + np.arange(100) * 0.7).astype(np.float32), slice(45, 60, 7)),
+        ],
+    )
+    def test_slice_whose_ends_need_no_rounding(self, spool_of, labels, cut):
+        """
+        A slice whose start, step and ends need no rounding keeps its parent's
+        rounding between them, so selecting a middle label finds and states it.
+        """
+        coords = {"distance": labels}
+        data = np.arange(len(labels))
+        patch = dc.Patch(data=data, coords=coords, dims=("distance",)).isel(
+            distance=cut
+        )
+        value = float(patch.get_array("distance")[1])
+        view = spool_of(patch).select(distance=(value, value))
+        assert view[0].data.tolist() == [data[cut][1]]
+        assert view.get_contents()["distance_min"].tolist() == [value]
+
+    @staticmethod
+    def _states_exactly(view, name="distance", find=True):
+        """
+        Each row states the first and last labels it loads, a selection of
+        either finds it, and the view equals the patches it loads.
+        """
+        contents = view.get_contents()
+        assert len(contents) == len(view)
+        for (_, row), patch in zip(contents.iterrows(), view, strict=True):
+            labels = patch.get_array(name)
+            ends = [float(labels.min()), float(labels.max())]
+            assert [row[f"{name}_min"], row[f"{name}_max"]] == ends
+            for end in ends if find else ():
+                assert len(view.select(**{name: (end, end)}))
+        assert view == dc.spool(list(view))
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    @pytest.mark.parametrize(
+        "cut, start",
+        [
+            (slice(10003, 10103), -1000.3),  # near zero, far from its start
+            (slice(503, 603), 1000.3),
+            (slice(None, None, -1), -1000.3),
+        ],
+    )
+    def test_cut_states_its_samples(self, spool_of, dtype, cut, start):
+        """
+        A range between samples of a grid cut from a longer one states the
+        samples inside it (#1728), and a chunk of it neither drops nor
+        repeats one.
+        """
+        labels = (start + np.arange(11000) * 0.1).astype(dtype)
+        coords = {"distance": labels}
+        parent = dc.Patch(data=np.arange(11000), coords=coords, dims=("distance",))
+        patch = parent.isel(distance=cut)
+        labels = patch.get_array("distance").astype(np.float64)
+        ordered = np.sort(labels)
+        low, high = ordered[7] + 0.037, ordered[41] + 0.041
+        view = spool_of(patch).select(distance=(low, high))
+        inside = patch.data[(labels >= low) & (labels <= high)]
+        assert view[0].data.tolist() == inside.tolist()
+        self._states_exactly(view)
+        chunked = view.chunk(distance=0.35, keep_partial=True)
+        loaded = np.concatenate([x.data for x in chunked])
+        assert sorted(loaded) == sorted(inside)
+        self._states_exactly(chunked, find=False)
+
+    def test_selection_of_a_plan(self, spool_of):
+        """A plan's outputs keep the grid of a coordinate it left alone."""
+        labels = (-1000.3 + np.arange(11000) * 0.1).astype(np.float32)
+        start, step = np.datetime64("2020-01-01"), np.timedelta64(1, "s")
+        time = dc.get_coord(start=start, step=step, shape=(6,))
+        coords = {"distance": labels, "time": time}
+        parent = dc.Patch(
+            data=np.zeros((11000, 6)), coords=coords, dims=("distance", "time")
+        )
+        patch = parent.isel(distance=slice(10003, 10103))
+        chunked = spool_of(patch).chunk(time=np.timedelta64(2, "s"))
+        ordered = np.sort(patch.get_array("distance").astype(np.float64))
+        view = chunked.select(distance=(ordered[7] + 0.037, ordered[41] + 0.041))
+        self._states_exactly(view, find=False)
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64"])
+    @pytest.mark.parametrize("cut", [slice(None), slice(10004, 10994)])
+    def test_rider_states_its_samples(self, spool_of, dtype, cut):
+        """A float rider, whole or cut from a longer grid, states what loads."""
+        lat = (-1000.3 + np.arange(11000) * 0.1).astype(dtype)
+        coords = {"distance": np.arange(11000), "lat": ("distance", lat)}
+        parent = dc.Patch(data=np.arange(11000), coords=coords, dims=("distance",))
+        patch = parent.isel(distance=cut)
+        first = patch.get_array("distance")[0]
+        view = spool_of(patch).select(distance=(first + 1, first + 10))
+        self._states_exactly(view, "lat")
+
+    def test_float32_and_float64_on_equal_terms(self, spool_of):
+        """Grids of equal terms in float32 and float64 each keep their labels."""
+        patches = []
+        for dtype in (np.float32, np.float64):
+            step = dtype(np.float32(0.1))
+            coord = dc.get_coord(start=dtype(0), step=step, shape=(100,))
+            coords = {"distance": coord}
+            patches.append(
+                dc.Patch(data=np.arange(100), coords=coords, dims=("distance",))
+            )
+        value = float(patches[1].get_array("distance")[90])
+        view = spool_of(*patches).select(distance=(value, value))
+        assert [x.data.tolist() for x in view] == [[90], [90]]
+
+    def test_float64_on_a_float32_step(self, spool_of):
+        """Float64 labels a float32 step spaces are found where they are."""
+        coord = dc.get_coord(start=np.float64(0), step=np.float32(0.1), shape=(1000,))
+        coords = {"distance": coord}
+        patch = dc.Patch(data=np.arange(1000), coords=coords, dims=("distance",))
+        spool = spool_of(patch)
+        value = float(spool[0].get_array("distance")[900])
+        view = spool.select(distance=(value, value))
+        assert [x.data.tolist() for x in view] == [[900]]
+
+    def test_cut_rounding_at_its_grids_scale(self, spool_of):
+        """A cut near zero of a grid of labels near 2e6 rounds as they do."""
+        start, step = np.float32(-2000000.1), np.float32(0.1)
+        coord = dc.get_coord(start=start, step=step, shape=(20000001,))[-1000:]
+        coords = {"distance": coord}
+        patch = dc.Patch(data=np.arange(1000), coords=coords, dims=("distance",))
+        view = spool_of(patch).select(distance=(-100.0, -100.0))
+        assert [x.data.tolist() for x in view] == [[1]]
+
+    def test_chunk_of_rounded_float32_selection(self, spool_of):
+        """A grid whose ends end in zero bits chunks as its loaded twin does."""
+        distance = (np.arange(11) * 0.1).astype(np.float32)
+        coords = {"distance": distance}
+        patch = dc.Patch(data=np.arange(11), coords=coords, dims=("distance",))
+        view = spool_of(patch).select(distance=(0.12, 0.88))
+        chunked = view.chunk(distance=0.35, keep_partial=True)
+        assert [len(x.data) for x in chunked] == [4, 3]
+        self._states_exactly(chunked, find=False)
 
     @pytest.mark.parametrize(
         "distance, first, last",

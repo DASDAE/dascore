@@ -474,6 +474,44 @@ class TestSpoolReadHints:
         assert selected.attrs.history == expected.attrs.history
 
 
+class TestDataOffsets:
+    """A scan records where a patch's data bytes are, as plain HDF5 formats do."""
+
+    @pytest.fixture(params=["1", "2"])
+    def path(self, request, random_patch, tmp_path):
+        """A DASDAE file of the random patch, in each version."""
+        path = tmp_path / "patch.h5"
+        random_patch.io.write(path, "DASDAE", file_version=request.param)
+        return path
+
+    def test_scan_records_offsets(self, path):
+        """A contiguous data array's offset is in the scan."""
+        (summary,) = dc.scan(path)
+        assert len(summary.data_offsets) == 1 and summary.data_chunk_rows
+
+    def test_spool_reads_by_offset(self, path, random_patch, stored_reads):
+        """A merge of files loads their data with plain reads, not through h5py."""
+        time = random_patch.get_coord("time")
+        later = random_patch.update_coords(time_min=time.max() + time.step)
+        later.io.write(path.with_name("later.h5"), "DASDAE")
+        spool = dc.spool(path.parent).update(progress=None)
+        merged = spool.chunk(time=None)[0]
+        expected = np.concatenate([random_patch.data, later.data], axis=1)
+        np.testing.assert_array_equal(merged.data, expected)
+        assert not stored_reads
+
+    def test_rewritten_file_uses_reader(self, path, random_patch, stored_reads):
+        """A file changed since its offsets were taken is read by its reader."""
+        source = dc.read(path)[0]._source
+        spool = dc.spool(path.parent).update(progress=None)
+        version = dc.get_format(path)[1]
+        (random_patch * 2).io.write(path, "DASDAE", file_version=version)
+        np.testing.assert_array_equal(source[2:20].load(), random_patch.data[2:20] * 2)
+        assert len(stored_reads) == 1
+        merged = spool.chunk(time=None)[0]
+        np.testing.assert_array_equal(merged.data, random_patch.data * 2)
+
+
 class TestScanDASDAE:
     """Tests for scanning the dasdae format."""
 

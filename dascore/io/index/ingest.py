@@ -88,6 +88,11 @@ class _ExactFields(TypedDict):
     step_numerator: int | None
     step_denominator: int | None
     origin_offset: int | None
+    grid_origin: float | None
+    grid_step: float | None
+    grid_count: int | None
+    grid_first: int | None
+    grid_stride: int | None
 
 
 def stored_runs(records, kind: str, absolute: bool = True) -> tuple[tuple, ...]:
@@ -162,6 +167,11 @@ class CoordRecord:
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    grid_origin: float | None = None
+    grid_step: float | None = None
+    grid_count: int | None = None
+    grid_first: int | None = None
+    grid_stride: int | None = None
     run_count: int | None = None
     data_id: str | None = None
     # the coord_runs rows of the definition, past its id and run number
@@ -533,6 +543,11 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         step_numerator=getattr(summary, "step_numerator", None),
         step_denominator=getattr(summary, "step_denominator", None),
         origin_offset=getattr(summary, "origin_offset", None),
+        grid_origin=getattr(summary, "grid_origin", None),
+        grid_step=getattr(summary, "grid_step", None),
+        grid_count=getattr(summary, "grid_count", None),
+        grid_first=getattr(summary, "grid_first", None),
+        grid_stride=getattr(summary, "grid_stride", None),
     )
     run_count = getattr(summary, "run_count", None)
     runs = _indexed_runs(summary)

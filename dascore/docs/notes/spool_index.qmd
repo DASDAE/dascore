@@ -38,7 +38,7 @@ A `coord_defs` row describes a coordinate the same way the coordinate describes 
 - its range, and its step if it is one grid (one list of labels, or several segments, states none);
 - how many segments it has (`run_count`).
 
-Range coordinates also store their exact grid (`step_numerator`, `step_denominator`, `origin_offset`, and `length`, the sample count). `is_exact` marks rows that can rebuild every value of the coordinate without opening the file. Range columns are named by storage type: `*_int` for nanosecond times and durations, `*_float` for numbers, and `*_str` for text.
+Range coordinates also store their exact grid (`step_numerator`, `step_denominator`, `origin_offset`, and `length`, the sample count). Float ranges store the terms of the grid their labels are spaced on (`grid_origin`, `grid_step`, `grid_count`, and `grid_first` and `grid_stride`, where the labels start in it and how far apart): a patch cut from a longer grid keeps that grid's rounding, which its own start and step don't rebuild, and selections place its samples from these. `is_exact` marks rows that can rebuild every value of the coordinate without opening the file. Range columns are named by storage type: `*_int` for nanosecond times and durations, `*_float` for numbers, and `*_str` for text.
 
 ### Segments and runs
 
