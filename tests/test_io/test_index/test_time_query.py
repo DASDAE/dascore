@@ -224,9 +224,10 @@ class TestNumbersOnTimes:
         numbers = patch.update_coords(time=steps * 0.004)
         tagged = [durations.update_attrs(tag="d"), numbers.update_attrs(tag="n")]
         spool = make_spool(tagged)
-        assert len(spool.select(tag="n", time=(None, 1e12))) == 1
-        assert len(spool.select(tag="n", time=(-1e12, 1))) == 1
-        assert len(spool.select(time=(1e12, None))) == 0
+        for big in (1e12, 1e308):
+            assert len(spool.select(tag="n", time=(None, big))) == 1
+            assert len(spool.select(tag="n", time=(-big, 1))) == 1
+            assert len(spool.select(time=(big, None))) == 0
 
     def test_durations_beside_numbers(self, make_spool):
         """Each patch reads the number in its own kind: seconds on durations."""

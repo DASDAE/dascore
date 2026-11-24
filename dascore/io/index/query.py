@@ -582,7 +582,7 @@ def _numbers_on_times(conditions: list, params: list, lo, hi) -> tuple[list, lis
             continue
         try:
             typed = typed_value(to_timedelta64(bound))
-        except TimeOverflowError:
+        except OverflowError:  # TimeOverflowError, or a float overflowing first
             if np.sign(bound) == side:
                 continue
             return conditions, params
