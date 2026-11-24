@@ -478,6 +478,20 @@ class TestMixedKinds:
             columns = [x for x in expected if x != "group_id"]
             assert self._values(got, columns) == self._values(expected, columns)
 
+    def test_kinds_in_order_beside_runs(self):
+        """Kinds keep their order of first appearance where a patch of the
+        first is cut into its runs (#1745).
+        """
+        time = TIME_KINDS["absolute"]
+        later = time[2:] + 5 * ONE_SECOND
+        runs = concat_coords(get_coord(data=time[:2]), get_coord(data=later))
+        spool = dc.spool([self._patch(runs), self._patch(TIME_KINDS["numbers"])])
+        kinds = [x.get_array("time").dtype.kind for x in spool.chunk(time=None)]
+        assert kinds == ["M", "M", "f"]
+        first, second = spool.get_coverage("time")["time_min"]
+        assert isinstance(first, pd.Timestamp)
+        assert isinstance(second, float)
+
     @pytest.mark.parametrize("kind", ["absolute", "durations"])
     def test_value_range_beside_runs(self, kind):
         """A value range on times in runs beside numbers keeps them times (#1738)."""

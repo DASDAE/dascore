@@ -227,6 +227,9 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
         split["_modified"] = True
     kept = df.drop(index=df.index[cut])
     out = pd.concat([kept, split], ignore_index=True)
+    # each row's segments where the row stood, so kinds keep their order
+    at = np.delete(np.arange(len(df)), cut).tolist() + [x[0] for x in stretches]
+    out = out.iloc[np.argsort(at, kind="stable")].reset_index(drop=True)
     if out[names[0]].dtype.kind in "Mm" and out[names[2]].dtype == object:
         # rows stating no step held objects, so segments' steps join them as
         # objects; hold them as durations, the missing ones as NaT
