@@ -124,10 +124,10 @@ def _float_array_to_ns(array):
 
 def _seconds_to_ns(num: float) -> int:
     """Convert finite seconds to an integer nanosecond count, raising on overflow."""
-    out = round(num * 1_000_000_000)
+    out = num * 1_000_000_000  # infinite past about 1.8e299 seconds
     if not -(2**63) < out < 2**63:
         _raise_out_of_range(f"{num} seconds")
-    return out
+    return round(out)
 
 
 @singledispatch
