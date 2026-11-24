@@ -37,6 +37,7 @@ from dascore.utils.pd import resolve_selector_namespaces
 from dascore.utils.time import to_timedelta64
 
 _GLOB_CHARS = frozenset("*?[")
+_INT64 = np.iinfo(np.int64)
 
 
 class _Unset(Enum):
@@ -598,6 +599,7 @@ def build_coord_clause(
     coord_meta: MetaRows,
     name: str,
     value,
+    time_span: int | None = None,
 ) -> None:
     """
     Add a patch_coords/coord_defs semi-join clause for one coord
@@ -605,6 +607,8 @@ def build_coord_clause(
 
     Candidacy only: envelope overlap, never false negatives. Exact
     membership/boolean masks are applied at patch load, above this layer.
+    ``time_span`` is the index's `max_time_span`, which bounds where an
+    absolute-time overlap can start.
     """
     rows = coord_meta.named(name)
     if isinstance(value, CoordExists):
@@ -634,6 +638,13 @@ def build_coord_clause(
         for bound, column, op in ((lo, "time_max", ">="), (hi, "time_min", "<=")):
             if bound is not None:
                 where.add(f"p.{column} {op} ?", bound)
+        # A patch ending at or after lo starts no earlier than lo - time_span,
+        # so saying so changes no result but lets SQLite seek
+        # idx_patches_time. INT64_MAX states no bound, as does a start
+        # before what int64 holds.
+        if lo is not None and time_span is not None and time_span < _INT64.max:
+            if (start := lo - time_span) > _INT64.min:
+                where.add("p.time_min >= ?", start)
         return
 
     min_col, max_col = {
@@ -708,6 +719,7 @@ def _build_where(
     queries: list[Query],
     attr_meta: MetaRows,
     coord_meta: MetaRows,
+    time_span: int | None = None,
 ) -> tuple[_Where, list[tuple[str, re.Pattern]]]:
     """Compose the shared WHERE clause and any regex residuals."""
     where = _Where()
@@ -718,7 +730,7 @@ def _build_where(
             if residual is not None:
                 residuals.append((name, residual))
         for name, value in one.coords.items():
-            build_coord_clause(where, coord_meta, name, value)
+            build_coord_clause(where, coord_meta, name, value, time_span)
     return where, residuals
 
 
@@ -782,10 +794,10 @@ def _order_clause(
         # an attr observed under several kinds orders by its first column
         keys = [(f"a.{columns[0]}", params)]
     # rows without a value sort last regardless of direction (matching
-    # the ordinal renumberer's missing-time-last rule); each null key
-    # repeats its expression, so its parameters repeat too
-    sql = ", ".join(f"{column} IS NULL, {column} {direction}" for column, _ in keys)
-    params = [x for _, key_params in keys for x in (*key_params, *key_params)]
+    # the ordinal renumberer's missing-time-last rule); NULLS LAST rather
+    # than an IS NULL key, so time order can read idx_patches_time
+    sql = ", ".join(f"{column} {direction} NULLS LAST" for column, _ in keys)
+    params = [x for _, key_params in keys for x in key_params]
     return f"ORDER BY {missing_time}{sql}, s.ordinal, p.patch_row", params
 
 
@@ -797,6 +809,7 @@ def build_sql(
     order_by=None,
     patch_rows=None,
     ids_only: bool = False,
+    time_span: int | None = None,
 ) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
     """
     Build SQL for one or more AND-composed queries.
@@ -809,7 +822,8 @@ def build_sql(
     attr-only queries). ``order_by`` overrides the default ordinal
     ordering (see `_order_clause`); ``patch_rows`` restricts rows to an
     id membership (one JSON parameter, so the SQLite bound-variable cap
-    does not limit membership size).
+    does not limit membership size); ``time_span`` is the index's
+    `max_time_span` (see `build_coord_clause`).
 
     Returns (sql, params, residuals), where residuals pairs attr names
     with regex patterns that must be re-applied to the resulting
@@ -818,7 +832,7 @@ def build_sql(
     back to a projected count.
     """
     queries = _as_query_list(query)
-    where, residuals = _build_where(queries, attr_meta, coord_meta)
+    where, residuals = _build_where(queries, attr_meta, coord_meta, time_span)
     if patch_rows is not None:
         where.add(
             "p.patch_row IN (SELECT value FROM json_each(?))",

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -21,6 +23,8 @@ from dascore.io.index.query import Query
 from dascore.io.index.schema import INDEX_VERSION
 from tests.test_io.test_index.test_heterogeneity_stress import make_random_summaries
 
+_INT64 = np.iinfo(np.int64)
+_MINUTE = 60_000_000_000
 # The coordinate discovery this replaces: a scan of every link.
 _LINK_VARIANTS = (
     "SELECT json_array(pc.coord_name, pc.dtype, cd.value_kind, cd.units, "
@@ -45,6 +49,10 @@ def _assert_consistent(backend):
     assert stored == _rows(backend, _LINK_VARIANTS)
     (count,) = backend._con.execute("SELECT count(*) FROM patches").fetchone()
     assert backend.get_metadata()["patch_count"] == count
+    (span,) = backend._con.execute(
+        "SELECT coalesce(max(time_max - time_min), 0) FROM patches"
+    ).fetchone()
+    assert backend.get_metadata()["max_time_span"] >= span
     expected = backend._fetch_df(_LINK_COORD_META)
     columns = list(expected.columns)
     pd.testing.assert_frame_equal(
@@ -344,6 +352,168 @@ class TestWorkIsBounded:
             backend._con.set_trace_callback(None)
         assert statements
         assert not [x for x in statements if "count(" in x.lower()]
+
+
+def _timed(path: str, start: int | None, stop: int | None) -> SourceRecord:
+    """A one-patch source whose absolute times run from start to stop (ns)."""
+    record = patch_record(dc.get_example_patch().summary)
+    coords = tuple(
+        replace(x, min_int=start, max_int=stop, data_id=None)
+        if x.coord_name == "time"
+        else x
+        for x in record.coords
+    )
+    return SourceRecord(
+        source_path=path,
+        source_format="DASDAE",
+        format_version="1",
+        patches=(replace(record, coords=coords),),
+    )
+
+
+class TestTimeSpan:
+    """The index keeps the longest span any patch's absolute times cover."""
+
+    @staticmethod
+    def _span(backend) -> int:
+        return backend.get_metadata()["max_time_span"]
+
+    def test_grows_on_insert_and_stays_on_delete(self):
+        """Only a longer patch widens it; removing patches never narrows it."""
+        backend = get_backend(":memory:")
+        assert self._span(backend) == 0
+        backend.write_sources([_timed("a", 0, _MINUTE), _timed("b", 0, 10)])
+        assert self._span(backend) == _MINUTE
+        backend.write_sources([_timed("long", 5, 5 + 3 * _MINUTE)])
+        assert self._span(backend) == 3 * _MINUTE
+        backend.write_sources([_timed("b", 0, 2 * _MINUTE)])
+        assert self._span(backend) == 3 * _MINUTE
+        backend.delete_sources(["long"])
+        backend.write_sources([_timed("long", 0, 10)])
+        assert self._span(backend) == 3 * _MINUTE
+        # emptied, as before a first scan
+        backend.clear()
+        assert self._span(backend) == 0
+        backend.close()
+
+    @pytest.mark.parametrize("start", [None, _INT64.min])
+    def test_unbounded_start(self, start):
+        """An end with no start, or a NaT one, leaves no bound."""
+        backend = get_backend(":memory:")
+        backend.write_sources([_timed("a", 0, _MINUTE), _timed("b", start, 10)])
+        assert self._span(backend) == _INT64.max
+        backend.close()
+
+    def test_untimed_and_endless_spans_count_nothing(self):
+        """A patch with no time, or a NaT end, does not widen it."""
+        backend = get_backend(":memory:")
+        backend.write_sources(
+            [_timed("a", 0, _MINUTE), _timed("b", None, None), _timed("c", 0, None)]
+        )
+        backend.write_sources([_timed("d", 5, _INT64.min)])
+        assert self._span(backend) == _MINUTE
+        backend.close()
+
+    @pytest.mark.parametrize(
+        ("start", "stop", "expected"),
+        [(0, 2 * _MINUTE, 2 * _MINUTE), (None, None, _MINUTE), (None, 10, _INT64.max)],
+    )
+    def test_written_through_sql(self, start, stop, expected):
+        """Rows written straight through SQL widen it as the writer does."""
+        backend = get_backend(":memory:")
+        backend.write_sources([_timed("a", 0, _MINUTE)])
+        backend._con.execute(
+            "INSERT INTO patches (patch_row, source_row, source_patch_key, dims, "
+            "time_min, time_max) VALUES (100, 1, 'raw', 'time', ?, ?)",
+            (start, stop),
+        )
+        assert self._span(backend) == expected
+        backend.close()
+
+    def test_updated_through_sql(self):
+        """Times widened through SQL widen it; narrowed, they leave it."""
+        backend = get_backend(":memory:")
+        backend.write_sources([_timed("a", 0, _MINUTE)])
+        backend._con.execute("UPDATE patches SET time_max = ?", (3 * _MINUTE,))
+        assert self._span(backend) == 3 * _MINUTE
+        backend._con.execute("UPDATE patches SET time_max = 10")
+        assert self._span(backend) == 3 * _MINUTE
+        backend.close()
+
+
+class TestOneCommit:
+    """A selection reads the span and the rows from one commit."""
+
+    @pytest.mark.concurrency
+    def test_commit_after_span_read(self, tmp_path, monkeypatch):
+        """A commit landing after the span is read is seen whole or not at all."""
+        path = tmp_path / "index.sqlite3"
+        backend = get_backend(path)
+        backend.write_sources([_timed("a", 0, 1)])
+
+        def write():
+            other = get_backend(path)
+            other.write_sources([_timed("long", 0, 100), _timed("short", 50, 51)])
+            other.close()
+
+        writer = threading.Thread(target=write)
+        read = backend._time_span
+
+        def read_then_commit():
+            span = read()
+            writer.start()
+            writer.join(timeout=0.5)  # it commits now, unless it must wait
+            return span
+
+        monkeypatch.setattr(backend, "_time_span", read_then_commit)
+        query = Query(coords={"time": (np.datetime64(50, "ns"), None)})
+        selected = backend.count(query)
+        writer.join()
+        monkeypatch.undo()
+        # the commit waits for the selection, which never sees the short
+        # patch without the long one
+        assert selected == 0
+        assert backend.count(query) == 2
+        backend.close()
+
+
+class TestOlderIndex:
+    """An index from before the time index is refused and rebuilt."""
+
+    @staticmethod
+    def _as_version_40(path):
+        """Give a closed index the layout and version of version 40."""
+        con = sqlite3.connect(path)
+        try:
+            con.executescript(
+                "DROP TRIGGER widen_time_span; DROP TRIGGER widen_time_span_updated; "
+                "DROP INDEX idx_patches_time; "
+                "ALTER TABLE meta_data DROP COLUMN max_time_span; "
+                "UPDATE meta_data SET index_version = 40;"
+            )
+        finally:
+            con.close()
+
+    def test_backend_refuses(self, tmp_path):
+        """Opening it asks for a rebuild."""
+        path = tmp_path / "index.sqlite3"
+        get_backend(path).close()
+        self._as_version_40(path)
+        with pytest.raises(InvalidIndexVersionError, match="delete it and rebuild"):
+            get_backend(path)
+
+    def test_directory_spool_rebuilds(self, tmp_path):
+        """A directory spool replaces it with a current index."""
+        dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        index_path = spool.indexer.index_path
+        spool.indexer.close()
+        self._as_version_40(index_path)
+        spool = dc.spool(tmp_path).update(progress=None)
+        metadata = spool._catalog.backend.get_metadata()
+        assert metadata["index_version"] == INDEX_VERSION
+        assert metadata["max_time_span"] > 0
+        spool.indexer.close()
 
 
 class TestNewerIndex:

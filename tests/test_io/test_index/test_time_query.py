@@ -224,7 +224,7 @@ class TestNumbersOnTimes:
         numbers = patch.update_coords(time=steps * 0.004)
         tagged = [durations.update_attrs(tag="d"), numbers.update_attrs(tag="n")]
         spool = make_spool(tagged)
-        for big in (1e12, 1e308):
+        for big in (1e12, 1e308, 10**20):
             for bounds in [(None, big), (-big, 1)]:  # open on the big side
                 assert len(spool.select(tag="n", time=bounds)) == 1
                 # the duration patch stays, and raises as its select does
@@ -233,6 +233,19 @@ class TestNumbersOnTimes:
                 with pytest.raises(OverflowError):
                     durations[0]
             assert len(spool.select(time=(big, None))) == 0
+
+    @pytest.mark.parametrize("big", [1e12, 10**20])
+    def test_numbers_past_nanoseconds_on_durations(self, make_spool, big):
+        """On durations alone, such a number plans too; only the load raises."""
+        patch = dc.get_example_patch()
+        steps = np.arange(patch.get_coord("time").shape[0])
+        spool = make_spool([patch.update_coords(time=steps * np.timedelta64(4, "ms"))])
+        for bounds in [(None, big), (-big, 1)]:
+            selected = spool.select(time=bounds)
+            assert len(selected) == len(selected.get_contents()) == 1
+            with pytest.raises(OverflowError):
+                selected[0]
+        assert len(spool.select(time=(big, None))) == 0
 
     def test_durations_beside_numbers(self, make_spool):
         """Each patch reads the number in its own kind: seconds on durations."""
@@ -326,3 +339,138 @@ class TestPlannedTimeQueries:
             == time_backend.count(Query(coords={"reference_time": bounds}))
             == 2
         )
+
+
+_INT64 = np.iinfo(np.int64)
+# a stated end beside a NaT start, and beside no start at all
+_UNBOUNDED_STARTS = [None, _INT64.min]
+
+
+def _plan(backend, sql, params) -> list[str]:
+    """The details of SQLite's plan for a statement."""
+    return [x[-1] for x in backend._con.execute("EXPLAIN QUERY PLAN " + sql, params)]
+
+
+@pytest.fixture()
+def mixed_backend():
+    """
+    Patches of random times, edges shared, beside a day-long patch, an
+    all-NaT patch, and patches with relative or no times.
+    """
+    rng = np.random.default_rng(42)
+    start = np.datetime64("2024-01-01", "ns")
+    second = np.timedelta64(1, "s")
+    times = [
+        start
+        + int(rng.integers(0, 600)) * second
+        + np.arange(rng.integers(1, 60)) * second
+        for _ in range(40)
+    ]
+    times.append(start + np.array([0, 86_400]) * second)
+    times.append(np.array(["NaT", "NaT"], dtype="datetime64[ns]"))
+    times.append(np.arange(4) * second)
+    patches = [
+        dc.Patch(data=np.zeros(len(x)), coords={"time": x}, dims=("time",))
+        for x in times
+    ]
+    patches.append(
+        dc.Patch(
+            data=np.zeros(3), coords={"distance": np.arange(3)}, dims=("distance",)
+        )
+    )
+    catalog = PatchCatalog.from_patches(patches)
+    yield catalog.backend
+    catalog.close()
+
+
+class TestTimeIndex:
+    """Time selections seek the time index, and select what they always did."""
+
+    @staticmethod
+    def _expected(rows, lo, hi) -> set[int]:
+        """The rows the overlap of [lo, hi] matched before the span bound."""
+        return {
+            row
+            for row, start, end in rows
+            if (lo is None or (end is not None and end >= lo))
+            and (hi is None or (start is not None and start <= hi))
+        }
+
+    @pytest.mark.parametrize("unbounded_start", [False, *_UNBOUNDED_STARTS])
+    def test_selections_unchanged(self, mixed_backend, unbounded_start):
+        """Intervals from every patch edge, and random ones, select the overlaps."""
+        con = mixed_backend._con
+        end = int(np.datetime64("2024-01-01T00:05", "ns").view(np.int64))
+        # rows written straight through SQL: a NaT end, and maybe a start no
+        # span bound can reach
+        extra = [(int(np.datetime64("2024-01-01", "ns").view(np.int64)), _INT64.min)]
+        if unbounded_start is not False:
+            extra.append((unbounded_start, end))
+        for start, stop in extra:
+            con.execute(
+                "INSERT INTO patches (patch_row, source_row, source_patch_key, dims, "
+                "time_min, time_max) SELECT max(patch_row) + 1, 1, "
+                "'raw' || max(patch_row), 'time', ?, ? FROM patches",
+                (start, stop),
+            )
+        span = mixed_backend._time_span()
+        assert (span == _INT64.max) is (unbounded_start is not False)
+        rows = con.execute(
+            "SELECT patch_row, time_min, time_max FROM patches"
+        ).fetchall()
+        edges = {x for _, *ends in rows for x in ends if x is not None}
+        values = sorted(
+            {y for x in edges for y in (x - 1, x, x + 1) if _INT64.min < y < _INT64.max}
+        )
+        rng = np.random.default_rng(0)
+        pairs = [(int(x), int(y)) for x, y in np.sort(rng.choice(values, (100, 2)))]
+        for x in values:
+            pairs.extend([(x, None), (None, x), (x, x)])
+        for lo, hi in pairs:
+            bounds = tuple(
+                None if x is None else np.datetime64(x, "ns") for x in (lo, hi)
+            )
+            query = Query(coords={"time": bounds})
+            expected = self._expected(rows, lo, hi)
+            assert set(mixed_backend.query_rows(query)) == expected, bounds
+            assert mixed_backend.count(query) == len(expected), bounds
+
+    def test_narrow_select_seeks(self, mixed_backend):
+        """A bounded time selection reads a range of the index, not every row."""
+        start = np.datetime64("2024-01-01T00:01", "ns")
+        query = Query(coords={"time": (start, start + np.timedelta64(1, "s"))})
+        queries, attrs, coords = mixed_backend._query_context(query)
+        for options in ({}, {"ids_only": True}, {"count": True}):
+            sql, params, _ = build_sql(
+                queries,
+                attrs,
+                coords,
+                time_span=mixed_backend._time_span(),
+                **options,
+            )
+            plan = _plan(mixed_backend, sql, params)
+            assert "idx_patches_time (time_min>? AND time_min<?)" in plan[0]
+
+    @pytest.mark.parametrize("ascending", [True, False])
+    def test_time_order_reads_index(self, ascending):
+        """A window of a time-ordered spool reads the index rather than sorting."""
+        patches = [
+            dc.get_example_patch().update_coords(time_min=np.datetime64(x, "s"))
+            for x in (20, 0, 10)
+        ]
+        # the last ties the first, and keeps its place after it either way
+        tie = patches[0].update_attrs(tag="tie")
+        catalog = PatchCatalog.from_patches([*patches, tie])
+        backend = catalog.backend
+        order = ("coord", "time", ascending)
+        queries, attrs, coords = backend._query_context(None, order_by=order)
+        sql, params, _ = build_sql(
+            queries, attrs, coords, ids_only=True, order_by=order
+        )
+        plan = _plan(backend, sql + " LIMIT 2", params)
+        assert "idx_patches_time" in plan[0]
+        assert "USE TEMP B-TREE FOR ORDER BY" not in plan
+        expected = [2, 3, 1, 4] if ascending else [1, 4, 3, 2]
+        assert backend.query_rows(order_by=order) == expected
+        assert backend.query_rows(order_by=order, limit=2, offset=1) == expected[1:3]
+        catalog.close()
