@@ -125,6 +125,7 @@ from dascore.utils.chunk_plan import (
     coalesce_runs,
     stack_plans,
     subdivision_pieces,
+    unknown_riders,
     window_plan,
     with_labels,
     with_runs,
@@ -540,7 +541,8 @@ class _LoadsReader:
             for x in by_output[int(output)]
         )
         if plan.mode == "identity" and not plan.merge_kwargs:
-            return sources[0]  # one member, untouched but for the view's selection
+            # one member, untouched but for the view's selection, if any
+            return sources[0] if whole else _Loads(recipe=_SELECTION, sources=sources)
         recipe = {"mode": plan.mode, "dim": plan.dim, "trim_dims": plan.trim_dims}
         return _Loads(recipe=recipe | plan.merge_kwargs, sources=sources)
 
@@ -658,6 +660,19 @@ def _same_rows(one: Spool, two: Spool) -> bool:
         if not (same | near).all():
             return False
     return True
+
+
+def _warn_read(names, files: dict) -> None:
+    """Warn that planning read ``names``' labels from ``files``, if it read any."""
+    if not files:
+        return
+    msg = (
+        f"Planning read the {', '.join(map(repr, sorted(names)))} labels "
+        f"of {len(files)} file(s), since the index holds only the ends "
+        "of a coordinate with no step. To plan from the index alone, "
+        "write the data on a grid, eg snapped with Spool.snap_coords."
+    )
+    warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
 
 
 def _same_loads(one: _Loads, two: _Loads, memo: dict) -> bool:
@@ -817,6 +832,77 @@ class Spool(NodeRepr, NamespaceOwner):
         # Shallow: copy-on-write is always on from pandas 3, so the
         # caller's frame detaches from the cached one on its first write.
         return present_columns(self._df.copy(deep=False))
+
+    @property
+    def unresolved_coords(self) -> tuple[str, ...]:
+        """
+        The names of coordinates whose range is unknown in some row.
+
+        A selection or chunk window cutting a coordinate along a dimension
+        (a rider, such as latitude along distance) states the range it
+        keeps where its step or the float grid the index records places
+        its labels. Elsewhere the range is unknown, NaN in `get_contents`,
+        until [`load_coords`](`dascore.Spool.load_coords`) reads it. This
+        reads nothing.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> count = len(patch.get_coord("distance"))
+        >>> lat = 40 + np.cumsum(np.random.random(count)) / 1000
+        >>> patch = patch.update_coords(lat=("distance", lat))
+        >>> spool = dc.spool([patch]).select(distance=(10, 20))
+        >>> assert spool.unresolved_coords == ("lat",)
+        >>> assert np.isnan(spool.get_contents()["lat_min"].iloc[0])
+        """
+        df, end = self._df, len("_dims")
+        columns = [str(x) for x in df.columns]
+        names = {x[1:-end] for x in columns if x[:1] == "_" and x.endswith("_dims")}
+        return tuple(sorted(x for x in names if unknown_riders(df, x).any()))
+
+    def load_coords(self, *names: str) -> Self:
+        """
+        Return a view stating coordinates of unknown range exactly.
+
+        Reads the labels of each named coordinate (by default, each of
+        [`unresolved_coords`](`dascore.Spool.unresolved_coords`)) for the
+        rows which state its range unknown, from their sources and without
+        their data, warning how many files it read. Returns this spool
+        where no row states one unknown.
+
+        Parameters
+        ----------
+        *names
+            The coordinates to state, all unknown ones if none are given.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> count = len(patch.get_coord("distance"))
+        >>> lat = 40 + np.cumsum(np.random.random(count)) / 1000
+        >>> patch = patch.update_coords(lat=("distance", lat))
+        >>> spool = dc.spool([patch]).select(distance=(10, 20)).load_coords()
+        >>> assert not spool.unresolved_coords
+        >>> assert spool.get_contents()["lat_min"].iloc[0] == lat[10]
+        """
+        if missing := set(names) - self._catalog.coord_names():
+            msg = f"Coordinates {sorted(missing)} are not in this spool."
+            raise CoordError(msg)
+        df = self._df.reset_index(drop=True)
+        files, read = {}, {}
+        for name in names or self.unresolved_coords:
+            for index in np.flatnonzero(unknown_riders(df, name)):
+                row = df.iloc[index].to_dict()
+                if (coord := self._read_coord(row, name, None, files)) is not None:
+                    read.setdefault(int(index), {})[name] = coord
+        if not read:
+            return self
+        _warn_read({x for y in read.values() for x in y}, files)
+        return self._new_from_catalog(self._materialize_lossy(snapped=read))
 
     def get_unread_sources(self) -> list[Path | UPath]:
         """
@@ -1306,7 +1392,21 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> # one box per row on two dimensions; row two's time end is open
         >>> boxes = spool.select(distance=ranges, time=[time, [time[0], None]])
         """
-        out, unjudged = self._select_counted(
+        # Circular import: the plan resolver imports the spool's catalog.
+        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+
+        # a selection on a rider an earlier cut left unknown needs its labels;
+        # only a cut (a selection or a plan) leaves one so
+        named = {*kwargs, *selector_spec_names(_coords)}
+        if isinstance(_coords, Mapping):
+            named |= {str(x) for x in _coords}
+        catalog, spool = self._catalog, self
+        dims = catalog.backend.coord_dims_map()
+        riders = {x for x in named if dims.get(x, x) != x}
+        if riders and (catalog.residuals or isinstance(catalog.resolver, PlanResolver)):
+            if unknown := riders & set(self.unresolved_coords):
+                spool = self.load_coords(*unknown)
+        out, unjudged = spool._select_counted(
             _attrs=_attrs,
             _coords=_coords,
             samples=samples,
@@ -2682,14 +2782,7 @@ class Spool(NodeRepr, NamespaceOwner):
             working = self._with_runs(working, name, modified=True)
         if labels and dim is not None:
             working = with_labels(working, dim, partial(read, name=dim))
-        if files:
-            msg = (
-                f"Planning read the {', '.join(map(repr, sorted(names)))} labels "
-                f"of {len(files)} file(s), since the index holds only the ends "
-                "of a coordinate with no step. To plan from the index alone, "
-                "write the data on a grid, eg snapped with Spool.snap_coords."
-            )
-            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
+        _warn_read(names, files)
         base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
@@ -2714,11 +2807,18 @@ class Spool(NodeRepr, NamespaceOwner):
         read = partial(self._read_coord, name=dim, key=key, files=files)
         return with_runs(df, dim, indexed, read, modified=modified, key=key)
 
-    def _read_coord(self, row, name: str, key: str, files: dict):
-        """The row's coordinate, read from its source and selected as it loads."""
+    def _read_coord(self, row, name: str, key: str | None, files: dict):
+        """
+        The row's coordinate, read from its source and selected as it loads.
+
+        ``key`` names the column holding the row's place in this spool's
+        relation, None where the row is one of its own.
+        """
         catalog = self._catalog
-        residuals, rows = catalog.residuals, catalog.to_df()
-        (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
+        residuals, source = catalog.residuals, row
+        if key is not None:
+            rows = catalog.to_df()
+            (source,) = rows[rows["_patch_row"] == row[key]].to_dict("records")
         # a selection on another coordinate needs that one to replay
         whole = any(set(x) - {name} for x, _, _ in residuals)
         projection = None if whole else name
@@ -3890,9 +3990,11 @@ class Spool(NodeRepr, NamespaceOwner):
             and mine._ids == theirs._ids
         ):
             return True
-        if not _same_rows(self, other):
+        # a range a cut left unknown compares as it loads
+        one, two = self.load_coords(), other.load_coords()
+        if not _same_rows(one, two):
             return False
-        pairs, memo = zip(self._loads(), other._loads(), strict=True), {}
+        pairs, memo = zip(one._loads(), two._loads(), strict=True), {}
         return all(_same_loads(x, y, memo) for x, y in pairs)
 
     def _loads(self) -> list[_Loads]:

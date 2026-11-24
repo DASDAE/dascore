@@ -70,11 +70,13 @@ from dascore.utils.chunk_plan import (
     PIECE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
+    _forget,
     _own_dtypes,
     _SampleTracker,
     grid_fits,
     patch_local_adjusted_envelopes,
     stretch_coordinate,
+    unknown_riders,
 )
 from dascore.utils.gaps import RunRecord
 from dascore.utils.misc import is_range
@@ -355,19 +357,28 @@ def _trim_to_member_windows(
     every coordinate on that coordinate's dimension. Only a source row
     describing the whole of that dimension, in the unit the window is in,
     says which samples those are; any other keeps its source envelopes as
-    candidacy supersets.
+    candidacy supersets, but for the riders of a dimension a selection
+    trimmed first, which are unknown (`unknown_riders`) where a window
+    cuts them.
     """
-    windows = [
-        x
-        for x, dims in coord_dims_map.items()
-        if {f"{x}_min", f"{x}_max"}.issubset(members.columns)
-        and f"{x}_min" in joined.columns
-        and str(dims) not in source_trimmed
-        and "," not in str(dims)
-    ]
-    if not windows:
+    windows, blind = [], []
+    for x, dims in coord_dims_map.items():
+        ends = [f"{x}_min", f"{x}_max"]
+        if (
+            set(ends) <= set(members.columns)
+            and ends[0] in joined
+            and "," not in str(dims)
+        ):
+            (blind if str(dims) in source_trimmed else windows).append(x)
+    if not (windows or blind):
         return joined
     cut, whole = joined.copy(deep=False), joined.copy(deep=False)
+    for name in blind:
+        dim, ends = coord_dims_map[name], [f"{name}_min", f"{name}_max"]
+        moved = (members[ends].to_numpy() != joined[ends].to_numpy()).any(axis=1)
+        for rider in (x for x, y in coord_dims_map.items() if y == dim):
+            if rider not in (dim, name):
+                _forget(cut, rider, joined.index[moved])
     for name in windows:
         native = joined.get(_source_units_column(name), joined.get(f"_{name}_units"))
         planned = members.get(f"_{name}_units")
@@ -389,6 +400,8 @@ def _trim_to_member_windows(
             # riders whole, so its samples count from the source's range
             if (use := same & joined[source].notna().to_numpy()).any():
                 whole[column] = joined[column].mask(use, joined[source])
+    if not windows:
+        return cut
     tracker = _SampleTracker(whole)
     tracker.follow_values(whole, cut, dict.fromkeys(windows), False, {})
     return tracker.trim(cut, windows)
@@ -481,6 +494,10 @@ def _aux_coord_info(
         unit_col, grid_col = f"_{name}_units", f"_{name}_grid"
         lows = _extrema(joined[cmin], joined["output_id"], "min")
         highs = _extrema(joined[cmax], joined["output_id"], "max")
+        # a member holding the rider unknown leaves its output's unknown
+        lost = pd.Series(unknown_riders(joined, name), index=joined.index)
+        unknown = lost.groupby(joined["output_id"], sort=True).any().to_numpy()
+        lows[unknown], highs[unknown] = None, None
         # the *_first arrays are only read where their gate is True, and
         # a gate can only be True when its column exists
         no_gate = np.zeros(len(output_ids), dtype=bool)
@@ -496,8 +513,8 @@ def _aux_coord_info(
         windowed = (joined[cmin] != whole[cmin]) | (joined[cmax] != whole[cmax])
         windowed &= joined[cmin].notna()
         windowed = windowed.groupby(joined["output_id"], sort=True).any().to_numpy()
-        keep = keep & ~windowed
-        all_null = pd.isnull(lows) & pd.isnull(highs)
+        keep = keep & ~windowed & ~unknown
+        all_null = pd.isnull(lows) & pd.isnull(highs) & ~unknown
         if rides:
             # a rider's values differ member by member, so only a lone
             # member keeps identity — unless nobody states any values,
@@ -507,12 +524,16 @@ def _aux_coord_info(
         if step_col in joined.columns:
             one_step = grouped[step_col].nunique().to_numpy() == 1
             step_ok = keep & one_step
-            if rides and not (trimmed or concat):
-                # a window of a lone member keeps its rider's grid, and so
-                # its step, though not the values its identity describes;
-                # a fractional grid's whole-tick step restates no labels
-                bare = one_step & single & ~step_ok & ~_fractional(joined, grid_col)
-                step_ok = step_ok | bare
+            if not (rides and concat):
+                # a lone member's rider keeps the grid its row states, and
+                # so its step, as do members stating one rider of another
+                # dimension alike, though not the values its identity
+                # describes; a fractional grid's whole-tick step restates
+                # no labels
+                ends = grouped[[cmin, cmax]].nunique().to_numpy().max(axis=1) == 1
+                alike = single if rides else single | ends
+                bare = one_step & alike & ~step_ok & ~_fractional(joined, grid_col)
+                step_ok = (step_ok | bare) & ~unknown
             step_first = grouped[step_col].first().to_numpy()
             if rides and concat:
                 # the joined coordinate is a range when the segments are
@@ -541,7 +562,7 @@ def _aux_coord_info(
         # a coordinate no member holds contributes nothing; one the members
         # do hold is always named, even when nothing about its values can
         # be stated — the patch will have it, so the catalog says so
-        holds = joined[cmin].notna()
+        holds = joined[cmin].notna() | lost
         if key_col in joined.columns:
             holds = holds | joined[key_col].notna()
         by_output = holds.groupby(joined["output_id"], sort=True)

@@ -1431,7 +1431,9 @@ class _SampleTracker:
         A coordinate the selection named keeps the envelope its own
         selection drew, unless another on its dimension was named beside
         it: then each is cut to the samples both keep. ``riders`` False
-        leaves the coordinates it did not name as they were.
+        leaves the coordinates it did not name as they were. A rider whose
+        labels the row cannot place is unknown (`unknown_riders`) where
+        the selection cut it.
         """
         for key, state in self.kept.items():
             rows = np.flatnonzero(state.moved & (state.status == _FOLLOWED))
@@ -1440,13 +1442,20 @@ class _SampleTracker:
                 continue
             on = [x for x in self.names if (self.dims[x][rows] == key).any()]
             named = [x for x in on if x in names]
+            # the rows keeping each of their samples
+            whole = (state.in_lo[rows] == 0) & (
+                state.in_hi[rows] == state.size[rows] - 1
+            )
             for name in on:
                 if (name in named and len(named) < 2) or not (riders or name in named):
                     continue
                 sizes = self.held(name).sizes[rows]
-                part = rows[
-                    (self.dims[name][rows] == key) & (sizes == state.size[rows])
-                ]
+                mine = self.dims[name][rows] == key
+                if name not in named and name != key:
+                    lost = rows[mine & (sizes != state.size[rows]) & ~whole]
+                    place = after.index.get_indexer(self.source.index[lost])
+                    _forget(after, name, after.index[place[place >= 0]])
+                part = rows[mine & (sizes == state.size[rows])]
                 place = after.index.get_indexer(self.source.index[part])
                 part, place = part[place >= 0], place[place >= 0]
                 if not len(part):
@@ -1474,6 +1483,27 @@ class _SampleTracker:
                 terms = {x: _grid_terms(kept[x]) for x in set(codes[sure])}
                 _set_cells(after, col, labels[sure], [terms[x] for x in codes[sure]])
         return after
+
+
+def _forget(frame: pd.DataFrame, name: str, rows) -> None:
+    """State ``name`` unknown on ``rows``: no range, and no identity."""
+    columns = [f"{name}_min", f"{name}_max", f"_{name}_def_key"]
+    frame.loc[rows, [x for x in columns if x in frame]] = None
+
+
+def unknown_riders(df: pd.DataFrame, name: str) -> np.ndarray:
+    """
+    Whether each row holds the rider ``name`` with an unknown range.
+
+    A cut rider the index can't place states no range and no identity,
+    where a rider whose labels are all NaN states its identity.
+    """
+    dims = df.get(f"_{name}_dims")
+    if dims is None or f"{name}_min" not in df:
+        return np.zeros(len(df), dtype=bool)
+    key = df.get(f"_{name}_def_key", pd.Series(None, index=df.index, dtype=object))
+    out = dims.notna() & (dims != name) & key.isna()
+    return (out & df[f"{name}_min"].isna() & df[f"{name}_max"].isna()).to_numpy()
 
 
 def _kind_parts(df: pd.DataFrame) -> list[pd.DataFrame]:
@@ -3001,7 +3031,8 @@ def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
     member holds it, and on which dims, is policed. Each row's own
     coordinate dims decide, so the same name on another dim is still
     compared by value.
-    A null envelope (a member without the coordinate) stays null.
+    A null envelope (a member without the coordinate) stays null, but
+    for an unknown one (`unknown_riders`), which the member holds.
     Returns the marked frame and the marked columns.
     """
     marked = {}
@@ -3011,9 +3042,11 @@ def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
         rides = pd.Series(_names_dim(dims, name), index=dims.index)
         if not rides.any():
             continue
+        unknown = unknown_riders(df, coord)
         for suffix in ("_min", "_max", "_step"):
             if (col := f"{coord}{suffix}") in df.columns:
-                marked[col] = df[col].where(~rides | df[col].isna(), _RIDES + dims)
+                blank = df[col].isna() & (~unknown if suffix != "_step" else True)
+                marked[col] = df[col].where(~rides | blank, _RIDES + dims)
     return df.assign(**marked), set(marked)
 
 

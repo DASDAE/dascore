@@ -500,13 +500,11 @@ class TestWindowedRiders:
         out = sensor_spool.select(distance=np.array([[10, 20]]))
         assert pd.isnull(out._catalog.to_df()["_sensor_def_key"].iloc[0])
 
-    def test_trimmed_source_keeps_superset(self, sensor_spool):
-        """Sources already trimmed on the dimension keep their envelopes."""
+    def test_trimmed_source_states_unknown(self, sensor_spool):
+        """A window over sources trimmed on its dimension states riders unknown."""
         out = sensor_spool.select(distance=(10.5, 200)).chunk(distance=50)
-        advertised, loaded = _bounds(out.get_contents(), out, "sensor")
-        assert len(set(advertised)) == 1
-        assert advertised[0] == pytest.approx((1022.0, 1400.0), abs=1e-5)
-        assert all(a[0] <= b[0] and b[1] <= a[1] for a, b in zip(advertised, loaded))
+        assert out.get_contents()[["sensor_min", "sensor_max"]].isna().all(axis=None)
+        _assert_holds(*_bounds(out.load_coords().get_contents(), out, "sensor"))
 
     def test_window_in_another_unit_keeps_superset(self, sensor_patch):
         """A window in a unit the source does not use keeps its envelopes."""
