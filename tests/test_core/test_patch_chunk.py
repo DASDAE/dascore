@@ -1311,6 +1311,51 @@ class TestMixedUnitChunk:
         assert distances == [[0.0], [1.0], [2.0]]
         assert np.array_equal(np.concatenate([x.data for x in spool]), plain.data)
 
+    @pytest.mark.parametrize("length", [5, None])
+    def test_rechunk_after_a_rider_selection(self, length):
+        """A re-chunk after a selection on a riding coordinate plans from
+        the samples it kept, as over the patch itself (#1741).
+        """
+        time = np.arange(8)
+        coords = {"time": time, "label": ("time", time * 2.0)}
+        patch = dc.Patch(data=np.arange(8.0), coords=coords, dims=("time",))
+        kept = {"label": (2.0, 12.0)}
+        chunked = dc.spool([patch]).chunk(time=3, keep_partial=True).select(**kept)
+        plain = dc.spool([patch]).select(**kept)
+        got, expected = (
+            x.chunk(time=length, keep_partial=length is not None)
+            for x in (chunked, plain)
+        )
+        assert [x.get_array("time").tolist() for x in got] == [
+            x.get_array("time").tolist() for x in expected
+        ]
+        assert got.get_contents()["time_min"].tolist() == [
+            x.get_coord("time").min() for x in got
+        ]
+
+    def test_rider_selection_riding_two_ways(self):
+        """A selected coordinate riding distance in one patch and time in
+        another still re-chunks time from the samples kept (#1741).
+        """
+
+        def patch(time, rides):
+            distance = np.arange(3.0)
+            label = (distance if rides == "distance" else time - time[0]) * 2.0
+            coords = {"distance": distance, "time": time, "label": (rides, label)}
+            data = np.zeros((3, len(time)))
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        patches = [patch(np.arange(8), "distance"), patch(np.arange(8) + 100, "time")]
+        kept = {"label": (2.0, 12.0)}
+        chunked = dc.spool(patches).chunk(time=3, keep_partial=True).select(**kept)
+        got, expected = (
+            x.chunk(time=5, keep_partial=True)
+            for x in (chunked, dc.spool(patches).select(**kept))
+        )
+        assert [x.get_array("time").tolist() for x in got] == [
+            x.get_array("time").tolist() for x in expected
+        ]
+
     def test_affine_quantity_length_is_a_delta(self):
         """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""
         degf = dc.get_example_patch().set_units(distance="degF")

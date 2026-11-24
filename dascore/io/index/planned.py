@@ -1788,7 +1788,14 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
         return None
     if any(samples or relative for _, samples, relative in catalog.residuals):
         return None
-    members = resolver.member_rows
+    # A selection on a coordinate riding the dimension, in any member,
+    # trims the dimension as each output loads, which its members'
+    # envelopes do not follow.
+    dim, members = resolver.dim, resolver.member_rows
+    riders = {x for coords, _, _ in catalog.residuals for x in coords} - {dim}
+    riding = ((dict.fromkeys(riders), False, False),)
+    if dim in _trimmed_dims(riding, catalog.backend.coord_dims_map(), members):
+        return None
     if catalog.is_view:
         present = {
             int(_row_source_patch_key(row))
