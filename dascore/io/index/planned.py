@@ -1547,6 +1547,14 @@ def derived_catalog(
         on="_patch_row",
         how="left",
     )
+    # where a member states no start of its own (the frame held the column
+    # only for other rows' segments), its source's places its samples
+    origin = f"_{name}_source_envelope"
+    if origin in trim_cols and origin in sources:
+        stated = sources.drop_duplicates("_patch_row").set_index("_patch_row")[origin]
+        held = member_rows[origin]
+        fallback = member_rows["_patch_row"].map(stated)
+        member_rows[origin] = held.where(held.notna(), fallback)
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
     loader = CompositeResolver()
