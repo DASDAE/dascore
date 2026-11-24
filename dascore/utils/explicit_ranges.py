@@ -275,20 +275,29 @@ def _planned_manager(plan, row, files=None, projection=None):
     return _project_manager(coords, requested_projection)
 
 
+def _row_dims(row, name: str, dims_map: Mapping) -> set[str]:
+    """
+    The dims ``name`` rides in a row's patch, none if it lacks it.
+
+    A coordinate can ride other dimensions in other patches, so the row
+    says; the map, which keeps the first patch's, stands in where the rows
+    state no dims for the coordinate.
+    """
+    stated = row.get(f"_{name}_dims", dims_map.get(name, name))
+    return set(stated.split(",")) if isinstance(stated, str) else set()
+
+
 def known_coordinates(catalog, rows, name: str) -> dict:
     """Find exact coordinates, replaying shared-dimension residuals in metadata."""
     out = {}
     files = {}
     residuals = getattr(catalog, "residuals", ())
-    dims_map = catalog.backend.coord_dims_map() if residuals else {}
-    target_dims = set(str(dims_map.get(name, name)).split(","))
-    shared = any(
-        target_dims & set(str(dims_map.get(selector, selector)).split(","))
-        for selectors, _, _ in residuals
-        for selector in selectors
-    )
-    projection = None if shared else name
+    selectors = {x for coords, _, _ in residuals for x in coords}
+    dims_map = catalog.backend.coord_dims_map() if selectors else {}
     for row in rows.to_dict("records"):
+        target = _row_dims(row, name, dims_map)
+        shared = any(target & _row_dims(row, x, dims_map) for x in selectors)
+        projection = None if shared else name
         coords = _source_manager(catalog.resolver, row, files, projection=projection)
         if coords is None:
             if shared:
