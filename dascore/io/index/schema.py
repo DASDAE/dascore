@@ -34,6 +34,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
 # changes, not only when a column does.
+# Version 41 indexes patches by start time and keeps the longest time span
+# a patch covers (`max_time_span`), so a time selection seeks, not scans.
 # Version 40 reads the data type of Febus A1 files as strain_rate, not
 # strainrate.
 # Version 39 shrinks the index: a coordinate's data_id is read from its
@@ -79,7 +81,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 40
+INDEX_VERSION = 41
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -117,6 +119,9 @@ class MetaDataRow(NamedTuple):
     # another is rescanned.
     snap: str
     max_shift: float
+    # The most nanoseconds any patch's absolute times span, kept as
+    # patch_count is; removing patches leaves it (see _WIDEN_SPAN).
+    max_time_span: int
 
 
 class SourceRow(NamedTuple):
@@ -513,10 +518,20 @@ _NEW, _OLD = VARIANT_COLUMNS.format("NEW"), VARIANT_COLUMNS.format("OLD")
 _OLD_KEY = (
     f"(SELECT json_array({_OLD}) FROM coord_defs cd WHERE cd.coord_row = OLD.coord_row)"
 )
-# Triggers keeping the patch and coordinate variant counts. Living in the
-# database, they count writes however they arrive, including cascaded
-# deletes and rows written straight through SQL; write_sources alone mutes
-# them and counts its inserts itself (COUNT_VARIANTS_ADDED).
+# Widens meta_data.max_time_span to a span, given as SQL. A missing start
+# beside an end reads as the earliest time, so its span, like any past
+# int64, overflows to REAL, which the CAST saturates: queries read
+# INT64_MAX as no bound. A patch with no end spans nothing.
+_SPAN = "{0}time_max - coalesce({0}time_min, -9223372036854775808)"
+_WIDEN_SPAN = (
+    "UPDATE meta_data SET max_time_span = "
+    "CAST(max(max_time_span, coalesce({}, 0)) AS INTEGER)"
+)
+# Triggers keeping the patch and coordinate variant counts and the time
+# span. Living in the database, they count writes however they arrive,
+# including cascaded deletes and rows written straight through SQL;
+# write_sources alone mutes them and counts its inserts itself
+# (COUNT_VARIANTS_ADDED, WIDEN_TIME_SPAN).
 # Changing a trigger needs an INDEX_VERSION bump; files keep their stored ones.
 TRIGGERS = MappingProxyType(
     {
@@ -527,6 +542,11 @@ TRIGGERS = MappingProxyType(
         "count_patch_removed": (
             "AFTER DELETE ON patches BEGIN "
             "UPDATE meta_data SET patch_count = patch_count - 1; END"
+        ),
+        # deletes leave the span alone: too wide is still exact
+        "widen_time_span": (
+            "AFTER INSERT ON patches BEGIN "
+            f"{_WIDEN_SPAN.format(_SPAN.format('NEW.'))}; END"
         ),
         "count_variant_added": (
             "AFTER INSERT ON patch_coords BEGIN "
@@ -555,8 +575,17 @@ COUNT_VARIANTS_ADDED = (
     "ON CONFLICT (variant_key) "
     "DO UPDATE SET patch_count = patch_count + excluded.patch_count"
 )
+# What widen_time_span does for the patch rows ? to ? (end excluded).
+WIDEN_TIME_SPAN = _WIDEN_SPAN.format(
+    f"(SELECT max({_SPAN.format('')}) FROM patches "
+    "WHERE patch_row >= ? AND patch_row < ?)"
+)
 INDEXES = (
     ("idx_pcoords_name", "patch_coords", "coord_name", None),
+    # time selections seek it, bounded by max_time_span, and time order
+    # reads it; source_row lets an ordered window join sources from the
+    # index alone, which is what gets SQLite to choose it
+    ("idx_patches_time", "patches", "time_min, source_row", None),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
     # the few definitions of several runs, so an archive of contiguous
     # patches says it has none without scanning every definition

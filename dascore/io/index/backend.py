@@ -61,6 +61,7 @@ from dascore.io.index.schema import (
     TABLES,
     TRIGGERS,
     WHAT_IS_THIS,
+    WIDEN_TIME_SPAN,
     CoordDefRow,
     CoordRunRow,
     MetaDataRow,
@@ -364,7 +365,7 @@ class SQLiteIndexBackend:
         self._create_triggers()
         shift = dc.get_config().max_shift
         row = MetaDataRow(
-            WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0, "null", shift
+            WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0, "null", shift, 0
         )
         self._bulk_insert("meta_data", MetaDataRow._fields, [row])
 
@@ -391,8 +392,28 @@ class SQLiteIndexBackend:
                 "UPDATE meta_data SET patch_count = patch_count + ?", (end - first,)
             )
             self._execute(COUNT_VARIANTS_ADDED, (first, end))
+            self._execute(WIDEN_TIME_SPAN, (first, end))
         finally:
             self._con.setconfig(option, True)
+
+    @contextmanager
+    def _snapshot(self):
+        """
+        Run the wrapped reads in one read transaction, so they see one commit.
+
+        A time selection is built from max_time_span; another connection
+        committing between the two reads could add a patch longer than
+        the bound allows for, and the selection would see it but drop it.
+        """
+        with self._lock:
+            self._con.execute("BEGIN")
+            try:
+                yield
+            except BaseException:
+                with suppress(Exception):
+                    self._con.execute("ROLLBACK")
+                raise
+            self._con.execute("COMMIT")
 
     def _validate_schema(self, tables: set[str]) -> None:
         """
@@ -472,6 +493,12 @@ class SQLiteIndexBackend:
         """Return how many patches the index holds."""
         with self._lock:
             return self._con.execute("SELECT patch_count FROM meta_data").fetchone()[0]
+
+    def _time_span(self) -> int:
+        """Return the most nanoseconds any patch's absolute times span."""
+        with self._lock:
+            sql = "SELECT max_time_span FROM meta_data"
+            return self._con.execute(sql).fetchone()[0]
 
     def _attr_meta(self) -> pd.DataFrame:
         # a frame of its own, copied under the lock: a shared frame is not
@@ -1039,14 +1066,16 @@ class SQLiteIndexBackend:
     def query(self, query=None, order_by=None, patch_rows=None) -> pd.DataFrame:
         """Return the flat patch-row relation for a query (or several)."""
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
-        sql, params, residuals = build_sql(
-            queries,
-            attr_meta,
-            coord_meta,
-            order_by=order_by,
-            patch_rows=patch_rows,
-        )
-        df = self._fetch_df(sql, params)
+        with self._snapshot():
+            sql, params, residuals = build_sql(
+                queries,
+                attr_meta,
+                coord_meta,
+                order_by=order_by,
+                patch_rows=patch_rows,
+                time_span=self._time_span(),
+            )
+            df = self._fetch_df(sql, params)
         df, attr_columns = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
         # The row number goes private before the attrs land; residual queries
@@ -1071,23 +1100,25 @@ class SQLiteIndexBackend:
     ) -> list[int]:
         """Return ordered patch ids, optionally limited after exact filtering."""
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
-        sql, params, residuals = build_sql(
-            queries,
-            attr_meta,
-            coord_meta,
-            order_by=order_by,
-            patch_rows=patch_rows,
-            ids_only=True,
-        )
-        if residuals:
-            # regex residuals need string values; realize the relation
-            df = self.query(queries, order_by=order_by, patch_rows=patch_rows)
-            stop = None if limit is None else offset + limit
-            return [int(x) for x in df["_patch_row"].iloc[offset:stop]]
-        if limit is not None or offset:
-            sql += " LIMIT ? OFFSET ?"
-            params.extend((-1 if limit is None else limit, offset))
-        return [int(x) for x in self._fetch_df(sql, params)["patch_row"]]
+        with self._snapshot():
+            sql, params, residuals = build_sql(
+                queries,
+                attr_meta,
+                coord_meta,
+                order_by=order_by,
+                patch_rows=patch_rows,
+                ids_only=True,
+                time_span=self._time_span(),
+            )
+            if not residuals:
+                if limit is not None or offset:
+                    sql += " LIMIT ? OFFSET ?"
+                    params.extend((-1 if limit is None else limit, offset))
+                return [int(x) for x in self._fetch_df(sql, params)["patch_row"]]
+        # regex residuals need string values; realize the relation
+        df = self.query(queries, order_by=order_by, patch_rows=patch_rows)
+        stop = None if limit is None else offset + limit
+        return [int(x) for x in df["_patch_row"].iloc[offset:stop]]
 
     def count(self, query=None, patch_rows=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
@@ -1095,15 +1126,16 @@ class SQLiteIndexBackend:
         if patch_rows is None and not any(q.attrs or q.coords for q in queries):
             return self._patch_count()
         queries, attr_meta, coord_meta = self._query_context(queries)
-        sql, params, residuals = build_sql(
-            queries,
-            attr_meta,
-            coord_meta,
-            count=True,
-            patch_rows=patch_rows,
-        )
-        if not residuals:
-            with self._lock:  # one integer: no frame needed
+        with self._snapshot():
+            sql, params, residuals = build_sql(
+                queries,
+                attr_meta,
+                coord_meta,
+                count=True,
+                patch_rows=patch_rows,
+                time_span=self._time_span(),
+            )
+            if not residuals:  # one integer: no frame needed
                 return int(self._con.execute(sql, _adapt(params)).fetchone()[0])
         # A regex residual must inspect string values, so a database count
         # cannot resolve it; the full relation already applies the residual.
@@ -1590,7 +1622,9 @@ class SQLiteIndexBackend:
             self._execute("DELETE FROM sources")
             self._execute("DELETE FROM coord_runs")
             self._execute("DELETE FROM coord_defs")
-            self._execute("UPDATE meta_data SET last_indexed_ns = -1")
+            self._execute(
+                "UPDATE meta_data SET last_indexed_ns = -1, max_time_span = 0"
+            )
 
     def holds_runs(self) -> bool:
         """Whether any coordinate the index holds is several runs."""
