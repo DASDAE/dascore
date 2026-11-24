@@ -601,6 +601,27 @@ def _compare(one: _Loads, two: _Loads, memo: dict) -> bool | None:
     return one.data_id == two.data_id
 
 
+def _floats(column: pd.Series) -> np.ndarray:
+    """Which cells of a column hold floats (NaN included)."""
+    if column.dtype.kind == "f":
+        return np.ones(len(column), dtype=bool)
+    if column.dtype != object:
+        return np.zeros(len(column), dtype=bool)
+    return column.map(lambda x: isinstance(x, float | np.floating)).to_numpy(bool)
+
+
+def _without(rows: pd.DataFrame, cells: Mapping) -> pd.DataFrame:
+    """
+    The rows with the cells each column's mask in ``cells`` marks blanked.
+
+    A column blanked whole goes, so its dtype (float32 or float64) is not
+    compared either.
+    """
+    whole = [x for x, y in cells.items() if y.all()]
+    rest = {x: rows[x].mask(y) for x, y in cells.items() if not y.all()}
+    return rows.drop(columns=whole).assign(**rest)
+
+
 def _same_rows(one: Spool, two: Spool) -> bool:
     """
     Whether two spools' rows (`Spool._eq_state`) state the same.
@@ -613,22 +634,23 @@ def _same_rows(one: Spool, two: Spool) -> bool:
     mine, theirs = one._eq_state()["rows"], two._eq_state()["rows"]
     if list(mine.columns) != list(theirs.columns) or len(mine) != len(theirs):
         return False
-    names = [
-        name
-        for name in (x[: -len("_step")] for x in mine.columns if x.endswith("_step"))
-        if all(
-            col in mine and mine[col].dtype.kind == theirs[col].dtype.kind == "f"
-            for col in (f"{name}_min", f"{name}_max")
-        )
-    ]
-    ends = [f"{x}_{end}" for x in names for end in ("min", "max")]
-    if not mine.drop(columns=ends).equals(theirs.drop(columns=ends)):
-        return False
-    for name in names:
+    # the rows stating each coordinate's ends as floats, in both spools; a
+    # coordinate holding other kinds in some patches holds them as objects
+    floats = {}
+    for name in (x[: -len("_step")] for x in mine.columns if x.endswith("_step")):
         cols = [f"{name}_min", f"{name}_max"]
-        these, those = mine[cols].to_numpy(), theirs[cols].to_numpy()
-        step = np.abs(mine[f"{name}_step"].to_numpy(dtype=np.float64))
-        narrow = _narrow(one._df, name) | _narrow(two._df, name)
+        if set(cols) <= set(mine.columns):
+            cells = [_floats(x[y]) for x in (mine, theirs) for y in cols]
+            floats[name] = np.logical_and.reduce(cells)
+    blanked = {f"{x}_{end}": y for x, y in floats.items() for end in ("min", "max")}
+    if not _without(mine, blanked).equals(_without(theirs, blanked)):
+        return False
+    for name, held in floats.items():
+        cols = [f"{name}_min", f"{name}_max"]
+        these = mine.loc[held, cols].to_numpy(dtype=np.float64)
+        those = theirs.loc[held, cols].to_numpy(dtype=np.float64)
+        step = np.abs(mine.loc[held, f"{name}_step"].to_numpy(dtype=np.float64))
+        narrow = (_narrow(one._df, name) | _narrow(two._df, name))[held]
         slack = 2 * _precision(False, step, narrow, *these.T, *those.T)[:, None]
         same = (these == those) | (np.isnan(these) & np.isnan(those))
         # never half a step apart, as on a grid at its dtype's precision
