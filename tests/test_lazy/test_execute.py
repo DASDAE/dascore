@@ -21,6 +21,7 @@ from dascore.lazy.execute import chunk_boxes, compute, read_schedule
 from dascore.lazy.recipe import Recipe, concat
 from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
+from dascore.utils.array_api import backend_name
 
 from .conftest import constant, lazy_patch, stored_patch
 
@@ -310,7 +311,7 @@ class TestWindowed:
     def test_any_block_size(self, lazy, eager, name, rows):
         """However the work is cut, the result is the eager one exactly."""
         out, expected = self.CASES[name](lazy), self.CASES[name](eager)
-        assert out.backend == "lazy"
+        assert backend_name(out.data) == "lazy"
         with config_context(lazy_block_size=int(rows * ROW)):
             loaded = out.load()
         assert loaded.attrs == expected.attrs

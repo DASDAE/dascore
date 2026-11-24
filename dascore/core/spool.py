@@ -38,6 +38,7 @@ from rich.filesize import decimal as format_bytes
 from rich.text import Text
 
 import dascore as dc
+from dascore.backends import ArrayBackend, LazyBackend, get_backend, reading_onto
 from dascore.compat import UPath, is_array
 from dascore.constants import (
     _DASCORE_DIR,
@@ -105,9 +106,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
-from dascore.lazy.array import LazyArray
 from dascore.units import Quantity
-from dascore.utils.array_api import parse_backend, reading_lazily, to_backend
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -741,9 +740,9 @@ class Spool(NodeRepr, NamespaceOwner):
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
-    # The array backend patches are handed out on, as `set_backend` spells
-    # given it. None hands them out as they are read: in memory, on NumPy.
-    _backend: str | None = None
+    # The backend which makes the array of each patch handed out; see
+    # `set_backend`. None hands them out as their readers return them.
+    _backend: ArrayBackend | None = None
     # single-file provenance (set by _from_file; drives update())
     _file_path = None
     _file_format = None
@@ -969,53 +968,69 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def _handed_out(self, read: Callable[[], dc.Patch]) -> dc.Patch:
         """Return the patch `read` gets, on the backend this spool was set to."""
-        if self._backend is None:
+        backend = self._backend
+        if backend is None:
             return read()
-        lazy, library = parse_backend(self._backend)
-        with reading_lazily(library if lazy else None):
+        with reading_onto(backend):
             patch = read()
-        if lazy and isinstance(patch.data, LazyArray):
-            # Read lazily just now, or held lazy already: computed on the
-            # library named, which its pending steps are asked about.
-            return patch.set_backend(self._backend)
-        if lazy and _is_lazy(patch.data):
-            # Another kind of promise, which a spool held already: left
-            # as it is, and computed when its holder asks.
-            return patch
-        # In memory: held there by the spool, with nothing read, or read
-        # after all as the fallback setting allowed. Put where chunks are
-        # computed.
-        return patch.set_backend(library)
+        # Whatever the read made, or the spool held, as the backend's own.
+        return patch._with_backend(backend)
 
-    def set_backend(self, backend: str) -> Self:
+    @property
+    def backend(self) -> ArrayBackend | None:
         """
-        Return a spool whose patches are handed out on another array backend.
-
-        Nothing is read or converted here. Each patch the new spool hands
-        out, by indexing or iterating, is on the backend. `load` reads every
-        patch into memory, on the library a lazy backend computes on.
-
-        Parameters
-        ----------
-        backend
-            The backend each patch is handed out on, named as
-            [`Patch.set_backend`](`dascore.Patch.set_backend`) names it.
-
-        Raises
-        ------
-        ParameterError
-            If the name is no backend, or the array library cannot be
-            imported.
+        Return the backend the spool was set to, or None if it was set to none.
 
         Examples
         --------
         >>> import dascore as dc
+        >>> from dascore.backends import LazyBackend
+        >>>
+        >>> spool = dc.get_example_spool("random_das")
+        >>> assert spool.backend is None
+        >>> assert spool.set_backend("lazy").backend == LazyBackend()
+        """
+        return self._backend
+
+    def set_backend(self, backend: str | ArrayBackend | None) -> Self:
+        """
+        Return a spool whose patches hold arrays a backend makes.
+
+        Nothing is read or converted here. Each patch the new spool hands
+        out, by indexing or iterating, holds an array of the backend. `load`
+        reads every patch into memory, on the backend a lazy one computes
+        on. A spool with no backend set hands out whatever its files'
+        readers return.
+
+        Parameters
+        ----------
+        backend
+            An [`ArrayBackend`](`dascore.backends.ArrayBackend`), whose
+            options are its own, or the name of a registered one with its
+            default options: ``"numpy"``, ``"jax"`` or ``"cupy"`` for
+            arrays in memory on that library, and ``"lazy"`` for arrays
+            which are not read until [`load`](`dascore.Patch.load`).
+            ``"lazy"`` computes each chunk on NumPy, and ``"lazy[jax]"``
+            names another backend to compute on. Operations on the
+            patches run the kernels registered under the backend's name,
+            where it has any. None unsets the backend.
+
+        Raises
+        ------
+        ParameterError
+            If the name is no registered backend, or its array library
+            cannot be used.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> from dascore.lazy.array import LazyArray
         >>> from dascore.utils.downloader import fetch
         >>>
         >>> spool = dc.spool(fetch("example_dasdae_event_1.h5"))
         >>> lazy = spool.set_backend("lazy")
         >>> patch = lazy[0]
-        >>> assert patch.backend == "lazy"
+        >>> assert isinstance(patch.data, LazyArray)
         >>> # Operations wait until the data are asked for.
         >>> out = patch.abs().load()
         >>> assert out.equals(spool[0].abs())
@@ -1026,11 +1041,12 @@ class Spool(NodeRepr, NamespaceOwner):
         what a lazy backend reads and when, what cannot be lazy, and how
         the `numpy_fallback` setting decides that.
         """
-        lazy, library = parse_backend(backend)
-        # Refused here and not at the first patch, if it cannot be used.
-        to_backend(np.empty(0), library)
+        if backend is not None:
+            backend = get_backend(backend)
+            # Refused here and not at the first patch, if it cannot be used.
+            backend._check()
         new = self.__class__(self)
-        new._backend = f"LazyArray[{library}]" if lazy else library
+        new._backend = backend
         return new
 
     def load(self) -> Self:
@@ -1080,11 +1096,11 @@ class Spool(NodeRepr, NamespaceOwner):
         from dascore.io.index.catalog import _patch_path  # noqa: PLC0415
 
         # Reading everything is what was asked for, so nothing is read
-        # lazily first: a lazy backend's patches are read onto the library
+        # lazily first: a lazy backend's patches are read onto the backend
         # it computes on.
         reader = self
-        if self._backend is not None:
-            reader = self.set_backend(parse_backend(self._backend)[1])
+        if isinstance(self._backend, LazyBackend):
+            reader = self.set_backend(self._backend.compute)
         patches, seen = [], set()
         for patch in reader:
             patch = _loaded(patch)
@@ -1157,8 +1173,9 @@ class Spool(NodeRepr, NamespaceOwner):
         up from it, is spool-wide state: the union carries whichever
         operand has one and applies it to every patch it yields, as
         attaching and enriching the union would; two different ones raise.
-        So is the backend set by `set_backend`: the union is on the one its
-        operands were set to, and two different ones raise.
+        So is the backend set by `set_backend`: the union is on the first
+        one its operands were set to, and backends which make arrays of
+        different array libraries raise.
 
         Examples
         --------
@@ -1180,15 +1197,22 @@ class Spool(NodeRepr, NamespaceOwner):
         union = PatchCatalog.union([x._as_union_member() for x in spools])
         new = Spool()
         new._catalog = union
-        # The backend the patches are handed out on is the spools' own,
-        # and two different ones have no combined answer.
+        # The backend the patches are handed out on is the spools' own.
         # A spool with none set takes the other's, so spools gathered onto
         # an empty one keep theirs.
-        backends = sorted({x._backend for x in spools if x._backend is not None})
-        if len(backends) > 1:
+        backends: list[ArrayBackend] = []
+        for backend in (x._backend for x in spools):
+            if backend is not None and backend not in backends:
+                backends.append(backend)
+        # Arrays of one library, counting a lazy backend as the one it computes
+        # on: the union is on the first backend, whose kernels its patches run.
+        inner = [x.compute if isinstance(x, LazyBackend) else x for x in backends]
+        kinds = sorted({x._native for x in inner})
+        if len(kinds) > 1:
             msg = (
-                f"Spools on different backends cannot be added: {backends}. "
-                "Set one backend on each before adding them."
+                "Spools whose backends make arrays of different array "
+                f"libraries cannot be added: {', '.join(kinds)}. Set them to "
+                "one backend first."
             )
             raise ParameterError(msg)
         new._backend = backends[0] if backends else None

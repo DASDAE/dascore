@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from dascore.config import get_config
+from dascore.core.processor import running_under
 from dascore.exceptions import PatchError
 from dascore.lazy.contract import Box, ChunkContract, Window
 from dascore.utils.array_api import (
@@ -47,18 +48,21 @@ from dascore.utils.array_api import (
     _as_numpy_dtype,
     array_namespace,
     fallbacks_decided,
-    to_backend,
+    is_numpy,
 )
 
 if TYPE_CHECKING:
+    from dascore.backends import ArrayBackend
     from dascore.lazy.array import LazyArray
 
 
-def _converted(processor, backend: str) -> str | None:
+def _converted(processor, backend: ArrayBackend) -> str | None:
     """Return the operation a step would take chunks through NumPy for, if any."""
-    if backend == NUMPY_BACKEND:
+    native = backend._native
+    if native == NUMPY_BACKEND:
         return None
-    if hasattr(type(processor).kernel_for(backend), "_converts"):
+    kernel = type(processor).kernel_for(native, backend.name)
+    if hasattr(kernel, "_converts"):
         return processor.name or type(processor).__name__
     # A step which runs another operation, as one in a window does, has a
     # kernel for any library and converts for the operation it runs.
@@ -174,7 +178,7 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     Read what one box of a lazy array needs, and compute it.
 
     Each step runs the kernel its processor has for the array's
-    `backend`, and what it makes is
+    backend, and what it makes is
     checked against the dtype its metadata stated and the shape of the box.
     An empty box is returned without running anything.
 
@@ -184,20 +188,33 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
         If a step is still pending, or computed an array of another shape
         or dtype than its metadata stated.
     """
+    backend = array._backend
     if 0 in _sizes(box):
-        return to_backend(np.empty(_sizes(box), array.dtype), array.backend)
+        return backend.from_array(np.empty(_sizes(box), array.dtype))
     needed = _needs(array, box)
-    backend = array.backend
-    data = to_backend(array.recipe[needed[0]].load(), backend)
+    stored = array.recipe[needed[0]]
+    data = backend.from_recipe(stored)
+    read = (tuple(data.shape), _as_numpy_dtype(data.dtype))
+    if read != (stored.shape, stored.dtype):
+        msg = (
+            f"The {backend.name} backend read an array of shape {read[0]} and "
+            f"dtype {read[1]} where the stored one has {stored.shape} and "
+            f"{stored.dtype}. Its from_recipe must make the array the recipe "
+            "describes."
+        )
+        raise PatchError(msg)
+    # What the backend's arrays are, and its name: the same for every box,
+    # so each step runs one kernel throughout.
+    native, under = backend._native, backend.name
     steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
     for node, before, after in steps:
         stated_shape, stated_dtype, _ = node.made()
         processor = node.processor
-        kernel = type(processor).kernel_for(backend)
+        kernel = type(processor).kernel_for(native, under)
         run = partial(kernel, processor, **node.plan)
         # A step with no kernel for the library was let through, or
         # refused, when it was chained: it is not asked again for each box.
-        with fallbacks_decided(_converted(processor, backend)):
+        with fallbacks_decided(_converted(processor, backend)), running_under(backend):
             data = (node.contract or _EVERYTHING).apply(run, data, after, before)
         # A step with no contract made the whole of its result, which is
         # checked as a whole before the box is taken from it.
@@ -214,20 +231,28 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
             raise PatchError(msg)
         if node.contract is None:
             data = data[after]
+        # One of the backend's arrays for the next step, as a patch in
+        # memory holds between two operations.
+        data = backend.from_array(data)
     return data
 
 
 def load(array: LazyArray) -> np.ndarray:
     """Compute a lazy array a box at a time, and return the whole of it."""
     boxes = chunk_boxes(array)
-    if len(boxes) == 1:
-        return compute(array, boxes[0])
-    if array.backend != NUMPY_BACKEND:
-        return _joined([compute(array, box) for box in boxes], boxes)
-    out = np.empty(array.shape, array.dtype)
-    for box in boxes:
-        out[box] = compute(array, box)
-    return out
+    out = compute(array, boxes[0])
+    if len(boxes) > 1 and is_numpy(out):
+        # Written in place, so only one box is held beside the whole.
+        first, out = out, np.empty(array.shape, array.dtype)
+        out[boxes[0]] = first
+        del first
+        for box in boxes[1:]:
+            out[box] = compute(array, box)
+    elif len(boxes) > 1:
+        out = _joined([out, *(compute(array, box) for box in boxes[1:])], boxes)
+    # One of the backend's own arrays however many boxes it took: arrays of
+    # no array library are joined as the `ndarray` NumPy makes of them.
+    return array._backend.from_array(out)
 
 
 def _joined(pieces: list, boxes: list[Box]):

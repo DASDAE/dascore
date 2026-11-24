@@ -248,7 +248,7 @@ assert absolute.get_coord("time") == filled.get_coord("time")
 
 ## Combined spools
 
-`spool + spool` makes a lazy spool over both spools' metadata. Chunking works across the join, so contiguous patches from different spools, even a mix of file-backed and in-memory, merge into one. The sum is on the backend its operands were set to; under a lazy backend a merge which has to read patches held in memory beside files is the `numpy_fallback` setting's to allow.
+`spool + spool` makes a lazy spool over both spools' metadata. Chunking works across the join, so contiguous patches from different spools, even a mix of file-backed and in-memory, merge into one. The sum is on the first backend its operands were set to; under a lazy backend a merge which has to read patches held in memory beside files is the `numpy_fallback` setting's to allow.
 
 ```{python}
 combined = dc.spool([p1]) + dc.spool([p2])

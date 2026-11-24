@@ -17,6 +17,7 @@ from pint import DimensionalityError
 from pydantic import TypeAdapter
 
 import dascore as dc
+from dascore.backends import _refuse_mixed
 from dascore.config import get_config
 from dascore.constants import (
     _DASCORE_DIR,
@@ -747,6 +748,8 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     # The fold named the result; building it is not another array.
     with operation_context():
         patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
+    # Made of several, it is of the first one's backend.
+    patch = patch._with_backend(patches[0]._backend)
     new_dict = {"patch": patch}
     return [new_dict]
 
@@ -1734,7 +1737,9 @@ def _concatenate_group(
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp(attrs, [x.attrs for x in patches], operation)
     with operation_context():
-        return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+        out = dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+    # Made of several, it is of the first one's backend.
+    return out._with_backend(first._backend)
 
 
 def _joinable(coords, dim: str) -> list[np.ndarray]:
@@ -1933,6 +1938,9 @@ def stack_patches(
         coords_ok = dims_ok and check_coords(init_patch, p, check_behavior, dim_vary)
         # actually do the stacking of data
         if coords_ok and check_data_units(init_patch, p, check_behavior):
+            # Of one array library: none is put on another's to be added.
+            # Asked of a patch which is added, not of one passed over.
+            _refuse_mixed((init_patch.data, p.data), "Stacking patches")
             stack_arr = stack_arr + p.data
             kept.append(p.attrs)
 
@@ -1947,7 +1955,9 @@ def stack_patches(
     )
 
     with operation_context():
-        return dc.Patch(stack_arr, init_patch.coords, init_patch.dims, stack_attrs)
+        out = dc.Patch(stack_arr, init_patch.coords, init_patch.dims, stack_attrs)
+    # Made of several, it is of the first one's backend.
+    return out._with_backend(init_patch._backend)
 
 
 def swap_kwargs_dim_to_axis(patch, kwargs):

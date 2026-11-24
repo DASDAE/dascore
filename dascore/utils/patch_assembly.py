@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.backends import _refuse_mixed, read_backend, spool_backend
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.source import ArraySource
@@ -45,7 +46,6 @@ from dascore.utils.array_api import (
     backend_name,
     decide_fallback,
     is_numpy,
-    lazy_read_backend,
     to_numpy,
 )
 from dascore.utils.attrs import (
@@ -705,13 +705,23 @@ def _label_blocks(coord, size: int = 2**18):
     return (coord[x : x + size] for x in range(0, len(coord), size))
 
 
+def _of_the_spool(patch: dc.Patch) -> dc.Patch:
+    """Return a member as one of the backend of the spool putting it together."""
+    # Before the members are joined, so those of another kind are its own.
+    backend = spool_backend()
+    return patch if backend is None else patch._with_backend(backend)
+
+
 def _on_stretch_grid(patch: dc.Patch, dim: str, row: Mapping) -> dc.Patch:
     """The patch with its ``dim`` labels on its stretch's grid (see above)."""
     coords, attrs = _regridded(patch.coords, patch.attrs, dim, row)
     if coords is patch.coords:
         return patch
     with operation_context():
-        return dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
+        out = dc.Patch(data=patch.data, coords=coords, attrs=attrs, dims=patch.dims)
+    # The same data on other labels: of the backend they were of.
+    out._backend = patch._backend
+    return out
 
 
 def fill_on_grid(patch, dim: str, grid, merge, dtype=None):
@@ -941,8 +951,8 @@ class PatchAssembler:
         # is still converted, which restates its units.
         stated = get_quantity(patch.attrs.data_units)
         if units is None or str(stated) == str(get_quantity(units)):
-            return patch
-        return patch.convert_units(units)
+            return _of_the_spool(patch)
+        return _of_the_spool(patch.convert_units(units))
 
     def _merge_patches_streaming(
         self, joined, df_dict_list, merge_dim, samples, units=None
@@ -988,19 +998,23 @@ class PatchAssembler:
             return None
         if self.sources_unchanged is not None and not self.sources_unchanged(joined):
             return None
-        library = lazy_read_backend()
-        if library is not None:
+        backend = read_backend()
+        try:
             # Under a lazy backend the recipe is the patch's data: nothing
             # is read, and a file which does not hold the array its row
             # described says so when the data are asked for.
-            data = LazyArray(recipe, backend=library)
-        else:
-            try:
-                data = recipe.load()
-            except (InvalidFiberIOError, ParameterError):
-                # the resource did not hold the array its row described: a
-                # different shape, or fewer axes than the windows name
+            data = recipe.load() if backend is None else backend.from_recipe(recipe)
+            # A backend which made another array than the recipe describes
+            # says so on the patch path, where each member is checked.
+            if (tuple(data.shape), _as_numpy_dtype(data.dtype)) != (
+                recipe.shape,
+                recipe.dtype,
+            ):
                 return None
+        except (InvalidFiberIOError, ParameterError):
+            # the resource did not hold the array its row described: a
+            # different shape, or fewer axes than the windows name
+            return None
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
         defaults = _row_defaults(df_dict_list[0])
@@ -1232,8 +1246,11 @@ class PatchAssembler:
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs = [], []
         target_units = None
+        # Made of several, the merged patch is of the first one's backend.
+        first = None
         for number, patch_kwargs in enumerate(df_dict_list):
             patch = self._load_trimmed_patch(patch_kwargs, joined, units)
+            first = patch._backend if number == 0 else first
             patch, target_units = _match_merge_units(patch, merge_dim, target_units)
             if not is_numpy(patch.data):
                 # Lazy, or on another library: joined where the members
@@ -1243,7 +1260,7 @@ class PatchAssembler:
                 if buffer is not None and axis is not None:
                     head = broadcast_for_index(buffer.ndim, axis, slice(0, offset))
                     held.append(buffer[head])
-                return self._joined(
+                out = self._joined(
                     joined,
                     patch,
                     df_dict_list[number + 1 :],
@@ -1253,6 +1270,7 @@ class PatchAssembler:
                     held=(held, coords, attrs, dims),
                     rows=df_dict_list,
                 )
+                return out._with_backend(first)
             data, coord = patch.data, patch.coords
             if dims is None:
                 dims = patch.dims
@@ -1298,7 +1316,8 @@ class PatchAssembler:
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
-        return self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
+        out = self._assemble(buffer, dims, merge_dim, coords, attrs, df_dict_list)
+        return out._with_backend(first)
 
     def _joined(
         self, joined, patch, rest, merge_dim, units, target_units, *, held, rows
@@ -1332,6 +1351,8 @@ class PatchAssembler:
             data.append(patch.data)
             coords.append(patch.coords)
             attrs.append(patch.attrs)
+        # Refused before anything is read or cast for them.
+        _refuse_mixed(data, "Merging patches")
         dtypes = [_as_numpy_dtype(x.dtype) for x in data]
         if len(set(dtypes)) > 1:
             # Promoted a member at a time, rounding where the buffer of NumPy

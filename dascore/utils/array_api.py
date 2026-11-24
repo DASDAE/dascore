@@ -11,7 +11,6 @@ lives in [compat](`dascore.compat`).
 
 from __future__ import annotations
 
-import re
 import warnings
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -29,7 +28,6 @@ from dascore.config import get_config
 from dascore.exceptions import (
     LazyOperationError,
     NumpyFallbackError,
-    ParameterError,
 )
 from dascore.warnings import NumpyFallbackWarning
 
@@ -42,8 +40,6 @@ __all__ = [
     "is_numpy",
     "namespace_name",
     "nan_reduce",
-    "parse_backend",
-    "to_backend",
     "to_numpy",
     "warn_numpy_fallback",
 ]
@@ -52,15 +48,6 @@ __all__ = [
 NUMPY_BACKEND = "numpy"
 # The name reported for a lazy array, whose values are read only on `load`.
 LAZY_BACKEND = "lazy"
-# How a lazy backend is asked for: the class, or the alias, and in brackets
-# the array library its chunks are computed on.
-_LAZY_SPELLING = re.compile(r"(?:lazyarray|lazy)(?:\[\s*(\w+)\s*\])?")
-# The module which is an array library's namespace, where it is not the
-# package itself.
-_NAMESPACES = {"jax": "jax.numpy", "dask": "dask.array"}
-# The array library patches are being read onto lazily, or None when reads
-# fill memory as usual; see `reading_lazily`.
-_LAZY_READ: ContextVar[str | None] = ContextVar("dascore_lazy_read", default=None)
 # The operations whose conversion through NumPy has been decided already;
 # see `fallbacks_decided`.
 _DECIDED: ContextVar[frozenset[str]] = ContextVar(
@@ -135,90 +122,6 @@ def is_foreign(array: Any) -> bool:
     return is_array_api_obj(array)
 
 
-def parse_backend(backend: str) -> tuple[bool, str]:
-    """
-    Return whether a backend name is lazy, and the array library it names.
-
-    Parameters
-    ----------
-    backend
-        An array library by the name
-        [`backend_name`](`dascore.utils.array_api.backend_name`) reports,
-        such as ``"numpy"`` or ``"jax"``, or a lazy backend: ``"LazyArray"``
-        or its alias ``"lazy"``, with the library each chunk is computed on
-        in brackets, NumPy when none is given.
-
-    Examples
-    --------
-    >>> from dascore.utils.array_api import parse_backend
-    >>>
-    >>> assert parse_backend("numpy") == (False, "numpy")
-    >>> assert parse_backend("lazy") == (True, "numpy")
-    >>> assert parse_backend("LazyArray[jax]") == (True, "jax")
-    """
-    text = str(backend).strip().lower()
-    found = _LAZY_SPELLING.fullmatch(text)
-    library = (found.group(1) or NUMPY_BACKEND) if found else text
-    if not re.fullmatch(r"\w+", library):
-        msg = (
-            f"{backend!r} is not a backend. Name an array library, such as "
-            "'numpy' or 'jax', or a lazy one: 'lazy', 'LazyArray' or "
-            "'LazyArray[jax]'."
-        )
-        raise ParameterError(msg)
-    return found is not None, library
-
-
-def to_backend(array: Any, backend: str) -> Any:
-    """
-    Return an array on the array library a name says.
-
-    Parameters
-    ----------
-    array
-        An array in memory, on any backend.
-    backend
-        The name of the array library, as
-        [`backend_name`](`dascore.utils.array_api.backend_name`) reports it.
-
-    Raises
-    ------
-    ParameterError
-        If no array library of that name can be imported.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from dascore.utils.array_api import to_backend
-    >>>
-    >>> assert isinstance(to_backend(np.array([1, 2]), "numpy"), np.ndarray)
-    """
-    if backend_name(array) == backend:
-        return array
-    # An array NumPy already holds is handed over as it is.
-    held = array if is_numpy(array) else to_numpy(array)
-    if backend == NUMPY_BACKEND:
-        return held
-    try:
-        namespace = import_module(_NAMESPACES.get(backend, backend))
-        out = namespace.asarray(held)
-    except (ImportError, AttributeError) as error:
-        msg = f"No array library called {backend!r} could be used: {error}"
-        raise ParameterError(msg) from error
-    # A library which holds the values in another dtype, as JAX does with
-    # 64-bit numbers unless told otherwise, would change them under the
-    # same id: refused rather than trusted.
-    made = _as_numpy_dtype(out.dtype)
-    if held.size and made != held.dtype:
-        msg = (
-            f"{backend} holds {held.dtype} data as {made}, which would change "
-            f"their values. Configure {backend} to keep {held.dtype}, or "
-            "convert the data first."
-        )
-        raise ParameterError(msg)
-    return out
-
-
 def decide_fallback(
     what: str,
     how: str,
@@ -289,28 +192,6 @@ def fallbacks_decided(*names: str | None):
         yield
     finally:
         _DECIDED.reset(token)
-
-
-@contextmanager
-def reading_lazily(backend: str | None):
-    """
-    Have reads inside the block return lazy patches, computed on `backend`.
-
-    None leaves reads as they are, filling memory. A read which cannot be
-    lazy is the `numpy_fallback` setting's to allow, which left unset
-    raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`)
-    rather than read.
-    """
-    token = _LAZY_READ.set(backend)
-    try:
-        yield
-    finally:
-        _LAZY_READ.reset(token)
-
-
-def lazy_read_backend() -> str | None:
-    """Return the array library lazy reads compute on, or None when eager."""
-    return _LAZY_READ.get()
 
 
 def warn_numpy_fallback(

@@ -571,11 +571,14 @@ class TestMemoryLookAhead:
         """The guard hears of a conversion the setting would hide or refuse."""
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
         from dascore.config import config_context  # noqa: PLC0415
-        from dascore.utils.array_api import warn_numpy_fallback  # noqa: PLC0415
+        from dascore.utils.array_api import (  # noqa: PLC0415
+            backend_name,
+            warn_numpy_fallback,
+        )
 
         def method(self):
             """Convert as an operation with no kernel for the library does."""
-            warn_numpy_fallback("announce", self.backend)
+            warn_numpy_fallback("announce", backend_name(self.data))
             return self.new(data=np.asarray(self.data))
 
         monkeypatch.setattr(dc.Patch, "announce_fallback", method, raising=False)

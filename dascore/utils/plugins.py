@@ -5,11 +5,13 @@ from __future__ import annotations
 import functools
 import warnings
 from importlib.metadata import entry_points
+from pathlib import Path
 from typing import Any
 
 # The entry-point group every FiberIO plugin registers under.
 FIBER_IO_GROUP = "dascore.fiber_io"
-# The entry-point group a backend package's kernels load from, keyed by backend.
+# The entry-point group a backend package's kernels, and its backend class,
+# load from, keyed by backend.
 KERNEL_GROUP = "dascore.kernels"
 
 
@@ -43,3 +45,26 @@ def maybe_load_entry_point(entry_point_group: str, name: str) -> Any:
     if loader is not None:
         return loader()
     return None
+
+
+@functools.cache
+def load_backend_plugins(backend: str) -> bool:
+    """
+    Load every `dascore.kernels` entry point named for a backend, once.
+
+    Returns whether every one of them loaded.
+    """
+    loaded = True
+    for entry_point in entry_points(group=KERNEL_GROUP, name=backend):
+        # The error is caught inside the cache, so a broken plugin warns once.
+        try:
+            entry_point.load()
+        except Exception as error:
+            msg = (
+                f"Plugin {entry_point.value!r} for backend {backend!r} failed "
+                f"to load, so its backend and kernels are not used: {error!r}"
+            )
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
+            loaded = False
+    return loaded

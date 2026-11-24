@@ -93,16 +93,16 @@ Plain `pass_filter` stays exact and needs its axis whole. The user chooses to ac
 
 ## Backends
 
-A spool or a patch is moved to a backend by name.
+A spool is set to a backend, which makes the array each of its patches holds, and a patch can be set to one the same way.
 
 ```python
 spool.set_backend("jax")             # eager, on JAX
 spool.set_backend("LazyArray")       # lazy, kernels on NumPy
 spool.set_backend("LazyArray[jax]")  # lazy, kernels on JAX
-patch.set_backend("numpy")           # in memory, on NumPy
+spool.set_backend(LazyBackend(compute=JaxBackend(device=device)))  # with options
 ```
 
-`"lazy"` is an alias for `"LazyArray"`, and `"LazyArray"` for `"LazyArray[numpy]"`. The bracket names the array library each box is computed on, which leaves room for another lazy backend later.
+`"lazy"` is an alias for `"LazyArray"`, and `"LazyArray"` for `"LazyArray[numpy]"`. The bracket names the backend each box is computed on, which leaves room for another lazy backend later. A name is a registered [`ArrayBackend`](`dascore.backends.ArrayBackend`) with its default options; an instance carries its own.
 
 One setting, `numpy_fallback`, decides what happens when an operation has no kernel for the backend and would convert through NumPy: `raise`, `warn` or `ignore`. Left unset it is `raise` for lazy data and `warn` otherwise. The same setting decides a read, a fill or a merge which cannot stay lazy.
 

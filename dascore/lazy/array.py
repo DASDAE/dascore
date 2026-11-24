@@ -8,7 +8,7 @@ says which stored samples fill which box of the array, and the
 none of which has computed anything. Its shape, dtype and `data_id` are the
 last step's, or the recipe's when nothing is pending, so they are known
 without reading. [`load`](`dascore.lazy.array.LazyArray.load`) reads the
-recipe and runs each step's kernel for the array's `backend` in order, a
+recipe and runs each step's kernel for the array's backend in order, a
 chunk at a time when the whole would be large; see
 [`dascore.lazy.execute`](`dascore.lazy.execute`).
 
@@ -34,6 +34,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from dascore.backends import ArrayBackend, NumpyBackend, _refuse_mixed
 from dascore.exceptions import ParameterError
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
@@ -63,10 +64,8 @@ class LazyArray:
         The operations to run on the recipe's array, in order; none by
         default, when the array is the recipe's.
     backend
-        The array library each chunk is computed on and `load` returns an
-        array of, by the name
-        [`backend_name`](`dascore.utils.array_api.backend_name`) reports;
-        NumPy by default.
+        The [`ArrayBackend`](`dascore.backends.ArrayBackend`) each chunk is
+        computed on and `load` returns an array of; NumPy's by default.
 
     Notes
     -----
@@ -81,31 +80,30 @@ class LazyArray:
         self,
         recipe: Recipe,
         chain: Chain | None = None,
-        backend: str = NUMPY_BACKEND,
+        backend: ArrayBackend | None = None,
     ):
         self._recipe = recipe
         self._chain = Chain() if chain is None else chain
-        self._backend = backend
+        self._backend = NumpyBackend() if backend is None else backend
 
-    @property
-    def backend(self) -> str:
-        """The array library each chunk is computed on."""
-        return self._backend
-
-    def with_backend(self, backend: str) -> LazyArray:
+    def _with_backend(self, backend: ArrayBackend) -> LazyArray:
         """
-        Return the array computed on another array library.
+        Return the array computed on another backend.
 
-        A step already pending with no kernel for it would have each chunk
-        converted through NumPy, which the `numpy_fallback` setting decides
-        here, as it does for a step chained afterwards.
+        A step already pending with no kernel for its library would have
+        each chunk converted through NumPy, which the `numpy_fallback`
+        setting decides here, as it does for a step chained afterwards.
         """
         if backend == self._backend:
             return self
-        for node in self._chain:
+        old = self._backend
+        # The same arrays under the same name, on another device say, run
+        # the kernels they ran: there is nothing to ask again.
+        same = (backend._native, backend.name) == (old._native, old.name)
+        for node in () if same else self._chain:
             if (converted := execute._converted(node.processor, backend)) is not None:
                 decide_fallback(
-                    f"{converted} has no {backend} implementation",
+                    f"{converted} has no {backend._native} implementation",
                     "each chunk is converted to numpy to run it",
                 )
         return LazyArray(self._recipe, self._chain, backend)
@@ -174,7 +172,8 @@ class LazyArray:
     def __repr__(self) -> str:
         name = type(self).__name__
         steps = len(self._chain)
-        on = "" if self._backend == NUMPY_BACKEND else f", backend={self._backend!r}"
+        on = str(self._backend)
+        on = "" if on == NUMPY_BACKEND else f", backend={on!r}"
         return f"{name}(shape={self.shape}, dtype={self.dtype}, steps={steps}{on})"
 
     def _appended(self, node: Node) -> LazyArray:
@@ -192,7 +191,7 @@ class LazyArray:
         Read the recipe and run every pending step, returning the array.
 
         Each step runs the kernel its processor has for this array's
-        `backend`, NumPy's unless another library was named, on the whole
+        backend, NumPy's unless another was given, on the whole
         array or, when that would hold an array larger than the
         `lazy_block_size` setting, a chunk at a time; only the samples the
         result needs are read. The array returned is on that library. What
@@ -229,10 +228,11 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     Lazy arrays with nothing pending are a window of what is stored, and
     are joined by their recipes, reading nothing: the result is lazy. Any
     other arrays held on one library are joined there, by the library's
-    own `concat`, so they are never taken through NumPy. What cannot be
-    joined either way -- lazy arrays with operations pending, a mix of lazy
-    and in-memory arrays or of libraries, or a new axis on lazy arrays --
-    is read or converted only as the `numpy_fallback` setting allows.
+    own `concat`, so they are never taken through NumPy. Arrays of
+    different libraries are not joined at all. What cannot be joined either
+    way -- lazy arrays with operations pending, a mix of lazy and in-memory
+    arrays, or a new axis on lazy arrays -- is read or converted only as
+    the `numpy_fallback` setting allows.
 
     Parameters
     ----------
@@ -258,6 +258,9 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     >>> assert np.array_equal(join([np.ones(2), np.zeros(2)], 0), [1, 1, 0, 0])
     """
     arrays = list(arrays)
+    # Of one array library, counting a lazy array as what it loads to: no
+    # library's arrays are put on another's to be joined.
+    _refuse_mixed(arrays, "Joining patches")
     lazy = [isinstance(x, LazyArray) for x in arrays]
     if all(lazy) and not new_axis:
         if (out := _joined_recipes(arrays, axis)) is not None:
@@ -283,18 +286,10 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     # Promoted as NumPy promotes the same arrays, from the dtypes they have
     # now: a library may not do so, nor keep every dtype NumPy holds.
     dtype = np.result_type(*(_as_numpy_dtype(x.dtype) for x in arrays))
-    # Arrays NumPy holds join others on their library: putting them there
-    # takes nothing through NumPy, as dask's own join of them never did.
-    others = {backend_name(x) for x in arrays if not is_numpy(x)}
-    if len(others) == 1 and NUMPY_BACKEND not in others:
-        like = next(x for x in arrays if not is_numpy(x))
-        arrays = [_moved(x, like, dtype) if is_numpy(x) else x for x in arrays]
-    libraries = {backend_name(x) for x in arrays}
     # Something NumPy takes only through `__array__`, which may read it.
-    held = libraries == {NUMPY_BACKEND}
-    if len(libraries) > 1 or held:
+    if backend_name(arrays[0]) == NUMPY_BACKEND:
         decide_fallback(
-            f"Arrays on {sorted(libraries)} cannot be joined on one library",
+            "Arrays NumPy holds only through `__array__` cannot be joined as they are",
             "they were converted to numpy and joined there",
             lazy=False,
         )
@@ -307,13 +302,6 @@ def join(arrays: Sequence, axis: int, new_axis: bool = False):
     if new_axis:
         arrays = [xp.expand_dims(x, axis=-1) for x in arrays]
     return xp.concat(arrays, axis=axis)
-
-
-def _moved(array: np.ndarray, like, dtype: np.dtype):
-    """Return a NumPy array in `dtype`, on the library `like` is on."""
-    out = asarray_like(array.astype(dtype, copy=False), like)
-    _check_kept(out, dtype)
-    return out
 
 
 def _check_kept(array, dtype: np.dtype) -> None:
@@ -346,8 +334,9 @@ def cast_on_library(array, dtype: np.dtype):
 
 def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:
     """Return lazy arrays joined by their recipes, or None if they cannot be."""
-    backends = {x.backend for x in arrays}
-    if len(backends) > 1 or any(len(x.chain) for x in arrays):
+    # Of one kind of array already, so on the first one's backend.
+    backend = arrays[0]._backend
+    if any(len(x.chain) for x in arrays):
         return None
     # Of one dtype only: a recipe joined with another of a wider dtype casts
     # its stored samples straight to it, skipping any rounding its own
@@ -356,4 +345,4 @@ def _joined_recipes(arrays: Sequence[LazyArray], axis: int) -> LazyArray | None:
         return None
     # A recipe join promotes the dtype as NumPy joins arrays in memory.
     joined = concat([x.recipe for x in arrays], axis=axis)
-    return LazyArray(joined, backend=next(iter(backends)))
+    return LazyArray(joined, backend=backend)

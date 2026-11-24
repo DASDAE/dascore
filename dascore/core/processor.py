@@ -42,11 +42,9 @@ import inspect
 import numbers
 import sys
 import textwrap
-import warnings
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
-from importlib.metadata import entry_points
-from pathlib import Path
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
 
@@ -96,9 +94,10 @@ from dascore.utils.patch_registry import (
     register_patch_function,
     resolve_patch_function,
 )
-from dascore.utils.plugins import KERNEL_GROUP
+from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
+    from dascore.backends import ArrayBackend
     from dascore.core.attrs import PatchAttrs
     from dascore.lazy.contract import ChunkContract
 
@@ -111,6 +110,35 @@ _RECORD: ContextVar[bool] = ContextVar("dascore_record_call", default=True)
 # operation a patch method builds rather than its result; see
 # `captured_operation`.
 _CAPTURE: ContextVar[list | None] = ContextVar("dascore_capture", default=None)
+
+# The backend the operation now running is of, so that an operation it
+# runs inside itself, as a window does, can be resolved under it too; see
+# `running_under` and `running_name`.
+_UNDER: ContextVar[ArrayBackend | None] = ContextVar("dascore_running", default=None)
+
+
+@contextmanager
+def running_under(backend: ArrayBackend | None):
+    """Say which backend the operation run inside the block is of."""
+    token = _UNDER.set(backend)
+    try:
+        yield
+    finally:
+        _UNDER.reset(token)
+
+
+def running_name(data) -> str | None:
+    """
+    Return the name of the running operation's backend, if `data` are its arrays.
+
+    For an operation which runs another inside its own kernel, as a window
+    does: the name to resolve that other one's kernel under, so the
+    backend's kernels are not passed over. None where no backend is in
+    force, or the data at hand are not its arrays, as they are not once a
+    fallback has made NumPy arrays of them.
+    """
+    backend = _UNDER.get()
+    return backend.name if backend is not None and backend._owns(data) else None
 
 
 class PatchProcessor(DascoreBaseModel):
@@ -377,7 +405,7 @@ class PatchProcessor(DascoreBaseModel):
         return self.run(patch)
 
     @classmethod
-    def kernel_for(cls, backend: str):
+    def kernel_for(cls, backend: str, name: str | None = None):
         """
         Return the kernel this class runs for a backend, or None.
 
@@ -388,17 +416,24 @@ class PatchProcessor(DascoreBaseModel):
         registered against its parent must not answer for it. A backend
         other than NumPy first loads its `dascore.kernels` entry points, once.
 
+        `backend` is what the data are, as
+        [`backend_name`](`dascore.utils.array_api.backend_name`) reports
+        them, and `name` that of the backend their patch is of, if any. A
+        kernel a class has registered under the name answers before
+        whatever the class runs for the data as they are, which takes no
+        conversion. With no name, the kernel is the array's own.
+
         The lazy backend never falls back unasked: the first class which
         computes anything is answered by its own registered lazy kernel, or
         else by [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), which
         runs the operation by its chunk contract, or refuses it unless the
         `numpy_fallback` setting lets the data be read into memory.
         """
-        if backend != "numpy":
-            _load_kernel_plugin(backend)
+        _load_plugins(backend, name)
         for klass in cls.__mro__:
             contents = klass.__dict__
-            if (found := contents.get("_kernels", {}).get(backend)) is not None:
+            kernels = contents.get("_kernels", {})
+            if (found := kernels.get(name) or kernels.get(backend)) is not None:
                 return found
             if backend == LAZY_BACKEND:
                 # Never the array api kernel or the numpy fallback; a kernel
@@ -531,14 +566,14 @@ class PatchProcessor(DascoreBaseModel):
         """Run the operation; `record=False` writes no history or ids."""
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
         # Before the check, which asks whether the class has any kernel.
-        if meta.backend != "numpy":
-            _load_kernel_plugin(meta.backend)
+        name = None if meta._backend is None else meta._backend.name
+        _load_plugins(meta._kernel_key, name)
         self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
         # settled before anything asks the patch for its data.
-        kernel = self.kernel_for(meta.backend)
+        kernel = self.kernel_for(meta._kernel_key, name)
         if kernel is None:
             if out is meta:
                 return self._finished(patch, self._unchanged(patch, record), record)
@@ -559,7 +594,9 @@ class PatchProcessor(DascoreBaseModel):
         data = patch.data
         # A kernel says "nothing to do" by handing its argument back, so it
         # must not write into that argument and return it.
-        result = kernel(self, data, **plan)
+        # What it runs inside itself is of the patch's backend too.
+        with running_under(meta._backend):
+            result = kernel(self, data, **plan)
         if out is meta and result is data:
             return self._finished(patch, self._unchanged(patch, record), record)
         out = self.reconcile(result, out, meta)
@@ -571,9 +608,11 @@ class PatchProcessor(DascoreBaseModel):
             # gets them as any other result does, below.
             attrs = _unrecorded_attrs(attrs)
         out = out.update(attrs=attrs)
-        if meta.backend == LAZY_BACKEND:
+        if meta._kernel_key == LAZY_BACKEND:
             result = self._settled(result, out)
-        new = out if reconciled else out.to_patch(result)
+        # A patch `reconcile` made is of the backend its input was of, as
+        # one made from the metadata is.
+        new = out._with_backend(patch._backend) if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
         if out._source is not meta._source:
             new._source = out._source
@@ -919,7 +958,9 @@ def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, .
     backend
         The backend it is for, as
         [`backend_name`](`dascore.utils.array_api.backend_name`) spells
-        it -- "numpy", "cupy", "dask" -- or a tuple of them.
+        it -- "numpy", "cupy", "dask" -- or the name of an
+        [`ArrayBackend`](`dascore.backends.ArrayBackend`), or a tuple of
+        them.
     """
     owner = _processor_named(cls) if isinstance(cls, str) else cls
     backends = (backend,) if isinstance(backend, str) else tuple(backend)
@@ -937,6 +978,13 @@ def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, .
     return decorate
 
 
+def _load_plugins(*names: str | None) -> None:
+    """Load the `dascore.kernels` entry points of each name but NumPy's, once."""
+    for name in names:
+        if name is not None and name != "numpy":
+            load_backend_plugins(name)
+
+
 def _processor_named(name: str) -> type[PatchProcessor]:
     """Return the processor a registry tag names."""
     owner = getattr(resolve_patch_function(name), "__processor__", None)
@@ -944,22 +992,6 @@ def _processor_named(name: str) -> type[PatchProcessor]:
         msg = f"{name!r} is a patch function, not a PatchProcessor, so takes no kernel."
         raise ParameterError(msg)
     return owner
-
-
-@functools.cache
-def _load_kernel_plugin(backend: str) -> None:
-    """Load every `dascore.kernels` entry point named for a backend, once."""
-    for entry_point in entry_points(group=KERNEL_GROUP, name=backend):
-        # The error is caught inside the cache, so a broken plugin warns once.
-        try:
-            entry_point.load()
-        except Exception as error:
-            msg = (
-                f"Kernel plugin {entry_point.value!r} for backend {backend!r} "
-                f"failed to load, so its kernels are not used: {error!r}"
-            )
-            prefix = str(Path(__file__).parent.parent)
-            warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
 
 
 def _method_for(cls: type[PatchProcessor], host: type):

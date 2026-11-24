@@ -40,7 +40,7 @@ Examples
 >>> patch = dc.Patch(data=recipe, coords={"x": range(3), "y": range(2)},
 ...                  dims=("x", "y"))
 >>> out = Negate()(patch)
->>> assert out.backend == "lazy" and len(out.data.chain) == 1
+>>> assert len(out.data.chain) == 1
 >>> assert out.data.chain.last.data_id == out.attrs.data_id
 >>> assert (out.load().data == 1).all()
 """
@@ -49,7 +49,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dascore.core.processor import PatchProcessor, _computes
+from dascore.core.processor import PatchProcessor, _computes, running_under
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Unchanged
@@ -81,12 +81,14 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     contract = _contract(processor, data.dtype, plan)
     if isinstance(contract, Unchanged):
         return data
-    kernel = type(processor).kernel_for(data.backend)
+    backend = data._backend
+    native = backend._native
+    kernel = type(processor).kernel_for(native, backend.name)
     if isinstance(contract, ChunkContract):
-        if (converted := _converted(processor, data.backend)) is not None:
+        if (converted := _converted(processor, backend)) is not None:
             # It runs a chunk at a time still, each chunk through NumPy.
             decide_fallback(
-                f"{converted} has no {data.backend} implementation",
+                f"{converted} has no {native} implementation",
                 "each chunk is converted to numpy to run it",
             )
         return data._appended(Node(processor, plan, contract))
@@ -100,7 +102,8 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     # If the operation has no kernel for that library either, it says so
     # itself, as it does for data in memory.
     loaded = data.load()
-    out = kernel(processor, loaded, **plan)
+    with running_under(backend):
+        out = kernel(processor, loaded, **plan)
     # Handed back unchanged is "nothing to do", as it is in memory: the
     # patch is left as it was, lazy and under its own id.
     return data if out is loaded else out

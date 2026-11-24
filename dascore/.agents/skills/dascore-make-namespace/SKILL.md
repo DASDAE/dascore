@@ -100,7 +100,7 @@ Calling a processor checks the patch, runs it, and records history and lineage i
 
 An operation whose metadata changes, or whose kernel needs numbers read from the metadata, splits the work so that no array is touched until the kernel runs:
 
-- `get_metadata(meta)` gets a [`PatchMeta`](`dascore.PatchMeta`) -- the coords, attrs, dtype and backend of the data, without the data -- and returns two things: the result's metadata, built through the coord manager and `meta.new`, and what the kernel needs as ints, floats, bools, slices, `None`, `Ellipsis`, sequences or string-keyed dicts of those, or arrays of any dtype but object. Deriving the one usually computes the other, so they come back together.
+- `get_metadata(meta)` gets a [`PatchMeta`](`dascore.PatchMeta`) -- the coords, attrs and dtype of the data, without the data -- and returns two things: the result's metadata, built through the coord manager and `meta.new`, and what the kernel needs as ints, floats, bools, slices, `None`, `Ellipsis`, sequences or string-keyed dicts of those, or arrays of any dtype but object. Deriving the one usually computes the other, so they come back together.
 - `kernel(data, **plan)` computes the array; it never sees a patch.
 - `numpy_kernel(data, **plan)` may be supplied alongside or instead of `kernel` for NumPy, SciPy or Numba implementations. NumPy inputs prefer it. Other backends use `kernel` if available, otherwise run on NumPy copies and convert the result back to the input backend, as the `numpy_fallback` setting says: with a `NumpyFallbackWarning` unless it is changed.
 - `reconcile(result, out, meta)` can use the kernel result, and the input metadata `meta`, to finalize metadata. Return a `PatchMeta` to attach the result array, or call `out.to_patch(data)` to return a patch with value-dependent data and coordinates.
@@ -165,7 +165,7 @@ def _abs_mybackend(processor, data):
     return np.abs(data)
 ```
 
-The data backend selects the kernel. A registered kernel takes precedence over the same class's `numpy_kernel` and `kernel`; a subclass's own implementation takes precedence over its parent's registrations.
+The kernel is selected by the name of the backend the patch is of, if it has one and a kernel is registered under it, and otherwise by the data's array library. A registered kernel takes precedence over the same class's `numpy_kernel` and `kernel`; a subclass's own implementation takes precedence over its parent's registrations.
 
 The operation may also be named by its registry tag -- bare for one of DASCore's own, `package:name` otherwise -- and one kernel may serve several backends:
 
@@ -175,7 +175,7 @@ def _abs_shared(processor, data):
     return np.abs(data)
 ```
 
-Kernels are registered when their module is imported. To have DASCore import it, rather than asking users to, declare the module as a `dascore.kernels` entry point for each backend it serves, named exactly as [`backend_name`](`dascore.utils.array_api.backend_name`) spells that backend. DASCore imports it the first time data of that backend meet a processor:
+Kernels are registered when their module is imported. To have DASCore import it, rather than asking users to, declare the module as a `dascore.kernels` entry point for each backend it serves, named for it: the `name` of an [`ArrayBackend`](`dascore.backends.ArrayBackend`), or, for an array library with no backend of its own, exactly as [`backend_name`](`dascore.utils.array_api.backend_name`) spells it. DASCore imports it the first time data of that backend meet a processor, or the first time a spool is set to a backend of that name, so the same module can define the package's [`ArrayBackend`](`dascore.backends.ArrayBackend`) subclass. A package of other kernels for arrays DASCore already has a backend for, such as Numba kernels for NumPy arrays, subclasses that backend under a `name` of its own and registers its kernels under it; an operation it has no kernel for runs what the array would anyway:
 
 ```toml
 [project.entry-points."dascore.kernels"]

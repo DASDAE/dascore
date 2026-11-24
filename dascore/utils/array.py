@@ -16,6 +16,7 @@ import numpy as np
 from numpy.lib.array_utils import normalize_axis_tuple
 
 import dascore as dc
+from dascore.backends import _refuse_mixed
 from dascore.compat import array, is_array
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
@@ -30,6 +31,7 @@ from dascore.units import (
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
+    backend_name,
     is_foreign,
     is_numpy,
     nan_reduce,
@@ -406,6 +408,12 @@ _OFFSET_UNIT_OPERATORS = frozenset(
         np.not_equal,
     }
 )
+
+
+def _is_plain_numpy(patch) -> bool:
+    """Whether a patch holds an array of NumPy's and was set to no backend."""
+    # Any array of no other library, as an array-like of none is NumPy's.
+    return patch.backend is None and backend_name(patch.data) == "numpy"
 
 
 def _apply_binary_ufunc(
@@ -1297,6 +1305,14 @@ def apply_ufunc(ufunc, *args, **kwargs):
         raise ParameterError(msg)
     # Whichever operand is lazy, before any is converted or applied.
     refuse_lazy(getattr(ufunc, "__name__", "operation"), _operand_arrays(args, kwargs))
+    patches = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
+    if len(patches) > 1 and not any(_is_plain_numpy(x) for x in patches):
+        # Of one array library: no patch's data are put on another's, by a
+        # fallback through NumPy or otherwise. A NumPy patch of no backend
+        # is taken in by the other's library, as it always was, and the
+        # result is of the first patch's backend.
+        name = getattr(ufunc, "__name__", "operation")
+        _refuse_mixed([x.data for x in patches], f"{name} of two patches")
     data = _get_foreign_data(args, kwargs)
     if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
         out = func(ufunc, *args, **kwargs)

@@ -11,6 +11,7 @@ from dascore.exceptions import LazyOperationError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.contract import Pointwise
 from dascore.lazy.recipe import Recipe
+from dascore.utils.array_api import backend_name
 from dascore.utils.identity import operation_context
 from dascore.utils.patch import stack_patches
 
@@ -47,7 +48,7 @@ class TestRecipeInAPatch:
         assert isinstance(patch.data, LazyArray)
         assert patch.data.recipe is recipe
         assert len(patch.data.chain) == 0
-        assert patch.backend == "lazy"
+        assert backend_name(patch.data) == "lazy"
         assert patch.shape == recipe.shape
         assert patch.dtype == recipe.dtype
         assert not recipe_loads
