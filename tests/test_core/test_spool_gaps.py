@@ -457,6 +457,18 @@ class TestMixedKinds:
         assert (gap["time_min"], gap["time_max"], gap["time_step"]) == (1, 3, 1)
         assert spool.get_coverage("time")["coverage"].tolist()[-1] == 0.5
 
+    def test_segments_first_keep_kind_order(self):
+        """A first patch timed in runs keeps its kind first (#1745)."""
+        times = TIME_KINDS["absolute"]
+        later = times[2:] + 5 * ONE_SECOND
+        runs = concat_coords(get_coord(data=times[:2]), get_coord(data=later))
+        spool = dc.spool([self._patch(runs), self._patch(TIME_KINDS["numbers"])])
+        kinds = [x.get_array("time").dtype.kind for x in spool.chunk(time=None)]
+        assert kinds == ["M", "M", "f"]
+        coverage = spool.get_coverage("time")["time_min"].tolist()
+        assert isinstance(coverage[0], pd.Timestamp)
+        assert coverage[1] == 0.0
+
     @pytest.mark.parametrize("on_disk", [False, True])
     def test_drop_leaves_one_kind(self, tmp_path, on_disk):
         """Rows a drop leaves of one kind plan as that kind alone (#1701)."""
