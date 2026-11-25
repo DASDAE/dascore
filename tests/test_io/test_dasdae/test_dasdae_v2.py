@@ -21,7 +21,8 @@ from dascore.warnings import SnapWarning
 from tests.conftest import join_patches, segment_layout
 
 # More samples than the address space can hold as labels: expanding such a
-# grid fails at once, as 7 PiB on 64-bit or 8 GiB on 32-bit WebAssembly.
+# grid fails at once, as petabytes on 64-bit or 4 GB or more on 32-bit
+# WebAssembly, where NumPy caps an array at 2 GiB.
 HUGE = 10**15 if np.intp(0).itemsize == 8 else 1_000_000_007
 T0 = np.datetime64("2020-01-01T00:00:00")
 MS = np.timedelta64(1, "ms")
@@ -393,14 +394,20 @@ class TestDefaultSnap:
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
         return dc.write(patch, path, "DASDAE")
 
-    @pytest.mark.parametrize("dim", ["distance", "time"])
-    def test_grid_labels_are_not_expanded(self, tmp_path, dim):
+    # The time step shrinks from 4 ms to 2 us so the last of HUGE labels stays
+    # in datetime64[ns] range. Distance keeps its 1 m step: it is int32 on
+    # 32-bit platforms, where a larger step would overflow the labels.
+    @pytest.mark.parametrize(
+        ("dim", "step"),
+        [("distance", {}), ("time", {"step_numerator": 2000})],
+        ids=["distance", "time"],
+    )
+    def test_grid_labels_are_not_expanded(self, tmp_path, dim, step):
         """Scanning a grid reads none of its labels, so any length scans."""
         path = dc.write(dc.get_example_patch(), tmp_path / "grid.h5", "DASDAE")
         with h5py.File(path, "r+") as h5:
             (group,) = h5["waveforms"].values()
-            # A step of 2 us keeps the last of HUGE time labels in range.
-            group[f"_coord_{dim}"].attrs.update(length=HUGE, step_numerator=2000)
+            group[f"_coord_{dim}"].attrs.update(length=HUGE, **step)
             attrs, shape = dict(group["data"].attrs), list(group["data"].shape)
             shape[group.attrs["_dims"].split(",").index(dim)] = HUGE
             del group["data"]
