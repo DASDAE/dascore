@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from dascore.core import coords as coords_module
 from dascore.core.coords import (
     Blank,
-    CoordString,
     Grid,
     Labels,
     NumericCoord,
@@ -43,7 +42,6 @@ class TestRunsHoldTheLabels:
         """A coordinate of one grid answers by arithmetic."""
         coord = get_coord(start=0, stop=10, step=1)
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Grid)
         assert coord.evenly_sampled
 
     def test_a_float_run_folds_its_offset(self):
@@ -58,7 +56,6 @@ class TestRunsHoldTheLabels:
         """Labels no grid describes are held as they are."""
         coord = NumericCoord.from_labels(np.array([0.0, 1.0, 3.5]))
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Labels)
         assert not coord.evenly_sampled
 
     def test_segments_are_the_runs(self, gappy):
@@ -216,7 +213,8 @@ class TestLabelsAreHeldOnce:
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
         for item in (slice(1, None), slice(None, None, 2), slice(None, None, -1)):
             sliced = stored[item]
-            assert isinstance(sliced.runs[0], Labels)
+            # still a window onto the one stored array, not a new one
+            assert set(sliced.sources) == set(stored.sources)
             assert np.array_equal(sliced.values, values[item])
 
     def test_striding_never_hashes(self, stored, monkeypatch):
@@ -235,8 +233,7 @@ class TestLabelsAreHeldOnce:
             *(slice(None, None, x) for x in (2, -2)),
         ):
             out = joined[item]
-            windows = [x for x in out.runs if isinstance(x, Labels)]
-            assert windows and {x.id for x in windows} <= ids
+            assert out.sources and set(out.sources) <= ids
             assert np.array_equal(out.values, values[item])
 
     def test_slicing_at_run_bounds_never_hashes(self, gappy, monkeypatch):
@@ -327,7 +324,7 @@ class TestBaseCoordFallbacks:
     def test_string_coords_state_no_seams(self):
         """Text has no spacing to be discontinuous in."""
         coord = get_coord(data=np.array(["a", "b", "c"]))
-        assert isinstance(coord, CoordString)
+        assert coord.dtype.kind == "U"
         assert not len(coord.get_discontinuities("all"))
 
 

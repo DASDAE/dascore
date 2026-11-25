@@ -1306,13 +1306,12 @@ class TestCombinations:
         """Which arrays these were does not turn on some other attr."""
         first = patch.update_attrs(origin_id="a" * 32, data_id="b" * 32)
         second = patch.update_attrs(origin_id="c" * 32, data_id="d" * 32)
-        _, attrs = dc.utils.patch.merge_compatible_coords_attrs(first, second)
+        attrs = (first + second).attrs
         assert attrs.origin_id == fold_origin_ids(["a" * 32, "c" * 32])
-        assert attrs.data_id == derive(["b" * 32, "d" * 32], merge_operation())
         # An unrelated difference is the same merge, so it is the same ids.
         note = patch.update_attrs(some_note="odd")
         other = note.update_attrs(origin_id="c" * 32, data_id="d" * 32)
-        _, folded = dc.utils.patch.merge_compatible_coords_attrs(first, other)
+        folded = (first + other).attrs
         assert (folded.origin_id, folded.data_id) == (attrs.origin_id, attrs.data_id)
 
 

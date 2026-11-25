@@ -8,7 +8,6 @@ from typing import Any, TypeVar, cast
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel
 
 import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
@@ -658,51 +657,6 @@ def get_dim_names_from_columns(df: pd.DataFrame) -> list[str]:
     cols = set(df.columns)
     names = (x.removesuffix("_min") for x in cols if x.endswith("_min"))
     return sorted(x for x in names if {f"{x}_max", f"{x}_step"} <= cols)
-
-
-def fill_defaults_from_pydantic(df, base_model: type[BaseModel]):
-    """
-    Fill missing columns in dataframe with defaults from base_model.
-
-    If the missing column has no default value, raise ValueError.
-
-    Parameters
-    ----------
-    df
-        A dataframe
-    base_model
-        A pydantic BaseModel
-    """
-    fields = base_model.model_fields
-    missing = set(fields) - set(df.columns)
-    required = {x for x in missing if fields[x].is_required()}
-    if any(required):
-        msg = f"Missing required value: {required}"
-        raise ValueError(msg)
-    fill = {x: fields[x].default for x in missing}
-    return df.assign(**fill)
-
-
-def list_ser_to_str(ser: pd.Series) -> pd.Series:
-    """Convert a column of str sequences to a string with commas separating values."""
-
-    def _is_null(val) -> bool:
-        if pd.api.types.is_scalar(val):
-            return bool(pd.isnull(val))
-        if isinstance(val, (list | tuple | np.ndarray)):
-            return bool(pd.isnull(np.asarray(val, dtype=object)).any())
-        null = pd.isnull(val)
-        return bool(null.any()) if isinstance(null, np.ndarray) else bool(null)
-
-    values = [
-        ""
-        if _is_null(x)
-        else ",".join(str(item) for item in x)
-        if isinstance(x, (list | tuple | np.ndarray))
-        else str(x)
-        for x in ser.values
-    ]
-    return pd.Series(values, index=ser.index, dtype=object)
 
 
 def _column_or_value(df, col, value):

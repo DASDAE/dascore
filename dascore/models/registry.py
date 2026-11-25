@@ -243,8 +243,3 @@ def resolve_tagged_model(
         raise InvalidModelTagError(f"{msg[:-1]}{where}.")
     warnings.warn(f"{msg} Reading it as {default.__name__}.", UserWarning, stacklevel=2)
     return default
-
-
-def registered_models() -> dict[str, type]:
-    """Return the registered classes, keyed by the tag naming each."""
-    return dict(_REGISTRY)

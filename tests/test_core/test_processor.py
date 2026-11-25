@@ -2112,7 +2112,7 @@ class TestLazyStep:
         """The step is settled with what the patch says it holds."""
         out = SeamLazyScale(factor=3)(lazy_patch)
         assert not recipe_loads
-        assert isinstance(out.data, LazyArray)
+        assert backend_name(out.data) == "lazy"
         assert out.data.recipe is lazy_patch.data.recipe
         node = out.data.chain.last
         assert len(out.data.chain) == 1 and not node.pending

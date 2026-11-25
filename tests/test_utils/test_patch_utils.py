@@ -34,9 +34,7 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     get_patch_kind,
     get_patch_names,
-    merge_compatible_coords_attrs,
     patch_function,
-    patches_to_df,
     stack_patches,
     swap_kwargs_dim_to_axis,
 )
@@ -342,14 +340,6 @@ class TestHistory:
 class TestPatchMergeWorkflow:
     """Tests for the supported patch merge workflow."""
 
-    def test_merge_compatible_coords_attrs_ignores_private_attrs(self, random_patch):
-        """Private attrs should not make otherwise compatible patches fail."""
-        patch_1 = random_patch.update_attrs(_source_patch_key="one")
-        patch_2 = random_patch.update_attrs(_source_patch_key="two")
-        coords, attrs = merge_compatible_coords_attrs(patch_1, patch_2)
-        assert coords == random_patch.coords
-        assert attrs["_source_patch_key"] == "one"
-
     def test_binary_ops_ignore_private_attrs(self, random_patch):
         """Binary ops should work on patches with different private ids."""
         patch_1 = random_patch.update_attrs(_source_patch_key="one")
@@ -357,6 +347,20 @@ class TestPatchMergeWorkflow:
         out = patch_1 + patch_2
         assert isinstance(out, dc.Patch)
         assert out.attrs["_source_patch_key"] == "one"
+
+    def test_binary_ops_carry_what_either_operand_states(self, random_patch):
+        """A value only one operand states is carried, whichever it is."""
+        keyed = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
+        for first, second in [(random_patch, keyed), (keyed, random_patch)]:
+            assert (first + second).attrs.acquisition_key == "TA.R2D1..RAW"
+
+    def test_binary_ops_keep_the_first_operands_attrs(self, random_patch):
+        """Attrs outside the kind never refuse an operation; the first wins."""
+        first = random_patch.update_attrs(foo="a")
+        second = random_patch.update_attrs(foo="b", bar="b")
+        attrs = (first + second).attrs
+        assert attrs.foo == "a"
+        assert attrs.bar == "b"
 
 
 class TestGetDimAxisValue:
@@ -400,57 +404,6 @@ class TestGetDimAxisValue:
         msg = "You must specify"
         with pytest.raises(ParameterError, match=msg):
             get_dim_axis_value(random_patch, kwargs=kwargs, allow_multiple=False)
-
-
-class TestPatchesToDF:
-    """Test for getting metadata from patch into a dataframe."""
-
-    def test_spool_input(self, random_spool):
-        """A spool should return its contents with its patches embedded."""
-        df = patches_to_df(random_spool)
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == len(random_spool)
-        # the "patch" column carries the actual patches, not None
-        assert "patch" in df.columns
-        assert all(isinstance(x, dc.Patch) for x in df["patch"])
-
-    def test_list_of_patches_input(self, random_spool):
-        """A plain sequence of patches is scanned and the patches embedded."""
-        patches = list(random_spool)
-        df = patches_to_df(patches)
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == len(patches)
-        assert list(df["patch"]) == patches
-
-    def test_empty_list_input(self):
-        """An empty sequence produces an empty frame with the right columns."""
-        df = patches_to_df([])
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 0
-        assert "patch" in df.columns
-
-    def test_dataframe_input(self, random_spool):
-        """The function should be idempotent."""
-        df = random_spool.get_contents()
-        out = patches_to_df(df)
-        out2 = patches_to_df(out)
-        eq = out == out2
-        is_null = pd.isnull(out) & pd.isnull(out2)
-        assert np.all(eq | is_null)
-
-    def test_history_added(self, random_spool):
-        """Ensure the history column gets added."""
-        df = random_spool.get_contents().drop(columns="history", errors="ignore")
-        out = patches_to_df(df)
-        assert "history" in out.columns
-
-    def test_patch_column_added(self, random_spool):
-        """Ensure the patch column gets added when dataframe input lacks it."""
-        df = random_spool.get_contents().drop(columns="patch", errors="ignore")
-        out = patches_to_df(df)
-        assert "patch" in out.columns
-        assert len(out["patch"]) == len(df)
-        assert out["patch"].isnull().all()
 
 
 class TestAlignPatches:
@@ -645,6 +598,17 @@ class TestCheckKind:
             check_kind(random_patch, random_patch, check_behavior=None)
 
 
+class TestCheckDims:
+    """Tests for checking two patches have compatible dimensions."""
+
+    def test_dims_which_only_intersect(self, random_patch):
+        """With intersection, patches sharing some dimensions are compatible."""
+        other = random_patch.rename_coords(time="money")
+        assert check_dims(random_patch, other, intersection=True)
+        with pytest.raises(IncompatiblePatchError, match="not compatible for merging"):
+            check_dims(random_patch, other)
+
+
 class TestCheckDataUnits:
     """Tests for the data-units gate shared by concatenate and stack."""
 
@@ -658,85 +622,6 @@ class TestCheckDataUnits:
                 check_data_units(metres, other)
         with pytest.warns(UserWarning, match="convert_units"):
             assert not check_data_units(metres, km, check_behavior="warn")
-
-
-class TestMergeCompatibleCoordsAttrs:
-    """Tests for merging compatible attrs, coords."""
-
-    def test_simple(self, random_patch):
-        """Simple merge test."""
-        coords, attrs = merge_compatible_coords_attrs(random_patch, random_patch)
-        assert coords == random_patch.coords
-        assert attrs == random_patch.attrs
-
-    def test_incompatible_dims(self, random_patch):
-        """Ensure incompatible dims raises."""
-        new = random_patch.rename_coords(time="money")
-        match = "not compatible for merging"
-        with pytest.raises(IncompatiblePatchError, match=match):
-            merge_compatible_coords_attrs(random_patch, new)
-
-    def test_incompatible_coords(self, random_patch):
-        """Ensure an incompatible error is raised for coords that don't match."""
-        new_time = random_patch.get_coord("time").max()
-        new = random_patch.update_coords(time_min=new_time)
-        match = "coordinates are not equal"
-        with pytest.raises(IncompatiblePatchError, match=match):
-            merge_compatible_coords_attrs(new, random_patch)
-
-    def test_incompatible_attrs(self, random_patch):
-        """A conflicting kind attr raises."""
-        new = random_patch.update_attrs(tag="other")
-        match = "not the same kind"
-        with pytest.raises(IncompatiblePatchError, match=match):
-            merge_compatible_coords_attrs(new, random_patch)
-
-    def test_kind_is_the_union(self, random_patch):
-        """A value only one patch knows is carried by the result."""
-        keyed = random_patch.update_attrs(acquisition_key="TA.R2D1..RAW")
-        for first, second in [(random_patch, keyed), (keyed, random_patch)]:
-            _, attrs = merge_compatible_coords_attrs(first, second)
-            assert attrs.acquisition_key == "TA.R2D1..RAW"
-
-    def test_other_attrs_fold_to_first(self, random_patch):
-        """Attrs outside the kind never refuse a merge; the first wins."""
-        pa1 = random_patch.update_attrs(foo="a", data_units="m")
-        pa2 = random_patch.update_attrs(foo="b", data_units="s", bar="b")
-        _, attrs = merge_compatible_coords_attrs(pa1, pa2)
-        assert attrs.foo == "a"
-        assert dc.get_quantity(attrs.data_units) == dc.get_quantity("m")
-        # An attr only the second has is added.
-        assert attrs.bar == "b"
-
-    def test_first_without_units_stays_unitless(self, random_patch):
-        """A first patch without units must not inherit the second's."""
-        pa1 = random_patch.set_units(None)
-        pa2 = random_patch.set_units("m")
-        _, attrs = merge_compatible_coords_attrs(pa1, pa2)
-        assert dc.get_quantity(attrs.data_units) is None
-
-    def test_extra_coord(self, random_patch, random_patch_with_lat_lon):
-        """Extra coords on both patch should end up in the merged patch."""
-        new_coord = np.ones(random_patch.coord_shapes["time"])
-        pa1 = random_patch.update_coords(new_time=("time", new_coord))
-        pa2 = random_patch_with_lat_lon.update_coords(new_time=("time", new_coord))
-        expected = set(pa1.coords.coord_map) | set(pa2.coords.coord_map)
-        coords, attrs = merge_compatible_coords_attrs(pa1, pa2)
-        assert set(coords.coord_map) == expected
-        assert "coords" not in attrs.model_dump()
-
-    def test_extra_attrs(self, random_patch):
-        """Ensure extra attributes are added to patch."""
-        patch = random_patch.update_attrs(new_attr=10)
-        _, attrs = merge_compatible_coords_attrs(patch, random_patch)
-        assert attrs.get("new_attr") == 10
-
-    def test_different_dims(self, random_patch):
-        """Ensure we can merge patches which share some dims but not all."""
-        patch1 = random_patch
-        patch2 = random_patch.rename_coords(time="money")
-        coord, _ = merge_compatible_coords_attrs(patch1, patch2, dim_intersection=True)
-        assert set(coord.dims) == (set(patch1.dims) | set(patch2.dims))
 
 
 class TestConcatenate:

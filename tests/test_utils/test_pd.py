@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-import pydantic
 import pytest
 
 import dascore as dc
@@ -12,11 +11,9 @@ from dascore.exceptions import ParameterError, TimeOverflowError
 from dascore.utils.pd import (
     adjust_segments,
     dataframe_to_patch,
-    fill_defaults_from_pydantic,
     filter_df,
     get_dim_names_from_columns,
     get_interval_columns,
-    list_ser_to_str,
     patch_to_dataframe,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
@@ -173,43 +170,6 @@ class TestFilterDfBasic:
         con = (ser >= 20) & (ser <= 30)
         out = filter_df(example_df, age_min=20, age_max=30)
         assert all(con == out)
-
-
-class TestListSerToStr:
-    """Tests for converting list-like series to strings."""
-
-    def test_mixed_values(self):
-        """Ensure scalars, sequences, and nulls are handled correctly."""
-        ser = pd.Series(
-            [
-                [1, 2],
-                ("a", "b"),
-                np.array([3, 4]),
-                "hi",
-                7,
-                None,
-                np.nan,
-                pd.NA,
-                [None, 1],
-                pd.Index([1, 2]),
-                pd.Index([np.nan]),
-            ]
-        )
-        out = list_ser_to_str(ser)
-        expected = [
-            "1,2",
-            "a,b",
-            "3,4",
-            "hi",
-            "7",
-            "",
-            "",
-            "",
-            "",
-            "Index([1, 2], dtype='int64')",
-            "",
-        ]
-        assert out.tolist() == expected
 
 
 class TestFilterDfAdvanced:
@@ -510,47 +470,6 @@ class TestAdjustSegments:
         df = adjacent_df.drop(columns=["distance_min"])
         with pytest.raises(ParameterError):
             _ = adjust_segments(df, distance=(100, 200))
-
-
-class TestFillDefaultsFromPydantic:
-    """Tests for initializing empty columns from pydantic models."""
-
-    class Model(pydantic.BaseModel):
-        """Example basemodel."""
-
-        int_with_default: int = 10
-        str_with_default: str = "bob"
-        float_with_default: float = 10.0
-        float_no_default: float
-
-    @pytest.fixture(scope="class")
-    def simple_df(self):
-        """Create a simple df for testing."""
-        df = pd.DataFrame(index=range(10)).assign(
-            int_with_default=20,
-            str_with_default="bill",
-            float_with_default=22.2,
-            float_no_default=42.0,
-        )
-        return df
-
-    def test_no_missing_does_nothing(self, simple_df):
-        """Ensure the default gets filled."""
-        out = fill_defaults_from_pydantic(simple_df, self.Model)
-        assert out.equals(simple_df)
-
-    def test_missing_with_default_fills_default(self, simple_df):
-        """Ensure the default values are filled in when missing."""
-        df = simple_df.drop(columns="int_with_default")
-        out = fill_defaults_from_pydantic(df, self.Model)
-        assert "int_with_default" in out.columns
-        assert (out["int_with_default"] == 10).all()
-
-    def test_missing_with_no_default_raises(self, simple_df):
-        """Ensure Value error is raised if no default is there."""
-        df = simple_df.drop(columns="float_no_default")
-        with pytest.raises(ValueError, match="required value"):
-            fill_defaults_from_pydantic(df, self.Model)
 
 
 class TestPatchToDF:

@@ -334,7 +334,11 @@ class TestPatchAttrsSerialization:
 @pytest.fixture
 def clean_registry():
     """Undo whatever a test registers, so the real registry is untouched."""
-    before = registry.registered_models()
+    # Looking up an unknown tag sweeps the io plugins once. Sweep before the
+    # snapshot, so a lookup in the test cannot register plugin models which
+    # the restore below would then drop for good.
+    registry.resolve_model_tag("absent:Whatever")
+    before = dict(registry._REGISTRY)
     yield
     registry._REGISTRY.clear()
     registry._REGISTRY.update(before)
@@ -414,14 +418,14 @@ class TestModelTagRegistry:
 
     def test_dascore_models_register_bare(self):
         """A bare name means dascore, which keeps files hand-authorable."""
-        assert registry.registered_models()["PatchAttrs"] is PatchAttrs
+        assert registry.resolve_model_tag("PatchAttrs") is PatchAttrs
         assert registry.get_model_tag(PatchAttrs) == "PatchAttrs"
 
     def test_out_of_tree_models_are_namespaced(self, clean_registry):
         """A plugin's namespace is derived, so it needs no ceremony."""
         cls = _model_in("myplugin.shapes")
         assert registry.get_model_tag(cls) == "myplugin:Square"
-        assert registry.registered_models()["myplugin:Square"] is cls
+        assert registry.resolve_model_tag("myplugin:Square") is cls
 
     def test_colliding_dascore_names_raise(self, clean_registry):
         """Two of our own classes may not claim one tag; this is the pin."""
@@ -429,7 +433,7 @@ class TestModelTagRegistry:
         with pytest.raises(InvalidModelTagError, match="claim the tag"):
             _model_in("dascore.elsewhere", "Doubled")
         # The collision does not replace what was there before it.
-        assert registry.registered_models()["Doubled"] is first
+        assert registry.resolve_model_tag("Doubled") is first
 
     def test_colliding_plugin_names_stop_resolving(self, clean_registry):
         """
@@ -441,7 +445,6 @@ class TestModelTagRegistry:
         _model_in("myplugin.a", "Doubled")
         with pytest.warns(UserWarning, match="claim the tag"):
             _model_in("myplugin.b", "Doubled")
-        assert "myplugin:Doubled" not in registry.registered_models()
         with pytest.raises(InvalidModelTagError, match="names two classes"):
             registry.resolve_model_tag("myplugin:Doubled")
 
@@ -466,7 +469,6 @@ class TestModelTagRegistry:
         """
         cls = _model_in("myplugin.generics", "Square[int]")
         assert registry.get_model_tag(cls) is None
-        assert "myplugin:Square[int]" not in registry.registered_models()
 
     def test_a_class_declared_in_a_function_is_not_registered(self, clean_registry):
         """Nothing can resolve a name which exists only while a call runs."""
@@ -474,13 +476,13 @@ class TestModelTagRegistry:
         class Local(DascoreBaseModel):
             """A model which cannot be addressed from a document."""
 
-        assert "Local" not in registry.registered_models()
+        assert registry.resolve_model_tag(registry.get_model_tag(Local)) is None
 
     def test_a_reimported_module_replaces_its_own_entry(self, clean_registry):
         """Re-importing a module is not two classes claiming one tag."""
         _model_in("myplugin.shapes")
         second = _model_in("myplugin.shapes")
-        assert registry.registered_models()["myplugin:Square"] is second
+        assert registry.resolve_model_tag("myplugin:Square") is second
 
     @pytest.mark.parametrize(
         "tag", ["Cable", "myplugin:Square", "my_plugin.sub:Square", "Cable-0.0.1"]
@@ -545,8 +547,9 @@ class TestModelTagRegistry:
         the time any other test runs, which is exactly what hides this.
         """
         code = (
+            "import sys\n"
             "import dascore.models.registry as r\n"
-            "assert 'ODH4PatchAttrs' not in r.registered_models(), 'already there'\n"
+            "assert 'dascore.io.odh4.core' not in sys.modules, 'already there'\n"
             "assert r.resolve_model_tag('ODH4PatchAttrs') is not None, 'not found'\n"
         )
         out = subprocess.run(

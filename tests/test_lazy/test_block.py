@@ -12,9 +12,10 @@ from dascore.core.source import ArraySource
 from dascore.lazy import block as block_module
 from dascore.lazy.recipe import Recipe, concat
 from tests.test_lazy.conftest import (
-    FORMAT,
     assert_same_members,
     mixed_member,
+    rebuilt,
+    stored_files,
 )
 
 
@@ -70,7 +71,7 @@ class TestClipEnds:
     def arrays(self):
         """Arrays stacked along each axis, at corners, and with folded columns."""
         rng = np.random.default_rng(20)
-        paths = [f"/root/f{x % 7}.h5" for x in range(300)]
+        laid = stored_files(300, (2, 3), files=7)
         return [
             mixed_stack(rng, 40, 0, 2),
             mixed_stack(rng, 40, 1, 2),
@@ -78,7 +79,7 @@ class TestClipEnds:
             mixed_stack(rng, 20, 0, 1),
             mixed_stack(rng, 40, 1, 2, laid=False),
             mixed_stack(rng, 40, 0, 2, laid=False),
-            Recipe.from_columns(paths, (2, 3), axis=1, base_uri="/root/", **FORMAT),
+            Recipe.from_sources(laid, axis=1, base_uri="/root/"),
             concat([stacked := mixed_stack(rng, 20, 0, 2), stacked], axis=1),
         ]
 
@@ -120,8 +121,7 @@ class TestClipEnds:
 
     def test_owns_its_storage(self):
         """A clipped view shares no placement with its base but broadcast values."""
-        paths = [f"/root/f{x}.h5" for x in range(300)]
-        array = Recipe.from_columns(paths, (4, 3), **FORMAT)
+        array = Recipe.from_sources(stored_files(300, (4, 3)))
 
         def placement(table):
             members = table.members
@@ -139,8 +139,9 @@ class TestClipEnds:
         wide = Recipe.from_sources(sources, shape=(12, 2))
         assert wide[1:11].validate().shape == (10, 2)
         frame = wide.to_frame()
-        frame.loc[frame["ordinal"] == 1, "out_stop"] = frame["out_start"]
-        empty = Recipe.from_frame(frame, (12, 3), "f8")
+        starts = frame.loc[frame["ordinal"] == 1, "out_start"].tolist()
+        changes = [("out_stop", 1, axis, x) for axis, x in enumerate(starts)]
+        empty = rebuilt(wide, changes, shape=(12, 3))
         assert len(empty[1:11]) == 2
 
     def test_overlapping_members_take_the_general_path(self, monkeypatch):

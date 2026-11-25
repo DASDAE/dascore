@@ -36,7 +36,7 @@ MS = np.timedelta64(1, "ms")
 
 def _is_stored(coord):
     """Whether the coordinate holds its labels as one stored run."""
-    return coord.runs_count == 1 and isinstance(coord.runs[0], Labels)
+    return coord.runs_count == 1 and not coord.evenly_sampled
 
 
 @pytest.fixture(scope="module")

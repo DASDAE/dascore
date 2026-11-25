@@ -26,7 +26,6 @@ from dascore.units import furlongs, m, s
 from dascore.utils.array import (
     UFUNC_NAMES,
     PatchUFunc,
-    _BoundPatchUFunc,
     _is_offset_unit,
     _needs_equal_units,
     apply_array_func,
@@ -1058,10 +1057,6 @@ class TestStringArrayHelpers:
         # Bind once
         bound_once = ufunc.__get__(random_patch, type(random_patch))
 
-        # Verify the bound instance is a _BoundPatchUFunc
-
-        assert isinstance(bound_once, _BoundPatchUFunc)
-
         # Test that the bound instance works correctly
         result1 = bound_once(random_patch)
         unbound_result = ufunc(random_patch, random_patch)
@@ -1074,17 +1069,9 @@ class TestStringArrayHelpers:
         assert result is ufunc
 
     def test_patch_ufunc_class_properties(self, random_patch):
-        """Test _BoundPatchUFunc class has proper attributes."""
-        ufunc = PatchUFunc(np.multiply)
-        bound_ufunc = ufunc.__get__(random_patch, type(random_patch))
-
-        # Should be instance of _BoundPatchUFunc
-        assert isinstance(bound_ufunc, _BoundPatchUFunc)
-
-        # Should have proper attributes
-        assert bound_ufunc.__name__ == "multiply"
-        assert bound_ufunc.np_ufunc is np.multiply
-        assert bound_ufunc.patch is random_patch
+        """A ufunc bound to a patch keeps its name and acts on that patch."""
+        assert random_patch.multiply.__name__ == "multiply"
+        assert random_patch.multiply(2) == random_patch * 2
 
     def test_out_parameter_raises(self, random_patch):
         """Since patches are immutable, we cant support out. Raise if provided."""

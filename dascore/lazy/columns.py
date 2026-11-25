@@ -352,34 +352,6 @@ def _merge_members(members: Sequence[_Members]) -> _Members:
     return _Members(sources, source_row, cast)
 
 
-def _members_of(frame: pd.DataFrame) -> _Members:
-    """Return the members one array's rows of a member frame describe."""
-    columns = {
-        x: _Column.of(frame[x].astype(str).to_numpy(object)) for x in SOURCE_FIELDS[:4]
-    }
-    # A frame written before members stated these reads them as empty, or
-    # the layout default.
-    for name in (*SOURCE_FIELDS[4:], "cast"):
-        default = _LAYOUT_DEFAULTS.get(name, "")
-        values = (
-            frame[name].to_numpy(object) if name in frame else [default] * len(frame)
-        )
-        if name in _LAYOUT_DEFAULTS:
-            # a join with an older frame leaves NaN, and parquet gives floats
-            values = [_layout_value(name, x, default) for x in values]
-        columns[name] = _Column.of(values)
-    cast = columns.pop("cast")
-    sources, rows = _sources_of_columns(columns, frame["filled"].to_numpy(bool))
-    return _Members(sources, rows, cast)
-
-
-def _layout_value(name: str, value: Any, default: Any) -> Any:
-    """Return a layout cell of a frame as a source states it."""
-    if value is None or pd.isna(value):
-        return default
-    return int(value) if name in _LAYOUT_NUMBERS else value
-
-
 def _folded(array: np.ndarray) -> np.ndarray:
     """Return an array of one value throughout as that value, broadcast."""
     # A short column costs more to check than folding it saves.

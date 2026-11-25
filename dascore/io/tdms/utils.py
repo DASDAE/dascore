@@ -430,10 +430,3 @@ def _read_sample_range(tdms_file, fileinfo, start=0, stop=None, lead_in_length=2
     data = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
     # in the machine's byte order, which copies only a file stored in the other
     return data.astype(fileinfo["data_type"], copy=False)
-
-
-def _get_data(tdms_file, lead_in_length=28):
-    """Get all the data saved in the current file."""
-    fileinfo, attrs = _get_fileinfo(tdms_file)
-    data = _read_sample_range(tdms_file, fileinfo, lead_in_length=lead_in_length)
-    return data, len(data), attrs

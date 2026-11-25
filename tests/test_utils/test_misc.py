@@ -40,7 +40,6 @@ from dascore.utils.misc import (
     get_2d_line_intersection,
     get_buffer_size,
     get_parent_code_name,
-    get_stencil_coefs,
     is_strictly_monotonic,
     iterate,
     maybe_get_items,
@@ -578,28 +577,6 @@ class TestGetInstallName:
         assert _get_install_name("dascore.utils.misc") == "dascore"
         assert _get_install_name("google.protobuf.message") == "protobuf"
         assert _get_install_name("yaml") == "pyyaml"
-
-
-class TestGetStencilCoefficients:
-    """Tests for stencil coefficients."""
-
-    def test_3_point_1st_derivative(self):
-        """3 point 1st derivative."""
-        out = get_stencil_coefs(1, 1)
-        expected = np.array([-1 / 2, 0, 1 / 2])
-        assert np.allclose(out, expected)
-
-    def test_5_point_1st_derivative(self):
-        """5 point 1st derivative."""
-        out = get_stencil_coefs(2, 1)
-        expected = np.array([1, -8, 0, 8, -1]) / 12.0
-        assert np.allclose(out, expected)
-
-    def test_3_point_2and_derivative(self):
-        """3 point 2nd derivative."""
-        out = get_stencil_coefs(1, 2)
-        expected = np.array([1, -2, 1])
-        assert np.allclose(out, expected)
 
 
 class TestTukeyFence:

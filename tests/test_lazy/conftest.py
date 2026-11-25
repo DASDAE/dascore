@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise, product
-from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -15,7 +14,7 @@ import dascore as dc
 from dascore.core.source import ArraySource
 from dascore.io import core as io_core
 from dascore.lazy.block import AXIS_FIELDS
-from dascore.lazy.recipe import Recipe
+from dascore.lazy.recipe import Recipe, RecipeTable
 from dascore.utils.downloader import fetch
 from dascore.utils.identity import operation_context
 
@@ -138,10 +137,6 @@ def grid(shape, edges):
     ]
 
 
-# The format arguments every from_columns test shares.
-FORMAT = MappingProxyType({"format": "DASDAE", "version": "1", "source_dtype": "f4"})
-
-
 def mixed_sources():
     """Files under and outside a base, keys, origins and constants; mixed adds casts."""
     whole = ArraySource(path="/root/a.h5", format="DASDAE", version="1")
@@ -167,17 +162,54 @@ def mixed():
     return Recipe.from_sources(mixed_sources(), base_uri="/root/", cast_via=casts)
 
 
+def stored_files(count, shape, dtype="f4", root="/root/", files=None, keys=False):
+    """
+    Return whole stored arrays, one per member, over `files` paths if given.
+
+    `dtype` may be one dtype or one per member; `keys` gives every third
+    member the key "k".
+    """
+    dtypes = dtype if isinstance(dtype, list) else [dtype] * count
+    return [
+        ArraySource(
+            path=f"{root}f{x % (files or count):03d}.h5",
+            format="DASDAE",
+            version="1",
+            key="k" if keys and x % 3 == 0 else "",
+        ).describe(shape, dtypes[x])
+        for x in range(count)
+    ]
+
+
 def many_members(count=300):
     """Return an array of many members over a few files, some paths repeated."""
-    return Recipe.from_columns(
-        [f"/root/f{x % 97:03d}.h5" for x in range(count)],
-        (2, 3),
-        format="DASDAE",
-        version="1",
-        source_dtype=["f4", "i2"] * (count // 2),
-        key=[["", "k"][x % 3 == 0] for x in range(count)],
-        base_uri="/root/",
+    sources = stored_files(
+        count, (2, 3), ["f4", "i2"] * (count // 2), files=97, keys=True
     )
+    return Recipe.from_sources(sources, base_uri="/root/")
+
+
+def rebuilt(array, changes=(), order=None, shape=None):
+    """
+    Return the array with its placement edited, which no constructor makes.
+
+    Constructors only build arrays which hold, so the arrays `validate`,
+    `load` and the ids must still handle are made by editing a table's own
+    storage. `changes` are `(field, member, out_axis, value)` placement
+    edits, `order` reorders the members, and `shape` replaces the shape.
+    """
+    table = RecipeTable.from_arrays([array])
+    ndim = array.ndim
+    axes = {name: np.array(values) for name, values in table.axes.items()}
+    for name, member, out_axis, value in changes:
+        axes[name][member * ndim + out_axis] = value
+    members = table.members
+    if order is not None:
+        rows = np.add.outer(np.asarray(order) * ndim, np.arange(ndim)).ravel()
+        axes = {name: values[rows] for name, values in axes.items()}
+        members = members.take(np.asarray(order))
+    shapes = table.shapes if shape is None else np.asarray(shape, np.int64)
+    return replace(table, axes=axes, members=members, shapes=shapes, _ids={})[0]
 
 
 # Constant values which compare equal but are distinct sources.

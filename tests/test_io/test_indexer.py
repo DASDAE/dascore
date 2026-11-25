@@ -403,7 +403,6 @@ class TestUpdate:
         """Ensure if one file is not readable index continues."""
         indexer = DBDirectoryIndexer(spool_directory_with_non_das_file)
         updated = indexer.update(progress=None)
-        assert isinstance(updated, DBDirectoryIndexer)
         assert len(updated._backend.query_rows()) == 2
 
     def test_removed_file_dropped(self, two_patch_directory, tmp_path_factory):

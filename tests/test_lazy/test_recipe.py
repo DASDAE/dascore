@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import gc
+import json
 import sys
 import time
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from types import MappingProxyType, SimpleNamespace
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -20,16 +21,16 @@ from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberIOError, ParameterError
 from dascore.lazy import recipe as recipe_module
 from dascore.lazy.block import AXIS_FIELDS, NEW_AXIS
-from dascore.lazy.columns import SOURCE_FIELDS
 from dascore.lazy.recipe import Recipe, RecipeTable, _tiles, concat, stack
 from dascore.utils.array_api import backend_name
 from dascore.utils.hdf5 import H5Reader
 from tests.test_lazy.conftest import (
-    FORMAT,
     constant,
     placed,
     random_boxes,
+    rebuilt,
     stored,
+    stored_files,
 )
 
 
@@ -73,11 +74,8 @@ def lookups(monkeypatch):
 
 def broadcast_array(shape=(2, 3), length=4):
     """Return an array whose first axis is broadcast from a stored one."""
-    array = constant(shape)
-    frame = stack([array], axis=0).to_frame()
-    new = frame["out_axis"] == 0
-    frame.loc[new, "out_stop"] = length
-    return Recipe.from_frame(frame, (length, *shape), array.dtype)
+    stacked = stack([constant(shape)], axis=0)
+    return rebuilt(stacked, [("out_stop", 0, 0, length)], shape=(length, *shape))
 
 
 def tiling_array(boxes, shape):
@@ -155,6 +153,8 @@ class TestDescription:
         source = ArraySource.full((1,), 1.0).describe((), np.float64)
         with pytest.raises(ParameterError, match="at least one dimension"):
             Recipe.from_source(source)
+        with pytest.raises(ParameterError, match="at least one dimension"):
+            Recipe.from_sources([ArraySource.full((), 1.0)])
 
     def test_refuses_unknown_extent(self):
         """A member must know how big the whole stored array is."""
@@ -163,6 +163,19 @@ class TestDescription:
         )
         with pytest.raises(ParameterError, match="extent"):
             Recipe.from_source(source)
+
+    def test_refuses_window_outside_the_source(self):
+        """A member's window lies inside the stored array it reads."""
+        source = ArraySource(
+            path="a",
+            format="b",
+            windows=((0, 5),),
+            shape=(5,),
+            extent=(3,),
+            dtype=np.float64,
+        )
+        with pytest.raises(ParameterError, match="fall outside the array"):
+            Recipe.from_sources([source])
 
     def test_refuses_ragged_sources(self):
         """Sources of one array all have the same ndim."""
@@ -479,10 +492,7 @@ class TestViews:
 
     def test_members_untouched(self, monkeypatch):
         """Views of a large array clip nothing until the members are needed."""
-        paths = np.char.add("/a/f", np.arange(10_000).astype(str))
-        array = Recipe.from_columns(
-            paths, (4, 3), format="DASDAE", version="1", source_dtype="f4"
-        )
+        array = Recipe.from_sources(stored_files(10_000, (4, 3), root="/a/"))
 
         def refuse(*args):
             raise AssertionError("the members were touched")
@@ -529,7 +539,7 @@ class TestViews:
     def test_table_holds_the_view(self, joined):
         """A view's table and row are those of the array it resolves to."""
         view = joined[90:110]
-        assert view.table.n_members == 2 and view.row == 0
+        assert len(view.table.members) == 2 and view.row == 0
         assert view.table[view.row].data_id == view.data_id
         assert len(RecipeTable.from_arrays([view, joined.transpose()])) == 2
 
@@ -588,18 +598,21 @@ class TestViews:
 
     def test_bare_transpose_keeps_members(self):
         """A transpose with no window keeps each member as it is stored."""
-        frame = Recipe.from_source(ArraySource.full((4, 3), 1.0)).to_frame()
-        frame["src_start"] += 2
-        frame["src_extent"] += 2
-        array = Recipe.from_frame(frame, (4, 3), "f8")
+        whole = Recipe.from_source(ArraySource.full((4, 3), 1.0))
+        frame = whole.to_frame()
+        changes = [
+            (name, 0, axis, frame.loc[axis, name] + 2)
+            for name in ("src_start", "src_extent")
+            for axis in range(2)
+        ]
+        array = rebuilt(whole, changes)
         # Windows are stated in the source's own axis order, so they stand.
         assert array.transpose().sources == array.sources
 
     def test_turned_back_is_in_order(self):
         """A transpose and its inverse put members out of order back in order."""
-        frame = concat([constant((2, 3), 1.0), constant((2, 3), 2.0)]).to_frame()
-        frame["ordinal"] = 1 - frame["ordinal"]
-        array = Recipe.from_frame(frame, (4, 3), "f8")
+        pair = concat([constant((2, 3), 1.0), constant((2, 3), 2.0)])
+        array = rebuilt(pair, order=[1, 0])
         expected = np.concatenate([np.full((2, 3), 1.0), np.full((2, 3), 2.0)])
         assert np.array_equal(array.transpose().transpose().load(), expected)
 
@@ -680,12 +693,9 @@ class TestConstants:
         big = 2**53 + 1
         parts = [constant((1, 2), big, np.int64), constant((1, 2), 1.5)]
         array = concat(parts, axis=0)
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        for out in (array, back):
-            assert out.sources[0].value == big
-            assert out.sources[0].dtype == np.dtype(np.int64)
-            assert out.sources[1].value == 1.5
-            assert out.data_id == array.data_id
+        assert array.sources[0].value == big
+        assert array.sources[0].dtype == np.dtype(np.int64)
+        assert array.sources[1].value == 1.5
         expected = np.concatenate([x.load() for x in parts])
         assert np.array_equal(array.load(), expected)
 
@@ -740,48 +750,37 @@ class TestValidate:
 
     def test_negative_shape(self, lazy):
         """An array cannot have a negative shape."""
-        frame = lazy.to_frame()
-        array = Recipe.from_frame(frame, (-1, 1001), lazy.dtype)
+        array = rebuilt(lazy, shape=(-1, 1001))
         with pytest.raises(ParameterError, match="cannot have shape"):
             array.validate()
 
     def test_window_outside_the_source(self, lazy):
         """A window must be inside the array it reads."""
-        frame = lazy.to_frame()
-        frame.loc[0, "src_start"] = 10
-        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
+        array = rebuilt(lazy, [("src_start", 0, 0, 10)])
         with pytest.raises(ParameterError, match="outside the source"):
             array.validate()
 
     def test_stored_axis_outside_the_array(self, lazy):
         """A stored axis cannot be read onto an axis which is not there."""
-        frame = lazy.to_frame()
-        frame.loc[0, "src_axis"] = 5
-        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
+        array = rebuilt(lazy, [("src_axis", 0, 0, 5)])
         with pytest.raises(ParameterError, match="does not have"):
             array.validate()
 
     def test_repeated_stored_axis(self, lazy):
         """One stored axis cannot feed two output axes."""
-        frame = lazy.to_frame()
-        frame.loc[1, "src_axis"] = 0
-        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
+        array = rebuilt(lazy, [("src_axis", 0, 1, 0)])
         with pytest.raises(ParameterError, match="two output axes"):
             array.validate()
 
     def test_out_of_order(self, joined):
         """Members which are not in placement order are refused."""
-        frame = joined.to_frame()
-        frame["ordinal"] = 1 - frame["ordinal"]
-        array = Recipe.from_frame(
-            frame.sort_values(["ordinal", "out_axis"]), joined.shape, joined.dtype
-        )
+        array = rebuilt(joined, order=[1, 0])
         with pytest.raises(ParameterError, match="canonical placement order"):
             array.validate()
 
     def test_members_of_an_empty_array(self, lazy):
         """An array of no samples has no box a member could fill."""
-        array = Recipe.from_frame(lazy.to_frame(), (0, 1001), lazy.dtype)
+        array = rebuilt(lazy, shape=(0, 1001))
         with pytest.raises(ParameterError, match="outside an array"):
             array.validate()
 
@@ -805,10 +804,8 @@ class TestValidate:
         """A broadcast axis reads nothing, so it states no window."""
         array = broadcast_array()
         array.validate()
-        frame = array.to_frame()
-        frame.loc[0, "src_extent"] = 3
         with pytest.raises(ParameterError, match="outside the source"):
-            Recipe.from_frame(frame, array.shape, array.dtype).validate()
+            rebuilt(array, [("src_extent", 0, 0, 3)]).validate()
 
     def test_staircase_tiling(self):
         """Two differently cut segments joined on another axis are accepted."""
@@ -857,9 +854,8 @@ class TestValidate:
 
     def test_stored_axes_must_be_a_permutation(self, lazy):
         """A member which reads its second stored axis but not its first."""
-        frame = lazy.to_frame()
-        frame.loc[frame["out_axis"] == 0, ["src_axis", "src_extent"]] = (NEW_AXIS, 0)
-        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
+        changes = [("src_axis", 0, 0, NEW_AXIS), ("src_extent", 0, 0, 0)]
+        array = rebuilt(lazy, changes)
         with pytest.raises(ParameterError, match="stored axes"):
             array.validate()
 
@@ -905,8 +901,7 @@ class TestValidate:
     def test_operations_on_a_memberless_array(self):
         """Every operation works on an array which has no members."""
         array = Recipe.from_source(ArraySource.full((0, 3), 1))
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert back.data_id == array.data_id == array[:, 0:3].data_id
+        assert array.data_id == array[:, 0:3].data_id
         assert array[:, 0:2].shape == (0, 2)
         assert array.transpose().shape == (3, 0)
         assert concat([array, array], axis=1).shape == (0, 6)
@@ -1118,26 +1113,9 @@ class TestStatedDtype:
         assert whole.dtype == whole.load().dtype == np.dtype(">f8")
         assert whole.data_id == source.data_id
 
-    def test_a_frame_round_trip_keeps_it(self):
-        """The frame plus the array's own shape and dtype rebuild it."""
-        array = Recipe.from_sources(self._sources(), axis=0, dtype="float32")
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert back.dtype == array.dtype
-        assert back.data_id == array.data_id
-        assert np.array_equal(back.load(), array.load())
-
 
 class TestCastVia:
     """A member may be told to pass through another dtype on the way."""
-
-    def test_a_frame_with_no_cast_column_reads_back(self):
-        """A frame written before casts existed rebuilds with none."""
-        source = ArraySource.full((3,), 1.5)
-        array = Recipe.from_source(source)
-        frame = array.to_frame().drop(columns=["cast"])
-        back = Recipe.from_frame(frame, array.shape, array.dtype)
-        assert back.data_id == array.data_id
-        assert np.array_equal(back.load(), array.load())
 
     # the integer a float32 rounds and a float64 keeps
     _value = 2**24 + 1
@@ -1180,12 +1158,10 @@ class TestCastVia:
         assert not np.array_equal(whole.load(), via.load())
         assert np.ravel(via.load())[0] == np.float64(np.float32(self._value))
 
-    def test_a_whole_constant_keeps_its_cast_through_a_round_trip(self):
+    def test_a_whole_constant_keeps_its_cast_in_a_table(self):
         """The cast rides with the members, so the id does not move."""
         source = ArraySource.full((3,), self._value, "int32")
         via = Recipe.from_sources([source], cast_via=["float32"])
-        back = Recipe.from_frame(via.to_frame(), via.shape, via.dtype)
-        assert back.data_id == via.data_id
         assert RecipeTable.from_arrays([via])[0].data_id == via.data_id
 
     @pytest.mark.parametrize(("count", "dtype"), [(1, None), (2, "float64")])
@@ -1197,13 +1173,6 @@ class TestCastVia:
         casts = ["float16", *[None] * (count - 1)]
         via = Recipe.from_sources(sources, cast_via=casts, **kwargs)
         assert whole.data_id != via.data_id
-
-    def test_a_frame_round_trip_keeps_it(self):
-        """The cast rides in the member frame with everything else."""
-        array = self._via()
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert back.data_id == array.data_id
-        assert np.array_equal(back.load(), array.load())
 
     def test_one_cast_per_source(self):
         """A cast for some of the members says nothing about the rest."""
@@ -1224,7 +1193,7 @@ class TestTable:
         """A window holds the members it selected, and no other rows."""
         window = joined[0:10]
         assert window.table is not joined.table
-        assert window.table.n_members == 1
+        assert len(window.table.members) == 1
         assert not np.shares_memory(
             window._block().axes["out_start"], joined.table.axes["out_start"]
         )
@@ -1234,7 +1203,7 @@ class TestTable:
         table = RecipeTable.from_arrays([joined, stack([joined, joined])])
         assert [x.ndim for x in table] == [2, 3]
         assert [x.shape for x in table] == [joined.shape, (2, *joined.shape)]
-        assert table.n_members == len(joined) + 2 * len(joined)
+        assert len(table.members) == len(joined) + 2 * len(joined)
         for array in table:
             assert np.shares_memory(
                 array._block().axes["out_start"], table.axes["out_start"]
@@ -1250,84 +1219,30 @@ class TestTable:
 
 
 class TestFrames:
-    """The frames are the database tables, and read back as they are."""
-
-    def test_array_round_trip(self, joined, patch):
-        """One array round trips through its long frame."""
-        frame = joined.to_frame()
-        back = Recipe.from_frame(frame, joined.shape, joined.dtype)
-        assert back.data_id == joined.data_id
-        assert np.array_equal(back.load(), patch.data)
-        assert len(frame) == len(joined) * joined.ndim
+    """The frame shows the database tables, one row per member per axis."""
 
     def test_array_frame_columns(self, joined):
         """The columns are the placement and what each member reads."""
-        columns = set(joined.to_frame().columns)
+        frame = joined.to_frame()
+        assert len(frame) == len(joined) * joined.ndim
+        columns = set(frame.columns)
         assert set(AXIS_FIELDS) <= columns
         assert {"ordinal", "out_axis", "base_uri", "path", "origin_id"} <= columns
-
-    def test_out_of_order_frame(self, joined):
-        """A frame which was shuffled is put back in order."""
-        frame = joined.to_frame()
-        back = Recipe.from_frame(frame.iloc[::-1], joined.shape, joined.dtype)
-        assert back.data_id == joined.data_id
-
-    def test_frame_keeps_the_concat_hint(self, joined):
-        """A round tripped array still knows which axis it is stacked on."""
-        pair = [constant((2, 3), 1.0), constant((2, 3), 2.0)]
-        grid = concat([concat(pair, axis=0), concat(pair, axis=0)], axis=1)
-        for array in (joined, stack([joined, joined]), concat(pair, axis=1), grid):
-            back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-            assert back._block().concat_axis == array._block().concat_axis
 
     def test_empty_table(self):
         """A table of no arrays holds no members."""
         table = RecipeTable.from_arrays([])
-        assert len(table) == 0 and table.n_members == 0
-
-    def test_constant_round_trip(self):
-        """A constant member keeps its value and dtype through a frame."""
-        array = concat([constant((2, 3), np.nan), constant((2, 3), 1.0)], axis=0)
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert back.data_id == array.data_id
-        assert np.array_equal(back.load(), array.load(), equal_nan=True)
+        assert len(table) == 0 and len(table.members) == 0
 
     def test_a_record_member_keeps_its_fields(self):
-        """A member of a record dtype is read back with every field."""
+        """A member of a record dtype keeps every field."""
         dtype = np.dtype([("x", "<i4"), ("y", "<f4")])
         source = stored((3,), path="/a/record.h5", dtype=dtype)
         array = Recipe.from_source(source)
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert array.dtype == back.dtype == dtype
+        assert array.dtype == dtype
         assert array.source(0) == source
-        assert back.source(0) == source
-        assert back.data_id == array.data_id
-
-    def test_frame_edits_do_not_reach_the_array(self):
-        """The array holds its own copy of what the frame said."""
-        original = Recipe.from_sources(
-            [ArraySource.full((2,), 1.0), ArraySource.full((2,), 2.0)]
-        )
-        frame = original.to_frame()
-        array = Recipe.from_frame(frame, original.shape, original.dtype)
-        before = array.data_id
-        frame.loc[0, "out_stop"] = 1
-        frame.loc[0, "src_extent"] = 1
-        frame.loc[1, "out_start"] = 1
-        frame.loc[1, "src_extent"] = 3
-        assert np.array_equal(array.load(), original.load())
-        assert array._data_id() == before == original.data_id
-
-    def test_frame_edits_do_not_reach_a_table(self):
-        """Tables built from the array do not read the frame either."""
-        whole = stored((10,), path="/a/w.h5", dtype=np.int64)
-        array = Recipe.from_source(whole[0:3])
-        frame = array.to_frame()
-        back = Recipe.from_frame(frame, array.shape, array.dtype)
-        table = RecipeTable.from_arrays([back])
-        frame.loc[0, "src_start"] = 4
-        assert back.source(0) == whole[0:3]
-        assert table[0].source(0) == whole[0:3]
+        fields = json.loads(array.to_frame()["dtype"].iloc[0])
+        assert [tuple(x) for x in fields] == dtype.descr
 
     def test_storage_is_read_only(self, joined):
         """Nothing a table exposes can be written, so no view can be bent."""
@@ -1343,7 +1258,6 @@ class TestFrames:
         tables = [
             Recipe.from_source(ArraySource.full((4, 3), 1.0)).table,
             Recipe.from_sources([ArraySource.full((4, 3), 1.0)]).table,
-            Recipe.from_frame(array.to_frame(), array.shape, array.dtype).table,
             array.table,
             concat([array, array], axis=0).table,
             stack([array, array], axis=0).table,
@@ -1456,367 +1370,18 @@ class TestArrayApi:
         assert backend_name(lazy) == "numpy"
 
 
-def column_case(rng):
-    """Return random columns for from_columns and the sources they describe."""
-    ndim = int(rng.integers(1, 4))
-    count = int(rng.integers(1, 7))
-    axis = int(rng.integers(-ndim, ndim))
-    lengths = np.tile(rng.integers(1, 4, ndim), (count, 1))
-    # Some members along the axis have no samples at all.
-    lengths[:, axis] = rng.integers(0, 4, count)
-    extra = rng.integers(0, 3, (count, ndim))
-    start = rng.integers(0, 3, (count, ndim)) * (extra > 0)
-    start = np.minimum(start, extra)
-    extent = lengths + extra
-    base = "/root/"
-    pool = [base + "a.h5", base + "sub/b.h5", "/elsewhere/c.h5", base + "é.h5"]
-    kwargs = {
-        "path": [pool[x] for x in rng.integers(0, len(pool), count)],
-        "shape": lengths,
-        "start": start,
-        "extent": extent,
-        "axis": axis,
-        "base_uri": base if rng.random() < 0.5 else "",
-    }
-    choices = {
-        "format": ["DASDAE", "H5Simple"],
-        "version": ["1", "2"],
-        "key": ["", "k1", "k2"],
-        "origin_id": ["", "a" * 32, "b" * 32],
-        "source_dtype": [np.dtype(x) for x in ("float32", "int16", "uint8")],
-    }
-    for name, options in choices.items():
-        picks = [options[x] for x in rng.integers(0, len(options), count)]
-        kwargs[name] = picks if rng.random() < 0.5 else picks[0]
-    if rng.random() < 0.3:
-        kwargs["cast_via"] = [[None, "float32"][x] for x in rng.integers(0, 2, count)]
-    if rng.random() < 0.3:
-        kwargs["dtype"] = "float64"
-    return kwargs
-
-
-def sources_of_columns(kwargs):
-    """Return the ArraySources the columns of one member each describe."""
-    count = len(kwargs["shape"])
-    out = []
-    for row in range(count):
-
-        def pick(name, row=row):
-            value = kwargs[name]
-            return value[row] if isinstance(value, list) else value
-
-        start, length = kwargs["start"][row], kwargs["shape"][row]
-        windows = tuple((int(a), int(a + b)) for a, b in zip(start, length))
-        out.append(
-            ArraySource(
-                path=pick("path"),
-                format=pick("format"),
-                version=pick("version"),
-                key=pick("key"),
-                origin_id=pick("origin_id"),
-                windows=windows,
-                shape=tuple(int(x) for x in length),
-                dtype=pick("source_dtype"),
-                extent=tuple(int(x) for x in kwargs["extent"][row]),
-            )
-        )
-    return out
-
-
-class TestFromColumns:
-    """Columns build the same array as the sources they describe."""
-
-    @pytest.mark.parametrize("seed", range(60))
-    def test_matches_sources(self, seed):
-        """A random case gives the frame, id, shape and dtype of its sources."""
-        kwargs = column_case(np.random.default_rng(seed))
-        sources = sources_of_columns(kwargs)
-        expected = Recipe.from_sources(
-            sources,
-            axis=kwargs["axis"],
-            base_uri=kwargs["base_uri"],
-            dtype=kwargs.get("dtype"),
-            cast_via=kwargs.get("cast_via"),
-        )
-        array = Recipe.from_columns(**kwargs)
-        pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
-        assert array.data_id == expected.data_id
-        assert array.shape == expected.shape
-        assert array.dtype == expected.dtype
-        # Members with samples are laid end to end, in the order given.
-        assert array.sources == tuple(x for x in sources if x.size)
-        lengths = kwargs["shape"][kwargs["shape"].all(axis=1)]
-        axis = kwargs["axis"] % lengths.shape[1]
-        corners = array.table.axes["out_start"].reshape(lengths.shape)[:, axis]
-        expected_corners = np.cumsum(lengths[:, axis]) - lengths[:, axis]
-        assert corners.tolist() == expected_corners.tolist()
-
-    def test_many_members(self):
-        """Hundreds of members, past the dict loop, match their sources."""
-        rng = np.random.default_rng(0)
-        count, pool = 300, ["/root/a.h5", "/root/b.h5", "/c.h5"]
-        kwargs = {
-            "path": [pool[x] for x in rng.integers(0, 3, count)],
-            "shape": np.tile([2, 3], (count, 1)),
-            "start": np.zeros((count, 2), np.int64),
-            "extent": np.tile([2, 3], (count, 1)),
-            "format": [["DASDAE", "H5Simple"][x] for x in rng.integers(0, 2, count)],
-            "version": "1",
-            "key": [f"k{x}" for x in rng.integers(0, 4, count)],
-            "origin_id": "",
-            "source_dtype": np.dtype("f4"),
-            "axis": 1,
-            "base_uri": "/root/",
-        }
-        sources = sources_of_columns(kwargs)
-        array = Recipe.from_columns(**kwargs)
-        expected = Recipe.from_sources(sources, axis=1, base_uri="/root/")
-        assert array.sources == tuple(sources)
-        pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
-        assert array.data_id == expected.data_id
-
-    def test_loads_files(self, two_sources, joined):
-        """Windows of files load as the sources' array does."""
-        sources = [x[5:50] for x in two_sources]
-        array = Recipe.from_columns(
-            np.array([x.path for x in sources]),
-            [x.shape for x in sources],
-            format=sources[0].format,
-            version=sources[0].version,
-            source_dtype=sources[0].dtype,
-            key=[x.key for x in sources],
-            origin_id=[x.origin_id for x in sources],
-            start=[[w[0] for w in x.windows] for x in sources],
-            extent=[x.extent for x in sources],
-        )
-        expected = Recipe.from_sources(sources)
-        assert array.data_id == expected.data_id
-        assert np.array_equal(array.load(), expected.load())
-
-    def test_whole_files(self, two_sources, joined):
-        """One shared shape and default windows read each file whole."""
-        first = two_sources[0]
-        array = Recipe.from_columns(
-            [first.path, first.path],
-            first.shape,
-            format=first.format,
-            version=first.version,
-            source_dtype=first.dtype,
-            key=first.key,
-            origin_id=first.origin_id,
-            axis=1,
-        )
-        data = first.load()
-        assert array.shape == (data.shape[0], 2 * data.shape[1])
-        assert np.array_equal(array.load(), np.concatenate([data, data], axis=1))
-
-    def test_one_path_many_rows(self):
-        """A scalar path is repeated over the rows of the shape."""
-        array = Recipe.from_columns(
-            "/a.h5", [[2, 3], [4, 3]], format="DASDAE", version="1", source_dtype="f4"
-        )
-        assert array.shape == (6, 3) and len(array) == 2
-        sources = array.table.members.sources
-        assert len(sources) == 1 and sources.path.at(np.arange(1)) == ["/a.h5"]
-        assert (sources.base_uri[0], sources.format[0], sources.version[0]) == (
-            "",
-            "DASDAE",
-            "1",
-        )
-
-    def test_paths_split_under_base(self):
-        """A path under the base uri is stored relative to it; others whole."""
-        array = Recipe.from_columns(
-            ["/root/a.h5", "/other/b.h5"],
-            (2,),
-            format="DASDAE",
-            version="1",
-            source_dtype="f4",
-            base_uri="/root/",
-        )
-        sources = array.table.members.sources
-        rows = np.arange(len(sources))
-        fields = [getattr(sources, x).at(rows) for x in SOURCE_FIELDS[:4]]
-        assert list(zip(*fields)) == [
-            ("/root/", "a.h5", "DASDAE", "1"),
-            ("", "/other/b.h5", "DASDAE", "1"),
-        ]
-        assert [x.path for x in array.sources] == ["/root/a.h5", "/other/b.h5"]
-
-    def test_rows_from_any_column(self):
-        """A per member key sets the member count when path and shape are shared."""
-        array = Recipe.from_columns("/a.h5", (2,), key=["a", "b"], **FORMAT)
-        assert array.shape == (4,)
-        assert [x.key for x in array.sources] == ["a", "b"]
-
-    @pytest.mark.parametrize("name", ["start", "extent"])
-    def test_rows_from_windows(self, name):
-        """Per member windows of one resource set the member count too."""
-        windows = {"start": [[0], [2]], "extent": 4}
-        if name == "extent":
-            windows = {"extent": [[4], [4]]}
-        array = Recipe.from_columns("/a.h5", (2,), **windows, **FORMAT)
-        assert array.shape == (4,) and len(array) == 2
-
-    def test_spellings_of_one_dtype(self):
-        """Two spellings of one dtype or cast are one value."""
-        array = Recipe.from_columns(
-            ["/a", "/b"],
-            (2,),
-            format="DASDAE",
-            version="1",
-            source_dtype=["f4", np.dtype("float32")],
-            cast_via=["f8", np.float64],
-        )
-        members = array.table.members
-        dtype = members.sources.dtype
-        assert dtype.values == ("<f4",)
-        assert members.cast.values == ("<f8",)
-        codes = dtype.codes[members.source_row].tolist()
-        assert codes == members.cast.codes.tolist() == [0, 0]
-
-    def test_structured_source_dtype(self):
-        """A source whose dtype is a field list names it as numpy does."""
-        spec = [("x", "i4"), ("y", "f8")]
-        listed, typed = (
-            ArraySource(path="/a", format="DASDAE", dtype=x).describe((2,), x)
-            for x in (spec, np.dtype(spec))
-        )
-        listed = replace(listed, dtype=spec)
-        first, second = (Recipe.from_sources([x]) for x in (listed, typed))
-        pd.testing.assert_frame_equal(first.to_frame(), second.to_frame())
-        assert first.data_id == second.data_id
-        assert first.dtype == np.dtype(spec)
-
-    def test_structured_cast(self):
-        """A cast given as a field list is named as numpy names it."""
-        spec = [("x", "i4"), ("y", "f8")]
-        source = ArraySource(path="/a", format="DASDAE", dtype=spec).describe(
-            (2,), spec
-        )
-        first, second = (
-            Recipe.from_sources([source], cast_via=[x]) for x in (spec, np.dtype(spec))
-        )
-        pd.testing.assert_frame_equal(first.to_frame(), second.to_frame())
-        assert first.data_id == second.data_id
-
-    def test_cast_array(self):
-        """Casts given as an array apply one per source."""
-        sources = [ArraySource.full((2,), 1.0), ArraySource.full((3,), 2.0)]
-        array = Recipe.from_sources(sources, cast_via=np.array(["f4", "f4"]))
-        assert array.to_frame()["cast"].tolist() == ["<f4", "<f4"]
-
-    def test_caller_arrays_stay_writable(self):
-        """The array keeps copies, never the caller's own arrays."""
-        shape = np.array([[2, 3]])
-        Recipe.from_columns(
-            ["/a.h5"], shape, format="DASDAE", version="1", source_dtype="f4"
-        )
-        shape[0, 0] = 5
-
-
-class TestFromColumnsRefuses:
-    """Columns which cannot describe an array are refused."""
-
-    kwargs = FORMAT
-
-    def test_no_members(self):
-        """An array needs at least one member."""
-        with pytest.raises(ParameterError, match="at least one member"):
-            Recipe.from_columns([], (2,), **self.kwargs)
-
-    def test_no_axes(self):
-        """An array has at least one axis."""
-        with pytest.raises(ParameterError, match="at least one dimension"):
-            Recipe.from_columns("/a.h5", (), **self.kwargs)
-
-    def test_bad_shape(self):
-        """A shape is one row of lengths, or one row per member."""
-        with pytest.raises(ParameterError, match="shape"):
-            Recipe.from_columns("/a.h5", [[[1]]], **self.kwargs)
-
-    def test_too_many_axes(self):
-        """A flat shape is one shape, so per member lengths are refused."""
-        with pytest.raises(ParameterError, match=r"\(n, ndim\)"):
-            Recipe.from_columns(["/a"] * 65, np.arange(1, 66), **self.kwargs)
-
-    def test_mismatched_rows(self):
-        """Per member columns must all have a row per member."""
-        with pytest.raises(ParameterError, match="shape"):
-            Recipe.from_columns(["/a", "/b"], [[1], [2], [3]], **self.kwargs)
-        with pytest.raises(ParameterError, match="key"):
-            Recipe.from_columns(["/a", "/b"], [1], key=["x"], **self.kwargs)
-        with pytest.raises(ParameterError, match="cast_via"):
-            Recipe.from_columns(["/a", "/b"], [1], cast_via=["f8"], **self.kwargs)
-        with pytest.raises(ParameterError, match="origin_id"):
-            Recipe.from_columns(
-                "/a", [1], key=["x", "y"], origin_id=["o"] * 3, **self.kwargs
-            )
-
-    @pytest.mark.parametrize(
-        "source_dtype", [None, ["f4", None], ["f4", np.nan], ["f4", pd.NA]]
-    )
-    def test_missing_dtype(self, source_dtype):
-        """Every member states the dtype it is stored at."""
-        with pytest.raises(ParameterError, match="source_dtype"):
-            Recipe.from_columns(
-                ["/a", "/b"],
-                (2,),
-                format="DASDAE",
-                version="1",
-                source_dtype=source_dtype,
-            )
-
-    def test_ndim_disagrees(self):
-        """Starts and extents have one number per axis of the shape."""
-        with pytest.raises(ParameterError, match="start"):
-            Recipe.from_columns("/a", (2, 2), start=(0,), **self.kwargs)
-
-    @pytest.mark.parametrize(
-        "window",
-        [
-            {"start": (1, 0)},
-            {"start": (-1, 0), "extent": (5, 2)},
-            {"start": (2, 0), "extent": (3, 2)},
-            {"shape": (-1, 2), "extent": (0, 2)},
-        ],
-    )
-    def test_window_outside(self, window):
-        """A window must be of positive length and inside its stored array."""
-        window = {"shape": (2, 2), **window}
-        with pytest.raises(ParameterError, match="outside"):
-            Recipe.from_columns("/a", **window, **self.kwargs)
-
-    @pytest.mark.parametrize("empty", ["path", "format"])
-    @pytest.mark.parametrize("missing", ["", None, np.nan])
-    def test_unloadable(self, empty, missing):
-        """A member needs a path and a format to be read."""
-        kwargs = {**self.kwargs, "path": ["/a", "/b"], empty: ["x", missing]}
-        with pytest.raises(ParameterError, match="path and a format"):
-            Recipe.from_columns(shape=(2,), **kwargs)
-
-
 class TestMissingText:
-    """A missing origin id or frame column reads as it did before."""
-
-    kwargs = MappingProxyType({"format": "F", "version": "1", "source_dtype": "f4"})
-
-    @pytest.mark.parametrize("origin", [None, [None, "x"]])
-    def test_columns(self, origin):
-        """A None origin id is no origin id, as an empty one is."""
-        array = Recipe.from_columns(
-            ["/a", "/b"], (2, 1), origin_id=origin, **self.kwargs
-        )
-        empty = [x or "" for x in origin] if isinstance(origin, list) else ""
-        expected = Recipe.from_columns(
-            ["/a", "/b"], (2, 1), origin_id=empty, **self.kwargs
-        )
-        assert array.data_id == expected.data_id
-        pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
+    """A missing origin id reads as it did before."""
 
     def test_pinned(self):
         """The id is the one an array with no origin id always had."""
-        array = Recipe.from_columns(["/a", "/b"], (2, 1), origin_id=None, **self.kwargs)
+        sources = [
+            ArraySource(path=x, format="F", version="1", origin_id=None).describe(
+                (2, 1), "f4"
+            )
+            for x in ("/a", "/b")
+        ]
+        array = Recipe.from_sources(sources)
         assert array.data_id == "bdc10f0ac9771acac56db59e8a5807f3"
 
     def test_source(self):
@@ -1826,20 +1391,3 @@ class TestMissingText:
         expected = Recipe.from_sources([replace(source, origin_id="")])
         assert array.data_id == expected.data_id
         pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
-
-    def test_frame(self):
-        """A frame whose origin ids read back as missing gives the same array."""
-        array = Recipe.from_columns(["/a", "/b"], (2, 1), **self.kwargs)
-        frame = array.to_frame().astype({"origin_id": object})
-        frame["origin_id"] = None
-        back = Recipe.from_frame(frame, array.shape, array.dtype)
-        assert back.data_id == array.data_id
-        assert back.sources == array.sources
-
-    @pytest.mark.parametrize("name", ["key", "origin_id", "dtype", "cast", "value"])
-    def test_frame_without_column(self, name):
-        """A frame missing a member column reads it as empty."""
-        array = Recipe.from_columns(["/a", "/b"], (2, 1), **self.kwargs)
-        frame = array.to_frame()
-        back = Recipe.from_frame(frame.drop(columns=name), array.shape, array.dtype)
-        assert back.data_id == array.data_id

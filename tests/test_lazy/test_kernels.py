@@ -13,9 +13,9 @@ import pytest
 import dascore as dc
 from dascore.core.processor import PatchProcessor, _subclasses
 from dascore.exceptions import LazyOperationError
-from dascore.lazy.array import LazyArray
 from dascore.lazy.contract import Pointwise
 from dascore.lazy.execute import compute
+from dascore.utils.array_api import backend_name
 
 from .conftest import grid, lazy_patch, stored_patch
 
@@ -96,7 +96,7 @@ class TestEachOperation:
         lazy = lazy_patch(stored[dtype])
         out = getattr(lazy, name)()
         assert not recipe_loads
-        assert isinstance(out.data, LazyArray)
+        assert backend_name(out.data) == "lazy"
         assert out is lazy or out.data.chain.last.contract == Pointwise()
         eager = getattr(lazy.load(), name)()
         # Known without reading: metadata is never lazy.

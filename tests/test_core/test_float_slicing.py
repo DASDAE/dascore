@@ -94,7 +94,7 @@ class TestFloatSlices:
         coord = concat_coords(float_coord[:30], float_coord[40:80])
         result = coord[indexer]
         assert result.values.tobytes() == coord.values[indexer].tobytes()
-        assert all(isinstance(run, Grid) for run in result.runs)
+        assert all(x.evenly_sampled for x in result.segments)
         assert not result.sources
 
     def test_patch_indexing(self, float_coord):

@@ -11,7 +11,6 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordString,
     NumericCoord,
     concat_coords,
     get_coord,
@@ -209,7 +208,8 @@ class TestVersion2Files:
         back = dc.read(path)[0]
         distance = back.get_coord("distance")
         assert distance.sorted and not distance.evenly_sampled
-        assert isinstance(back.get_coord("tag"), CoordString)
+        tag = back.get_coord("tag")
+        assert tag.dtype.kind == "U" and len(tag.select("a*")[0]) == n
         assert back == patch
 
     def test_exact_scan_of_array_values(self, random_patch, tmp_path):

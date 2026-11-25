@@ -31,12 +31,9 @@ import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Any
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike, DTypeLike
-from pandas.api.types import is_list_like
 
 import dascore as dc
 from dascore.core.source import ArraySource
@@ -45,7 +42,6 @@ from dascore.lazy.block import (
     AXIS_FIELDS,
     NEW_AXIS,
     _Block,
-    _block_of_columns,
     _block_of_sources,
     _candidates,
     _canonical,
@@ -64,7 +60,6 @@ from dascore.lazy.columns import (
     _dtype_text,
     _folded,
     _Members,
-    _members_of,
     _merge_members,
 )
 from dascore.lazy.identity import _digest, _signature, _whole_source_id
@@ -205,11 +200,6 @@ class RecipeTable:
     def __iter__(self):
         """Iterate over the arrays in the table."""
         return (Recipe(self, row) for row in range(len(self)))
-
-    @property
-    def n_members(self) -> int:
-        """The number of members in the whole table."""
-        return len(self.members)
 
 
 def _table(blocks: Sequence[_Block]) -> RecipeTable:
@@ -378,126 +368,6 @@ class Recipe:
             # A source with no samples fills no box, so it is not a member.
             block = block.take(np.flatnonzero(lengths.all(axis=1)))
         return _array(_canonical(block))
-
-    @classmethod
-    def from_columns(
-        cls,
-        path: str | ArrayLike,
-        shape: ArrayLike,
-        *,
-        format: str | ArrayLike,
-        version: str | ArrayLike,
-        source_dtype: DTypeLike | ArrayLike,
-        key: str | ArrayLike = "",
-        origin_id: str | ArrayLike = "",
-        start: ArrayLike | None = None,
-        extent: ArrayLike | None = None,
-        axis: int = 0,
-        base_uri: str = "",
-        dtype: DTypeLike | None = None,
-        cast_via: DTypeLike | ArrayLike | None = None,
-    ) -> Recipe:
-        """
-        Return an array which reads one member per row, laid end to end.
-
-        The array and `data_id` `from_sources` builds from the equivalent
-        sources, with no object made per member. `axis`, `base_uri` and
-        `dtype` are single values; every other argument is one per member,
-        or one all share. The member count is the length of any per member
-        argument, else the rows of `shape`.
-
-        Parameters
-        ----------
-        path
-            Where each member is stored.
-        shape
-            Each member's window lengths as an `(n, ndim)` array. A flat
-            `shape` is one shape every member shares, so the lengths of 1-D
-            members are given as `(n, 1)`.
-        format, version
-            The FiberIO which reads the members, and its version.
-        source_dtype
-            The dtype the members are stored at.
-        key, origin_id
-            Which array of each resource, and its id; see `ArraySource`.
-        start, extent
-            Where each window starts, and the shape of the whole stored
-            array; zeros and `shape` by default.
-        axis, base_uri, dtype, cast_via
-            As `from_sources` takes them.
-
-        Examples
-        --------
-        >>> import numpy as np
-        >>> from dascore.lazy.recipe import Recipe
-        >>>
-        >>> paths = np.array(["/data/f0.h5", "/data/f1.h5", "/data/f2.h5"])
-        >>> array = Recipe.from_columns(
-        ...     paths, (100, 10), format="DASDAE", version="1", source_dtype="f4"
-        ... )
-        >>> assert array.shape == (300, 10) and len(array) == 3
-        """
-        lengths = np.atleast_1d(np.asarray(shape, np.int64))
-        ndim = lengths.shape[-1]
-        if ndim > 64:  # the most axes numpy gives an array
-            msg = f"A shape of {ndim} axes; give per member lengths as (n, ndim)."
-            raise ParameterError(msg)
-        columns: dict[str, Any] = {"path": path, "format": format, "version": version}
-        columns |= {"key": key, "origin_id": origin_id, "source_dtype": source_dtype}
-        columns["cast_via"] = cast_via
-        listed = [len(x) for x in columns.values() if is_list_like(x)]
-        windows = (np.asarray(x) for x in (lengths, start, extent) if x is not None)
-        listed += [len(x) for x in windows if x.ndim == 2]
-        rows = listed[0] if listed else 1
-        if not rows:
-            msg = "A lazy array takes at least one member."
-            raise ParameterError(msg)
-        if any(np.any(pd.isna(x) | (np.asarray(x) == "")) for x in (path, format)):
-            msg = "Every member needs a path and a format to be read from."
-            raise ParameterError(msg)
-        block = _block_of_columns(
-            columns,
-            _rows_of(lengths, rows, ndim, "shape"),
-            _rows_of(0 if start is None else start, rows, ndim, "start"),
-            _rows_of(lengths if extent is None else extent, rows, ndim, "extent"),
-            base_uri,
-        )
-        return cls._placed(block, axis=axis, dtype=dtype)
-
-    @classmethod
-    def from_frame(cls, frame: pd.DataFrame, shape, dtype) -> Recipe:
-        """
-        Return the array `to_frame` wrote.
-
-        Parameters
-        ----------
-        frame
-            One row per member per output axis, as `to_frame` returns.
-        shape
-            The shape of the array, which its members do not state.
-        dtype
-            The dtype of the array.
-        """
-        shape = tuple(int(x) for x in shape)
-        ndim = len(shape)
-        keys = ["ordinal", "out_axis"]
-        order = frame[keys].to_numpy(np.int64)
-        if not _is_canonical(order):
-            frame = frame.sort_values(keys, kind="stable")
-        count = len(frame) // ndim
-        # Copies, so that editing the frame afterwards changes no array.
-        matrices = {
-            name: frame[name].to_numpy(np.int64, copy=True).reshape(count, ndim)
-            for name in AXIS_FIELDS
-        }
-        block = _Block(
-            shape=shape,
-            dtype=np.dtype(dtype),
-            concat_axis=_concat_axis_of(matrices),
-            members=_members_of(frame.iloc[::ndim]),
-            axes=matrices,
-        )
-        return _array(block)
 
     @property
     def table(self) -> RecipeTable:
@@ -865,24 +735,6 @@ def _resolved(view: _View | None) -> RecipeTable:
     # A window of the whole block clips nothing, so a bare transpose keeps
     # each member as it is stored.
     return _table([block if identity else _transposed(block, order)])
-
-
-def _concat_axis_of(axes: dict[str, np.ndarray]) -> int:
-    """Return an axis the members are laid along, which _candidates needs."""
-    start, stop = axes["out_start"], axes["out_stop"]
-    if len(start) < 2:
-        return 0
-    ordered = np.flatnonzero(np.all(start[1:] >= stop[:-1], axis=0))
-    return int(ordered[0]) if len(ordered) else NEW_AXIS
-
-
-def _rows_of(values, rows: int, ndim: int, name: str) -> np.ndarray:
-    """Return a new `(rows, ndim)` integer array from a scalar or rows."""
-    array = np.asarray(values, np.int64)
-    if array.shape not in ((), (ndim,), (rows, ndim)):
-        msg = f"The {name} must be a scalar, or of shape ({ndim},) or ({rows}, {ndim})."
-        raise ParameterError(msg)
-    return np.array(np.broadcast_to(array, (rows, ndim)))
 
 
 def concat(arrays: Sequence[Recipe], axis: int = 0) -> Recipe:

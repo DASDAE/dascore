@@ -25,6 +25,7 @@ from tests.test_lazy.conftest import (
     mixed,
     placed,
     random_boxes,
+    rebuilt,
     stored,
 )
 
@@ -54,15 +55,6 @@ def squares():
     first = stored((4, 4), path="/a/one.h5", origin_id="a" * 32)
     second = stored((4, 4), path="/a/two.h5", origin_id="b" * 32)
     return placed([first, second], [[0, 0], [0, 4]], (4, 8))
-
-
-def bent(array, changes):
-    """Return the array with some placement entries changed."""
-    frame = array.to_frame()
-    for name, member, out_axis, value in changes:
-        row = (frame["ordinal"] == member) & (frame["out_axis"] == out_axis)
-        frame.loc[row, name] = value
-    return Recipe.from_frame(frame, array.shape, array.dtype)
 
 
 def random_tiling(rng, shape):
@@ -214,11 +206,9 @@ class TestIdentity:
         assert array.data_id == source.data_id
         assert array[0:2].data_id == source[0:2].data_id
 
-    def test_odd_origin_id(self, lazy):
+    def test_odd_origin_id(self, source):
         """An origin which is not 32 hex characters is folded into the id."""
-        frame = lazy.to_frame()
-        frame["origin_id"] = "a stored name"
-        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_source(replace(source, origin_id="a stored name"))
         pair = concat([array[0:10], array[10:601]], axis=0)
         assert pair.data_id == array.data_id
         assert array.data_id == array.source(0).data_id
@@ -266,11 +256,9 @@ class TestIdentity:
         assert pair.data_id != other.data_id
 
     @pytest.mark.parametrize("origin", ["", "a stored name", "abcd", "z" * 32])
-    def test_folded_origin_ids(self, lazy, origin):
+    def test_folded_origin_ids(self, source, origin):
         """An origin which is not 32 hex characters still names its member."""
-        frame = lazy.to_frame()
-        frame["origin_id"] = origin
-        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_source(replace(source, origin_id=origin))
         pair = concat([array[0:10], array[100:110]], axis=0)
         assert pair.data_id == concat([array[0:10], array[100:110]], axis=0).data_id
         assert pair.data_id != concat([array[0:10], array[101:111]], axis=0).data_id
@@ -300,12 +288,12 @@ class TestIdentity:
     def test_every_placement_matrix_is_in_the_id(self, changes):
         """Changing one entry of one placement matrix changes the id."""
         array = squares()
-        assert array.data_id != bent(array, changes).data_id
+        assert array.data_id != rebuilt(array, changes).data_id
 
     def test_swapped_axes_keep_the_member_ids(self):
         """The src_axis case differs in placement alone, not in its members."""
         array = squares()
-        moved = bent(array, [("src_axis", 0, 0, 1), ("src_axis", 0, 1, 0)])
+        moved = rebuilt(array, [("src_axis", 0, 0, 1), ("src_axis", 0, 1, 0)])
         assert [x.data_id for x in moved.sources] == [x.data_id for x in array.sources]
 
     def test_members_of_every_kind(self):
@@ -369,8 +357,7 @@ class TestIdentity:
     def test_a_cast_member_is_not_its_source(self):
         """A stored array laid at another dtype is not the source's array."""
         source = stored((4, 3), origin_id="a" * 32)
-        frame = Recipe.from_source(source).to_frame()
-        cast = Recipe.from_frame(frame, (4, 3), np.float64)
+        cast = Recipe.from_sources([source], dtype=np.float64)
         assert cast.dtype == np.float64
         assert cast.data_id != source.data_id
         assert Recipe.from_source(source).data_id == source.data_id
@@ -490,9 +477,9 @@ class TestIdentity:
 
     def test_record_dtypes_are_not_one_array(self):
         """Two record layouts of one width are two arrays."""
-        frame = Recipe.from_source(ArraySource.full((2,), 1)).to_frame()
-        first = Recipe.from_frame(frame, (2,), [("x", "<i4"), ("y", "<i4")])
-        second = Recipe.from_frame(frame, (2,), [("z", "<i8")])
+        source = ArraySource.full((2,), 1)
+        first = Recipe.from_sources([source], dtype=[("x", "<i4"), ("y", "<i4")])
+        second = Recipe.from_sources([source], dtype=[("z", "<i8")])
         assert first.load().dtype != second.load().dtype
         assert first.data_id != second.data_id
         assert first[0:0].data_id != second[0:0].data_id
@@ -561,12 +548,11 @@ class TestIdentity:
 
     def test_a_constant_value_keeps_its_type(self):
         """One value written as an int and as a float is two constants."""
-        array = concat([constant((1, 2), 1.0), constant((1, 2), 2.0)], axis=0)
-        frame = array.to_frame()
         ids = []
         for value in (1, 1.0):
-            frame["value"] = np.array([1, 1, value, value], object)
-            ids.append(Recipe.from_frame(frame, array.shape, array.dtype).data_id)
+            pair = [ArraySource(filled=True, value=x) for x in (1, value)]
+            sources = [x.describe((1, 2), "f8") for x in pair]
+            ids.append(Recipe.from_sources(sources).data_id)
         assert ids[0] != ids[1]
 
     def test_a_constant_dtype_is_in_its_group(self):
@@ -820,9 +806,8 @@ class TestCutAxes:
         ids = []
         for pieces in (1, 2):
             array = concat([constant((2 // pieces, 1), 1.0)] * pieces, axis=0)
-            frame = array.to_frame()
-            frame.loc[frame["out_axis"] == 1, "out_stop"] = 0
-            flat = Recipe.from_frame(frame, (2, 0), array.dtype)
+            changes = [("out_stop", x, 1, 0) for x in range(len(array))]
+            flat = rebuilt(array, changes, shape=(2, 0))
             assert described(flat) == [([(-1, -1), (-1, -1)], 0)]
             ids.append(flat.data_id)
         assert ids[0] == ids[1]
@@ -947,9 +932,7 @@ class TestPartitions:
     def test_a_member_of_an_empty_axis(self):
         """A box with no samples covers nothing, however the members are laid."""
         array = constant((2, 1), 1.0)
-        frame = array.to_frame()
-        frame.loc[frame["out_axis"] == 1, "out_stop"] = 0
-        flat = Recipe.from_frame(frame, (2, 0), array.dtype)
+        flat = rebuilt(array, [("out_stop", 0, 1, 0)], shape=(2, 0))
         assert flat._block().concat_axis == 0
         scattered = replace(flat.table, concat_axes=np.array([NEW_AXIS]), _ids={})
         assert scattered[0].data_id == flat.data_id
@@ -1040,8 +1023,7 @@ class TestPinnedSourceIds:
         array = concat([many_members()[590:600, 0:2], mixed()[0:4]])
         assert array.data_id == "808b817683b4f79b94f3711b8d38a11d"
 
-    def test_stacked_round_trip(self):
-        """Two windows stacked, through a frame."""
+    def test_stacked(self):
+        """Two windows stacked."""
         array = stack([mixed()[1:5], mixed()[6:10]], axis=1)
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert back.data_id == "f3ddaf77e1e762dff63826dc6f4054cf"
+        assert array.data_id == "f3ddaf77e1e762dff63826dc6f4054cf"

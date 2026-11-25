@@ -3194,8 +3194,9 @@ class TestStringCoords:
     """Tests for string-backed coordinates."""
 
     def test_get_coord_returns_string_coord(self, string_coord):
-        """String arrays should create CoordString."""
-        assert isinstance(string_coord, CoordString)
+        """String arrays should create a coordinate of text, which globs select."""
+        assert string_coord.dtype.kind == "U"
+        assert string_coord.select("g*")[0].values.tolist() == ["gamma"]
 
     def test_exact_value_select(self, string_coord):
         """Exact scalar selection should return one value."""
@@ -3206,7 +3207,7 @@ class TestStringCoords:
     def test_exact_value_select_does_not_truncate_probe(self, string_coord):
         """Longer string probes should not be truncated to the coord dtype."""
         out, indexer = string_coord.select("alphabet")
-        assert isinstance(out, CoordString)
+        assert out.dtype.kind == "U"
         assert out.values.size == 0
         assert np.array_equal(indexer, np.array([False, False, False, False]))
 
@@ -3259,7 +3260,7 @@ class TestStringCoords:
     def test_wildcard_select_no_match_returns_empty(self, string_coord):
         """Wildcard selectors with no matches should return an empty coord."""
         out, indexer = string_coord.select("z*")
-        assert isinstance(out, CoordString)
+        assert out.dtype.kind == "U"
         assert out.values.size == 0
         assert np.array_equal(indexer, np.array([False, False, False, False]))
 
@@ -3394,27 +3395,24 @@ class TestStringCoords:
     def test_empty_string_coord(self):
         """Empty string arrays should preserve their string coord type."""
         out = get_coord(data=np.array([], dtype="U8"))
-        assert isinstance(out, CoordString)
+        assert out.dtype.kind == "U"
         assert len(out) == 0
 
     def test_empty_bytes_string_coord_normalizes_to_unicode(self):
         """Empty byte-backed string arrays should still become string coords."""
         out = get_coord(data=np.array([], dtype="S3"))
-        assert isinstance(out, CoordString)
         assert len(out) == 0
         assert out.dtype.kind == "U"
 
     def test_bytes_string_coord_normalizes_to_unicode(self):
         """Byte-backed string coords should decode to unicode internally."""
         out = get_coord(data=np.array([b"alpha", b"beta"], dtype="S5"))
-        assert isinstance(out, CoordString)
         assert out.dtype.kind == "U"
         assert np.array_equal(out.values, np.array(["alpha", "beta"]))
 
     def test_mixed_str_bytes_object_array_normalizes(self):
         """Mixed str/bytes object arrays should normalize to unicode strings."""
         coord = get_coord(data=np.array(["gamma", b"alpha", "delta"], dtype=object))
-        assert isinstance(coord, CoordString)
         assert coord.dtype.kind == "U"
         assert coord.min() == "alpha"
         assert coord.max() == "gamma"
@@ -3488,10 +3486,10 @@ class TestStringCoordUtilities:
         assert np.array_equal(out, np.array(["a", "bb"]))
 
     def test_get_coord_rejects_mixed_object_string_arrays(self):
-        """Mixed object arrays should stay generic arrays, not CoordString."""
+        """Mixed object arrays should stay generic arrays, not text."""
         data = np.array([*(str(i) for i in range(20)), 21], dtype=object)
         out = get_coord(data=data)
-        assert not isinstance(out, CoordString)
+        assert out.dtype == object
 
 
 class TestDimensionalityErrors:
