@@ -42,8 +42,10 @@ keywords = ["geophysics", "distributed-acoustic-sensing"]
 # --- Dependencies
 
 dependencies = [
-     # Provides array_namespace and friends for array-API backed code.
-     "array-api-compat>=1.9",
+     # Provides array_namespace and friends for array-API backed code. 1.15
+     # is the first whose array_namespace accepts an unhashable namespace,
+     # like the lazy backend's; older ones hand lazy data to numpy kernels.
+     "array-api-compat>=1.15",
      "filelock>=3.12",  # serialize remote-cache copies across processes
      "h5py",
      "matplotlib>=3.10",
