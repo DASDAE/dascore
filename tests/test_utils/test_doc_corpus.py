@@ -226,21 +226,26 @@ class TestApiInspection:
             assert omitted == ["dascore.doc_probe: missing optional_driver"]
 
     def test_private_modules(self, isolated_api, tmp_path, monkeypatch):
-        """Private package subtrees and helper modules are excluded before import."""
-        for name in ("core/_private/helper.py", "core/_helper.py", "core/public.py"):
+        """
+        Private package subtrees and helper modules are excluded before import,
+        so a private module which fails when run is never run.
+        """
+        for name in ("core/_private/helper.py", "core/_helper.py"):
             path = tmp_path / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("raise AssertionError('must not run')")
+        (tmp_path / "core/public.py").write_text("")
         monkeypatch.setattr(doc_corpus, "PACKAGE_PATH", tmp_path)
         monkeypatch.setattr(doc_corpus, "_API_MODULES", ())
         monkeypatch.setattr(doc_corpus, "_API_PACKAGES", ("core",))
-        imported = []
 
         def import_owned(name):
-            imported.append(name)
-            return ModuleType(name)
+            """Import a module of the temporary package by running its file."""
+            module = ModuleType(name)
+            path = tmp_path.joinpath(*name.split(".")[1:]).with_suffix(".py")
+            exec(path.read_text(), vars(module))
+            return module
 
         monkeypatch.setattr(doc_corpus, "import_module", import_owned)
         records, _ = doc_corpus._api_documents()
-        assert imported == ["dascore.core.public"]
-        assert list(records) == [f"module:{name}" for name in imported]
+        assert list(records) == ["module:dascore.core.public"]
