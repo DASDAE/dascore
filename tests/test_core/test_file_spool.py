@@ -54,10 +54,14 @@ class TestBasic:
         assert spool.get_contents()["source_path"][0].endswith("a\\b.h5")
         assert isinstance(spool[0], dc.Patch)
 
-    def test_raises_bad_file(self):
-        """Simply ensures a bad file will raise."""
+    def test_update_after_file_removed(self, tmp_path):
+        """Updating a file spool whose file is gone says so."""
+        path = tmp_path / "gone.h5"
+        dc.get_example_patch().io.write(path, "dasdae")
+        spool = dc.spool(path)
+        path.unlink()
         with pytest.raises(FileNotFoundError, match="does not exist"):
-            Spool._from_file("/not/a/directory")
+            spool.update()
 
     def test_local_upath_file(self, terra15_v5_path):
         """Ensure _from_file accepts local UPath inputs."""
