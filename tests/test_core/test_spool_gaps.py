@@ -833,23 +833,29 @@ class TestSpoolFillGaps:
             assert out.get_coord("time") == expected.get_coord("time")
             np.testing.assert_array_equal(out.data, expected.data)
 
-    def test_window_reads_only_the_members_it_reaches(self, gappy_spool):
-        """Loading a window reads the files it reaches, not the whole stretch."""
-        filled = gappy_spool.fill_gaps("time")
-        resolver = filled._catalog.resolver
-        reads = []
-        original = resolver._load_member
-        resolver._load_member = lambda *a, **kw: (
-            reads.append(1),
-            original(*a, **kw),
-        )[1]
+    def test_window_reads_only_the_members_it_reaches(self, gappy_spool, tmp_path):
+        """
+        Loading a window reads the files it reaches, not the whole stretch,
+        so the files it does not reach can be gone.
+        """
+        for number, patch in enumerate(gappy_spool):
+            patch.io.write(tmp_path / f"{number}.h5", "DASDAE")
+        filled = dc.spool(tmp_path).update(progress=None).fill_gaps("time")
+        for number in range(1, len(gappy_spool)):  # the window is in the first
+            (tmp_path / f"{number}.h5").unlink()
         start = gappy_spool[0].get_coord("time").min()
         window = start + np.array([[1, 2]]) * ONE_SECOND
         (out,) = filled.cut(time=window)
-        assert len(reads) == 1 and not np.isnan(out.data).any()
+        assert not np.isnan(out.data).any()
 
     def test_chunk_plans_once_onto_the_files(self, gappy_spool, monkeypatch):
-        """A chunk of a fill is one plan, its windows loading from the files."""
+        """
+        A chunk of a fill is one plan, its windows loading from the files.
+
+        A performance guard that keeps its spy: a second plan gives the
+        same patches, only slower, so the count of plans is its only
+        witness.
+        """
         plans = []
         build = spool_module.build_chunk_plan
 

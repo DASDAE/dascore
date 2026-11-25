@@ -5,7 +5,6 @@ import threading
 import warnings
 from dataclasses import replace
 from datetime import timedelta
-from unittest.mock import Mock
 
 import numpy as np
 import pandas as pd
@@ -1065,16 +1064,19 @@ class TestExplicitBoxes:
         assert [x[1] for x in _boxes(out)] == [(50, 150), (50, 100)]
         assert [x.attrs.tag for x in out] == ["a", "b"]
 
-    def test_trim_scans_only_touched_files(self, tmp_path, monkeypatch):
-        """A trim reads coordinates only from the files a box touches."""
+    def test_trim_scans_only_touched_files(self, tmp_path):
+        """
+        A trim reads coordinates only from the files a box touches, so the
+        files it does not touch can be gone.
+        """
         for number, patch in enumerate(dc.get_example_spool("random_das", length=6)):
             distance = patch.get_coord("distance").values * 1.02  # float: scanned
             patch = patch.update_coords(distance=distance)
             patch.io.write(tmp_path / f"{number}.h5", "DASDAE")
         files = dc.spool(tmp_path).update(progress=None)
-        monkeypatch.setattr(dc, "scan_payloads", scan := Mock(wraps=dc.scan_payloads))
+        for number in range(1, 6):  # the box is in the first file's time
+            (tmp_path / f"{number}.h5").unlink()
         assert len(files.cut(time=_t(1, 2), distance=_d(10.2, 20.4))) == 1
-        assert scan.call_count == 1
 
     @pytest.mark.parametrize("case", ["first", "mixed", "size", "fill", "depth"])
     def test_refusals(self, case):

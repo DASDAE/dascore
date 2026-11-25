@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import warnings
@@ -12,11 +13,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-import dascore.io.core as io_core
 import dascore.utils.chunk_plan as chunk_plan
-from dascore.core.spool import Spool
 from dascore.exceptions import CoordMergeError, ParameterError
-from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
 from dascore.units import m
 from dascore.warnings import DASCoreWarning
@@ -35,6 +33,27 @@ def spool():
 def start(spool):
     """The spool's first time."""
     return spool.get_contents()["time_min"].min()
+
+
+@pytest.fixture(scope="module")
+def unplannable(spool, start):
+    """
+    The spool and a patch nested in its first one which disagrees with it,
+    so planning any cut raises: a cut refused before planning says why.
+    """
+    inner = spool[0].select(time=(start + SECOND, start + 3 * SECOND))
+    return dc.spool([*spool, inner.update_attrs(instrument_id="other")])
+
+
+def _unopenable(path):
+    """
+    Overwrite a file's HDF5 signature, keeping its size and mtime, so h5py
+    cannot open it while its data is still where its offsets say.
+    """
+    stat = os.stat(path)
+    with open(path, "r+b") as handle:
+        handle.write(bytes(8))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 def _span(patch, dim="time"):
@@ -104,15 +123,13 @@ class TestCut:
         assert _span(patch, "distance") == [8, 13]
         assert _span(patch) == _seconds(start, 0, 23.996)
 
-    def test_value_without_pad(self, spool, start):
+    def test_value_without_pad(self, unplannable, start):
         """A value with no pad is refused, naming it and the keyword, first."""
         ends = {"time_min": [start, None], "time_max": [start + SECOND, None]}
         frame = pd.DataFrame({**ends, "time": [None, start]})
         match = r"annotation 1 is a single time.*time="
-        with mock.patch.object(Spool, "_build_chunk_plan") as plan:
-            with pytest.raises(ParameterError, match=match):
-                spool.cut(dc.AnnotationSet(frame, dims=DIMS))
-        assert not plan.call_count
+        with pytest.raises(ParameterError, match=match):
+            unplannable.cut(dc.AnnotationSet(frame, dims=DIMS))
 
     def test_crossing_patches(self, spool, start):
         """A window crossing a file boundary is one patch."""
@@ -255,13 +272,11 @@ class TestCut:
             {"distance": (-np.timedelta64(1, "s"), np.timedelta64(1, "s"))},
         ],
     )
-    def test_bad_pad(self, spool, start, pads):
+    def test_bad_pad(self, unplannable, start, pads):
         """A malformed pad is refused, naming its keyword, before planning."""
         ann = _ranges(start, (0, 1))
-        with mock.patch.object(Spool, "_build_chunk_plan") as plan:
-            with pytest.raises(ParameterError, match=f"{next(iter(pads))}="):
-                spool.cut(ann, **pads)
-        assert not plan.call_count
+        with pytest.raises(ParameterError, match=f"{next(iter(pads))}="):
+            unplannable.cut(ann, **pads)
 
     def test_dim_spool_lacks(self, spool, start):
         """A dimension the spool lacks must be spanned, and takes no pad."""
@@ -289,7 +304,13 @@ class TestCut:
         assert patch.equals(expected.update_attrs(feature_id="box", annotation=None))
 
     def test_many_in_one_plan(self, spool, start):
-        """Many features take one plan, not one per feature, in order."""
+        """
+        Many features take one plan, not one per feature, in order.
+
+        A performance guard that keeps its spies: a plan or a join per
+        feature gives the same patches, only slower, so the counts are its
+        only witness.
+        """
         times = [start + x * SECOND / 10 for x in range(10, 210)]
         ann = dc.AnnotationSet(pd.DataFrame({"time": times}), dims=DIMS)
         wrapped = mock.patch(
@@ -381,24 +402,21 @@ class TestCut:
         assert _span(cut) == span
 
     def test_lazy(self, spool, start, tmp_path):
-        """Cutting and reading contents load nothing; reading the data does."""
+        """
+        Cutting and reading contents load nothing, so they work with the
+        files moved aside; reading the data does.
+        """
         dc.examples.spool_to_directory(spool, path=tmp_path)
         directory = dc.spool(tmp_path).update()
-        plan = mock.patch.object(
-            PlanResolver, "resolve", autospec=True, side_effect=PlanResolver.resolve
-        )
-        file = mock.patch.object(
-            io_core, "_open_array_reader", wraps=io_core._open_array_reader
-        )
-        source = mock.patch.object(
-            FileResolver, "resolve", autospec=True, side_effect=FileResolver.resolve
-        )
-        with plan as calls, file as reads, source as sources:
-            cut = directory.cut(_ranges(start, (5, 12)))
-            cut.get_contents()
-            assert calls.call_count == reads.call_count == sources.call_count == 0
-            (patch,) = cut
-            assert calls.call_count and patch.data.size and reads.call_count
+        files = sorted(tmp_path.glob("*.hdf5"))
+        for path in files:
+            path.rename(path.with_suffix(".aside"))
+        cut = directory.cut(_ranges(start, (5, 12)))
+        cut.get_contents()
+        for path in files:
+            path.with_suffix(".aside").rename(path)
+        (patch,) = cut
+        assert patch.data.size
         assert _span(patch) == _seconds(start, 5, 12)
 
 
@@ -492,7 +510,7 @@ class TestCutWindows:
         assert [_span(x) for x in cut] == [[3.0, 6.0], [0.0, 0.0]]
         assert cut.get_contents()["window"].tolist() == [0, 2]
 
-    def test_refusals(self, spool, start):
+    def test_refusals(self, spool, unplannable, start):
         """Bad window arguments are refused before planning."""
         cases = [
             ({"time": 4}, "(n, 2)"),
@@ -503,10 +521,8 @@ class TestCutWindows:
             ({"tolerance": np.ones((1, 2))}, "got no windows"),
         ]
         for kwargs, match in cases:
-            with mock.patch("dascore.core.spool.window_plan") as plan:
-                with pytest.raises(ParameterError, match=re.escape(match)):
-                    spool.cut(**kwargs)
-            assert not plan.call_count
+            with pytest.raises(ParameterError, match=re.escape(match)):
+                unplannable.cut(**kwargs)
         with pytest.raises(ParameterError, match="cut pad time="):
             spool.cut(_ranges(start, (1, 2)), time=_windows(start, (1, 2)))
         for positional in (_windows(start, (1, 2)), [[1, 2]]):
@@ -514,7 +530,13 @@ class TestCutWindows:
                 spool.cut(positional)
 
     def test_many_windows_planned_at_once(self):
-        """2,000 windows over 200 patches plan in one pass, reading no data."""
+        """
+        2,000 windows over 200 patches plan in one pass, reading no data.
+
+        A performance guard that keeps its spies: a plan, a pairing or a
+        search per window gives the same contents, only slower, and the
+        patches are in memory, so the calls are its only witness.
+        """
         source = dc.examples.random_spool(length=200, shape=(2, 1000))
         contents = source.get_contents()
         low, high = contents["time_min"].min(), contents["time_max"].max()
@@ -819,16 +841,16 @@ class TestCutWindows:
             assert "channel" not in out.coords.coord_map
 
     def test_crossing_window_reads_arrays(self, spool, start, tmp_path):
-        """A window across files loads each file's part with array reads."""
+        """
+        A window across files loads each file's part with array reads, at
+        the offsets the index holds, so files h5py cannot open still load.
+        """
         dc.examples.spool_to_directory(spool, path=tmp_path)
         directory = dc.spool(tmp_path).update()
         cut = directory.cut(time=_windows(start, (5, 12)))
-        arrays = mock.patch.object(
-            io_core, "_open_array_reader", wraps=io_core._open_array_reader
-        )
-        with arrays as reads, mock.patch.object(dc, "read", wraps=dc.read) as patches:
-            (patch,) = cut
-        assert reads.call_count == 2 and not patches.call_count  # one per file
+        for path in tmp_path.glob("*.hdf5"):
+            _unopenable(path)
+        (patch,) = cut
         assert _span(patch) == _seconds(start, 5, 12)
 
     def test_overrides_follow_each_window(self):
