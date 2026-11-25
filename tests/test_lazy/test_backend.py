@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import warnings
+from contextlib import contextmanager
 from itertools import pairwise
 from types import SimpleNamespace
 
@@ -141,6 +143,39 @@ def whole():
 def spool(whole, tmp_path_factory):
     """The spool of a directory of four files which abut along time."""
     return _in_four_files(whole, tmp_path_factory.mktemp("lazy_backend"))
+
+
+@pytest.fixture()
+def own_spool(whole, tmp_path):
+    """The spool of four files like `spool`'s, which a test may take away."""
+    return _in_four_files(whole, tmp_path)
+
+
+@pytest.fixture()
+def own_path(path, tmp_path):
+    """A copy of the example file, which a test may take away."""
+    out = tmp_path / "copy.h5"
+    shutil.copy2(path, out)
+    return out
+
+
+@contextmanager
+def _taken_away(*paths):
+    """Move files aside for the block, so any read of them raises; then put back."""
+    # Moved, not copied, so each comes back with the size and mtime it had.
+    aside = [x.with_name(f"{x.name}.aside") for x in paths]
+    for path, moved in zip(paths, aside, strict=True):
+        os.replace(path, moved)
+    try:
+        yield
+    finally:
+        for path, moved in zip(paths, aside, strict=True):
+            os.replace(moved, path)
+
+
+def _parts(directory):
+    """Return the files `_in_four_files` wrote in a directory."""
+    return sorted(directory.glob("part_*.h5"))
 
 
 @pytest.fixture(scope="module")
@@ -848,14 +883,15 @@ class TestNamespace:
         out = dc.spool([plain, other]).stack(dim_vary="time", check_behavior="ignore")
         np.testing.assert_array_equal(out.data, plain.data)
 
-    def test_lazy_patches_of_one_kind_join_on_the_first_s(self, spool, reads):
+    def test_lazy_patches_of_one_kind_join_on_the_first_s(self, own_spool, tmp_path):
         """Lazy patches on unequal backends of one kind are joined, unread."""
-        lazy = list(spool.set_backend("lazy"))
-        fast = list(spool.set_backend("lazy[fast_numpy]"))
-        with warnings.catch_warnings():
+        lazy = list(own_spool.set_backend("lazy"))
+        fast = list(own_spool.set_backend("lazy[fast_numpy]"))
+        # The files are gone while they are joined, so a join which read raises.
+        with _taken_away(*_parts(tmp_path)), warnings.catch_warnings():
             warnings.simplefilter("error")
             out = dc.spool([fast[0], *lazy[1:]]).concatenate(time=None)[0]
-        assert backend_name(out.data) == "lazy" and not reads
+            assert backend_name(out.data) == "lazy"
         assert out.backend == LazyBackend(compute=_Fast()) and _triples(out.load())
 
     def test_lazy_steps_are_handed_its_arrays(self, spool):
@@ -910,19 +946,18 @@ class TestNamespace:
             lazy.load()
 
     def test_merge_of_kinds_is_refused_before_anything_is_read(
-        self, spool, strict, reads
+        self, own_spool, strict, tmp_path
     ):
         """Members of different libraries are refused, lazy ones unread."""
-        lazy = list(spool.set_backend("lazy"))
-        first = spool[0].new(data=spool[0].data.astype(np.float32))
+        lazy = list(own_spool.set_backend("lazy"))
+        first = own_spool[0].new(data=own_spool[0].data.astype(np.float32))
         mixed = dc.spool([first.set_backend(STRICT), *lazy[1:]])
-        reads.clear()
-        with config_context(numpy_fallback="ignore"):
+        # The files are gone, so a member read before the refusal raises.
+        with config_context(numpy_fallback="ignore"), _taken_away(*_parts(tmp_path)):
             with pytest.raises(
                 IncompatiblePatchError, match="arrays of one array library"
             ):
                 mixed.chunk(time=None)[0]
-        assert not reads
 
     def test_promise_of_another_kind_loads_to_numpy(self, spool):
         """A dask patch of a backend which makes dask arrays loads to NumPy's."""
@@ -1120,7 +1155,14 @@ class TestPatchOnABackend:
     """A spool set to a backend hands out the same patch, on that backend."""
 
     def test_lazy_reads_nothing(self, patch, reads):
-        """A patch from a file is handed out as a promise to read it."""
+        """
+        A patch from a file is handed out as a promise to read it.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its file, so taking it away fails the hand-out itself, and data
+        read there and dropped change no result; the loader's reads are the only
+        witness.
+        """
         lazy = _lazy(patch)
         assert backend_name(lazy.data) == "lazy" and lazy.shape == patch.shape
         assert lazy.attrs == patch.attrs and lazy.coords == patch.coords
@@ -1309,12 +1351,14 @@ class TestPatchOnABackend:
         back = _on(there, "numpy")
         assert backend_name(back.data) == "numpy" and back.equals(patch)
 
-    def test_lazy_on_another_library(self, patch, strict, reads):
+    def test_lazy_on_another_library(self, patch, strict, own_path):
         """Chunks are computed on the library in the brackets."""
-        lazy = _lazy(patch, f"LazyArray[{STRICT}]")
+        lazy = dc.spool(own_path).set_backend(f"LazyArray[{STRICT}]")[0]
         assert backend_name(lazy.data) == "lazy" and lazy.data._backend == _Strict()
-        out = lazy.abs()
-        assert backend_name(out.data) == "lazy" and not reads
+        # The file is gone while the operation is asked for, so it cannot read.
+        with _taken_away(own_path):
+            out = lazy.abs()
+            assert backend_name(out.data) == "lazy"
         loaded = out.load()
         assert backend_name(loaded.data) == STRICT
         np.testing.assert_array_equal(to_numpy(loaded.data), np.abs(patch.data))
@@ -1491,13 +1535,14 @@ class TestOperationWithNoContract:
         (lambda x: x + 1, lambda x: np.add(x, 1), lambda x: dc.spool([x, x]).stack()),
         ids=("arithmetic", "numpy_function", "stack"),
     )
-    def test_refused_whatever_the_setting(self, patch, call, reads):
+    def test_refused_whatever_the_setting(self, own_path, call):
         """What takes the values themselves never reads them unasked."""
-        lazy = _lazy(patch)
+        lazy = dc.spool(own_path).set_backend("lazy")[0]
+        # The file is gone, so an operation which read it would raise.
+        own_path.unlink()
         with config_context(numpy_fallback="ignore"):
             with pytest.raises(LazyOperationError):
                 call(lazy)
-        assert not reads
 
     def test_on_another_library(self, patch, strict):
         """Read onto the library, an operation with no kernel for it says so too."""
@@ -1524,13 +1569,13 @@ class TestOperationWithNoContract:
         # Lazy still, with no step recorded and its own id.
         assert backend_name(out.data) == "lazy" and out.attrs == lazy.attrs
 
-    def test_read_into_memory(self, patch, reads):
+    def test_read_into_memory(self, patch):
         """Allowed, the data are read and the operation run in memory."""
         lazy = _lazy(patch)
         with config_context(numpy_fallback="warn"):
             with pytest.warns(NumpyFallbackWarning, match="read into memory"):
                 out = lazy.detrend("time")
-        assert backend_name(out.data) == "numpy" and len(reads) == 1
+        assert backend_name(out.data) == "numpy"
         np.testing.assert_allclose(out.data, patch.detrend("time").data)
 
 
@@ -1538,7 +1583,13 @@ class TestLazyRead:
     """Inside `reading_onto` a lazy backend, a read returns a promise to read."""
 
     def test_reads_nothing(self, path, patch, reads):
-        """The patch names its stored array and holds none of it."""
+        """
+        The patch names its stored array and holds none of it.
+
+        A performance guard that keeps its spy: the lazy read opens the file for its
+        metadata, so taking it away fails the read itself, and data read there
+        and dropped change no result; the loader's reads are the only witness.
+        """
         with reading_onto(LazyBackend()):
             assert read_backend() == LazyBackend()
             lazy = dc.read(path)[0]
@@ -1573,7 +1624,13 @@ class TestLazyRead:
         assert backend_name(out.data) == "numpy" and out.equals(expected)
 
     def test_window_of_the_file(self, path, patch, reads):
-        """A selection of neighbouring samples is a window to read later."""
+        """
+        A selection of neighbouring samples is a window to read later.
+
+        A performance guard that keeps its spy: reading the whole array and
+        cutting the window from it gives the same patch, so the shape read
+        is the only witness.
+        """
         with reading_onto(LazyBackend()):
             lazy = dc.read(path, time=(10, 60), samples=True)[0]
         expected = dc.read(path, time=(10, 60), samples=True)[0]
@@ -1606,7 +1663,14 @@ class TestSpoolSetBackend:
     """A spool hands its patches out on the backend it was set to."""
 
     def test_nothing_is_read_until_asked(self, spool, reads):
-        """Indexing and iterating hand out promises."""
+        """
+        Indexing and iterating hand out promises.
+
+        A performance guard that keeps its spy: handing each patch out opens or
+        checks its file, so taking it away fails the hand-out itself, and data
+        read there and dropped change no result; the loader's reads are the only
+        witness.
+        """
         lazy = spool.set_backend("lazy")
         assert not reads and len(lazy) == len(spool)
         first = lazy[0]
@@ -1650,7 +1714,14 @@ class TestSpoolSetBackend:
         )
 
     def test_added_spools_keep_their_backend(self, spool, strict, reads):
-        """A sum of spools on one backend is on it; of two, it is refused."""
+        """
+        A sum of spools on one backend is on it; of two, it is refused.
+
+        A performance guard that keeps its spy: handing each patch out opens or
+        checks its file, so taking it away fails the hand-out itself, and data
+        read there and dropped change no result; the loader's reads are the only
+        witness.
+        """
         lazy = spool.set_backend("lazy")
         both = lazy[:2] + lazy[2:]
         assert len(both) == len(spool)
@@ -1737,28 +1808,35 @@ class TestSpoolSetBackend:
     @pytest.mark.wasm_skip
     @pytest.mark.parametrize("backend", (None, "lazy"), ids=("unset", "lazy"))
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_lazy_patches_held_merge(self, spool, policy, backend, reads):
+    def test_lazy_patches_held_merge(self, own_spool, tmp_path, policy, backend):
         """Merging patches a spool holds lazy reads them, which is said."""
         # Members the merge has to load: each is an operation on a file.
-        held = dc.spool([x.abs() for x in spool.set_backend("lazy")])
-        expected = dc.spool([x.abs() for x in spool]).chunk(time=None)[0]
-        reads.clear()
+        held = dc.spool([x.abs() for x in own_spool.set_backend("lazy")])
+        expected = dc.spool([x.abs() for x in own_spool]).chunk(time=None)[0]
         # Whatever backend the spool which holds them is on, or none.
         held = held if backend is None else held.set_backend(backend)
         merged = held.chunk(time=None)
         with config_context(numpy_fallback=policy):
             if policy is None:
-                with pytest.raises(LazyOperationError, match="cannot stay lazy"):
-                    merged[0]
-                assert not reads
+                # The files are gone, so a member read before refusing raises.
+                with _taken_away(*_parts(tmp_path)):
+                    with pytest.raises(LazyOperationError, match="cannot stay lazy"):
+                        merged[0]
                 return
             with pytest.warns(NumpyFallbackWarning, match="cannot stay lazy"):
                 out = merged[0]
-        assert backend_name(out.data) == "numpy" and len(reads) == len(spool)
+        assert backend_name(out.data) == "numpy"
         np.testing.assert_array_equal(out.data, expected.data)
 
     def test_lazy_patches_concatenated(self, spool, reads):
-        """Lazy patches joined end to end stay lazy, reading nothing."""
+        """
+        Lazy patches joined end to end stay lazy, reading nothing.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         expected = spool.concatenate(time=None)[0]
         reads.clear()
         with warnings.catch_warnings():
@@ -1770,17 +1848,19 @@ class TestSpoolSetBackend:
         assert out.load().equals(expected) and len(reads) == len(spool)
 
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_concatenated_with_operations_pending(self, spool, policy, reads):
+    def test_concatenated_with_operations_pending(self, own_spool, tmp_path, policy):
         """Lazy patches with operations pending are joined only with leave."""
-        held = dc.spool([x.abs() for x in spool.set_backend("lazy")])
-        expected = dc.spool([x.abs() for x in spool]).concatenate(time=None)[0]
-        reads.clear()
+        held = dc.spool([x.abs() for x in own_spool.set_backend("lazy")])
+        expected = dc.spool([x.abs() for x in own_spool]).concatenate(time=None)[0]
         joined = held.concatenate(time=None)
         with config_context(numpy_fallback=policy):
             if policy is None:
-                with pytest.raises(LazyOperationError, match="concatenation cannot"):
-                    joined[0]
-                assert not reads
+                # The files are gone, so a member read before refusing raises.
+                with _taken_away(*_parts(tmp_path)):
+                    with pytest.raises(
+                        LazyOperationError, match="concatenation cannot"
+                    ):
+                        joined[0]
                 return
             with pytest.warns(NumpyFallbackWarning, match="concatenation cannot"):
                 out = joined[0]
@@ -1871,7 +1951,14 @@ class TestSpoolSetBackend:
         np.testing.assert_array_equal(values, expected.data)
 
     def test_lazy_patches_with_units_concatenated(self, whole, tmp_path, reads):
-        """Members which state their units are joined lazily too."""
+        """
+        Members which state their units are joined lazily too.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         spool = _in_four_files(whole.set_units("m/s"), tmp_path)
         expected = spool.concatenate(time=None)[0]
         reads.clear()
@@ -1966,7 +2053,14 @@ class TestLazyMerge:
     """A spool which merges files hands out one patch which reads none."""
 
     def test_merge_reads_nothing(self, spool, whole, reads):
-        """The merged patch names a window of each file."""
+        """
+        The merged patch names a window of each file.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         expected = spool.chunk(time=None)[0]
         reads.clear()
         merged = spool.set_backend("lazy").chunk(time=None)
@@ -1979,28 +2073,41 @@ class TestLazyMerge:
         assert loaded.equals(expected) and len(reads) == len(spool)
         np.testing.assert_array_equal(loaded.data, whole.transpose(*loaded.dims).data)
 
-    def test_selection_reads_the_files_it_touches(self, spool, reads):
+    def test_selection_reads_the_files_it_touches(self, own_spool, tmp_path):
         """A part of the merged patch opens only the files which hold it."""
-        lazy = spool.set_backend("lazy").chunk(time=None)[0]
+        lazy = own_spool.set_backend("lazy").chunk(time=None)[0]
         size = lazy.shape[lazy.get_axis("time")]
         # Inside the second of the four files.
         window = (size // 4 + 5, size // 2 - 5)
-        part = lazy.select(time=window, samples=True)
-        assert backend_name(part.data) == "lazy" and not reads
-        loaded = part.load()
-        assert len(reads) == 1 and "part_1" in reads[0].path
-        expected = spool.chunk(time=None)[0].select(time=window, samples=True)
+        expected = own_spool.chunk(time=None)[0].select(time=window, samples=True)
+        first, second, *rest = _parts(tmp_path)
+        # Every file is gone while selecting, and all but the second while
+        # loading, so reading any other raises.
+        with _taken_away(first, *rest):
+            with _taken_away(second):
+                part = lazy.select(time=window, samples=True)
+                assert backend_name(part.data) == "lazy"
+            loaded = part.load()
         assert loaded.equals(expected)
 
-    def test_operations_wait(self, spool, reads):
+    def test_operations_wait(self, own_spool, tmp_path):
         """What is done to the merged patch is done when it is loaded."""
-        lazy = spool.set_backend("lazy").chunk(time=None)[0]
-        out = lazy.abs()
-        assert backend_name(out.data) == "lazy" and not reads
-        assert out.load().equals(spool.chunk(time=None)[0].abs())
+        lazy = own_spool.set_backend("lazy").chunk(time=None)[0]
+        # The files are gone while it is asked for, so it cannot read.
+        with _taken_away(*_parts(tmp_path)):
+            out = lazy.abs()
+            assert backend_name(out.data) == "lazy"
+        assert out.load().equals(own_spool.chunk(time=None)[0].abs())
 
     def test_members_the_index_cannot_describe(self, undescribed, reads):
-        """A merge of members read as patches is lazy still, joined by recipe."""
+        """
+        A merge of members read as patches is lazy still, joined by recipe.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         expected = undescribed.chunk(time=None)[0]
         reads.clear()
         with warnings.catch_warnings():
@@ -2070,7 +2177,14 @@ class TestLazyMerge:
         np.testing.assert_array_equal(filled.data, expected.data)
 
     def test_no_gap_to_fill(self, spool, reads):
-        """With no gap there is nothing to write, so nothing is read or refused."""
+        """
+        With no gap there is nothing to write, so nothing is read or refused.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         expected = spool.fill_gaps(time=None)[0]
         reads.clear()
         filled = spool.set_backend("lazy").fill_gaps(time=None)[0]
@@ -2102,18 +2216,31 @@ class TestLazyMerge:
         assert not np.allclose(merged.data, whole.transpose(*merged.dims).data)
 
     @pytest.mark.parametrize("policy", (None, "warn"))
-    def test_dtypes_which_promote_in_order(
-        self, whole, tmp_path, policy, monkeypatch, reads
-    ):
-        """Where promoting in order differs from at once, the members are read."""
+    def test_dtypes_which_promote_in_order(self, whole, tmp_path, policy, reads):
+        """
+        Where promoting in order differs from at once, the members are read.
+
+        A performance guard that keeps its spy: handing the merge out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         size = whole.shape[whole.get_axis("time")]
         edges = [0, size // 3, 2 * size // 3, size]
         dtypes = (np.int8, np.uint8, np.float16)
+        indexed_path, unindexed_path = tmp_path / "indexed", tmp_path / "unindexed"
+        indexed_path.mkdir()
+        unindexed_path.mkdir()
+        # The same members again, with an attr of units, which the index
+        # cannot hold, so its rows cannot stand in for them.
+        span = dc.get_quantity("10 m")
         for index, dtype in enumerate(dtypes):
             part = whole.select(time=(edges[index], edges[index + 1]), samples=True)
             part = part.new(data=(part.data * 10).astype(dtype))
-            dc.write(part, tmp_path / f"part_{index}.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
+            dc.write(part, indexed_path / f"part_{index}.h5", "dasdae")
+            spanned = part.update_attrs(span=span)
+            dc.write(spanned, unindexed_path / f"part_{index}.h5", "dasdae")
+        spool = dc.spool(indexed_path).update()
         expected = spool.chunk(time=None)[0]
         # From the index the merge casts as it reads, and stays lazy.
         indexed = spool.set_backend("lazy").chunk(time=None)[0]
@@ -2121,10 +2248,8 @@ class TestLazyMerge:
         np.testing.assert_array_equal(indexed.load().data, expected.data)
         # Members the index cannot describe are merged as patches, which a
         # join of recipes cannot cast in order.
-        monkeypatch.setattr(
-            assembly.PatchAssembler, "_member_meta_from_index", lambda *args: None
-        )
-        lazy = spool.set_backend("lazy").chunk(time=None)
+        unindexed = dc.spool(unindexed_path).update()
+        lazy = unindexed.set_backend("lazy").chunk(time=None)
         reads.clear()
         with config_context(numpy_fallback=policy):
             if policy is None:
@@ -2189,7 +2314,14 @@ class TestLazyMerge:
 
     @pytest.mark.parametrize("policy", (None, "warn"))
     def test_member_in_memory_before_lazy_ones(self, spool, whole, policy, reads):
-        """Lazy members after one in memory are not copied into it unasked."""
+        """
+        Lazy members after one in memory are not copied into it unasked.
+
+        A performance guard that keeps its spy: handing the merge out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         size = whole.shape[whole.get_axis("time")]
         # The first quarter held in memory, changed so the index cannot stand
         # for it, before the three files after it.
@@ -2209,7 +2341,14 @@ class TestLazyMerge:
         np.testing.assert_array_equal(merged.data, expected.data)
 
     def test_file_changed_since_it_was_indexed(self, whole, tmp_path, reads):
-        """A file the index no longer describes is read as it is now, lazily."""
+        """
+        A file the index no longer describes is read as it is now, lazily.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         spool = _in_four_files(whole, tmp_path)
         expected = spool.chunk(time=None)[0]
         # Written again: the same samples, at another time.
@@ -2222,7 +2361,14 @@ class TestLazyMerge:
         np.testing.assert_array_equal(merged.load().data, expected.data)
 
     def test_merge_of_unknown_size(self, spool, monkeypatch, reads):
-        """Members merged as loaded patches stay lazy, joined by recipe."""
+        """
+        Members merged as loaded patches stay lazy, joined by recipe.
+
+        A performance guard that keeps its spy: handing the patch out opens or
+        checks its files, so taking them away fails the hand-out itself, and
+        data read there and dropped change no result; the loader's reads are the
+        only witness.
+        """
         expected = spool.chunk(time=None)[0]
         # As for members whose merged length the index's rows do not state.
         monkeypatch.setattr(assembly, "_estimate_merge_samples", lambda *args: None)
