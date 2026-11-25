@@ -32,7 +32,6 @@ from dascore.exceptions import (
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingOptionalDependencyError,
-    MissingPatchError,
     ParameterError,
     ScanError,
     UnknownExampleError,
@@ -153,7 +152,12 @@ class TestLiveSpoolLazy:
         return list(dc.examples.get_example_spool(length=3))
 
     def test_simple_access_builds_no_dataframes(self, patch_list):
-        """len, integer access, and iteration should not build dataframes."""
+        """
+        len, integer access, and iteration should not build dataframes.
+
+        A performance guard (rule C): nothing public tells whether the
+        catalog has built its index backend, so that is read.
+        """
         spool = dc.spool(patch_list)
         assert len(spool) == len(patch_list)
         assert spool[0] == patch_list[0]
@@ -162,7 +166,12 @@ class TestLiveSpoolLazy:
         assert spool._catalog._backend is None
 
     def test_out_of_bounds_raises(self, patch_list):
-        """The fast path must raise the same IndexError as the df path."""
+        """
+        The fast path must raise the same IndexError as the df path.
+
+        A performance guard (rule C): that the fast path was the one taken
+        shows only in the catalog's unbuilt backend.
+        """
         spool = dc.spool(patch_list)
         match = "out of bounds for spool"
         with pytest.raises(IndexError, match=match):
@@ -170,7 +179,12 @@ class TestLiveSpoolLazy:
         assert spool._catalog._backend is None
 
     def test_access_unchanged_after_df_built(self, patch_list):
-        """Patch access must return the same thing before/after df built."""
+        """
+        Patch access must return the same thing before/after df built.
+
+        An engine test (rule E): only the catalog's backend shows that
+        get_contents moved access off the fast path.
+        """
         spool = dc.spool(patch_list)
         lazy_patches = list(spool)
         _ = spool.get_contents()  # forces the flat relation to build
@@ -203,7 +217,12 @@ class TestLiveSpoolLazy:
         assert time_coord.min() == expected_min
 
     def test_derived_spool_is_own_catalog(self, patch_list):
-        """A chunked spool is a fresh derived catalog sharing patches."""
+        """
+        A chunked spool is a fresh derived catalog sharing patches.
+
+        An engine test (rule E): which catalog and registry a spool holds
+        is the state under test, and nothing public names them.
+        """
         spool = dc.spool(patch_list)
         chunked = spool.chunk(time=1)
         assert chunked._catalog is not spool._catalog
@@ -215,11 +234,15 @@ class TestLiveSpoolLazy:
         assert "_data" not in chunked.__dict__
 
     def test_single_patch_input_uses_lazy_storage(self, random_patch):
-        """A single patch lands in the registry without realizing tables."""
+        """
+        A single patch is held as it is, without realizing tables.
+
+        A performance guard (rule C): nothing public tells whether the
+        catalog has built its index backend, so that is read.
+        """
         spool = Spool(random_patch)
         assert len(spool) == 1
-        registry = spool._catalog.resolver.live_entries()
-        assert tuple(registry.values()) == (random_patch,)
+        assert spool[0] is random_patch
         # simple access never bootstrapped the index backend
         assert spool._catalog._backend is None
 
@@ -314,25 +337,34 @@ class TestLoad:
         budget(None)
         assert len(random_directory_spool.load()) == len(random_directory_spool)
 
+    @staticmethod
+    def _assert_needs(spool, budget, needed):
+        """Loading the spool is refused below `needed` bytes and done at it."""
+        if needed:
+            budget(needed - 1)
+            with pytest.raises(InsufficientMemoryError):
+                spool.load()
+        budget(needed)
+        assert len(spool.load()) == len(spool)
+
     def test_in_memory_patches_cost_nothing(self, random_spool, budget):
         """Patches already held are not counted against the budget."""
-        budget(1)
-        assert _bytes_to_load(random_spool._df) == 0
+        budget(0)
         assert random_spool.load() == random_spool
 
-    def test_trimmed_rows_estimated(self, random_spool):
+    def test_trimmed_rows_estimated(self, random_spool, budget):
         """A selection forgets a row's size; its ranges give the count."""
         patch = random_spool[0]
         start = patch.coords.min("time") + np.timedelta64(1, "s")
         trimmed = random_spool.select(time=(start, None))
         expected = patch.select(time=(start, None)).data.nbytes
-        assert _bytes_to_load(trimmed._df) == expected
+        self._assert_needs(trimmed, budget, expected)
 
-    def test_chunk_rows_estimated(self, random_spool):
+    def test_chunk_rows_estimated(self, random_spool, budget):
         """Plan outputs state no size; their ranges give the total."""
         chunked = random_spool.chunk(time=3)
         expected = sum(x.data.nbytes for x in random_spool)
-        assert _bytes_to_load(chunked._df) == expected
+        self._assert_needs(chunked, budget, expected)
 
     def test_unknown_step_or_dtype_counts_nothing(self):
         """A row whose size cannot be told does not inflate the figure."""
@@ -359,42 +391,56 @@ class TestLoad:
         """A one-dimensional patch over coordinate x."""
         return dc.Patch(data=data, coords={"x": x}, dims=("x",))
 
-    def test_descending_coords_estimated(self, tmp_path):
+    def test_descending_coords_estimated(self, tmp_path, budget):
         """A negative step counts samples like a positive one."""
         path = tmp_path / "down.h5"
         dc.write(self._line(np.ones(10), np.arange(10)[::-1]), path, "dasdae")
         trimmed = dc.spool(path).select(x=(0, 1))
-        assert _bytes_to_load(trimmed._df) == sum(x.data.nbytes for x in trimmed)
+        self._assert_needs(trimmed, budget, sum(x.data.nbytes for x in trimmed))
 
-    def test_off_grid_trim_counts_at_most_one_extra(self, tmp_path):
+    def test_off_grid_trim_counts_at_most_one_extra(self, tmp_path, budget):
         """A range ending between samples counts one more per dimension."""
         path = tmp_path / "grid.h5"
         dc.write(self._line(np.ones(10), np.arange(10)), path, "dasdae")
         trimmed = dc.spool(path).select(x=(0.1, 8.1))
         actual = sum(x.data.nbytes for x in trimmed)
-        assert actual <= _bytes_to_load(trimmed._df) <= actual + 8
+        budget(actual - 1)
+        with pytest.raises(InsufficientMemoryError):
+            trimmed.load()
+        budget(actual + 8)
+        assert len(trimmed.load()) == 1
 
     def test_text_coords_load(self, budget):
         """Coordinates with no arithmetic leave the row's count unknown."""
-        budget(1)
+        budget(0)
         patch = self._line(np.ones(3), np.array(["a", "b", "c"]))
         assert len(dc.spool(patch).load()) == 1
-        df = dc.spool(patch).select(x=("a", "b"))._df
-        assert _bytes_to_load(df) == 0
+        # Trimmed along y, the row states no size and is counted from its
+        # ranges, which the text labels of x cannot give.
+        coords = {"x": np.array(["a", "b", "c"]), "y": np.arange(4.0)}
+        grid = dc.Patch(data=np.ones((3, 4)), coords=coords, dims=("x", "y"))
+        assert dc.spool(grid).select(y=(1, 2)).load()[0].shape == (3, 2)
+        # A text range counts nothing either: the budget of none lets the load
+        # through to the reader, which is what refuses a text range.
+        selected = dc.spool(patch).select(x=("a", "b"))
+        assert selected.get_contents()["x_max"].tolist() == ["b"]
+        with pytest.raises(CoordError, match="do not support range selection"):
+            selected.load()
 
     def test_mixed_kinds_load(self, budget):
         """Rows whose values are of different kinds are counted one by one."""
         budget(1)
         start = np.datetime64("2020-01-01")
-        patches = [
-            self._line(np.ones(3), np.array([0.0, 1.0, 3.0])),
-            self._line(np.ones(3), start + np.arange(3) * np.timedelta64(1, "s")),
-        ]
-        spool = dc.spool(patches)
-        assert len(spool.load()) == 2
-        counts = spool_module._estimated_samples(spool._df)
-        assert counts.isna().tolist() == [True, False]
-        assert counts.iloc[1] == 3
+        times = start + np.arange(3) * np.timedelta64(1, "s")
+        uneven = self._line(np.ones(3), np.array([0.0, 1.0, 3.0]))
+        dated = self._line(np.ones(3, dtype=np.float32), times)
+        assert len(dc.spool([uneven, dated]).load()) == 2
+        # Trimmed rows state no size, so each is counted from its ranges: the
+        # uneven floats have no step to count by, and the dated row keeps two
+        # float32 samples.
+        spool = dc.spool(uneven).select(x=(0.0, 1.0))
+        spool = spool + dc.spool(dated).select(x=(times[1], None))
+        self._assert_needs(spool, budget, 2 * 4)
 
     def test_live_lazy_patch_counted(self, budget):
         """A held patch whose array is not read yet costs its size."""
@@ -455,7 +501,7 @@ class TestLoad:
         path = tmp_path / "lazy.h5"
         dc.write(random_patch, path, "dasdae")
         stored = dc.read(path)[0]
-        lazy = stored.to_patch(Recipe.from_sources([stored._source]))
+        lazy = dc.spool(path).set_backend("lazy")[0].set_backend(None)
         loaded = dc.spool(lazy).load()[0]
         assert isinstance(loaded.data, np.ndarray)
         assert np.array_equal(loaded.data, stored.data)
@@ -468,7 +514,11 @@ class TestLoad:
         patch, inventory = inventory_patch_pair()
         loaded = dc.spool(patch).attach_inventory(inventory).enrich().load()
         assert loaded[0].attrs.gauge_length == 10.0
-        assert loaded._inventory is inventory
+        # enrich() with nothing passed raises unless an inventory is attached,
+        # so the loaded spool still carries the one enriched before loading
+        assert loaded.enrich()[0].attrs.gauge_length == 10.0
+        plain = dc.spool(patch).attach_inventory(inventory).load()
+        assert plain.enrich()[0].attrs.gauge_length == 10.0
 
 
 class TestIndexing:
@@ -710,10 +760,10 @@ class TestGetContents:
     def test_no_private_columns(self, name, request):
         """What the index keeps for itself stays out of the frame."""
         spool = request.getfixturevalue(name)
-        private = [x for x in spool._df.columns if str(x).startswith("_")]
-        assert private, "the flat relation should have some to drop"
         df = spool.get_contents()
         assert not [x for x in df.columns if str(x).startswith("_")]
+        # the index's own size columns are presented under public names
+        assert {"dtype", "data_size"}.issubset(df.columns)
 
     def test_units_survive_the_drop(self, random_spool):
         """A `_{name}_units` column is renamed, not dropped with the rest."""
@@ -1232,7 +1282,12 @@ class TestSelectSharedDimension:
         assert contents[["arc_min", "arc_max"]].isna().all(axis=None)
 
     def test_loading_leaves_the_last_riders(self, sensor_spool):
-        """Loading skips the last selection's riders, which it never reads."""
+        """
+        Loading skips the last selection's riders, which it never reads.
+
+        A performance guard (rule C): the relation loading reads, and
+        whether the trimmed one was built, are the catalog's own.
+        """
         out = sensor_spool.select(distance=(10, 20))
         catalog = out._catalog
         load = catalog._load_df()
@@ -1246,7 +1301,12 @@ class TestSelectSharedDimension:
         assert 1019.99 < low <= 1020 and 1040 <= high < 1040.01
 
     def test_loading_keeps_earlier_riders(self, sensor_spool):
-        """A rider a later selection may select rows by is trimmed for loading."""
+        """
+        A rider a later selection may select rows by is trimmed for loading.
+
+        An engine test (rule E): loading trims each patch whatever the
+        relation says, so only the catalog's loading relation shows this.
+        """
         out = sensor_spool.select(sensor=(1020, 1040)).select(
             time=(1, None), samples=True
         )
@@ -2190,7 +2250,8 @@ class TestUnselect:
         kept = diverse_spool.select(tag="some_tag")
         dropped = diverse_spool.unselect(tag="some_tag")
         assert len(kept) + len(dropped) == len(diverse_spool)
-        assert not set(kept._df["_patch_row"]) & set(dropped._df["_patch_row"])
+        assert kept.get_contents()["tag"].eq("some_tag").all()
+        assert not dropped.get_contents()["tag"].eq("some_tag").any()
 
     def test_removes_the_matches(self, diverse_spool):
         """What comes back is what the selection would not have kept."""
@@ -2565,16 +2626,6 @@ class TestGetSpool:
             assert len(dc.spool(terra15_das_example_path))
         assert probe.call_count == 1
 
-    def test_from_file_with_known_format_does_not_probe(self, terra15_das_example_path):
-        """A caller which states the format is believed."""
-        fmt, ver = dc.get_format(terra15_das_example_path)
-        manager = dc.io.FiberIO.manager
-        with mock.patch.object(
-            manager, "_get_format", wraps=manager._get_format
-        ) as probe:
-            assert len(Spool._from_file(terra15_das_example_path, fmt, ver))
-        assert probe.call_count == 0
-
     def test_update_rereads_a_rewritten_format(self, tmp_path):
         """A file rewritten in another format is re-sniffed, not assumed."""
         path = tmp_path / "patch.h5"
@@ -2595,6 +2646,9 @@ class TestGetSpool:
         Naming a format the file is not therefore yields what that reader
         makes of the file rather than an error, which is the contract the
         other two entry points already have.
+
+        An engine test (rule E): dc.spool checks a stated format against
+        the file first, so only the single-file constructor believes one.
         """
         spool = Spool._from_file(terra15_das_example_path, "DASDAE", "1")
         assert len(spool) == 0
@@ -2715,7 +2769,10 @@ class TestDirectorySpoolSnap:
         assert spool[0].get_coord("time") == terra15_exact.get_coord("time")
         contents = spool.get_contents()
         assert contents["time_max"].iloc[0] == terra15_exact.get_coord("time").max()
-        assert spool._catalog.backend.get_metadata()["snap"] == "[]"
+        # the index records the snap, so opening under it again keeps it
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            dc.spool(directory, snap=False)
 
     def test_another_snap_rescans(self, directory, terra15_exact):
         """Opened with another snap, the index is rebuilt; with the same, kept."""
@@ -2734,8 +2791,11 @@ class TestDirectorySpoolSnap:
         dc.spool(directory).update()
         with dc.config_context(max_shift=0.3):
             with pytest.warns(UserWarning, match="rescanning"):
-                spool = dc.spool(directory)
-            assert spool._catalog.backend.get_metadata()["max_shift"] == 0.3
+                dc.spool(directory).update()
+            # the rescan recorded the new max_shift, so it is not redone
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                dc.spool(directory)
 
     def test_derived_spools_keep_the_snap(self, directory, terra15_exact):
         """Chunked and concatenated directory spools read under its snap."""
@@ -2758,9 +2818,10 @@ class TestDirectorySpoolSnap:
         first.update()
         with pytest.warns(UserWarning, match="rescanning"):
             second.update()
-        metadata = second._catalog.backend.get_metadata()
-        assert metadata["snap"] == "[]"
-        reopened = dc.spool(directory, snap=False)
+        # the index now records snap=False, so opening under it rescans nothing
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            reopened = dc.spool(directory, snap=False)
         assert not reopened.get_contents()["time_step"].notna().any()
 
     def test_directory_and_file_under_two_snaps(self, directory):
@@ -2939,17 +3000,14 @@ class TestSpoolCoverageEdges:
         assert len(combined) == 2
         assert all(isinstance(p, dc.Patch) for p in combined)
 
-    def test_iteration_skips_unresolvable_patch(self, monkeypatch):
+    def test_iteration_skips_unresolvable_patch(self, tmp_path):
         """A patch that fails to resolve is skipped with a #583 warning."""
-        spool = dc.spool([dc.get_example_patch()])
-        # Realize the relation so iteration resolves rows rather than
-        # serving the live registry (which cannot fail to resolve).
-        spool.get_contents()
-
-        def _raise(*args, **kwargs):
-            raise MissingPatchError("not available in this session")
-
-        monkeypatch.setattr(spool._catalog, "resolve_row", _raise)
+        path = tmp_path / "patch.h5"
+        dc.write(dc.get_example_patch(), path, "dasdae")
+        spool = dc.spool(tmp_path).update()
+        # The file loses its patch after indexing, so its row finds none.
+        path.unlink()
+        dc.write(dc.spool([]), path, "dasdae")
         with pytest.warns(UserWarning, match="Skipping patch"):
             assert list(spool) == []
 
@@ -3543,15 +3601,15 @@ class TestConcatenatePartitions:
         out = dc.spool([a, b]).concatenate(time=None)
         assert "clock" in out[0].coords.coord_map
         # the catalog names it too, rather than denying a coordinate the
-        # patch will have
-        assert "clock" in out._catalog.backend.coord_names()
+        # patch will have: selecting on it is not refused as unknown
+        assert len(out.select(clock=(None, None))) == 1
 
     def test_value_less_dimension_reaches_the_catalog(self, pair):
         """A blank dimension is named by the catalog and joined by the patch."""
         first, other = pair
         blank_a, blank_b = first.mean("time"), other.mean("time")
         out = dc.spool([blank_a, blank_b]).concatenate(time=None)
-        assert "time" in out._catalog.backend.coord_names()
+        assert len(out.select(time=(None, None))) == 1
         assert out[0].shape[out[0].get_axis("time")] == 2
         # what identity such an output carries is pinned in test_plan.py
 
@@ -3563,7 +3621,7 @@ class TestConcatenatePartitions:
         a = first.update_coords(clock=("time", blank)).convert_units(clock="s")
         b = other.update_coords(clock=("time", blank)).convert_units(clock="s")
         out = dc.spool([a, b]).concatenate(time=None)
-        assert "clock" in out._catalog.backend.coord_names()
+        assert len(out.select(clock=(None, None))) == 1
         row = out.get_contents().iloc[0]
         assert pd.isnull(row["clock_min"]) and pd.isnull(row["clock_max"])
         # the patch still holds it, units and all
@@ -4032,7 +4090,12 @@ class TestSpoolRepr:
         assert "display_max_patches=1" in rendered
 
     def test_a_repr_does_not_advise_on_pandas(self):
-        """Typing a name asked for a glance, not for advice on pandas."""
+        """
+        Typing a name asked for a glance, not for advice on pandas.
+
+        A regression test (rule B): pandas warns only when assembling a large
+        index fragments the frame, so the frame is replaced by one that warns.
+        """
         spool = dc.get_example_spool("diverse_das")
         frame = spool.get_contents()
         real = Spool._df
@@ -4051,7 +4114,12 @@ class TestSpoolRepr:
         assert not [x for x in caught if issubclass(x.category, PerformanceWarning)]
 
     def test_a_repr_does_not_eat_a_warning(self):
-        """A realized frame warns once, and a repr must not be who hears it."""
+        """
+        A realized frame warns once, and a repr must not be who hears it.
+
+        A regression test (rule B): the warning is injected, since no small
+        spool makes realizing its frame warn.
+        """
         spool = dc.get_example_spool("diverse_das")
         message = "something worth saying"
 

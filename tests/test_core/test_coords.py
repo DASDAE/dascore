@@ -30,6 +30,7 @@ from dascore.core.coords import (
     NumericCoord,
     _blank_coord,
     concat_coords,
+    get_compatible_values,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError, TimeOverflowError
@@ -180,6 +181,15 @@ def two_d_coord():
     """Return a 2D coordinate."""
     ar = np.ones((10, 10))
     return get_coord(data=ar, units="m/s")
+
+
+def labels_unknown(coord) -> bool:
+    """Whether a coordinate's labels are unknown, so it answers only by samples."""
+    try:
+        coord.order(np.array([0]))
+    except Exception as err:
+        return "only by samples" in str(err) and pd.isnull(coord.values).all()
+    return False
 
 
 def assert_value_in_one_step(coord, index, value, greater=True):
@@ -433,7 +443,14 @@ class TestCoordSummary:
 
     @staticmethod
     def _assert_matches_validated(coord):
-        """The unvalidated summary equals the validated one, field by field."""
+        """
+        The unvalidated summary equals the validated one, field by field.
+
+        An engine test (rule C): `to_summary` skips validation for speed,
+        and only the coordinate's own field builders say what validation
+        would have been given, so the expected summary is built from them
+        rather than from the summary under test.
+        """
         out = coord.to_summary(dims=["x"])
         fields = coord._summary_fields(["x"])
         validated = CoordSummary(**fields).model_copy(update=coord._summary_update())
@@ -596,17 +613,15 @@ class TestCoordSummary:
         assert dumped["data_id"] == "abc123"
 
 
-class TestGetSliceTuple:
-    """Tests for getting slice tuples."""
+class TestSelectRange:
+    """Tests for selecting a range of values."""
 
-    def test_get_slice_tuple(self, coord):
-        """Basic tests for range of coords."""
+    def test_select_range(self, coord):
+        """A range spanning the coordinate, open or closed, keeps all of it."""
         start = coord.min()
         end = coord.max()
-        out = coord._get_slice_tuple((start, end))
-        assert out == (start, end)
-        assert coord._get_slice_tuple((start, None)) == (start, None)
-        assert coord._get_slice_tuple((None, end)) == (None, end)
+        for bounds in [(start, end), (start, None), (None, end)]:
+            assert coord.select(bounds)[0] == coord
         # if units aren't none, ensure they work.
         if not (unit := coord.units):
             return
@@ -615,19 +630,26 @@ class TestGetSliceTuple:
             start, end = to_float(start), to_float(end)
         start_unit = start * get_quantity(unit)
         end_unit = end * get_quantity(unit)
-        # check that first slice is close to original
-        sliced = coord._get_slice_tuple((start_unit, None))
-        lims = (coord.min(), None)
-        assert all_close([to_float(lims[0])], [to_float(sliced[0])])
-        # same for second slice.
         lims = to_float(np.array((coord.min(), coord.max())))
-        sliced = to_float(np.array(coord._get_slice_tuple((start_unit, end_unit))))
-        assert all_close(lims, sliced)
+        # bounds with units select close to the whole coordinate.
+        for bounds in [(start_unit, None), (None, end_unit), (start_unit, end_unit)]:
+            out, _ = coord.select(bounds)
+            assert len(out), bounds
+            assert all_close(lims, to_float(np.array((out.min(), out.max()))))
+        # And an interior range selects what the same range without units does,
+        # so a conversion which scales the bounds cannot hide at the ends.
+        values = coord.values
+        if dtype_time_like(coord) or values.ndim != 1 or len(values) < 4:
+            return
+        low, high = sorted(values[[len(values) // 4, 3 * len(values) // 4]])
+        quant = get_quantity(unit)
+        expected, _ = coord.select((low, high))
+        assert coord.select((low * quant, high * quant))[0] == expected
 
-    def test_get_slice_range_bad_values(self, evenly_sampled_coord):
+    def test_select_range_bad_values(self, evenly_sampled_coord):
         """Ensure bad values raise helpful error."""
         with pytest.raises(ParameterError, match="must be a length 2"):
-            evenly_sampled_coord._get_slice_tuple((1, 2, 3))
+            evenly_sampled_coord.select((1, 2, 3))
 
     def test_slice_with_step_raises(self, evenly_sampled_coord):
         """A slice with a step shouldn't work."""
@@ -639,18 +661,22 @@ class TestGetSliceTuple:
         """Ensure slice works like tuple."""
         coord = evenly_sampled_coord
         vmin, vmax = coord.min(), coord.max()
-        sli = slice(vmin, vmax + 1)
-        out_sli = evenly_sampled_coord._get_slice_tuple(sli)
-        assert out_sli == (None, None) or out_sli == (0, len(coord))
+        out, indexer = coord.select(slice(vmin, vmax + 1))
+        assert out == coord
+        assert coord.select((vmin, vmax + 1)) == (out, indexer)
 
 
 class TestCoordDataId:
     """Tests for coordinate data ids."""
 
-    def test_hash_scalar_none(self):
-        """The helper should preserve an explicit None sentinel."""
-        coord = get_coord(start=0.0, stop=10.0, step=1.0)
-        assert coord._hash_scalar(None) == ("none", None)
+    @pytest.mark.parametrize("dtype", ["float64", "int64", "datetime64[ns]"])
+    def test_unknown_ends_have_an_id(self, dtype):
+        """Unstated ends name no value: a stable id, apart from stated ends."""
+        unknown = get_coord(shape=(10,), dtype=dtype)
+        assert unknown.data_id == get_coord(shape=(10,), dtype=dtype).data_id
+        start = np.zeros(1, dtype=dtype)[0]
+        stated = get_coord(shape=(10,), start=start, dtype=dtype)
+        assert unknown.data_id != stated.data_id
 
     def test_spelling_of_a_scalar_is_not_its_identity(self):
         """Equal coordinates share an id however they were written."""
@@ -827,7 +853,7 @@ class TestCoordDataId:
             shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
         )
         out = coord.convert_units("km")
-        assert out._partial
+        assert labels_unknown(out)
         assert out.units == get_quantity("km")
         assert out.min() == pytest.approx(0.001)
         assert out.max() == pytest.approx(0.004)
@@ -1095,7 +1121,7 @@ class TestSelect:
         """Ensure an overlapping array works as well."""
         # Create an array which likely has values not contained in the original.
         values1 = long_coord.values[: len(long_coord) // 2]
-        values2 = long_coord._get_compatible_value(-to_float(values1))
+        values2 = get_compatible_values(-to_float(values1), long_coord.dtype)
         values = np.concatenate([values1, values2])
         # Ensure this still gets some output.
         in_coord = np.isin(long_coord.values, values)
@@ -1158,7 +1184,7 @@ class TestSelect:
         values1 = long_coord.values[: len(long_coord) // 2]
         rand = random_state.rand(len(values1))
         # try to make values that won't be in the coordinate.
-        values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
+        values2 = get_compatible_values(-to_float(values1) + rand, long_coord.dtype)
         # if by some chance there are any overlaps just bail out.
         if np.any(np.isin(values2, long_coord.values)):
             return
@@ -1301,7 +1327,7 @@ class TestOrder:
         """An array holding values the coordinate lacks raises."""
         # Create an array which likely has values not contained in the original.
         values1 = long_coord.values[: len(long_coord) // 2]
-        values2 = long_coord._get_compatible_value(-to_float(values1))
+        values2 = get_compatible_values(-to_float(values1), long_coord.dtype)
         values = np.concatenate([values1, values2])
         if np.isin(values, long_coord.values).all():
             return
@@ -1342,7 +1368,7 @@ class TestOrder:
         values1 = long_coord.values[: len(long_coord) // 2]
         rand = random_state.rand(len(values1))
         # try to make values that won't be in the coordinate.
-        values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
+        values2 = get_compatible_values(-to_float(values1) + rand, long_coord.dtype)
         # if by some chance there are any overlaps just bail out.
         if np.any(np.isin(values2, long_coord.values)):
             return
@@ -2179,14 +2205,14 @@ class TestPartialCoord:
     def test_dump_round_trips(self, make):
         """A blank rebuilds from its dump as the same blank."""
         coord = make()
-        assert coord._partial
+        assert labels_unknown(coord)
         out = get_coord(**coord.model_dump())
         assert out == coord
-        assert out._partial
+        assert labels_unknown(out)
         assert out.shape == coord.shape and out.dtype == coord.dtype
         assert out.units == coord.units
         assert out.step == coord.step
-        assert out._blank == coord._blank
+        assert out.runs == coord.runs
 
     def test_blank_beside_other_runs_raises(self):
         """Unknown labels cannot sit inside a coordinate of known ones."""
@@ -2222,7 +2248,7 @@ class TestPartialCoord:
         """Unstated, the dtype follows a time-like end."""
         start = np.datetime64("2020-01-01T00:00:00", "ns")
         coord = get_coord(shape=4, start=start)
-        assert coord._partial and coord.dtype == start.dtype
+        assert labels_unknown(coord) and coord.dtype == start.dtype
         assert coord.to_summary().min == start
 
     def test_timedelta_step_sets_dtype(self):
@@ -2263,7 +2289,7 @@ class TestPartialCoord:
         """A slice keeps the label of each end sample it keeps, where it lands."""
         coord = get_coord(data=10, start=0.0, stop=9.0)
         out = coord[item]
-        assert out._blank == Blank(coord.values[item].shape, *ends)
+        assert out.runs == (Blank(coord.values[item].shape, *ends),)
 
     def test_change_length_keeps_ends(self):
         """Its own length changes nothing; another length keeps the start."""
@@ -2294,7 +2320,7 @@ class TestPartialCoord:
 
     def test_init_non_coord(self, basic_non_coord):
         """Ensure a non-coord can be created."""
-        assert basic_non_coord._partial
+        assert labels_unknown(basic_non_coord)
 
     def test_str_repr(self, basic_non_coord):
         """Ensure NonCoord has a string repr."""
@@ -2305,7 +2331,7 @@ class TestPartialCoord:
         """Ensure update returns a new non coord."""
         out = basic_non_coord.update(shape=2)
         assert len(out) == 2
-        assert out._partial
+        assert labels_unknown(out)
 
     def test_non_coord_eq_self(self, basic_non_coord):
         """Ensure non coords are equal to themselves."""
@@ -2339,7 +2365,7 @@ class TestPartialCoord:
         """
         dtype = np.dtype(dtype)
         coord = get_coord(data=np.full(3, "NaT", dtype=dtype))
-        assert coord._partial
+        assert labels_unknown(coord)
         assert coord.dtype == dtype
         assert coord.values.dtype == dtype
 
@@ -2355,7 +2381,7 @@ class TestPartialCoord:
         """
         dtype = np.dtype(dtype)
         coord = get_coord(data=np.full(3, np.nan, dtype=dtype))
-        assert coord._partial
+        assert labels_unknown(coord)
         assert coord.dtype == dtype
         assert coord.values.dtype == dtype
 
@@ -2367,7 +2393,7 @@ class TestPartialCoord:
         saying "object" would state a dtype which `values` contradicts.
         """
         coord = get_coord(data=np.array([None, None, None]))
-        assert coord._partial
+        assert labels_unknown(coord)
         assert coord.values.dtype == np.dtype("float64")
         assert coord.dtype in (None, np.dtype("float64"))
 
@@ -2381,7 +2407,7 @@ class TestPartialCoord:
         """Units are set the same way as on any other coord."""
         out = basic_non_coord.set_units("m")
         assert out.units == dc.get_quantity("m")
-        assert out._partial
+        assert labels_unknown(out)
 
     def test_update_limits_only_touches_metadata(self):
         """There are no values to limit, so the stored scalars survive."""
@@ -2389,7 +2415,7 @@ class TestPartialCoord:
         out = coord.update_limits(units="m")
         assert out.units == dc.get_quantity("m")
         assert out.step == coord.step
-        assert out._partial
+        assert labels_unknown(out)
 
     def test_dimensionless_shape_survives_dump(self):
         """A partial coord keeps its shape when defaults are excluded."""
@@ -2481,16 +2507,16 @@ class TestPartialCoord:
         """An array of NaN should return uncoord."""
         array = np.empty(10) * np.nan
         out = get_coord(data=array)
-        assert out._partial
+        assert labels_unknown(out)
 
     def test_start_stop(self):
         """Ensure start/stop/step are maintained in NonCoords."""
         coord = get_coord(shape=10, step=1)
-        assert coord._partial
+        assert labels_unknown(coord)
         assert coord.step == 1
         # Test start/stop
         coord = get_coord(start=10, shape=10)
-        assert coord._partial
+        assert labels_unknown(coord)
         assert coord.min() == 10
         assert len(coord) == 10
 
@@ -3330,21 +3356,22 @@ class TestStringCoords:
         """No-op unit conversions should return the same coord."""
         assert string_coord.convert_units(None) is string_coord
 
-    def test_direct_validation_accepts_array_input(self):
-        """The validator should pass non-dict inputs through unchanged."""
+    def test_direct_validation_leaves_array_input_to_pydantic(self):
+        """An input which is not a mapping is refused by pydantic, not the coord."""
         data = np.array(["alpha", "beta"])
-        assert CoordString._validate_values(data) is data
+        with pytest.raises(ValidationError, match="valid dictionary or instance"):
+            CoordString.model_validate(data)
 
     def test_direct_validation_normalizes_bytes_to_unicode(self):
         """Validation should decode byte arrays into unicode arrays."""
-        out = CoordString._validate_values({"values": np.array([b"alpha", b"beta"])})
-        assert out["dtype"].kind == "U"
-        assert np.array_equal(out["values"], np.array(["alpha", "beta"]))
+        out = CoordString(values=np.array([b"alpha", b"beta"]))
+        assert out.dtype.kind == "U" and out.shape == (2,)
+        assert np.array_equal(out.values, np.array(["alpha", "beta"]))
 
     def test_direct_validation_rejects_non_string_data(self):
         """The validator should reject non-string arrays."""
-        with pytest.raises(CoordError, match="string-like data"):
-            CoordString._validate_values({"values": np.array([1, 2, 3])})
+        with pytest.raises(ValidationError, match="string-like data"):
+            CoordString(values=np.array([1, 2, 3]))
 
     def test_select_slice_in_samples_mode(self, string_coord):
         """Sample selections should still allow slice indexers."""
@@ -3369,18 +3396,29 @@ class TestStringCoords:
         """A sole data kwarg should remain a no-op for API compatibility."""
         assert string_coord.update_limits(data=string_coord.values) is string_coord
 
-    def test_get_compatible_value_null_returns_none(self, string_coord):
-        """Null-like selectors should map to None."""
-        assert string_coord._get_compatible_value(np.nan) is None
+    @pytest.mark.parametrize("null", [np.nan, ...])
+    def test_null_label_bound_is_open(self, string_coord, null):
+        """A null slice bound leaves that end of a label selection open."""
+        coords = {"channel": string_coord, "time": np.arange(3)}
+        patch = dc.Patch(data=np.zeros((4, 3)), dims=("channel", "time"), coords=coords)
+        head = patch.sel(channel=slice(null, "beta"))
+        assert head.get_array("channel").tolist() == ["alpha", "beta"]
+        tail = patch.sel(channel=slice("beta", null))
+        assert tail == patch.sel(channel=slice("beta", None))
 
     def test_get_compatible_value_scalar_returns_scalar(self, string_coord):
-        """Scalar selectors should cast to the coord dtype."""
+        """
+        Scalar selectors should cast to the coord dtype.
+
+        An engine test: public selections hand this hook text unchanged
+        or arrays, so no public call shows how it treats a scalar.
+        """
         assert string_coord._get_compatible_value("alpha") == "alpha"
 
-    def test_get_compatible_value_relative_raises(self, string_coord):
-        """Relative coercion should fail for string coords."""
+    def test_relative_order_raises(self, string_coord):
+        """Relative ordering should fail for string coords."""
         with pytest.raises(CoordError, match="relative selection"):
-            string_coord._get_compatible_value("alpha", relative=True)
+            string_coord.order(np.array(["alpha"]), relative=True)
 
     def test_string_summary_is_lossy(self, string_coord):
         """String coordinates should produce lossy summaries."""
@@ -3508,7 +3546,7 @@ class TestDimensionalityErrors:
     def partial_2d(self):
         """A 2D partial coordinate."""
         coord = get_coord(start=0, step=1, shape=(2, 3))
-        assert coord._partial and coord.ndim == 2
+        assert labels_unknown(coord) and coord.ndim == 2
         return coord
 
     def test_select_sample_array_2d_raises(self, coord_2d):
@@ -3545,7 +3583,7 @@ class TestDimensionalityErrors:
         # coord is 1D by construction; the multidimensional case can only be
         # a partial coordinate.
         coord = get_coord(start=0, step=1, shape=(2, 3))
-        assert coord._partial
+        assert labels_unknown(coord)
         assert coord.shape == (2, 3)
 
 
@@ -3566,6 +3604,9 @@ class TestUnitNoOps:
         where `convert_units` was the abstract method, instantiable. That
         costs the abstract check which would have caught a coord class
         shipping without a conversion, so this asks the question instead.
+
+        An engine test: the hook is the interface coordinate classes
+        implement, and no public call enumerates the classes.
         """
 
         def _subclasses(cls):
@@ -3581,7 +3622,12 @@ class TestUnitNoOps:
         assert not missing
 
     def test_the_hook_says_so_when_it_is_not_implemented(self, evenly_sampled_coord):
-        """A class which did not implement it gets an error naming itself."""
+        """
+        A class which did not implement it gets an error naming itself.
+
+        An engine test: every DASCore class implements the hook, so only
+        calling the base one shows its error.
+        """
         with pytest.raises(NotImplementedError, match="unit conversion"):
             BaseCoord._convert_units(evenly_sampled_coord, "m")
 

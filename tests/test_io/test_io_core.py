@@ -8,8 +8,10 @@ import os
 import shutil
 import threading
 import warnings
+from contextlib import suppress
 from dataclasses import replace
 from fractions import Fraction
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import ClassVar, TypeVar
 
@@ -78,10 +80,25 @@ from dascore.utils.io import (
     TextReader,
 )
 from dascore.utils.misc import suppress_warnings
+from dascore.utils.plugins import FIBER_IO_GROUP, get_entry_point_loaders
 from dascore.utils.time import to_datetime64
 from dascore.warnings import DASCoreWarning, SnapWarning
 
 tvar = TypeVar("tvar", int, float, str, Path)
+
+
+def _names_no_source(patch) -> bool:
+    """Whether a patch's summary names no file, format, version or key."""
+    summary = patch.summary
+    named = (summary.source_path, summary.source_format, summary.source_version)
+    return not any(str(x) for x in named) and not summary.source_patch_key
+
+
+def _installed(monkeypatch, loaders=None) -> _FiberIOManager:
+    """A manager of these entry points, as installed packages would report them."""
+    loaders = dict(loaders or {})
+    monkeypatch.setattr(io_core, "get_entry_point_loaders", lambda group: loaders)
+    return _FiberIOManager("dascore.fiber_io")
 
 
 class _FiberFormatTestV1(FiberIO):
@@ -744,8 +761,13 @@ class TestFormatManager:
 
     def test_get_all_formatters(self, format_manager):
         """Ensure getting all formatters through yield_fiberio works."""
-        formatters = list(format_manager.yield_fiberio())
-        assert len(formatters) >= len(format_manager._eps)
+        formatters = set(format_manager.yield_fiberio())
+        # At least one per entry-point name; the manager keeps one loader each.
+        names = {x.name for x in entry_points(group="dascore.fiber_io")}
+        assert len(formatters) >= len(names)
+        for name in format_manager.known_formats:
+            with suppress(UnknownFiberFormatError):  # a plugin which failed to load
+                assert set(format_manager.yield_fiberio(format=name)) <= formatters
 
     def test_extension_priority(self, format_manager):
         """Ensure the extension priority is honored."""
@@ -803,59 +825,57 @@ class TestFormatManager:
         name_ver = [(x.name, x.version) for x in out]
         assert len(name_ver) == len(set(name_ver))
 
-    def test_known_formats_empty_entry_points(self, format_manager):
+    def test_known_formats_empty_entry_points(self, monkeypatch):
         """Known formats should tolerate an empty/non-string entry-point index."""
-        format_manager.__dict__.pop("_eps", None)
-        format_manager.__dict__.pop("known_formats", None)
-        format_manager._eps = pd.Series(dtype=object)
-        assert isinstance(format_manager.known_formats, frozenset)
+        assert _installed(monkeypatch).known_formats == frozenset()
 
-    def test_load_plugins_empty_entry_points(self, format_manager):
+    def test_load_plugins_empty_entry_points(self, monkeypatch):
         """Loading plugins should no-op when no entry points are present."""
-        format_manager.__dict__.pop("_eps", None)
-        format_manager.__dict__.pop("known_formats", None)
-        format_manager._eps = pd.Series(dtype=object)
-        format_manager.load_plugins()
+        manager = _installed(monkeypatch)
+        manager.load_plugins()
+        assert manager.unloaded_formats == []
+        assert not list(manager.yield_fiberio())
 
-    def test_load_entry_point_warns_on_broken_plugin(self, format_manager):
-        """Broken plugin loaders should warn and return None."""
+    def test_load_entry_point_warns_on_broken_plugin(self, monkeypatch):
+        """Broken plugin loaders should warn and be skipped."""
 
         def loader():
             raise ImportError("boom")
 
-        with pytest.warns(UserWarning, match="Failed to load FiberIO plugin 'broken'"):
-            out = format_manager._load_entry_point("broken", loader)
+        manager = _installed(monkeypatch, {"BROKEN__V1": loader})
+        match = "Failed to load FiberIO plugin 'BROKEN__V1'"
+        with pytest.warns(UserWarning, match=match):
+            manager.load_plugins()
+        assert manager.unloaded_formats == []
+        assert not list(manager.yield_fiberio())
 
-        assert out is None
-
-    def test_load_entry_point_warns_on_runtime_plugin_error(self, format_manager):
+    def test_load_entry_point_warns_on_runtime_plugin_error(self, monkeypatch):
         """Runtime plugin construction failures should warn and be skipped."""
 
         def loader():
             raise RuntimeError("boom")
 
+        manager = _installed(monkeypatch, {"BROKEN__V1": loader})
         with pytest.warns(UserWarning, match="RuntimeError: boom"):
-            out = format_manager._load_entry_point("broken", loader)
+            manager.load_plugins()
+        assert manager.unloaded_formats == []
+        assert not list(manager.yield_fiberio())
 
-        assert out is None
-
-    def test_prioritized_list_skips_unloaded_formats(self, format_manager):
+    def test_prioritized_list_skips_unloaded_formats(self, monkeypatch):
         """Formats with no registered versions should not break prioritization."""
-        manager = type(format_manager)("dascore.fiber_io")
-        manager.__dict__.pop("known_formats", None)
-        manager._eps = pd.Series(
-            {
-                "BROKEN__V1": lambda: (_ for _ in ()).throw(ImportError("boom")),
-                "GOOD__V1": lambda: _ReadOnlySummaryFormatter,
-            }
-        )
+        loaders = {
+            "BROKEN__V1": lambda: (_ for _ in ()).throw(ImportError("boom")),
+            "GOOD__V1": lambda: _ReadOnlySummaryFormatter,
+        }
+        manager = _installed(monkeypatch, loaders)
 
-        prioritized = manager._get_prioritized_list()
+        with pytest.warns(UserWarning, match="plugin 'BROKEN__V1'"):
+            prioritized = list(manager.yield_fiberio(input_type="file"))
 
-        registered = manager._format_version[_ReadOnlySummaryFormatter.name.upper()]
-        assert "1" in registered
-        assert isinstance(registered["1"], _ReadOnlySummaryFormatter)
-        assert isinstance(prioritized, tuple)
+        assert [type(x) for x in prioritized] == [_ReadOnlySummaryFormatter]
+        name = _ReadOnlySummaryFormatter.name
+        registered = manager.get_fiberio(format=name, version="1")
+        assert isinstance(registered, _ReadOnlySummaryFormatter)
 
 
 class TestFiberIOOrder:
@@ -871,7 +891,7 @@ class TestFiberIOOrder:
 
     @staticmethod
     def _names(manager, **kwargs):
-        return [x.name for x in manager._get_prioritized_list(None, **kwargs)]
+        return [x.name for x in manager.yield_fiberio(**kwargs)]
 
     def test_order_ignores_registration_order(self, manager):
         """Formats are tried by name, whatever order they registered in."""
@@ -907,7 +927,7 @@ class TestFiberIOOrder:
         """Each format's highest version is tried before any older version."""
         for name, version in [("_a", "1"), ("_a", "2"), ("_b", "1")]:
             type(name, (FiberIO,), {"name": name, "version": version})
-        ios = manager._get_prioritized_list(None)
+        ios = manager.yield_fiberio()
         assert [(x.name, x.version) for x in ios] == [
             ("_a", "2"),
             ("_b", "1"),
@@ -926,7 +946,7 @@ class TestFiberIOOrder:
         class _Z2(_Z1):
             version, before = "2", ()
 
-        ios = manager._get_prioritized_list(None)
+        ios = manager.yield_fiberio()
         assert [(x.name, x.version) for x in ios] == [
             ("_z", "2"),
             ("_z", "1"),
@@ -945,10 +965,16 @@ class TestFiberIOOrder:
         cold = _FiberIOManager("dascore.fiber_io")
         eps = {"_A__1": lambda: _A, "_Z__1": lambda: _Z}
         cold.__dict__["_eps"] = pd.Series(eps, dtype=object)
-        assert [x.name for x in cold._get_prioritized_list(None, "z")] == ["_z", "_a"]
+        assert [x.name for x in cold.yield_fiberio(extension="z")] == ["_z", "_a"]
 
     def test_before_beats_extension(self, manager):
-        """A reader stating `before` precedes one preferring the extension."""
+        """
+        A reader stating `before` precedes one preferring the extension.
+
+        The cache check is a performance guard: extensions no reader
+        prefers must not each grow the manager's cache, and nothing public
+        shows its size.
+        """
 
         class _Zarr(FiberIO):
             name, version, preferred_extensions = "_zarr", "1", ("zarr",)
@@ -993,7 +1019,7 @@ class TestFiberIOOrder:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            ios = manager._get_prioritized_list(None)
+            ios = list(manager.yield_fiberio())
         assert [x.version for x in ios] == ["2", "1"]
 
     def test_hint_waits_for_readers_before_it(self, manager):
@@ -1026,23 +1052,15 @@ class TestBrokenEntryPoint:
     """Tests for graceful handling of unloadable FiberIO entry points."""
 
     @pytest.fixture()
-    def broken_ep_manager(self):
+    def broken_ep_manager(self, monkeypatch):
         """Return a manager with an entry point that cannot be loaded."""
-        manager = copy.deepcopy(FiberIO.manager)
 
         def bad_loader():
             raise ModuleNotFoundError("No module named 'dascore.io.not_real'")
 
-        eps = manager._eps.copy()
+        eps = dict(get_entry_point_loaders(FIBER_IO_GROUP))
         eps["NOT_REAL_FORMAT__V1"] = bad_loader
-        manager.__dict__["_eps"] = eps
-        manager.__dict__.pop("known_formats", None)
-        # clear the method cache so load_plugins runs again for this instance.
-        manager.__dict__.pop("_cache", None)
-        # the copy inherits the original's "everything is loaded" state,
-        # which the swapped-in entry points invalidate.
-        manager._all_loaded = False
-        return manager
+        return _installed(monkeypatch, eps)
 
     def test_load_plugins_warns_and_skips(self, broken_ep_manager):
         """A stale/broken entry point should warn, not raise."""
@@ -1125,7 +1143,7 @@ class TestGetFormatErrors:
             def get_version(self, resource: TextReader, **kwargs) -> str | None:
                 return self.version if resource.read(4) == "RCX1" else None
 
-        assert len(manager._get_prioritized_list()) == 5
+        assert len(list(manager.yield_fiberio(input_type="file"))) == 5
 
     @pytest.mark.parametrize(
         ("content", "expected"), [(b"RCX1", ("_reads_text", "1")), (b"none", None)]
@@ -1138,6 +1156,9 @@ class TestGetFormatErrors:
         resource is built only once and then dropped, even when it was the
         reader which refused; the first refusal surfaces only when no other
         reader claims the file.
+
+        Asking for the dropped resource again builds it anew. The build
+        count is a performance guard, which nothing public shows.
         """
         built, build = [], io_utils.get_handle_from_resource
 
@@ -1154,8 +1175,9 @@ class TestGetFormatErrors:
                     dc.get_format(manager)
             else:
                 assert dc.get_format(manager) == expected
-            assert BinaryReader not in manager._cache
-        assert built.count(LocalPath) == built.count(BinaryReader) == 1
+            manager.get_resource(BinaryReader)
+        assert built.count(LocalPath) == 1
+        assert built.count(BinaryReader) == 2
 
     def test_untyped_refusal_skips_only_that_reader(self, monkeypatch, tmp_path):
         """An untyped reader refusing a download does not skip later untyped ones."""
@@ -1293,21 +1315,38 @@ class TestFormatManagerConcurrency:
         assert sorted(calls) == ["1", "2"]
 
     def test_snapshots_are_immutable(self):
-        """Cached lookups hand back immutable snapshots."""
+        """
+        Cached lookups hand back immutable snapshots.
+
+        An engine test: the manager hands these snapshots to its own
+        callers, and no public call returns them.
+        """
         manager = self._make_manager({"_TESTFORMATTER__V1": lambda: _FiberFormatTestV1})
         assert isinstance(manager.known_formats, frozenset)
         assert isinstance(manager._get_prioritized_list(), tuple)
         assert isinstance(manager._get_fiber_io_by_input_type("file"), frozenset)
 
     def test_copy_gets_own_lock(self):
-        """A copied manager must not share the original's lock."""
+        """
+        A copied manager must not share the original's lock.
+
+        Asked of the lock itself (rule B): a shared lock shows only as one
+        manager's loader blocking the other's, which a test could catch only
+        by racing two threads against a loader held open, and timing decides
+        whether such a race shows anything.
+        """
         manager = self._make_manager({"_TESTFORMATTER__V1": lambda: _FiberFormatTestV1})
         copied = copy.deepcopy(manager)
         assert copied._lock is not manager._lock
         assert list(copied.yield_fiberio(format="_TestFormatter"))
 
     def test_fork_handler_replaces_held_lock(self):
-        """A lock held at fork time is replaced so the child cannot deadlock."""
+        """
+        A lock held at fork time is replaced so the child cannot deadlock.
+
+        A regression with no public reproducer: it is the after-fork hook's
+        own state, which only a forked child would show.
+        """
         manager = FiberIO.manager
         old_lock = manager._lock
         try:
@@ -1461,27 +1500,20 @@ class TestGetFormat:
         assert fiber_io.version == version
 
     def test_manager_get_format_invokes_fiberio_get_format(self, monkeypatch, tmp_path):
-        """Manager format detection should execute FiberIO get_format loop bodies."""
+        """Format detection hands each reader the resource its detector asks for."""
         path = tmp_path / "format_loop.h5"
         path.write_text("placeholder")
-        fiber_io = _ReadOnlySummaryFormatter()
+        monkeypatch.setattr(FiberIO, "manager", _installed(monkeypatch))
         seen = {}
 
-        def _yield_fiberio(*_args, **_kwargs):
-            yield fiber_io
+        class _SeesPath(FiberIO):
+            name, version = "_sees_path", "1"
 
-        def _get_format(resource, **_kwargs):
-            seen["resource"] = resource
-            return (fiber_io.name, fiber_io.version)
+            def get_version(self, resource: Path, **kwargs) -> str | None:
+                seen["resource"] = resource
+                return self.version
 
-        monkeypatch.setattr(FiberIO.manager, "yield_fiberio", _yield_fiberio)
-        monkeypatch.setattr(fiber_io, "get_format", _get_format)
-        fiber_io.get_format._required_type = Path
-
-        assert FiberIO.manager._get_format(path=path) == (
-            fiber_io.name,
-            fiber_io.version,
-        )
+        assert dc.get_format(path) == ("_sees_path", "1")
         assert seen["resource"] == path
 
 
@@ -1921,9 +1953,9 @@ class TestScanOnError:
         payload = out[0]
         assert isinstance(payload.coords, dc.CoordManager)
         assert payload.coords == random_patch.coords
-        assert (payload._source or ArraySource()).path == ""
-        assert (payload._source or ArraySource()).format == ""
-        assert (payload._source or ArraySource()).version == ""
+        assert payload.summary.source_path == ""
+        assert payload.summary.source_format == ""
+        assert payload.summary.source_version == ""
 
     def test_scan_payloads_spool_returns_each_patch(self, random_patch):
         """Spool inputs should produce one raw payload per patch."""
@@ -2019,39 +2051,36 @@ class TestScanOnError:
 
     def test_updated_after_warns_when_remote_mtime_missing(self, monkeypatch):
         """Timestamp filtering should warn and continue on unsupported backends."""
-        fiber_io = _FiberFormatTestV1()
+        fiber_io = _FiberInheritsScan()
         resource = UPath("memory://dascore/fiberio/mtime.txt")
         resource.write_text("x")
-        path_type = type(resource)
-        original_stat = path_type.stat
 
         def _stat(self, *args, **kwargs):
             raise OSError("no mtime")
 
-        monkeypatch.setattr(path_type, "stat", _stat)
+        monkeypatch.setattr(type(resource), "stat", _stat)
         with pytest.warns(UserWarning, match="does not expose reliable mtime"):
-            assert fiber_io._updated_after(resource, 1) is True
-        monkeypatch.setattr(path_type, "stat", original_stat)
+            assert len(fiber_io.scan(resource, timestamp=1)) == 1
 
     def test_local_stat_failure_returns_false(self, monkeypatch, tmp_path):
         """Local stat failures should conservatively skip timestamp-matched scans.
 
         Remote backends sometimes cannot provide mtimes at all, so DASCore warns
         and continues scanning in that case. For local files, a failed ``stat``
-        usually means the path disappeared or became unreadable, so
-        ``_updated_after`` should return ``False`` instead of treating that as an
-        implicit update.
+        usually means the path disappeared or became unreadable, so the scan
+        skips it instead of treating that as an implicit update.
         """
-        fiber_io = _FiberFormatTestV1()
+        fiber_io = _FiberInheritsScan()
         path = tmp_path / "mtime.txt"
         path.write_text("x")
+        assert len(fiber_io.scan(path, timestamp=1)) == 1
 
         def _stat(_self, *args, **kwargs):
             raise OSError("no stat")
 
         monkeypatch.setattr(Path, "stat", _stat)
         with suppress_warnings(action="always", record=True) as record:
-            assert fiber_io._updated_after(path, 1) is False
+            assert fiber_io.scan(path, timestamp=1) == []
         assert not record
 
 
@@ -2157,10 +2186,7 @@ class TestReloadableSourcePath:
 
         assert len(out) == 1
         assert isinstance(out[0], dc.PatchMeta)
-        assert out[0]._source is None
-        assert out[0]._source is None
-        assert out[0]._source is None
-        assert not (out[0]._source or ArraySource()).key
+        assert _names_no_source(out[0])
 
     def test_default_fiberio_scan_forwards_snap_dims(self, tmp_path):
         """Default scans should forward exact-coordinate mode to read()."""
@@ -2199,9 +2225,7 @@ class TestReloadableSourcePath:
 
         raw = _ReadOnlySummaryFormatter().scan(path)
         assert len(raw) == 1
-        assert raw[0]._source is None
-        assert raw[0]._source is None
-        assert raw[0]._source is None
+        assert _names_no_source(raw[0])
 
         out = dc.scan(path)
         assert len(out) == 1
@@ -2237,9 +2261,9 @@ class TestReloadableSourcePath:
         assert seen["snap"] is False
         assert len(out) == 1
         assert isinstance(out[0].coords, dc.CoordManager)
-        assert str((out[0]._source or ArraySource()).path) == str(path)
-        assert (out[0]._source or ArraySource()).format == fiber_io.name
-        assert (out[0]._source or ArraySource()).version == fiber_io.version
+        assert str(out[0].summary.source_path) == str(path)
+        assert out[0].summary.source_format == fiber_io.name
+        assert out[0].summary.source_version == fiber_io.version
 
     def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_key(
         self, tmp_path, monkeypatch
@@ -2260,7 +2284,7 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 2
-        assert all(p._source is None for p in out)
+        assert all(_names_no_source(p) for p in out)
 
     @pytest.mark.concurrency
     def test_keyboard_interrupt(self, monkeypatch):
@@ -2679,7 +2703,7 @@ class TestSourceIds:
                 path=str(terra15_path),
                 format=fmt,
                 version=version,
-                key=patch._source.key,
+                key=patch.summary.source_patch_key,
             ),
             stat.st_size,
             stat.st_mtime_ns,
@@ -2745,7 +2769,7 @@ class TestSourceIds:
     def test_a_key_naming_several_patches_names_none(self, idless_multi_patch):
         """Or every patch asked for at once would answer to one id."""
         spool = dc.read(idless_multi_patch)
-        keys = [x._source.key for x in spool]
+        keys = [x.summary.source_patch_key for x in spool]
         ids = {
             x.attrs.origin_id
             for x in dc.read(idless_multi_patch, source_patch_key=keys)
@@ -2844,7 +2868,7 @@ class TestSourceIds:
         """Asking for one patch gives the id reading them all would."""
         spool = dc.read(idless_multi_patch)
         wanted = spool[1]
-        key = wanted._source.key
+        key = wanted.summary.source_patch_key
         alone = dc.read(idless_multi_patch, source_patch_key=key)[0]
         assert alone.attrs.origin_id == wanted.attrs.origin_id
 
@@ -2869,7 +2893,7 @@ class TestReadStampsSelectedPatches:
     def _ids_by_key(patches):
         """Map each patch's source key to its ids, tag and array value."""
         return {
-            patch._source.key: (
+            patch.summary.source_patch_key: (
                 patch.attrs.origin_id,
                 patch.attrs.data_id,
                 patch.attrs.tag,
@@ -2918,19 +2942,20 @@ class TestReadStampsSelectedPatches:
         out = dc.read(path, source_patch_key=["7", "99"])
         assert ordinals == [7, 99]
         assert checked == snapped == ["7", "99"]
-        assert [x._source.key for x in out] == ["7", "99"]
+        assert [x.summary.source_patch_key for x in out] == ["7", "99"]
 
     def test_yielded_metadata(self, tmp_path, monkeypatch):
         """Metadata a reader yields, rather than lists, still reads by key."""
         path = tmp_path / "large.manypatch"
         path.write_text("3")
-        prepare = FiberIO._prepare_read
+        monkeypatch.setattr(FiberIO, "manager", _installed(monkeypatch))
 
-        def yielding(self, *args, **kwargs):
-            patches, load = prepare(self, *args, **kwargs)
-            return iter(patches), load
+        class _YieldsMetadata(_ManyPatchIO):
+            name = "_yields_metadata"
 
-        monkeypatch.setattr(FiberIO, "_prepare_read", yielding)
+            def get_metadata(self, resource: Path, **kwargs):
+                yield from super().get_metadata(resource, **kwargs)
+
         assert dc.read(path, source_patch_key="2")[0].data.flat[0] == 2
 
     def test_direct_read_keeps_positional_key(self, tmp_path):
@@ -2938,7 +2963,7 @@ class TestReadStampsSelectedPatches:
         path = tmp_path / "large.manypatch"
         path.write_text("3")
         patch = _ManyPatchIO().read(path, source_patch_key="2")[0]
-        assert patch._source.key == "2"
+        assert patch.summary.source_patch_key == "2"
         assert patch.data.flat[0] == 2
 
 
@@ -3196,7 +3221,12 @@ class TestOpenArrayReader:
         assert np.array_equal(again, 2 * array[4:])
 
     def test_one_reader_per_key(self, source, monkeypatch):
-        """A key is prepared once, however many windows read it."""
+        """
+        A key is prepared once, however many windows read it.
+
+        A performance guard at the loading context; preparing twice reads
+        the same values, so only the hook's calls show it.
+        """
         prepared = []
         original = FiberIO._prepare_array_reader
 
@@ -3383,7 +3413,12 @@ class TestOffsetReads:
         "name", ["ap_sensing_1.hdf5", "gdr_1.h5", "ai4eps_1.h5", "neubrex_das_1.h5"]
     )
     def test_mixin_readers(self, name, stored_reads):
-        """Readers describing their arrays by dataset load them from offsets."""
+        """
+        Readers describing their arrays by dataset load them from offsets.
+
+        An engine test: the source a patch's array loads from is the subject,
+        and nothing public hands it out.
+        """
         patch = dc.read(fetch(name))[0]
         source = patch._source
         assert source.offsets
@@ -3391,7 +3426,12 @@ class TestOffsetReads:
         assert not stored_reads
 
     def test_explicit_path_uses_reader(self, stored_reads):
-        """A resource opened from a given path is read by its reader."""
+        """
+        A resource opened from a given path is read by its reader.
+
+        An engine test of the loading context, given the source a patch's
+        array loads from, which nothing public hands out.
+        """
         path = fetch("gdr_1.h5")
         patch = dc.read(path)[0]
         with io_core._open_array_reader(patch._source, path=path) as load:

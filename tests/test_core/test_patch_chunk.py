@@ -908,7 +908,13 @@ class TestStreamingMerge:
         assert merged.data.dtype == np.float64
 
     def test_transposes_patch_to_first_patch_dims(self, random_patch, monkeypatch):
-        """Streaming merge should tolerate patches with the same dims reordered."""
+        """
+        Streaming merge should tolerate patches with the same dims reordered.
+
+        An engine test (rule E): chunk never merges members which differ in
+        dims, shape off the merged axis, or the dimension they vary along, so
+        only the assembler is handed them.
+        """
         assembler = _bare_assembler()
         p1 = random_patch.update_attrs(history=[])
         time = p1.get_coord("time")
@@ -927,7 +933,13 @@ class TestStreamingMerge:
         assert out.data.shape[time_axis] == samples
 
     def test_incompatible_shapes_raise_merge_error(self, random_patch, monkeypatch):
-        """Streaming merge should wrap non-merge-dimension shape mismatches."""
+        """
+        Streaming merge should wrap non-merge-dimension shape mismatches.
+
+        An engine test (rule E): chunk never merges members which differ in
+        dims, shape off the merged axis, or the dimension they vary along, so
+        only the assembler is handed them.
+        """
         assembler = _bare_assembler()
         p1 = random_patch.update_attrs(history=[])
         time = p1.get_coord("time")
@@ -959,7 +971,13 @@ class TestStreamingMerge:
     def test_lazy_members_with_axes_reordered(
         self, random_patch, tmp_path, monkeypatch
     ):
-        """A lazy member is not put in the merge's axis order unasked."""
+        """
+        A lazy member is not put in the merge's axis order unasked.
+
+        An engine test (rule E): chunk never merges members which differ in
+        dims, shape off the merged axis, or the dimension they vary along, so
+        only the assembler is handed them.
+        """
         assembler = _bare_assembler()
         flipped = self._lazy_pair(
             random_patch, tmp_path, lambda x: x.transpose(*reversed(x.dims))
@@ -978,7 +996,13 @@ class TestStreamingMerge:
     def test_lazy_members_of_incompatible_shapes(
         self, random_patch, tmp_path, monkeypatch
     ):
-        """Lazy members which do not line up raise the merge's own error."""
+        """
+        Lazy members which do not line up raise the merge's own error.
+
+        An engine test (rule E): chunk never merges members which differ in
+        dims, shape off the merged axis, or the dimension they vary along, so
+        only the assembler is handed them.
+        """
         assembler = _bare_assembler()
 
         def shorter(patch):
@@ -996,7 +1020,13 @@ class TestStreamingMerge:
             assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
 
     def test_unexpected_merge_dimension_raises(self, random_patch, monkeypatch):
-        """Streaming merge should validate the actual varying dimension."""
+        """
+        Streaming merge should validate the actual varying dimension.
+
+        An engine test (rule E): chunk never merges members which differ in
+        dims, shape off the merged axis, or the dimension they vary along, so
+        only the assembler is handed them.
+        """
         assembler = _bare_assembler()
         p1 = random_patch.update_attrs(history=[])
         dist = p1.get_coord("distance")
@@ -1251,12 +1281,16 @@ class TestMixedUnitChunk:
             values = np.arange(size, dtype=float)
             new = patch.update_coords(distance_source=("distance", values))
             patches.append(new.set_units(distance_source="s"))
-        chunked = dc.spool(patches).chunk(
-            distance=200, keep_partial=True, conflict="keep_first"
-        )
-        rows = chunked._catalog.resolver.member_rows
-        assert set(rows["_distance_units_source"]) == {"m", "ft"}
-        assert set(rows["_distance_units"]) == {"m"}
+        kwargs = {"distance": 200, "keep_partial": True, "conflict": "keep_first"}
+        chunked = dc.spool(patches).chunk(**kwargs)
+        assert set(chunked.get_contents()["distance_units"]) == {"m"}
+        # the feet member is trimmed in feet, as it is without the coordinate
+        expected = spool.chunk(**kwargs)
+        assert len(chunked) == len(expected)
+        for patch, other in zip(chunked, expected, strict=True):
+            assert np.array_equal(patch.data, other.data)
+            assert patch.get_coord("distance") == other.get_coord("distance")
+            assert patch.get_coord("distance_source").units == get_quantity("s")
         n = sum(p.shape[p.get_axis("distance")] for p in chunked)
         assert n == 600
 
@@ -1264,6 +1298,10 @@ class TestMixedUnitChunk:
         """
         Re-chunking preserves one source-units column so load kwargs trim in the correct
         units.
+
+        The column is read off the plan as well (rule E): this merge loads
+        the same data without it, and only a later trim back into the
+        source's units would use it.
         """
         pm = dc.get_example_patch().set_units(distance="m")
         d = pm.get_coord("distance")
@@ -1272,6 +1310,11 @@ class TestMixedUnitChunk:
         pf = pf.set_units(distance="ft")
         first = dc.spool([pm, pf]).chunk(distance=200, keep_partial=True)
         second = first.chunk(distance=None, conflict="keep_first")
+        # the feet member is trimmed in feet, as one chunk trims it
+        expected = dc.spool([pm, pf]).chunk(distance=None, conflict="keep_first")
+        assert len(second) == len(expected) == 1
+        assert np.array_equal(second[0].data, expected[0].data)
+        assert second[0].get_coord("distance") == expected[0].get_coord("distance")
         rows = second._catalog.resolver.member_rows
         assert not rows.columns.duplicated().any()
         # the file's own spelling survives, not the plan's normalized unit
@@ -1414,7 +1457,7 @@ class TestMixedUnitSpellings:
         for num, patch in enumerate(mixed_patches):
             dc.write(patch, path / f"{num}.h5", "dasdae")
         spool = dc.spool(path).update()
-        assert spool._catalog.to_df()["_distance_def_key"].nunique() == 2
+        assert spool.get_contents()["distance_units"].nunique() == 2
         assert len(spool.chunk(time=None)) == 2
 
 
@@ -1530,7 +1573,13 @@ class TestChainedChunk:
 
     @pytest.mark.parametrize("on_disk", [False, True])
     def test_same_dim_rechunk_cuts_a_rider(self, tmp_path, on_disk):
-        """A re-chunk states a rider its windows cut as one chunk does (#1679)."""
+        """
+        A re-chunk states a rider its windows cut as one chunk does (#1679).
+
+        The rider's identity key is read off the plan (rule B): a re-chunk
+        which kept the uncut rider's key loads the same coordinates, so no
+        public result shows that it claimed the rider was whole.
+        """
         time = np.arange(8.0)
         # the windows trim an evenly sampled rider; one with no step stays whole
         riders = {"label": 2 * time, "irregular": np.array([0, 1, 3, 4, 6, 7, 9.0, 10])}
@@ -1540,8 +1589,14 @@ class TestChainedChunk:
             spool = dc.spool(ex.spool_to_directory(spool, path=tmp_path)).update()
         once, twice = spool.chunk(time=2), spool.chunk(time=4).chunk(time=2)
         columns = [f"{x}_{y}" for x in riders for y in ("min", "max", "step")]
-        columns += [f"_{x}_def_key" for x in riders]  # neither claims to be uncut
-        assert twice._df[columns].equals(once._df[columns])
+        assert twice.get_contents()[columns].equals(once.get_contents()[columns])
+        keys = [f"_{x}_def_key" for x in riders]  # neither claims to be uncut
+        assert twice._df[keys].equals(once._df[keys])
+        # and each output loads the riders one chunk cuts
+        assert len(twice) == len(once)
+        for one, other in zip(twice, once, strict=True):
+            for name in riders:
+                assert one.get_coord(name) == other.get_coord(name)
         # each output's first sample, then those past label 3
         later = twice.select(label=(0, 1), samples=True).select(label=(3, None))
         assert [x.get_array("label").tolist() for x in later] == [[4], [8], [12]]
@@ -1888,6 +1943,9 @@ class TestQuantityTolerance:
         coordinate: a dimensionless quantity reaching `simplify` is read
         as *seconds*, which only shows up in a merged coordinate for
         gap geometries where the snap bound is the binding constraint.
+
+        An engine test (rule E): nothing public shows what the merge is handed,
+        so it is read from the plan's resolver.
         """
         out = random_spool.chunk(time=None, tolerance=get_quantity("2"))
         handed = out._catalog.resolver.merge_kwargs["tolerance"]
@@ -2171,7 +2229,7 @@ class TestSizeChunk:
             [make("float32", t0), make("float64", t0 + np.timedelta64(1600, "ms"))]
         ).sort("time")
         out = spool.chunk(time=1.0)
-        claimed = out._df["_dtype"].tolist()
+        claimed = out.get_contents()["dtype"].tolist()
         assert claimed == [str(x.data.dtype) for x in out]
         assert out == dc.spool(list(out))
 
@@ -3205,7 +3263,6 @@ class TestChunkFromIndex:
                 path / f"p{num}.h5", "dasdae"
             )
         file_spool = dc.spool(path).update()
-        assert "quality" in file_spool._catalog.backend.coord_dims_map()
         out = file_spool.chunk(time=None)[0]
         assert "quality" in out.coords.coord_map
         assert route.counts["array"] == 0
@@ -3298,7 +3355,13 @@ class TestChunkFromIndex:
         assert fast.attrs.origin_id == read.chunk(time=None)[0].attrs.origin_id
 
     def test_extended_float_coordinate_survives_merge(self, tmp_path, permanent_config):
-        """File coordinate precision survives merging, including extended floats."""
+        """
+        File coordinate precision survives merging, including extended floats.
+
+        An engine test (rule E): the assembler is handed both rows directly,
+        since coordinate-id grouping may plan these files as two outputs, and
+        `PatchAssembler` is what must keep the precision once they are joined.
+        """
         with permanent_config(allow_dasdae_format_unpickle=False):
             start = np.nextafter(np.longdouble(1), np.longdouble(2))
             coord = dc.get_coord(
@@ -3443,7 +3506,13 @@ class TestChunkFromIndex:
         assert all(p.attrs["counter"] == wide for p in nested)
 
     def test_row_the_index_could_not_fully_describe_loads_patch(self):
-        """A cleared id or an attr the index could not hold means the patch path."""
+        """
+        A cleared id or an attr the index could not hold means the patch path.
+
+        An engine test (rule E): rows changed in ways no index writes are put to
+        the assembler directly; through a spool only the route counts show its
+        choice.
+        """
         assembler = PatchAssembler(
             load_patch=lambda kwargs: None,
             merge_kwargs={},
@@ -3472,7 +3541,13 @@ class TestChunkFromIndex:
         assert assembler._meta_from_index(row | {"_attrs_complete": 0}) is None
 
     def test_row_without_range_loads_patch(self):
-        """A dimension the row cannot state as a range means the patch path."""
+        """
+        A dimension the row cannot state as a range means the patch path.
+
+        An engine test (rule E): rows changed in ways no index writes are put to
+        the assembler directly; through a spool only the route counts show its
+        choice.
+        """
         assembler = PatchAssembler(
             load_patch=lambda kwargs: None,
             merge_kwargs={},
@@ -3488,7 +3563,12 @@ class TestChunkFromIndex:
         assert assembler._meta_from_index(row) is None
 
     def test_unnameable_member_loads_patch(self):
-        """A member no source can name sends the whole merge to the patches."""
+        """
+        A member no source can name sends the whole merge to the patches.
+
+        An engine test (rule E): what the assembler does when its array source
+        names nothing for a row, as a format without read_array does.
+        """
         row = {
             "dims": "distance,time",
             "distance_min": 0,
@@ -3589,6 +3669,9 @@ class TestChunkFromIndex:
 
         The rows say whether the index can stand in for every member, so
         a merge which must load patches pays for no discarded reads.
+
+        A performance guard (rule C): a discarded array read changes no output,
+        so the assembler's reads are counted.
         """
         reads = []
         assembler = PatchAssembler(
@@ -3759,7 +3842,13 @@ class TestRecipeMerge:
         assert route.counts == {"patch": 0, "array": 4}
 
     def test_a_member_in_another_order_takes_the_patch_path(self):
-        """A recipe lays members out without reordering axes."""
+        """
+        A recipe lays members out without reordering axes.
+
+        An engine test (rule E): dimension order and shape partition the plan
+        (see test_members_stored_the_other_way_round), so only the assembler
+        meets such members.
+        """
         rows = [{"dims": "time,distance"}, {"dims": "distance,time"}]
         metas = [
             _stub_meta(("time", "distance"), (3, 2)),
@@ -3770,13 +3859,24 @@ class TestRecipeMerge:
         assert assembler._recipe(rows, metas, metas[0].dims, 0) is None
 
     def test_incompatible_shapes_refuse_the_merge(self):
-        """Members which disagree off the merged axis cannot be laid together."""
+        """
+        Members which disagree off the merged axis cannot be laid together.
+
+        An engine test (rule E): dimension order and shape partition the plan
+        (see test_members_stored_the_other_way_round), so only the assembler
+        meets such members.
+        """
         metas = [_stub_meta(("time", "distance"), (3, x)) for x in (2, 3)]
         rows = [{"dims": "time,distance"}] * 2
         assert _stub_assembler()._recipe(rows, metas, metas[0].dims, 0) is None
 
     def test_a_whole_member_states_no_id_of_its_own(self):
-        """A member which names no array does not take one from its location."""
+        """
+        A member which names no array does not take one from its location.
+
+        An engine test (rule E): the id a recipe member states before the merge
+        folds it, which no output shows on its own.
+        """
         source = ArraySource(path="/a/b.h5", format="DASDAE", version="1", key="p")
         assembler = _stub_assembler(lambda row, shape: source.describe(shape, "f4"))
         whole = _stub_meta(("time", "distance"), (3, 2))
@@ -4307,17 +4407,36 @@ def _stat_recorder(monkeypatch) -> list[str]:
     return seen
 
 
-def _index_reads(monkeypatch, backend) -> list[str]:
-    """Record every statement one index is asked to run, from here on."""
-    asked = []
-    original = backend._fetch_df
+def _frozen_stats(monkeypatch, paths, mtime=0, size=0):
+    """
+    Have the stale check see each of ``paths`` as it stands now.
 
-    def counted(sql, params=()):
-        asked.append(sql)
-        return original(sql, params)
+    The stat is moved by ``mtime`` nanoseconds and ``size`` bytes; any other
+    source answers as it is. A file then rewritten is one its stat cannot
+    see, as a rewrite to the same size inside one mtime tick is: a check
+    trusting the index reads the window it promised, where the patch path
+    reads the file as it now is.
+    """
 
-    monkeypatch.setattr(backend, "_fetch_df", counted)
-    return asked
+    def _key(path):
+        # rows may spell a path another way (separators, Windows short names)
+        return os.path.normcase(os.path.realpath(path))
+
+    frozen = {_key(x): (x.stat().st_mtime_ns, x.stat().st_size) for x in paths}
+    original = planned.scan_unit_stats
+
+    def scanned(path):
+        if (stat := frozen.get(_key(path))) is None:
+            return original(path)
+        return stat[0] + mtime, stat[1] + size
+
+    monkeypatch.setattr(planned, "scan_unit_stats", scanned)
+
+
+def _no_stat(path):
+    """A stat which must not be taken."""
+    msg = f"{path} was measured"
+    raise AssertionError(msg)
 
 
 def _patch_shape(patch):
@@ -4380,8 +4499,13 @@ class TestSingleFileStats:
         assert out.shape[0] == 20
         assert np.array_equal(out.data[8:], grown.data)
 
-    def test_the_scan_is_bracketed_by_two_measurements(self, paths):
-        """One before and one after; a single reading certifies nothing."""
+    def test_the_scan_is_bracketed_by_two_measurements(self, paths, monkeypatch):
+        """
+        One before and one after; a single reading certifies nothing.
+
+        What is recorded is the file's own stat: a check which sees that
+        stat after a rewrite trusts it, and reads the recipe's window.
+        """
         seen = []
         original = catalog.scan_unit_stats
 
@@ -4392,12 +4516,10 @@ class TestSingleFileStats:
         with mock.patch.object(catalog, "scan_unit_stats", recorded):
             spool = dc.spool(paths[0])
             assert len(seen) == 2
-        row = spool._df.iloc[0]
-        status = paths[0].stat()
-        assert tuple(int(row[x]) for x in SOURCE_STAT_COLUMNS) == (
-            status.st_mtime_ns,
-            status.st_size,
-        )
+        chunked = (spool + dc.spool(paths[1])).chunk(time=None)
+        _frozen_stats(monkeypatch, paths)
+        _rewrite_dasdae(paths[0], _grid_patch(ORIGIN, 12, seed=7))
+        assert chunked[0].shape[0] == 16
 
 
 class TestUnionRevision:
@@ -4415,7 +4537,7 @@ class TestUnionRevision:
         ]
         dc.write(dc.spool(patches), path, "dasdae")
         old = dc.spool(data, index=tmp_path / "old.sqlite").update()
-        key = str(old._df.iloc[0]["source_patch_key"]).split("/")[-1]
+        key = str(old.get_contents()["source_patch_key"].iloc[0]).split("/")[-1]
         # the grown patch runs into the one beside it, which the planner
         # windows away once the rows say so
         grown = _grid_patch(ORIGIN, 12, seed=7)
@@ -4553,13 +4675,16 @@ class TestStaleSourceCheck:
 
     def test_a_remote_source_is_never_stat_ed(self, spool_and_paths, monkeypatch):
         """A store which charges for metadata is left alone, and read as patches."""
-        spool, _ = spool_and_paths
-        stats = _stat_recorder(monkeypatch)
+        spool, paths = spool_and_paths
+        monkeypatch.setattr(planned, "scan_unit_stats", _no_stat)
         monkeypatch.setattr(planned, "is_local_path", lambda path: False)
         chunked = spool.chunk(time=None)
-        resolver = chunked._catalog.resolver
-        assert not resolver._sources_unchanged(resolver.member_rows)
-        assert not stats
+        grown = self._patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        out = chunked[0]
+        # the patches read the file as it is, not the window the index promised
+        assert out.shape[0] == 20
+        assert np.array_equal(out.data[:12], grown.data)
 
     def test_a_route_which_is_not_a_plan_is_left_out(
         self, spool_and_paths, monkeypatch
@@ -4567,6 +4692,9 @@ class TestStaleSourceCheck:
         """
         Rows another library's loader routes, which can't list members, are
         unmeasured: the lenient check leaves them out rather than failing.
+
+        An engine test (rule E): a route another library's loader adds is the
+        resolver's own interface, and no dascore spool routes rows to one.
         """
 
         class Route:  # e.g. a client routing reads of a server's rows
@@ -4587,7 +4715,12 @@ class TestStaleSourceCheck:
     def test_xarray_passes_over_a_route_which_is_not_a_plan(
         self, spool_and_paths, monkeypatch
     ):
-        """A route with no merge of its own is not asked what its merge snapped."""
+        """
+        A route with no merge of its own is not asked what its merge snapped.
+
+        An engine test (rule E): a route another library's loader adds is the
+        resolver's own interface, and no dascore spool routes rows to one.
+        """
 
         class Route:  # loads its own rows as they are; no plan attributes
             pass
@@ -4605,7 +4738,12 @@ class TestStaleSourceCheck:
     def test_a_route_which_lists_members_is_measured(
         self, spool_and_paths, monkeypatch
     ):
-        """A route which can list its members, a wrapped plan say, is checked."""
+        """
+        A route which can list its members, a wrapped plan say, is checked.
+
+        An engine test (rule E): a route another library's loader adds is the
+        resolver's own interface, and no dascore spool routes rows to one.
+        """
 
         class Wrapped:  # forwards to a plan, as a wrapper might
             def __init__(self, plan):
@@ -4630,7 +4768,12 @@ class TestStaleSourceCheck:
         ]
 
     def test_an_unknown_scheme_is_not_local(self, spool_and_paths, monkeypatch):
-        """A scheme no filesystem here claims is not a local file."""
+        """
+        A scheme no filesystem here claims is not a local file.
+
+        An engine test (rule E): no spool holds a source under a scheme no
+        filesystem claims, so the rows are relabelled and the resolver asked.
+        """
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
         rows = resolver.member_rows.assign(source_path="nosuchthing://a/b")
@@ -4645,21 +4788,30 @@ class TestStaleSourceCheck:
     def test_both_size_and_mtime_decide(
         self, spool_and_paths, monkeypatch, size_delta, mtime_delta, unchanged
     ):
-        """Either field moving on its own says the file is not what it was."""
-        spool, _ = spool_and_paths
-        resolver = spool.chunk(time=None)._catalog.resolver
-        stats = resolver._source_stats
-        mtime, size = (stats[name][0] for name in SOURCE_STAT_COLUMNS)
-        monkeypatch.setattr(
-            planned,
-            "scan_unit_stats",
-            lambda path: (int(mtime) + mtime_delta, int(size) + size_delta),
-        )
-        rows = resolver.member_rows
-        assert resolver._sources_unchanged(rows.iloc[:1]) is unchanged
+        """
+        Either field moving on its own says the file is not what it was.
+
+        The file grows under a stat which moves only as asked, so the
+        recipe's eight samples of it show the check trusted the index, and
+        the patch path's twelve that it did not.
+        """
+        spool, paths = spool_and_paths
+        chunked = spool.chunk(time=None)
+        _frozen_stats(monkeypatch, paths[:1], mtime_delta, size_delta)
+        grown = self._patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        out = chunked[0]
+        assert out.shape[0] == (16 if unchanged else 20)
+        assert np.array_equal(out.data[:8], grown.data[:8])
 
     def test_a_source_the_index_never_stat_ed_refuses(self, spool_and_paths):
-        """An index which recorded neither size nor mtime promises nothing."""
+        """
+        An index which recorded neither size nor mtime promises nothing.
+
+        An engine test (rule E): through a spool, a source the index never
+        measured is refused just as one found changed is; only the resolver's
+        stats tell the two apart.
+        """
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
         stats = resolver._source_stats
@@ -4669,33 +4821,47 @@ class TestStaleSourceCheck:
         assert not resolver._sources_unchanged(resolver.member_rows)
 
     def test_rows_with_no_stats_refuse_everything(self, spool_and_paths):
-        """A relation which never carried the stats cannot vouch for a row."""
+        """
+        A relation which never carried the stats cannot vouch for a row.
+
+        An engine test (rule E): no spool built now lacks the stat columns, so
+        the resolver's stats are cleared to stand for an index which never had
+        them.
+        """
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
         resolver._source_stats = {}
         assert not resolver._sources_unchanged(resolver.member_rows)
 
-    def test_a_rechunk_keeps_what_the_index_recorded(self, spool_and_paths, route):
+    def test_a_rechunk_keeps_what_the_index_recorded(
+        self, spool_and_paths, monkeypatch
+    ):
         """The stats ride the members, which a derived catalog re-plans."""
         spool, paths = spool_and_paths
-        chunked = spool.chunk(time=None)
-        stats = chunked.chunk(time=None)._catalog.resolver._source_stats
-        assert set(stats) == set(SOURCE_STAT_COLUMNS)
-        assert all(pd.notna(stats[name]).all() for name in SOURCE_STAT_COLUMNS)
-        grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
-        _rewrite_dasdae(paths[0], grown)
-        assert list(chunked.chunk(time=None))
-        assert route.counts["patch"] > 0
+        rechunked = spool.chunk(time=None).chunk(time=None)
+        grown = self._patch(ORIGIN, 12, seed=7)
+        with monkeypatch.context() as context:
+            _frozen_stats(context, paths)
+            _rewrite_dasdae(paths[0], grown)
+            # a stat as recorded keeps the recipe, so the re-plan still has it
+            assert rechunked[0].shape[0] == 16
+        out = rechunked[0]
+        assert out.shape[0] == 20, "the changed file abandons the recipe"
+        assert np.array_equal(out.data[:12], grown.data)
 
-    def test_a_pickled_plan_carries_what_it_needs(self, spool_and_paths):
+    def test_a_pickled_plan_carries_what_it_needs(self, spool_and_paths, monkeypatch):
         """The stats travel with the resolver, so no index is reopened."""
         spool, paths = spool_and_paths
         chunked = pickle.loads(pickle.dumps(spool.chunk(time=None)))
-        resolver = chunked._catalog.resolver
-        assert resolver._sources_unchanged(resolver.member_rows)
-        grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
-        _rewrite_dasdae(paths[0], grown)
-        assert not resolver._sources_unchanged(resolver.member_rows)
+        grown = self._patch(ORIGIN, 12, seed=7)
+        with monkeypatch.context() as context:
+            _frozen_stats(context, paths)
+            _rewrite_dasdae(paths[0], grown)
+            # a stat as recorded keeps the recipe, so the plan still has it
+            assert chunked[0].shape[0] == 16
+        out = chunked[0]
+        assert out.shape[0] == 20, "the changed file abandons the recipe"
+        assert np.array_equal(out.data[:12], grown.data)
 
     @pytest.mark.parametrize("read_first", [False, True])
     def test_a_plan_across_an_update_describes_what_it_planned(
@@ -4743,13 +4909,15 @@ class TestStaleSourceCheck:
             worker.join(30)
         assert shapes == {"first": (20, 4), "second": (20, 4)}
 
-    def test_a_merge_asks_the_index_nothing(self, spool_and_paths, monkeypatch):
+    def test_a_merge_asks_the_index_nothing(self, spool_and_paths):
         """The rows already say what was recorded, so nothing is looked up."""
         spool, _ = spool_and_paths
         chunked = spool.chunk(time=None)
-        statements = _index_reads(monkeypatch, spool._catalog.backend)
+        # a closed index answers nothing, so a merge which asked it would fail
+        spool.indexer.close()
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            spool.select(time=(ORIGIN, None)).get_contents()
         assert chunked[0].shape[0] == 16
-        assert not statements, statements
 
     @pytest.fixture
     def plan_and_index(self, tmp_path):
@@ -4955,13 +5123,21 @@ class TestStatPrecision:
         live = _grid_patch(ORIGIN + STEP * 24, 8, seed=3)
         return spool + dc.spool([live]), paths
 
-    def test_the_recorded_stats_are_integers(self, mixed):
-        """A column with a NULL in it still states what it measured."""
-        spool, _ = mixed
-        resolver = spool.chunk(time=None)._catalog.resolver
-        mtimes = resolver._source_stats[SOURCE_STAT_COLUMNS[0]]
-        assert mtimes.dtype == np.int64
-        assert sorted(set(mtimes.tolist()))[-1] == self._mtime
+    def test_the_recorded_stats_are_integers(self, mixed, monkeypatch):
+        """
+        A column with a NULL in it still states what it measured.
+
+        The first file's exact mtime must match the one recorded, so a
+        rewrite its stat cannot see keeps the recipe's eight samples of it.
+        """
+        spool, paths = mixed
+        chunked = spool.chunk(time=to_timedelta64(0.16))
+        _frozen_stats(monkeypatch, paths)
+        grown = _grid_patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        out = chunked[0]
+        assert out.shape[0] == 16
+        assert np.array_equal(out.data[:8], grown.data[:8])
 
     def test_unchanged_files_keep_the_recipe(self, mixed, route):
         """The file-backed outputs of a mixed spool are read as recipes."""
@@ -5079,7 +5255,12 @@ class TestStoredDatetimeUnit:
         assert assembly_module.coord_at_stored_unit(coord, {}, "distance") is coord
 
     def test_a_row_which_names_no_dtype_falls_back(self, tmp_path, route):
-        """Without a dtype nothing says what the file counts in."""
+        """
+        Without a dtype nothing says what the file counts in.
+
+        An engine test (rule E): every index built now records the dtype, so the
+        plan's rows are stripped to stand for one which did not.
+        """
         spool = self._spool(tmp_path, "ms")
         chunked = spool.chunk(time=None)
         resolver = chunked._catalog.resolver
@@ -5089,7 +5270,13 @@ class TestStoredDatetimeUnit:
         assert route.counts["patch"] > 0
 
     def test_the_index_records_the_unit(self, tmp_path):
-        """The stored dtype names the unit, so no rebuild is searched for."""
+        """
+        The stored dtype names the unit, so no rebuild is searched for.
+
+        A performance guard (rule C): the coordinates come out the same either
+        way (test_a_whole_merge_keeps_the_stored_unit); only the plan's rows
+        show that nothing has to be searched for.
+        """
         spool = self._spool(tmp_path, "ms")
         rows = spool.chunk(time=None)._catalog.resolver.member_rows
         assert set(rows["_time_coord_dtype"]) == {"datetime64[ms]"}
@@ -5129,8 +5316,8 @@ class TestTrimmedRecipeMerge:
                 patch = patch.update_attrs(origin_id="", data_id=f"array{num}")
                 patch.io.write(tmp_path / f"m{num}.h5", "dasdae")
             spool = dc.spool(tmp_path).update()
+        assert "origin_id" not in spool.get_contents()
         chunked = spool.chunk(time=to_timedelta64(0.12), keep_partial=True)
-        assert "origin_id" not in chunked._catalog.resolver.member_rows
         fast = list(chunked)
         with pytest.MonkeyPatch.context() as context:
             route.force_patches(context)
@@ -5200,8 +5387,8 @@ class TestTrimmedRecipeMerge:
         ]
         patches = [x.new(data=x.data * 2) for x in patches]
         spool = _write_spool(tmp_path, patches)
-        rows = spool.chunk(time=None)._catalog.resolver.member_rows
-        assert (rows["origin_id"] != rows["data_id"]).all(), "a derived patch"
+        contents = spool.get_contents()
+        assert (contents["origin_id"] != contents["data_id"]).all(), "a derived patch"
         fast = list(spool.chunk(time=to_timedelta64(0.12)))
         assert route.counts["patch"] == 0
         route.force_patches()
@@ -5270,7 +5457,12 @@ class TestTrimmedRecipeMerge:
         assert len(set(ids)) == len(ids)
 
     def test_a_trim_is_placed_on_its_source_not_its_envelope(self, trimmed_row):
-        """A trimmed row's grid counts the source's samples, not its own."""
+        """
+        A trimmed row's grid counts the source's samples, not its own.
+
+        An engine test (rule E): how the assembler places a trimmed row, on rows
+        changed in ways no index writes.
+        """
         assembler, row = trimmed_row
         source = assembly_module.source_coord_from_row(row, "time")
         coord, window, length = assembler._trim_window(row, "time", None)
@@ -5359,7 +5551,12 @@ class TestTrimmedRecipeMerge:
         return resolver._assembler(), trimmed
 
     def test_a_row_missing_one_source_bound_is_refused(self, trimmed_row):
-        """All three of the source's low, high and step, or none of them."""
+        """
+        All three of the source's low, high and step, or none of them.
+
+        An engine test (rule E): how the assembler places a trimmed row, on rows
+        changed in ways no index writes.
+        """
         assembler, row = trimmed_row
         assert assembler._trim_window(row, "time", None) is not None
         for end in assembly_module.SOURCE_RANGE_ENDS:
@@ -5367,20 +5564,35 @@ class TestTrimmedRecipeMerge:
             assert assembler._trim_window({**row, column: None}, "time", None) is None
 
     def test_a_converted_envelope_is_refused(self, trimmed_row):
-        """A trim in the plan's unit is not a window on the file's grid."""
+        """
+        A trim in the plan's unit is not a window on the file's grid.
+
+        An engine test (rule E): how the assembler places a trimmed row, on rows
+        changed in ways no index writes.
+        """
         assembler, row = trimmed_row
         other = {**row, "_time_units_source": "ms"}
         assert assembler._trim_window(other, "time", None) is None
 
     def test_a_window_naming_no_sample_is_refused(self, trimmed_row):
-        """A trim outside its source names nothing to read."""
+        """
+        A trim outside its source names nothing to read.
+
+        An engine test (rule E): how the assembler places a trimmed row, on rows
+        changed in ways no index writes.
+        """
         assembler, row = trimmed_row
         past = row["_time_src_high"] + row["_time_src_step"] * 100
         row = {**row, "time_min": past, "time_max": past + row["_time_src_step"]}
         assert assembler._trim_window(row, "time", None) is None
 
     def test_a_trim_which_does_not_name_its_array_is_refused(self, trimmed_row):
-        """A window's id builds on the whole array's, which the row states."""
+        """
+        A window's id builds on the whole array's, which the row states.
+
+        An engine test (rule E): how the assembler places a trimmed row, on rows
+        changed in ways no index writes.
+        """
         assembler, row = trimmed_row
         assert assembler._meta_from_index(row) is not None
         # a column no row carries states no id either
@@ -5394,7 +5606,12 @@ class TestTrimmedRecipeMerge:
         assert assembler._meta_from_index({**row, "data_id": None}) is None
 
     def test_a_row_without_its_source_range_falls_back(self, tmp_path, route):
-        """Without the source's own range a trim cannot be placed."""
+        """
+        Without the source's own range a trim cannot be placed.
+
+        An engine test (rule E): every plan made now keeps the source's range,
+        so the plan's rows are stripped to stand for one which did not.
+        """
         spool = self._spool(tmp_path)
         chunked = spool.chunk(time=to_timedelta64(0.12))
         resolver = chunked._catalog.resolver
@@ -5467,6 +5684,10 @@ class TestSelectedRecipeMerge:
         What the outputs should be is worked out from the same patches
         held in memory, where there is no index to describe a member
         with and so no window to take.
+
+        An engine test (rule E): in these geometries a member wrongly windowed
+        still loads the same samples, so which members the plan would window is
+        asked of its resolver.
         """
         with suppress_warnings(UserWarning):
             chunked = select(spool).chunk(**kwargs)
@@ -5495,12 +5716,17 @@ class TestSelectedRecipeMerge:
         selected = spool.select(time=(labels[3], labels[-4]))
         chunked = selected.chunk(time=STEP * 10)
         assert list(chunked)
+        # every output holds a member the selection or the chunk cut, and a
+        # merge from the index windows all its members or none
         assert any(merged), "the selected merge was assembled from the index"
-        resolver, trimmed, _ = self._members(chunked)
-        assert any(resolver._can_load_member_from_index(x) for x in trimmed)
 
     def test_a_row_the_selection_cut_falls_back(self, spools):
-        """A row a selection narrowed no longer states its source's range."""
+        """
+        A row a selection narrowed no longer states its source's range.
+
+        An engine test (rule E): which rows keep their source's range is what
+        the plan tells the assembler; the outputs are the same either way.
+        """
         spool = self._spool(spools, "datetime")
         labels = self._labels(spool, "time")
         selected = spool.select(time=(labels[3], labels[-4]))

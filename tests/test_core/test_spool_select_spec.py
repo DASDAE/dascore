@@ -40,7 +40,8 @@ def spool(request, tmp_path_factory):
     The ``*_derived`` params run every spec test over a derived
     (plan-backed) catalog via a content-preserving concatenate — the
     parity net proving one selector engine serves identity and
-    restructured spools alike.
+    restructured spools alike. That they are plan-backed shows only in the
+    catalog's resolver, which nothing public names, so it is checked there.
     """
     # Use 8,000 samples over 8 seconds to keep time windows narrower than a patch.
     # Distance must exceed the 10-sample selection to make that trim meaningful.
@@ -58,6 +59,14 @@ def spool(request, tmp_path_factory):
         out = out.concatenate(time=1)
         assert isinstance(out._catalog.resolver, PlanResolver)
     return out
+
+
+def _assert_as_loaded(selected, method, kwargs):
+    """The plan's outputs are those of the same plan over the loaded patches."""
+    got = list(getattr(selected, method)(**kwargs))
+    expected = list(getattr(dc.spool(list(selected)), method)(**kwargs))
+    assert len(got) == len(expected)
+    assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
 
 
 class TestUnknownNames:
@@ -103,7 +112,12 @@ class TestCatalogPushdown:
     """Public spool selection composes a lazy SQLite query."""
 
     def test_coord_predicate_reaches_backend(self, spool, monkeypatch):
-        """Selection does not query all rows before applying its predicate."""
+        """
+        Selection does not query all rows before applying its predicate.
+
+        A performance guard (rule C): the queries the catalog's backend runs
+        are not public, so its backend is watched.
+        """
         catalog = spool._catalog
         backend = catalog.backend
         calls = []
@@ -147,7 +161,12 @@ class TestLazySelection:
         return _arm
 
     def test_cold_directory_select(self, tmp_path_factory, forbid_realization):
-        """A cold directory spool selects without touching the relation."""
+        """
+        A cold directory spool selects without touching the relation.
+
+        A performance guard (rule C): nothing public tells whether a
+        selection stayed a lazy view, so the catalog is asked.
+        """
         path = dc.examples.spool_to_directory(
             dc.get_example_spool("random_das"),
             path=tmp_path_factory.mktemp("lazy_select_dir"),
@@ -159,7 +178,12 @@ class TestLazySelection:
         assert selected._catalog.is_view
 
     def test_cold_memory_select(self, forbid_realization):
-        """A fresh patch-list spool selects via the catalog, lazily."""
+        """
+        A fresh patch-list spool selects via the catalog, lazily.
+
+        A performance guard (rule C): nothing public tells whether a
+        selection stayed a lazy view, so the catalog is asked.
+        """
         patches = list(dc.get_example_spool("random_das"))
         forbid_realization()
         fresh = dc.spool(patches)
@@ -167,7 +191,12 @@ class TestLazySelection:
         assert selected._catalog.is_view
 
     def test_cold_relative_select(self, forbid_realization):
-        """Relative selection defers each patch-local coordinate envelope."""
+        """
+        Relative selection defers each patch-local coordinate envelope.
+
+        A performance guard (rule C): nothing public tells whether a
+        selection stayed a lazy view, so the catalog is asked.
+        """
         patches = list(dc.get_example_spool("random_das"))
         fresh = dc.spool(patches)
         forbid_realization()
@@ -667,14 +696,6 @@ class TestRelative:
 class TestPlansOverLocalSelections:
     """A plan over a sample or relative view cuts members on its own dimensions."""
 
-    @staticmethod
-    def _assert_as_loaded(selected, method, kwargs):
-        """The plan's outputs are those of the same plan over the loaded patches."""
-        got = list(getattr(selected, method)(**kwargs))
-        expected = list(getattr(dc.spool(list(selected)), method)(**kwargs))
-        assert len(got) == len(expected)
-        assert all(x.equals(y) for x, y in zip(got, expected, strict=True))
-
     @pytest.mark.parametrize(
         "method, kwargs",
         [
@@ -708,7 +729,7 @@ class TestPlansOverLocalSelections:
             dims=("distance", "time"),
         )
         selected = dc.spool([patch]).select(**selection)
-        self._assert_as_loaded(selected, "chunk", {"time": 4})
+        _assert_as_loaded(selected, "chunk", {"time": 4})
 
 
 @pytest.mark.wasm_skip
@@ -766,7 +787,7 @@ class TestBoundBetweenSamples:
         out = self._select(dc.spool(self._patches(labels)), labels, bounds, relative)
         out = out if first is None else out.chunk(**first)
         kwargs = {"time": length, "keep_partial": True}
-        TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", kwargs)
+        _assert_as_loaded(out, "chunk", kwargs)
 
     @pytest.mark.parametrize("relative", [False, True])
     @pytest.mark.parametrize("on_disk", [False, True])
@@ -837,7 +858,12 @@ class TestBoundBetweenSamples:
         assert len(out) == len(list(out)) == 0
 
     def test_text_range_counts_in_sql(self):
-        """Text labels have no lattice to fall between, so a range counts in SQL."""
+        """
+        Text labels have no lattice to fall between, so a range counts in SQL.
+
+        A performance guard (rule C): how the catalog's backend counts is
+        not public, so its coordinate projection is watched.
+        """
         coords = {"station": ["a", "b", "c"], "time": np.arange(4.0)}
         patch = dc.Patch(data=np.zeros((3, 4)), coords=coords, dims=("station", "time"))
         out = dc.spool([patch]).select(station=("a", "b"))
@@ -847,7 +873,12 @@ class TestBoundBetweenSamples:
         pivot.assert_not_called()
 
     def test_wide_range_counts_in_sql(self, kind):
-        """A range a step wide holds a sample, so counting it projects nothing."""
+        """
+        A range a step wide holds a sample, so counting it projects nothing.
+
+        A performance guard (rule C): how the catalog's backend counts is
+        not public, so its coordinate projection is watched.
+        """
         labels, _, _ = kind
         spool = dc.spool(self._patches(labels, count=2))
         out = spool.select(time=(labels[3], labels[4]))
@@ -861,7 +892,7 @@ class TestBoundBetweenSamples:
         labels, _, (low, high) = kind
         spool = dc.spool(self._patches(labels, count=2))
         out = spool.select(time=(low, high + 10 * (labels[1] - labels[0])))
-        TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", {"time": None})
+        _assert_as_loaded(out, "chunk", {"time": None})
 
     _start = np.datetime64("2020-01-01")
 
@@ -908,7 +939,7 @@ class TestBoundBetweenSamples:
         coord = out[0].get_coord("time")
         assert time.min() <= row.time_min <= coord.min()
         assert coord.max() <= row.time_max <= time.max()
-        TestPlansOverLocalSelections._assert_as_loaded(out, "chunk", {"time": None})
+        _assert_as_loaded(out, "chunk", {"time": None})
 
     def test_bound_near_a_sample_through_a_plan(self):
         """A plan's outputs over a bound just short of a sample state that sample."""
@@ -916,7 +947,7 @@ class TestBoundBetweenSamples:
         out = dc.spool([patch]).select(time=(2.95, 10.5)).chunk(distance=None)
         view = out.select(distance=(0, 0))
         kwargs = {"time": 3.0, "keep_partial": True}
-        TestPlansOverLocalSelections._assert_as_loaded(view, "chunk", kwargs)
+        _assert_as_loaded(view, "chunk", kwargs)
         chunked = view.chunk(**kwargs)
         assert chunked.get_contents()["time_min"].tolist() == [3.0, 6.0, 9.0]
 
@@ -1416,7 +1447,12 @@ class TestLazyOrderAndWindow:
     """sort/slice/array selection are lazy Selection specs (D2)."""
 
     def test_sort_is_lazy_and_ordered(self, tmp_path_factory):
-        """Sorting composes a spec; realization returns ordered rows."""
+        """
+        Sorting composes a spec; realization returns ordered rows.
+
+        A performance guard (rule C): that the sort stayed lazy shows only
+        in the catalog's view state.
+        """
         patches = list(dc.get_example_spool("random_das"))
         spool = dc.spool(list(reversed(patches)))
         out = spool.sort("time")
@@ -1426,7 +1462,12 @@ class TestLazyOrderAndWindow:
         assert list(out) == patches
 
     def test_slice_is_lazy_window(self):
-        """Slicing keeps the catalog state and correct membership."""
+        """
+        Slicing keeps the catalog state and correct membership.
+
+        A performance guard (rule C): that the slice stayed a lazy window
+        shows only in the catalog's id membership.
+        """
         patches = list(dc.get_example_spool("random_das"))
         spool = dc.spool(patches)
         part = spool[1:]
