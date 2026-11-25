@@ -1547,6 +1547,14 @@ def derived_catalog(
         on="_patch_row",
         how="left",
     )
+    # where a member states no start of its own (the frame held the column
+    # only for other rows' segments), its source's places its samples
+    origin = f"_{name}_source_envelope"
+    if origin in trim_cols and origin in sources:
+        stated = sources.drop_duplicates("_patch_row").set_index("_patch_row")[origin]
+        held = member_rows[origin]
+        fallback = member_rows["_patch_row"].map(stated)
+        member_rows[origin] = held.where(held.notna(), fallback)
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
     loader = CompositeResolver()
@@ -1780,7 +1788,14 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
         return None
     if any(samples or relative for _, samples, relative in catalog.residuals):
         return None
-    members = resolver.member_rows
+    # A selection on a coordinate riding the dimension, in any member,
+    # trims the dimension as each output loads, which its members'
+    # envelopes do not follow.
+    dim, members = resolver.dim, resolver.member_rows
+    riders = {x for coords, _, _ in catalog.residuals for x in coords} - {dim}
+    riding = ((dict.fromkeys(riders), False, False),)
+    if dim in _trimmed_dims(riding, catalog.backend.coord_dims_map(), members):
+        return None
     if catalog.is_view:
         present = {
             int(_row_source_patch_key(row))

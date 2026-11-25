@@ -29,7 +29,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import NumericCoord, get_coord
+from dascore.core.coords import NumericCoord, concat_coords, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     ChunkError,
@@ -1289,6 +1289,72 @@ class TestMixedUnitChunk:
         assert np.allclose(out.get_array("distance"), np.arange(12.0))
         expected = metres.select(**select).data
         assert np.allclose(out.data, np.concatenate([expected, expected]))
+
+    def test_rechunks_beside_runs_load_their_own_samples(self):
+        """Members keep their source's start where another patch's runs
+        made the frame state one, so each output loads its own samples (#1739).
+        """
+
+        def patch(distance, time):
+            coords = {"distance": distance, "time": time}
+            data = np.arange(len(distance) * 3.0).reshape(-1, 3)
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        plain = patch(np.arange(3.0), np.arange(3.0))
+        halves = (np.arange(2.0) * 0.5, np.arange(2.0) * 0.5 + 2.0)
+        runs = concat_coords(*(get_coord(data=x) for x in halves))
+        spool = dc.spool([plain, patch(runs, np.arange(3.0) + 100)])
+        spool = spool.chunk(distance=1.5, keep_partial=True).select(time=(None, 50))
+        for length in (2.0, 1.0):
+            spool = spool.chunk(distance=length, keep_partial=True)
+        distances = [x.get_array("distance").tolist() for x in spool]
+        assert distances == [[0.0], [1.0], [2.0]]
+        assert np.array_equal(np.concatenate([x.data for x in spool]), plain.data)
+
+    @pytest.mark.parametrize("length", [5, None])
+    def test_rechunk_after_a_rider_selection(self, length):
+        """A re-chunk after a selection on a riding coordinate plans from
+        the samples it kept, as over the patch itself (#1741).
+        """
+        time = np.arange(8)
+        coords = {"time": time, "label": ("time", time * 2.0)}
+        patch = dc.Patch(data=np.arange(8.0), coords=coords, dims=("time",))
+        kept = {"label": (2.0, 12.0)}
+        chunked = dc.spool([patch]).chunk(time=3, keep_partial=True).select(**kept)
+        plain = dc.spool([patch]).select(**kept)
+        got, expected = (
+            x.chunk(time=length, keep_partial=length is not None)
+            for x in (chunked, plain)
+        )
+        assert [x.get_array("time").tolist() for x in got] == [
+            x.get_array("time").tolist() for x in expected
+        ]
+        assert got.get_contents()["time_min"].tolist() == [
+            x.get_coord("time").min() for x in got
+        ]
+
+    def test_rider_selection_riding_two_ways(self):
+        """A selected coordinate riding distance in one patch and time in
+        another still re-chunks time from the samples kept (#1741).
+        """
+
+        def patch(time, rides):
+            distance = np.arange(3.0)
+            label = (distance if rides == "distance" else time - time[0]) * 2.0
+            coords = {"distance": distance, "time": time, "label": (rides, label)}
+            data = np.zeros((3, len(time)))
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        patches = [patch(np.arange(8), "distance"), patch(np.arange(8) + 100, "time")]
+        kept = {"label": (2.0, 12.0)}
+        chunked = dc.spool(patches).chunk(time=3, keep_partial=True).select(**kept)
+        got, expected = (
+            x.chunk(time=5, keep_partial=True)
+            for x in (chunked, dc.spool(patches).select(**kept))
+        )
+        assert [x.get_array("time").tolist() for x in got] == [
+            x.get_array("time").tolist() for x in expected
+        ]
 
     def test_affine_quantity_length_is_a_delta(self):
         """20 degC of extent is 36 degF, never 68 (adversarial round, D2)."""

@@ -227,6 +227,9 @@ def with_runs(df, dim: str, indexed, read, modified=False, key="_patch_row"):
         split["_modified"] = True
     kept = df.drop(index=df.index[cut])
     out = pd.concat([kept, split], ignore_index=True)
+    # each row's segments where the row stood, so kinds keep their order
+    at = np.delete(np.arange(len(df)), cut).tolist() + [x[0] for x in stretches]
+    out = out.iloc[np.argsort(at, kind="stable")].reset_index(drop=True)
     if out[names[0]].dtype.kind in "Mm" and out[names[2]].dtype == object:
         # rows stating no step held objects, so segments' steps join them as
         # objects; hold them as durations, the missing ones as NaT
@@ -289,7 +292,8 @@ def clip_to_runs(df: pd.DataFrame, dim: str, indexed, read) -> pd.DataFrame:
     rows = bounds.index.to_numpy(dtype=np.int64)
     for col, values in ((f"{dim}_min", bounds["low"]), (f"{dim}_max", bounds["high"])):
         column = out[col].astype(object).to_numpy(copy=True)
-        column[rows] = values.to_numpy()
+        # as objects, so times stay times in a column holding several kinds
+        column[rows] = values.astype(object).to_numpy()
         _set_column(out, col, column, df)
     empty = sorted(set(cut) - set(rows.tolist()))
     return out.drop(index=out.index[empty])
@@ -4497,7 +4501,7 @@ def _coerce(values: pd.Series, family: str) -> pd.Series:
         return pd.to_timedelta(values)
     if family == "text":
         return values.astype(str)
-    if values.dtype.kind in "mM":  # only nulls, which a time column holds as NaT
+    if values.dtype.kind in "mMO":  # nulls a time column or objects hold as NaT
         values = values.astype(object).where(values.notna())
     return pd.to_numeric(values)
 
