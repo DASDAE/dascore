@@ -5,6 +5,7 @@ from __future__ import annotations
 import pickle
 import shutil
 import sqlite3
+from http import HTTPStatus
 
 import pytest
 from upath import UPath
@@ -18,11 +19,24 @@ from dascore.exceptions import (
     InvalidSpoolError,
     ParameterError,
 )
-from dascore.io.index.catalog import FileResolver
 from dascore.io.index.schema import INDEX_VERSION
-from dascore.utils import remote_io
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache
+from tests.test_io.conftest import _RangeHTTPRequestHandler, _serve_das_tree
+
+TOKEN = "Bearer secret-token"
+
+
+class _TokenHTTPRequestHandler(_RangeHTTPRequestHandler):
+    """A range server which refuses the index tree without the test's token."""
+
+    def send_head(self):
+        """Serve the index tree only to requests carrying the token."""
+        guarded = self.path.startswith("/das/read_only_index")
+        if guarded and self.headers.get("Authorization") != TOKEN:
+            self.send_error(HTTPStatus.UNAUTHORIZED, "No token")
+            return None
+        return super().send_head()
 
 
 def _assert_same_spool(spool1, spool2):
@@ -216,29 +230,27 @@ class TestRemoteIndex:
         combined = dc.spool(index=url / INDEX_NAME) + extra
         _assert_same_spool(combined, dc.spool(local) + extra)
 
-    def test_storage_options_reach_every_read(self, served, monkeypatch):
-        """A remote index's storage options carry to its downloads and reads."""
-        local, url = served
-        headers = {"Authorization": "Bearer secret-token"}
-        seen = []
-        download, read = remote_io._download_remote_file, FileResolver._read
+    @pytest.fixture()
+    def token_url(self, served, http_test_data_root):
+        """The served index's URL on a server which demands a token."""
+        with _serve_das_tree(
+            _TokenHTTPRequestHandler, http_test_data_root, "token server"
+        ) as path:
+            yield path / "read_only_index"
 
-        def _download(path, local_path):
-            seen.append(path.storage_options)
-            return download(path, local_path)
-
-        def _read(self, path, *args, **kwargs):
-            if str(path).startswith("http"):  # not the local spool's reads
-                seen.append(getattr(path, "storage_options", {}))
-            return read(self, path, *args, **kwargs)
-
-        monkeypatch.setattr(remote_io, "_download_remote_file", _download)
-        monkeypatch.setattr(FileResolver, "_read", _read)
-        spool = dc.spool(index=UPath(str(url / INDEX_NAME), headers=headers))
+    def test_storage_options_reach_every_read(self, served, token_url):
+        """
+        A remote index's storage options carry to its downloads and reads,
+        so a server refusing requests without its token serves them all.
+        """
+        local, _ = served
+        headers = {"Authorization": TOKEN}
+        with pytest.raises(FileNotFoundError):  # the server refuses bare reads
+            dc.spool(index=token_url / INDEX_NAME)
+        spool = dc.spool(index=UPath(str(token_url / INDEX_NAME), headers=headers))
         extra = dc.spool([dc.get_example_patch()])
         expected = dc.spool(local)
         _assert_same_spool(spool, expected)
         _assert_same_spool((spool + extra)[:-1], expected)
         _assert_same_spool(spool.chunk(time=None), expected.chunk(time=None))
-        assert seen and all(x.get("headers") == headers for x in seen)
         assert "secret-token" not in repr(spool)

@@ -276,18 +276,22 @@ class TestHostWithGetattr:
         assert inst._private == "host"
 
     def test_private_lookup_loads_no_plugin(self, monkeypatch):
-        """Resolving a private name must not import a plugin to find it."""
-        loaded = []
-        monkeypatch.setattr(
-            ns_module,
-            "maybe_load_entry_point",
-            lambda group, name: loaded.append(name),
-        )
+        """
+        Resolving a private name must not import a plugin to find it, so a
+        plugin whose import fails breaks only a public lookup.
+        """
+
+        class BrokenPluginError(Exception):
+            """Raised by a plugin which fails to import."""
+
+        def broken(group, name):
+            raise BrokenPluginError(name)
+
+        monkeypatch.setattr(ns_module, "maybe_load_entry_point", broken)
         inst = GetattrParent()
         assert inst._private == "host"
-        assert not loaded
-        assert inst.from_host == "host"
-        assert loaded == ["from_host"]
+        with pytest.raises(BrokenPluginError, match="from_host"):
+            inst.from_host
 
     def test_default_message_survives_host_getattr(self):
         """A name neither knows still raises this class's message."""

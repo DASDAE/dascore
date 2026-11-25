@@ -17,7 +17,7 @@ from dascore.lazy.contract import Pointwise
 from dascore.lazy.execute import compute
 from dascore.utils.array_api import backend_name
 
-from .conftest import grid, lazy_patch, stored_patch
+from .conftest import grid, lazy_patch, stored_patch, unreadable
 
 # The dtypes whose result dtype a pointwise operation could get wrong: the
 # integers and bool which angle promotes, and the complex ones whose part
@@ -64,6 +64,18 @@ def stored(tmp_path_factory):
     return {x: stored_patch(directory, _values(shape, x), x) for x in DTYPES}
 
 
+@pytest.fixture(scope="module")
+def gone(stored, tmp_path_factory):
+    """
+    A lazy patch of each dtype over a copy of its file, deleted since.
+
+    Any read of one raises. Only this fixture uses the copies, so deleting
+    them takes nothing from another test.
+    """
+    directory = tmp_path_factory.mktemp("gone")
+    return {x: lazy_patch(unreadable(y, directory, x)) for x, y in stored.items()}
+
+
 def assert_same(lazy, eager):
     """The loaded lazy patch is the eager one: values, metadata and id."""
     loaded = lazy.load()
@@ -91,11 +103,12 @@ class TestEachOperation:
 
     @pytest.mark.parametrize("dtype", DTYPES)
     @pytest.mark.parametrize("name", DECLARED)
-    def test_matches_eager(self, stored, recipe_loads, name, dtype):
+    def test_matches_eager(self, stored, gone, name, dtype):
         """Coords, attrs, dtype and data_id are the eager ones."""
+        # Declaring reads nothing, so it runs on a patch whose file is gone.
+        getattr(gone[dtype], name)()
         lazy = lazy_patch(stored[dtype])
         out = getattr(lazy, name)()
-        assert not recipe_loads
         assert backend_name(out.data) == "lazy"
         assert out is lazy or out.data.chain.last.contract == Pointwise()
         eager = getattr(lazy.load(), name)()
@@ -107,13 +120,13 @@ class TestEachOperation:
 
     @pytest.mark.parametrize("dtype", ("int16", "float32", "bool"))
     @pytest.mark.parametrize("name", ("real", "conj"))
-    def test_no_op_on_real(self, stored, recipe_loads, name, dtype):
+    def test_no_op_on_real(self, stored, gone, name, dtype):
         """Real data come back as the patch itself, as they do eagerly."""
-        lazy = lazy_patch(stored[dtype])
+        # Its file is gone, so the lazy patch is handed back unread.
+        lazy = gone[dtype]
         assert getattr(lazy, name)() is lazy
-        eager = lazy.load()
+        eager = lazy_patch(stored[dtype]).load()
         assert getattr(eager, name)() is eager
-        assert len(recipe_loads) == 1
 
 
 class TestChain:
@@ -130,11 +143,11 @@ class TestChain:
         out.append(out[-1].angle())
         return out
 
-    def test_each_step(self, stored, recipe_loads):
+    def test_each_step(self, stored, gone):
         """Every step's patch and id are the eager step's, nothing read."""
-        lazy_steps = self._steps(lazy_patch(stored["complex64"]))
-        assert not recipe_loads
-        eager_steps = self._steps(lazy_steps[0].load())
+        # Steps of a patch whose file is gone: none of them reads.
+        lazy_steps = self._steps(gone["complex64"])
+        eager_steps = self._steps(lazy_patch(stored["complex64"]).load())
         for lazy, eager in zip(lazy_steps, eager_steps, strict=True):
             assert lazy.attrs == eager.attrs
             assert lazy.attrs.data_id == eager.attrs.data_id
@@ -143,8 +156,8 @@ class TestChain:
         assert len(last.data.chain) == 3
         computed = [lazy_steps[x].attrs.data_id for x in (1, 3, 5)]
         assert [x.data_id for x in last.data.chain] == computed
-        assert_same(last, eager_steps[-1])
-        assert len(recipe_loads) == 2
+        readable = self._steps(lazy_patch(stored["complex64"]))[-1]
+        assert_same(readable, eager_steps[-1])
 
     def test_metadata_only_keeps_the_array(self, stored):
         """The metadata-only step holds the same lazy array as the step before."""
@@ -153,12 +166,11 @@ class TestChain:
         # The patch's id moved on; the array's is still the step's.
         assert steps[2].attrs.data_id != steps[2].data.data_id
 
-    def test_refused_after_steps(self, stored, recipe_loads):
+    def test_refused_after_steps(self, gone):
         """An operation with no contract is refused partway, reading nothing."""
-        out = lazy_patch(stored["float64"]).abs()
+        out = gone["float64"].abs()
         with pytest.raises(LazyOperationError, match="detrend"):
             out.detrend("time")
-        assert not recipe_loads
 
 
 # Every one of DASCore's own operations which states a chunk contract.

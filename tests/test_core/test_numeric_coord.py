@@ -267,7 +267,13 @@ class TestLabelsAreHeldOnce:
             NumericCoord(runs=stored.runs, dtype=stored.dtype)
 
     def test_converting_units_hashes_once(self, monkeypatch):
-        """Scaled labels are a new array, so they enter a store of their own."""
+        """
+        Scaled labels are a new array, so they enter a store of their own.
+
+        A performance guard that keeps its spy: hashing the labels again
+        gives the same store, only slowly, so the count of hashes is its
+        only witness.
+        """
         coord = NumericCoord.from_labels(np.array([0.0, 1.5, 3.0]), units="m")
         calls = []
         monkeypatch.setattr(

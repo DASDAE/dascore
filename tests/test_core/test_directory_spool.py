@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import itertools
+import math
 import os
 import pickle
+import shutil
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -146,7 +150,12 @@ class TestLoadPatchFastPath:
     def test_forwards_recorded_format_and_version(
         self, one_directory_spool, monkeypatch
     ):
-        """The recorded format/version are forwarded so dc.read skips probing."""
+        """
+        The recorded format/version are forwarded so dc.read skips probing.
+
+        An engine interface test that keeps its fake: probing finds the same
+        format, only slower, so what dc.read is given is its only witness.
+        """
         resolver = one_directory_spool._catalog.resolver
         calls = []
 
@@ -164,7 +173,12 @@ class TestLoadPatchFastPath:
         assert "file_format" not in calls[-1]
 
     def test_reads_file_once(self, one_directory_spool, monkeypatch):
-        """A row's patch is read exactly once regardless of the reader's return."""
+        """
+        A row's patch is read exactly once regardless of the reader's return.
+
+        A performance guard that keeps its fake: a second read gives the
+        same patch, only slower, so the count of reads is its only witness.
+        """
         calls = []
 
         def _fake_read(**kwargs):
@@ -180,7 +194,12 @@ class TestLoadPatchFastPath:
     def test_multi_patch_resolves_identity_with_single_read(
         self, one_directory_spool, random_patch, monkeypatch
     ):
-        """Multi-patch reads resolve source identity from one dc.read call."""
+        """
+        Multi-patch reads resolve source identity from one dc.read call.
+
+        A performance guard that keeps its fake: a second read finds the
+        same patch, only slower, so the count of reads is its only witness.
+        """
         patch_1 = random_patch.new(source=ArraySource(key="first"))
         patch_2 = random_patch.new(source=ArraySource(key="second"))
         reads = []
@@ -445,6 +464,47 @@ class TestSelect:
 class TestSampleSelectPushdown:
     """A samples=True select reads only the selected samples (#1318)."""
 
+    @staticmethod
+    def _decodable(spool, directory, keep):
+        """
+        Index a copy of the spool's one file whose patches store their data
+        as gzip chunks, where only the chunks inside the kept sample range of
+        each dimension in `keep` decode, so a read of more than they hold
+        raises.
+        """
+        path = Path(shutil.copy(spool.spool_path / "multi_patch.h5", directory))
+        with h5py.File(path, "r+") as h5:
+            for group in h5["waveforms"].values():
+                dims = group.attrs["_dims"].split(",")
+                data, attrs = group["data"][()], dict(group["data"].attrs)
+                del group["data"]
+                # Chunks end on the kept range's ends, so each is all in or out.
+                ranges = [keep.get(x, (0, n)) for x, n in zip(dims, data.shape)]
+                chunks = [
+                    math.gcd(first, stop, n)
+                    for (first, stop), n in zip(ranges, data.shape)
+                ]
+                node = group.create_dataset(
+                    "data",
+                    data.shape,
+                    data.dtype,
+                    chunks=tuple(chunks),
+                    compression="gzip",
+                )
+                node.attrs.update(attrs)
+                starts = [range(0, n, c) for n, c in zip(data.shape, chunks)]
+                for at in itertools.product(*starts):
+                    inside = all(
+                        first <= x and x + c <= stop
+                        for x, c, (first, stop) in zip(at, chunks, ranges)
+                    )
+                    if inside:  # stored as if the gzip filter were skipped
+                        box = tuple(slice(x, x + c) for x, c in zip(at, chunks))
+                        node.id.write_direct_chunk(at, data[box].tobytes(), 1)
+                    else:
+                        node.id.write_direct_chunk(at, b"not gzip")
+        return dc.spool(directory).update()
+
     @pytest.fixture()
     def trims(self, monkeypatch):
         """Record the read hints each file-backed row is resolved with."""
@@ -469,22 +529,22 @@ class TestSampleSelectPushdown:
     )
     @pytest.mark.parametrize("relative", [False, True])
     def test_reads_only_selected_samples(
-        self, multi_patch_file_spool, trims, select, relative
+        self, multi_patch_file_spool, tmp_path, select, relative
     ):
-        """Each patch reads the window and equals the eager selection."""
+        """
+        Each patch reads the window and equals the eager selection, so only
+        the samples the window holds along each selected dimension decode.
+        """
         spool = multi_patch_file_spool
         expected = [x.select(samples=True, relative=relative, **select) for x in spool]
-        trims.clear()
-        out = list(spool.select(samples=True, relative=relative, **select))
+        keep = {}
+        for dim in select:
+            held = expected[0].get_coord(dim).values
+            found = np.flatnonzero(np.isin(spool[0].get_coord(dim).values, held))
+            keep[dim] = (int(found[0]), int(found[-1]) + 1)
+        decodable = self._decodable(spool, tmp_path, keep)
+        out = list(decodable.select(samples=True, relative=relative, **select))
         assert out == expected
-        assert len(trims) == len(expected)
-        for trim, patch in zip(trims, out):
-            assert set(trim) == set(select)
-            for name, (low, high) in trim.items():
-                coord = patch.get_coord(name)
-                step = coord.step
-                assert coord.min() - step < low <= coord.min()
-                assert coord.max() <= high < coord.max() + step
 
     def test_empty_range(self, multi_patch_file_spool):
         """A sample range holding nothing gives what the eager select does."""
@@ -503,7 +563,12 @@ class TestSampleSelectPushdown:
         assert spool.select(distance=(1, 3), samples=True)[0] == expected
 
     def test_uneven_coordinate_reads_whole(self, tmp_path, trims):
-        """A coordinate without a step cannot be restated, so it is not hinted."""
+        """
+        A coordinate without a step cannot be restated, so it is not hinted.
+
+        A guard that keeps its spy: a hint restated from these labels would
+        select the same samples, so the hints are its only witness.
+        """
         patch = dc.get_example_patch().select(distance=(0, 20), samples=True)
         values = np.cumsum(np.arange(1, 21, dtype=float))
         patch = patch.update_coords(distance=values)
@@ -521,9 +586,7 @@ class TestSampleSelectPushdown:
         out = list(spool.select(time=(10, 20), samples=True))
         assert [x.attrs.data_id for x in out] == [x.attrs.data_id for x in expected]
 
-    def test_after_a_value_select_stays_on_the_patch(
-        self, multi_patch_file_spool, trims
-    ):
+    def test_after_a_value_select_stays_on_the_patch(self, multi_patch_file_spool):
         """Samples counted from an already trimmed patch are not pushed."""
         spool = multi_patch_file_spool
         dist = spool[0].get_coord("distance")

@@ -170,7 +170,13 @@ class TestReadWork:
     """Read planning reuses headers and skips samples outside the request."""
 
     def test_two_passes_for_multiple_groups(self, monkeypatch):
-        """One header pass and one sample pass suffice for multiple patches."""
+        """
+        One header pass and one sample pass suffice for multiple patches.
+
+        A performance guard that keeps its count: a pass per patch gives the
+        same patches, only slowly, so the passes over the stand-in reader
+        are its only witness.
+        """
         records = [
             _MiniSeedRecord("FDSN:XX_00000__H_S_F", samprate=10),
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20),

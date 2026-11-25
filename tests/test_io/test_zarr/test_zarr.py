@@ -320,7 +320,13 @@ class TestScanDirectory:
     """A scan of a directory takes each store whole, and survives a bad one."""
 
     def test_sizing_skips_chunks(self, chunked_store, monkeypatch):
-        """The progress total counts a store as one and never lists its chunks."""
+        """
+        The progress total counts a store as one and never lists its chunks.
+
+        A performance guard that keeps its spies: listing the chunks gives
+        the same scan, only slowly, so the total and the listings are its
+        only witnesses.
+        """
         lengths, listed = [], []
         track, scandir = io_core.track, os.scandir
 
@@ -437,7 +443,12 @@ class TestRangeAttr:
         assert np.array_equal(dc.read(path)[0].get_array("distance"), stored)
 
     def test_spool_loaded_once(self, zarr_patch, tmp_path):
-        """A file spool's one patch is loaded once to be written."""
+        """
+        A file spool's one patch is loaded once to be written.
+
+        A performance guard that keeps its spy: loading it again gives the
+        same store, only slowly, so the call count is its only witness.
+        """
         dc.write(zarr_patch, tmp_path / "a.h5", "dasdae")
         spool = dc.spool(tmp_path / "a.h5")
         resolve = PatchCatalog.resolve_row
@@ -757,7 +768,13 @@ class TestMultiPatch:
             dc.write(patch, tmp_path / "scalar.zarr", "zarr")
 
     def test_streams(self, zarr_spool, tmp_path, monkeypatch):
-        """Each patch is converted and written before the next is converted."""
+        """
+        Each patch is converted and written before the next is converted.
+
+        A memory guard that keeps its spies: converting every patch first
+        gives the same store, with all of them held at once, so the order of
+        calls is its only witness.
+        """
         events = []
         to_cf, to_zarr = zarr_core.spool_to_cf_dataset, xr.Dataset.to_zarr
 

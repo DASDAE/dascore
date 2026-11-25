@@ -65,6 +65,21 @@ def scan_calls(monkeypatch):
     return calls
 
 
+def _overwrite_head(path, head=bytes(8)):
+    """
+    Overwrite a file's first bytes, its HDF5 signature, keeping its size and
+    mtime, so a move still matches it while a rescan finds no patches; return
+    the bytes overwritten.
+    """
+    stat = os.stat(path)
+    with open(path, "r+b") as handle:
+        old = handle.read(len(head))
+        handle.seek(0)
+        handle.write(head)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    return old
+
+
 @pytest.fixture()
 def hive_dir(tmp_path):
     """One patch under network=XX/station=A/cable=north__tag=raw."""
@@ -329,41 +344,54 @@ class TestPatchStamping:
 class TestMoveDetection:
     """Renames rewrite the index without content rescans."""
 
-    def test_directory_rename_no_rescan(self, hive_spool, hive_dir, scan_calls):
-        """Renaming a partition directory never re-reads file contents."""
+    def test_directory_rename_no_rescan(self, hive_spool, hive_dir):
+        """
+        Renaming a partition directory never re-reads file contents, so a
+        file no scan can read keeps its row until it is read again.
+        """
         ids_before = list(hive_spool._df["_patch_row"])
+        name = "cable=north__tag=raw/das_file.h5"
+        head = _overwrite_head(hive_dir / "network=XX" / "station=A" / name)
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=Q"
         )
         updated = hive_spool.update(progress=None)
-        assert not scan_calls
         df = updated.get_contents()
         assert df["station"].iloc[0] == "Q"
         assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
         assert list(updated._df["_patch_row"]) == ids_before
+        _overwrite_head(hive_dir / "network=XX" / "station=Q" / name, head)
         assert updated[0].attrs.station == "Q"
 
-    def test_added_key_is_a_pure_move(self, hive_spool, hive_dir, scan_calls):
-        """Adding a key to an existing segment never re-reads contents."""
+    def test_added_key_is_a_pure_move(self, hive_spool, hive_dir):
+        """
+        Adding a key to an existing segment never re-reads contents, so a
+        file no scan can read keeps its row.
+        """
         old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw"
+        _overwrite_head(old / "das_file.h5")
         old.rename(old.with_name("cable=north__tag=raw__phase=2"))
         updated = hive_spool.update(progress=None)
-        assert not scan_calls
         assert updated.get_contents()["phase"].iloc[0] == "2"
 
-    def test_removed_key_triggers_rescan(self, hive_spool, hive_dir, scan_calls):
+    def test_removed_key_triggers_rescan(self, hive_spool, hive_dir):
         """Dropping a hive key needs the file's own value back: rescan."""
         old = hive_dir / "network=XX" / "station=A" / "cable=north__tag=raw"
         old.rename(old.with_name("cable=north"))
         updated = hive_spool.update(progress=None)
-        assert len(scan_calls) == 1
         df = updated.get_contents()
         # the file itself declares a tag; with the path key gone it returns
         assert df["tag"].iloc[0] == dc.get_example_patch().attrs.tag
 
     def test_ambiguous_stats_fall_back_to_rescan(self, tmp_path, scan_calls):
-        """Twin files with identical stats are rescanned, not guessed."""
+        """
+        Twin files with identical stats are rescanned, not guessed.
+
+        A guard that keeps its spy: the twins hold the same patch, so a guess
+        gives the same index, and the one scan covering both is a cost; the
+        scans made are its only witness.
+        """
         patch = dc.get_example_patch()
         patch.io.write(tmp_path / "twin_a.h5", "dasdae")
         patch.io.write(tmp_path / "twin_b.h5", "dasdae")
@@ -386,8 +414,15 @@ class TestMoveDetection:
         finally:
             spool.indexer.close()
 
-    def test_moves_parse_each_directory_once(self, tmp_path, monkeypatch, scan_calls):
-        """Splitting a folder in two parses each directory, not each file."""
+    def test_moves_parse_each_directory_once(self, tmp_path, monkeypatch):
+        """
+        Splitting a folder in two parses each directory, not each file, and
+        moves files no scan can read rather than rescanning them.
+
+        A performance guard that keeps its parse spy: parsing each file's
+        path gives the same attrs, only slowly, so the parses are its only
+        witness.
+        """
         patch = dc.get_example_patch()
         for name in ("A", "B", "C"):
             (tmp_path / f"station={name}").mkdir()
@@ -396,7 +431,8 @@ class TestMoveDetection:
             patch.io.write(path, "dasdae")
             os.utime(path, ns=(i * 10**9, i * 10**9))
         dc.spool(tmp_path).update(progress=None)
-        scan_calls.clear()
+        for i in range(4):
+            _overwrite_head(tmp_path / "station=A" / f"f{i}.h5")
         parsed = []
         real = indexer_mod.hive_path_attrs
 
@@ -411,7 +447,6 @@ class TestMoveDetection:
                 tmp_path / f"station={target}" / f"f{i}.h5"
             )
         df = dc.spool(tmp_path).update(progress=None).get_contents()
-        assert not scan_calls  # moved, not rescanned
         stations = dict(zip(df["source_path"], df["station"], strict=True))
         assert stations == {
             "station=B/f0.h5": "B",
@@ -422,15 +457,17 @@ class TestMoveDetection:
         # keys of the old folder and both new ones, then both new ones' attrs
         assert len(parsed) == 5
 
-    def test_plain_rename_without_hive_keys(self, tmp_path, scan_calls):
-        """A rename with no hive keys anywhere is still a cheap move."""
+    def test_plain_rename_without_hive_keys(self, tmp_path):
+        """
+        A rename with no hive keys anywhere is still a cheap move, so a file
+        no scan can read keeps its row.
+        """
         dc.get_example_patch().io.write(tmp_path / "plain_a.h5", "dasdae")
         spool = dc.spool(tmp_path).update(progress=None)
         try:
-            scan_calls.clear()
+            _overwrite_head(tmp_path / "plain_a.h5")
             (tmp_path / "plain_a.h5").rename(tmp_path / "plain_b.h5")
             updated = spool.update(progress=None)
-            assert not scan_calls
             assert updated.get_contents()["source_path"].iloc[0] == "plain_b.h5"
         finally:
             spool.indexer.close()
@@ -443,7 +480,13 @@ class TestMoveDetection:
         assert moves == {}
 
     def test_non_fiber_file_rename(self, hive_spool, hive_dir, scan_calls):
-        """A moved non-fiber file stays quietly tracked."""
+        """
+        A moved non-fiber file stays quietly tracked.
+
+        A performance guard that keeps its spy: rescanning a non-fiber file
+        finds nothing again, only slowly, so the scans made are its only
+        witness.
+        """
         (hive_dir / "notes.txt").write_text("hello")
         spool = hive_spool.update(progress=None)
         scan_calls.clear()
@@ -465,17 +508,19 @@ class TestEdgeCases:
             spool = dc.spool(tmp_path).update(progress=None)
         spool.indexer.close()
 
-    def test_restricted_update_leaves_moves_outside(
-        self, hive_spool, hive_dir, scan_calls
-    ):
-        """update(paths=...) leaves moves outside its scope to a full update."""
+    def test_restricted_update_leaves_moves_outside(self, hive_spool, hive_dir):
+        """
+        update(paths=...) leaves moves outside its scope to a full update,
+        which moves rather than rescans a file no scan can read.
+        """
+        name = "network=XX/station=A/cable=north__tag=raw/das_file.h5"
+        _overwrite_head(hive_dir / name)
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=R"
         )
         scoped = hive_spool.update(paths=[hive_dir / "does_not_exist"], progress=None)
         assert scoped.get_contents()["station"].iloc[0] == "A"
         full = hive_spool.update(progress=None)
-        assert not scan_calls
         assert full.get_contents()["station"].iloc[0] == "R"
 
     def test_old_index_version_rebuilds(self, hive_dir):

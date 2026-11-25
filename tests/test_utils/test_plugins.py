@@ -20,12 +20,13 @@ class TestLoadEntryPoint:
         assert plugin_mod.maybe_load_entry_point("test.group", "missing") is None
 
     def test_entry_point_loads_and_caches(self, monkeypatch):
-        """Loaded entry points should only invoke the loader once."""
-        called = {"count": 0}
+        """
+        Loaded entry points should only invoke the loader once, so each
+        lookup returns the object the first load made.
+        """
 
         def loader():
-            called["count"] += 1
-            return "loaded"
+            return ["loaded"]
 
         plugin_mod.get_entry_point_loaders.cache_clear()
         plugin_mod.maybe_load_entry_point.cache_clear()
@@ -33,9 +34,9 @@ class TestLoadEntryPoint:
             plugin_mod, "get_entry_point_loaders", lambda _: {"foo": loader}
         )
 
-        assert plugin_mod.maybe_load_entry_point("test.group", "foo") == "loaded"
-        assert plugin_mod.maybe_load_entry_point("test.group", "foo") == "loaded"
-        assert called["count"] == 1
+        first = plugin_mod.maybe_load_entry_point("test.group", "foo")
+        assert first == ["loaded"]
+        assert plugin_mod.maybe_load_entry_point("test.group", "foo") is first
 
     def test_duplicate_entry_points_warn_and_last_one_wins(self, monkeypatch):
         """Duplicate entry-point names should warn and keep the last loader."""

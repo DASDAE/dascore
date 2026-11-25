@@ -24,7 +24,13 @@ def square_source(patch, tmp_path_factory):
 
 
 class TestCoalescedReads:
-    """Abutting windows of one source are read as one window."""
+    """
+    Abutting windows of one source are read as one window.
+
+    The tests which record reads are performance guards that keep their
+    spy: windows read apart give the same array, only in more reads, so
+    the reads recorded are their only witness.
+    """
 
     def test_windows_of_one_file(self, two_sources, patch, reads):
         """Abutting windows of one file take one read."""

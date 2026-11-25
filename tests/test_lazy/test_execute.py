@@ -23,7 +23,7 @@ from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
 from dascore.utils.array_api import backend_name
 
-from .conftest import constant, lazy_patch, stored_patch
+from .conftest import constant, lazy_patch, stored_patch, unreadable
 
 # Bytes of one float64 row of the stored patch: 300 distances by 2000 times.
 ROW = 2000 * 8
@@ -43,6 +43,12 @@ def eager(lazy):
     return lazy.load()
 
 
+@pytest.fixture()
+def gone(lazy, tmp_path):
+    """The lazy patch over a copy of its file, deleted: any read of it raises."""
+    return lazy_patch(unreadable(lazy, tmp_path))
+
+
 def _covers(boxes, shape):
     """Whether boxes tile a shape: each sample in exactly one."""
     count = np.zeros(shape, np.int64)
@@ -54,19 +60,24 @@ def _covers(boxes, shape):
 class TestSelect:
     """A selection of lazy data stays lazy and reads only what it keeps."""
 
-    def test_matches_eager(self, lazy, eager, recipe_loads):
+    def test_matches_eager(self, lazy, gone, eager):
         """Coords, attrs and id are the eager ones, and nothing is read."""
         kwargs = {"time": (100, 900), "distance": (..., 50), "samples": True}
-        out, expected = lazy.select(**kwargs), eager.select(**kwargs)
-        assert not recipe_loads
+        out, expected = gone.select(**kwargs), eager.select(**kwargs)
         assert isinstance(out.data.chain.last.contract, Window)
         assert out.coords == expected.coords
         assert out.attrs == expected.attrs
         assert out.attrs.data_id == expected.attrs.data_id
-        assert out.load() == expected
+        assert lazy.select(**kwargs).load() == expected
 
     def test_reads_only_the_window(self, lazy, recipe_loads):
-        """What is read has the selection's shape, not the array's."""
+        """
+        What is read has the selection's shape, not the array's.
+
+        A performance guard that keeps its spy: reading more of the file
+        and cutting it gives the same values, so the shape read is its only
+        witness.
+        """
         out = lazy.select(time=(100, 900), distance=(10, 50), samples=True)
         out.load()
         assert [x.shape for x in recipe_loads] == [(40, 800)]
@@ -82,19 +93,23 @@ class TestSelect:
         assert lazy.select(time=(None, None)) is lazy
 
     def test_selections_compose(self, lazy, eager, recipe_loads):
-        """A window of a window reads the samples both keep."""
+        """
+        A window of a window reads the samples both keep.
+
+        A performance guard that keeps its spy, for the reason
+        `test_reads_only_the_window` gives.
+        """
         out = lazy.select(time=(100, 900), samples=True)
         out = out.select(time=(50, 60), samples=True)
         expected = eager.select(time=(150, 160), samples=True)
         assert np.array_equal(out.load().data, expected.data)
         assert [x.shape for x in recipe_loads] == [(300, 10)]
 
-    def test_values_refused(self, lazy, eager, recipe_loads):
+    def test_values_refused(self, gone, eager):
         """Picking out separate values is no window, so it is refused."""
         distance = eager.get_array("distance")
         with pytest.raises(LazyOperationError, match="select"):
-            lazy.select(distance=distance[1::2])
-        assert not recipe_loads
+            gone.select(distance=distance[1::2])
 
     def test_empty(self, lazy, eager):
         """A selection which keeps nothing loads as an empty array."""
@@ -106,9 +121,9 @@ class TestSelect:
 class TestReadSchedule:
     """What is read is known before anything is read."""
 
-    def test_filter_after_select_stays_in_the_window(self, lazy, recipe_loads):
+    def test_filter_after_select_stays_in_the_window(self, gone):
         """A halo never reaches into what an earlier selection dropped."""
-        out = lazy.select(time=(100, 900), samples=True)
+        out = gone.select(time=(100, 900), samples=True)
         out = out.median_filter(time=5, samples=True).data
         whole, inner = (slice(0, 300), slice(0, 800)), (slice(0, 300), slice(50, 60))
         found = read_schedule(out, [whole, inner])
@@ -117,10 +132,14 @@ class TestReadSchedule:
             (slice(0, 300), slice(100, 900)),
             (slice(0, 300), slice(148, 162)),
         ]
-        assert not recipe_loads
 
     def test_select_after_filter_reads_only_its_reach(self, lazy, eager, recipe_loads):
-        """A selection made after a filter still narrows what is read."""
+        """
+        A selection made after a filter still narrows what is read.
+
+        A performance guard that keeps its spy, for the reason
+        `TestSelect.test_reads_only_the_window` gives.
+        """
         out = lazy.median_filter(time=5, samples=True)
         out = out.select(time=(100, 900), samples=True)
         expected = eager.median_filter(time=5, samples=True)
@@ -236,7 +255,13 @@ class TestLoad:
 
     @pytest.mark.parametrize("rows", (0, 60, 3))
     def test_any_block_size(self, lazy, eager, recipe_loads, rows):
-        """The result and its id do not depend on how the work was cut."""
+        """
+        The result and its id do not depend on how the work was cut.
+
+        Keeps its spy: the reads counted show the work was cut at all, and
+        a load in one piece gives the same result, so they are the only
+        witness.
+        """
         out, expected = self._run(lazy), self._run(eager)
         with config_context(lazy_block_size=rows * ROW):
             loaded = out.load()
@@ -361,20 +386,19 @@ class TestWindowed:
         assert np.array_equal(loaded.data, expected.data)
 
     @pytest.mark.parametrize("name, args", (("abs", ()), ("set_units", ("m",))))
-    def test_bad_blend_refused_before_reading(self, lazy, recipe_loads, name, args):
+    def test_bad_blend_refused_before_reading(self, gone, name, args):
         """A taper whose ramps would cross is refused when it is called."""
-        window = lazy.window(time=64, overlap=48, samples=True)
+        window = gone.window(time=64, overlap=48, samples=True)
         # Whether or not the operation computes anything to blend.
         with pytest.raises(ParameterError, match="ramps would cross"):
             getattr(window, name)(*args)
-        assert not recipe_loads
 
-    def test_declaring_is_quiet(self, lazy, recipe_loads):
+    def test_declaring_is_quiet(self, gone):
         """The window of zeros run to find the dtype raises no warning."""
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            out = lazy.window(time=64, samples=True).standardize("time")
-        assert out.dtype == np.float64 and not recipe_loads
+            out = gone.window(time=64, samples=True).standardize("time")
+        assert out.dtype == np.float64
 
     def test_metadata_only_adds_no_step(self, lazy):
         """An operation with no kernel leaves the lazy array as it was."""
@@ -410,11 +434,10 @@ class TestWindowed:
             expected = eager.savgol_filter(**call)
         assert out.dtype == expected.dtype
 
-    def test_reduction_still_refused(self, lazy, recipe_loads):
+    def test_reduction_still_refused(self, gone):
         """A reduction in a window states no contract yet."""
         with pytest.raises(LazyOperationError):
-            lazy.window(time=64, samples=True).mean()
-        assert not recipe_loads
+            gone.window(time=64, samples=True).mean()
 
 
 class TestFilterArguments:
@@ -464,11 +487,10 @@ class TestFilterArguments:
         self._same(lazy.gaussian_filter(**kwargs), eager.gaussian_filter(**kwargs))
 
     @pytest.mark.parametrize("mode", (("wrap", "reflect"), ["wrap", "reflect"]))
-    def test_mode_for_each_axis_refused(self, lazy, recipe_loads, mode):
+    def test_mode_for_each_axis_refused(self, gone, mode):
         """A mode given axis by axis is not worked out, so it is refused."""
         with pytest.raises(LazyOperationError, match="gaussian_filter"):
-            lazy.gaussian_filter(time=2, distance=2, samples=True, mode=mode)
-        assert not recipe_loads
+            gone.gaussian_filter(time=2, distance=2, samples=True, mode=mode)
 
 
 class Demean(dc.PatchProcessor):
@@ -540,8 +562,7 @@ class TestQueries:
         plan = {"indexer": (slice(0, 10, 2), slice(None))}
         assert Select().chunk_contract(np.dtype("f8"), plan) is None
 
-    def test_unselect_refused(self, lazy, recipe_loads):
+    def test_unselect_refused(self, gone):
         """What unselect keeps is spelled as positions, so it is refused."""
         with pytest.raises(LazyOperationError, match="unselect"):
-            lazy.unselect(time=(0, 100), samples=True)
-        assert not recipe_loads
+            gone.unselect(time=(0, 100), samples=True)

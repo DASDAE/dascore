@@ -31,6 +31,7 @@ from tests.test_lazy.conftest import (
     rebuilt,
     stored,
     stored_files,
+    unreadable,
 )
 
 
@@ -122,12 +123,14 @@ class TestDescription:
         """The repr says the shape, dtype and how many members there are."""
         assert "shape" in repr(lazy) and "members" in repr(lazy)
 
-    def test_nothing_read(self, joined, reads):
+    def test_nothing_read(self, two_files, tmp_path):
         """Building, slicing, joining and naming an array open no file."""
+        # Copies of the two files, deleted since: opening one would raise.
+        copies = [unreadable(dc.read(x)[0], tmp_path, x.stem) for x in two_files]
+        joined = Recipe.from_sources([x._source._without_layout() for x in copies])
         array = concat([joined[0:50], joined[50:601]], axis=0)
         assert array.data_id and array[10:20].shape == (10, 1001)
         assert array.to_frame() is not None
-        assert not reads
 
     def test_empty_slice_keeps_header(self, lazy):
         """A slice which selects nothing is still an array of its own."""
@@ -506,7 +509,13 @@ class TestViews:
             view.data_id
 
     def test_clips_only_candidates(self, monkeypatch):
-        """Resolving a view clips only the members its window can touch."""
+        """
+        Resolving a view clips only the members its window can touch.
+
+        A performance guard that keeps its spy: clipping every member gives
+        the same view, only slowly, so the sizes clipped are its only
+        witness.
+        """
         array = concat([constant((4, 3), float(x)) for x in range(100)])
         sizes = []
         clip = recipe_module._clip
@@ -521,7 +530,12 @@ class TestViews:
         assert sizes == [3, 100, 1, 1]
 
     def test_resolves_once(self, monkeypatch, joined):
-        """A view clips its members once, however often they are asked for."""
+        """
+        A view clips its members once, however often they are asked for.
+
+        A performance guard that keeps its spy: clipping again gives the
+        same members, only slowly, so the count is its only witness.
+        """
         calls = []
         clip = recipe_module._clip
         monkeypatch.setattr(
@@ -581,10 +595,17 @@ class TestViews:
         sys.platform == "emscripten", reason="emscripten does not support threads"
     )
     def test_threads_share_one_table(self, monkeypatch):
-        """Threads resolving one view at once all get the one table."""
+        """
+        Threads resolving one view at once all get the one table.
+
+        A guard that keeps its spy: threads which each clip the view and
+        publish one winner also agree on the table, so the count of clips is
+        the only witness that the work is shared.
+        """
         clip, calls = recipe_module._clip, []
 
         def slow(*args):
+            # Slowed, so every thread asks before the first one is done.
             calls.append(1)
             time.sleep(0.05)
             return clip(*args)
@@ -960,7 +981,15 @@ class TestSources:
 
 
 class TestLoad:
-    """Loading reads each member and puts it in its box."""
+    """
+    Loading reads each member and puts it in its box.
+
+    The tests which record handles and reads are performance guards that
+    keep their spies: opening a file again for each member, or reading a
+    member twice, gives the same array, only slowly, so the counts are
+    their only witness. The failure tests follow the one handle opened, as
+    a leaked handle is otherwise freed with the traceback, unseen.
+    """
 
     def test_many_files(self, joined, patch, reads):
         """Each member is read once, through its own source."""

@@ -682,7 +682,14 @@ class TestIdentity:
 
 
 class TestCutAxes:
-    """An id costs what the cuts did, not how many axes the array has."""
+    """
+    An id costs what the cuts did, not how many axes the array has.
+
+    Performance guards that keep their spy: an axis expanded though no
+    member was cut on it gives the same id at twice the cost, so the axes
+    recorded are the only witness. Expanding every axis of an array of
+    thirty would be refused, as more than `MAX_CUT_AXES`; one more would not.
+    """
 
     def test_a_high_dimensional_constant(self, expanded):
         """A constant of thirty axes is named without expanding one."""

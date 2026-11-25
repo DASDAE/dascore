@@ -42,25 +42,22 @@ from dascore.warnings import DASCoreWarning
 class TestUnitInit:
     """Ensure units can be initialized."""
 
-    def test_stale_pint_cache_falls_back(self, monkeypatch):
+    def test_stale_pint_cache_falls_back(self, monkeypatch, tmp_path):
         """Stale Pint disk cache should not prevent registry creation."""
 
         class FakeRegistry:
             pass
 
-        cache_folders = []
-        removed_paths = []
-        cache_path = "pint-cache"
+        cache_path = tmp_path / "pint-cache"
+        (cache_path / "stale").mkdir(parents=True)
         fake_registry = FakeRegistry()
 
-        def unit_registry(*args, **kwargs):
-            cache_folders.append(kwargs.get("cache_folder"))
-            if len(cache_folders) == 1 and kwargs.get("cache_folder") == ":auto:":
+        def unit_registry(*, cache_folder):
+            """A registry which cannot load while the stale cache is there."""
+            assert cache_folder == ":auto:"
+            if cache_path.exists():
                 raise FileNotFoundError("stale pint cache")
             return fake_registry
-
-        def rmtree(path, ignore_errors):
-            removed_paths.append((path, ignore_errors))
 
         monkeypatch.setattr(units.pint, "UnitRegistry", unit_registry)
         monkeypatch.setattr(
@@ -68,12 +65,10 @@ class TestUnitInit:
             "user_cache_path",
             lambda appname, appauthor: cache_path,
         )
-        monkeypatch.setattr(units.shutil, "rmtree", rmtree)
 
         registry = units._get_unit_registry()
 
-        assert cache_folders == [":auto:", ":auto:"]
-        assert removed_paths == [(cache_path, True)]
+        assert not cache_path.exists()
         assert registry is fake_registry
 
     def test_time(self):

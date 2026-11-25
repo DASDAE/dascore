@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 import shutil
 
 import h5py
@@ -303,17 +304,26 @@ class TestOffsetReads:
     """A PRODML array's chunks are read from their offsets, gaps and all."""
 
     @needs_chunk_iter
-    def test_windows_equal_hdf5(self, stored_reads):
-        """Windows across separated chunks equal h5py's, with no HDF5 open."""
-        path = fetch("prodml_2.1.h5")
+    def test_windows_equal_hdf5(self, tmp_path):
+        """
+        Windows across separated chunks equal h5py's, with no HDF5 open, so
+        they load from a file h5py can no longer open.
+        """
+        path = shutil.copy(fetch("prodml_2.1.h5"), tmp_path / "prodml.h5")
         source = dc.read(path)[0]._source
         offsets = source.offsets
         assert any(b - a != 1024 * 512 * 2 for a, b in itertools.pairwise(offsets))
+        windows = [(slice(None),), (slice(1000, 3100),), (slice(11999, None),)]
         with h5py.File(path, "r") as h5:
             node = h5["Acquisition/Raw[0]/RawData"]
-            for window in [(slice(None),), (slice(1000, 3100),), (slice(11999, None),)]:
-                np.testing.assert_array_equal(source[window].load(), node[window])
-        assert not stored_reads
+            expected = [node[window] for window in windows]
+        # Overwrite the HDF5 signature, keeping the file's size and mtime.
+        stat = os.stat(path)
+        with open(path, "r+b") as handle:
+            handle.write(bytes(8))
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        for window, values in zip(windows, expected, strict=True):
+            np.testing.assert_array_equal(source[window].load(), values)
 
 
 def _write_variant(path, patch, rows=None, ns_times=False, rate=None):

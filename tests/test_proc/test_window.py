@@ -215,7 +215,13 @@ class TestReduce:
             patch.window(time=3, samples=True).reduce("var")
 
     def test_fast_engine_is_taken(self, patch, monkeypatch):
-        """A long window named by a string goes to pandas; arguments keep it out."""
+        """
+        A long window named by a string goes to pandas; arguments keep it out.
+
+        A performance guard that keeps its spy: NumPy's reduction gives the
+        same values, only slower, and no input that fits in memory makes it
+        unaffordable, so the calls are its only witness.
+        """
         calls = []
 
         def counted(*args, **kwargs):
@@ -1587,7 +1593,12 @@ class TestPositionFree:
             window.slope_filter(filt=(2e3, 2.2e3, 8e3, 2e4))
 
     def test_many_windows(self, monkeypatch):
-        """A declared operation is one plan, whatever the number of windows."""
+        """
+        A declared operation is one plan, whatever the number of windows.
+
+        A performance guard that keeps its spy: a plan per window gives the
+        same values, only slower, so the count of plans is its only witness.
+        """
         coords = {"distance": np.arange(2.0), "time": np.arange(30_000.0)}
         patch = dc.Patch(np.ones((2, 30_000)), coords, ("distance", "time"))
         planned = []
@@ -1758,20 +1769,15 @@ class TestOtherBackends:
         assert backend_name(out.data) == library and values.dtype == expected.dtype
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-5)
 
-    def test_operation_without_the_library(self, patch, library, monkeypatch):
+    def test_operation_without_the_library(self, patch, library):
         """
         An operation with no implementation for the library still runs.
 
         On dask each chunk is blended on the library it is held in when
         it is computed: NumPy here, so nothing is converted or said. On
         another library the array is converted once, for the whole of it,
-        and the warning names the operation.
+        and the warning names the operation: said once for each conversion.
         """
-        calls = []
-        original = processor_module.to_numpy
-        monkeypatch.setattr(
-            processor_module, "to_numpy", lambda x: calls.append(1) or original(x)
-        )
         expected = patch.window(time=100, samples=True).detrend("time")
         there = _on(patch, library)
         with warnings.catch_warnings(record=True) as caught:
@@ -1779,10 +1785,10 @@ class TestOtherBackends:
             out = there.window(time=100, samples=True).detrend("time")
         said = [str(x.message) for x in caught if x.category is NumpyFallbackWarning]
         if library == "dask":
-            assert not calls and not said
+            assert not said
         else:
             # Once, not once for each of the 39 windows.
-            assert len(calls) == 1 and len(said) == 1 and "detrend has no" in said[0]
+            assert len(said) == 1 and "detrend has no" in said[0]
         assert backend_name(out.data) == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
 
@@ -1854,7 +1860,13 @@ class TestOtherBackends:
         np.testing.assert_array_equal(_values(out), expected.data)
 
     def test_dask_pieces(self, patch, library, monkeypatch):
-        """Short chunks are joined along a windowed axis; tasks take turns."""
+        """
+        Short chunks are joined along a windowed axis; tasks take turns.
+
+        A guard that keeps its spy: blending in more pieces, or without
+        the turn, gives the same values, so the blends are its only
+        witness.
+        """
         if library != "dask":
             pytest.skip("only dask computes in pieces")
         dask_array = pytest.importorskip("dask.array")

@@ -566,25 +566,21 @@ class TestGetHandleFromResource:
             assert "data" in handle
             assert "missing" not in handle
 
-    def test_h5_writer_remote_cleans_up_after_open_failure(self, monkeypatch):
+    def test_h5_writer_remote_cleans_up_after_open_failure(self, monkeypatch, tmp_path):
         """A failed local open removes the temp file and raises."""
-        created = []
-        real_mkstemp = hdf5_module.tempfile.mkstemp
-
-        def _tracking_mkstemp(*args, **kwargs):
-            file_descriptor, name = real_mkstemp(*args, **kwargs)
-            created.append(Path(name))
-            return file_descriptor, name
+        temp_dir = tmp_path / "temp"
+        temp_dir.mkdir()
 
         def _raise(*args, **kwargs):
+            assert any(temp_dir.iterdir())  # the open fails on a made temp file
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(hdf5_module.tempfile, "mkstemp", _tracking_mkstemp)
+        monkeypatch.setattr(hdf5_module.tempfile, "tempdir", str(temp_dir))
         monkeypatch.setattr(hdf5_module, "H5pyFile", _raise)
         path = UPath("memory://dascore/upath-write-open-failure.h5")
         with pytest.raises(RuntimeError, match="boom"):
             H5Writer.get_handle(path)
-        assert created and not created[0].exists()
+        assert not any(temp_dir.iterdir())
 
     def test_h5_writer_remote_abort_is_idempotent(self):
         """Remote writer aborts should be safe to call more than once."""
@@ -1560,7 +1556,13 @@ class TestRemoteCacheConcurrency:
 
     @pytest.mark.concurrency
     def test_racing_callers_download_once(self, monkeypatch, run_in_threads):
-        """Callers wanting one resource agree on the path and download it once."""
+        """
+        Callers wanting one resource agree on the path and download it once.
+
+        A performance guard that keeps its spy: racing downloads publish the
+        same file, only slower, so the count of downloads is its only
+        witness.
+        """
         resource = self._memory_file("shared.bin")
         downloads = []
         original = remote_io._download_remote_file
@@ -1592,22 +1594,28 @@ class TestRemoteCacheConcurrency:
         assert all(x is not None and x.exists() for x in results)
 
     def test_failed_download_is_retried(self, monkeypatch):
-        """A failed download publishes nothing, so the next caller retries."""
+        """
+        A failed download publishes nothing, so the next caller retries and
+        gets the whole file rather than what the failure left behind.
+        """
         resource = self._memory_file("flaky.bin")
-        calls = []
+        failed = False
         original = remote_io._download_remote_file
 
         def _fail_once(path, local_path):
-            calls.append(local_path)
-            if len(calls) == 1:
-                raise OSError("download failed")
-            return original(path, local_path)
+            """The first download leaves part of the file, then fails."""
+            nonlocal failed
+            if failed:
+                return original(path, local_path)
+            failed = True
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(b"partial")
+            raise OSError("download failed")
 
         monkeypatch.setattr(remote_io, "_download_remote_file", _fail_once)
         with pytest.raises(OSError, match="download failed"):
             ensure_local_file(resource)
-        assert ensure_local_file(resource).exists()
-        assert len(calls) == 2
+        assert ensure_local_file(resource).read_bytes() == resource.read_bytes()
 
     def test_unregistered_remote_id_is_coerced(self):
         """An id missing from the resource cache is rebuilt from the id itself."""

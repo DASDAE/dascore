@@ -1361,7 +1361,13 @@ class TestEnrichContracts:
         assert history[0].startswith("enrich(")
 
     def test_enrich_encodes_the_inventory_once(self, patch, monkeypatch):
-        """Enriching many patches walks the immutable inventory once."""
+        """
+        Enriching many patches walks the immutable inventory once.
+
+        A performance guard that keeps its spy: walking the inventory again
+        gives the same id, only slower, so the count of walks is its only
+        witness.
+        """
         inventory = inventory_patch_pair()[1]
         walked = []
 

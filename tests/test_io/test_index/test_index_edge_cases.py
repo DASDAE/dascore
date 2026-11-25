@@ -484,53 +484,51 @@ class TestAdaptAndBackendBasics:
 
     @pytest.mark.parametrize("operation", ["write", "delete"])
     def test_commit_failure_rolls_back(self, tmp_path, monkeypatch, operation):
-        """Write and delete commit failures both release their transaction."""
+        """
+        Write and delete commit failures both release their transaction, so
+        the index is unchanged and the next write can begin its own.
+        """
         back = get_backend(tmp_path / f"{operation}.sqlite3")
         records = summaries_to_records(make_summaries())
         initial = records[:1] if operation == "write" else records
         back.write_sources(initial)
         before = len(back.query())
-        original_rollback = back._rollback
-        rolled_back = []
-
-        def rollback():
-            rolled_back.append(True)
-            original_rollback()
 
         def commit_failure():
             raise RuntimeError("simulated commit failure")
 
-        monkeypatch.setattr(back, "_rollback", rollback)
         monkeypatch.setattr(back, "_commit", commit_failure)
         with pytest.raises(RuntimeError, match="commit failure"):
             if operation == "write":
                 back.write_sources(records[1:2])
             else:
                 back.delete_sources([records[0].source_path])
-        assert rolled_back
         assert len(back.query()) == before
+        monkeypatch.undo()
+        back.write_sources(records[1:2])
+        assert len(back.query()) == len(
+            records[:2] if operation == "write" else records
+        )
         back.close()
 
     def test_marker_commit_failure_rolls_back(self, tmp_path, monkeypatch):
-        """A marker commit failure restores the initial metadata value."""
+        """
+        A marker commit failure restores the initial metadata value, and
+        releases its transaction for the next write.
+        """
         back = get_backend(tmp_path / "marker.sqlite3")
         before = back.get_metadata()["last_indexed_ns"]
-        original_rollback = back._rollback
-        rolled_back = []
-
-        def rollback():
-            rolled_back.append(True)
-            original_rollback()
 
         def commit_failure():
             raise RuntimeError("simulated commit failure")
 
-        monkeypatch.setattr(back, "_rollback", rollback)
         monkeypatch.setattr(back, "_commit", commit_failure)
         with pytest.raises(RuntimeError, match="commit failure"):
             back.mark_initial_update_done()
-        assert rolled_back
         assert back.get_metadata()["last_indexed_ns"] == before
+        monkeypatch.undo()
+        back.mark_initial_update_done()
+        assert back.get_metadata()["last_indexed_ns"] != before
         back.close()
 
     def test_delete_failure_rolls_back(self, tmp_path, monkeypatch):

@@ -228,7 +228,13 @@ class TestPatchFunction:
         assert out.attrs.data_type == ""
 
     def test_data_type_and_history_use_one_attr_update(self, random_patch, monkeypatch):
-        """Ensure decorator-managed attrs are updated together."""
+        """
+        Ensure decorator-managed attrs are updated together.
+
+        A performance guard that keeps its spy: a second attrs update gives
+        the same attrs, only slower, so the count of updates is its only
+        witness.
+        """
         update_count = 0
         original_update_attrs = dc.Patch.update_attrs
 

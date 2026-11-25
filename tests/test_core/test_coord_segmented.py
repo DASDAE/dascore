@@ -23,6 +23,10 @@ from dascore.exceptions import CoordError, ParameterError
 from dascore.units import get_quantity
 from dascore.warnings import DASCoreWarning
 
+# More samples than the address space can hold as labels: expanding such a
+# grid fails at once, as 7 PiB on 64-bit or 8 GiB on 32-bit WebAssembly.
+HUGE = 10**15 if np.intp(0).itemsize == 8 else 1_000_000_007
+
 
 @pytest.fixture(scope="session")
 def float_gap_coord() -> NumericCoord:
@@ -474,7 +478,13 @@ class TestSegmentLimit:
         np.testing.assert_array_equal(dropped.data, patch.data[mask])
 
     def test_no_object_per_stretch(self, monkeypatch):
-        """A heavy mask builds no grid per stretch it leaves."""
+        """
+        A heavy mask builds no grid per stretch it leaves.
+
+        A performance guard that keeps its spy: a grid per stretch gives the
+        same coordinate, only slowly, so the count of grids is its only
+        witness.
+        """
         patch, mask = _pairs_patch(10_000)
         made = []
         original = Grid.__post_init__
@@ -958,26 +968,21 @@ class TestReviewFindings:
         with pytest.raises(Exception, match=r"(?i)cannot convert|units of time"):
             time_gap_coord.get_discontinuities("gaps", get_quantity("1 m"))
 
-    def test_select_never_materializes(self, monkeypatch):
+    def test_select_never_materializes(self):
         """Value selection must stay O(segments): no full-array pass.
 
         Locks in the second-review performance finding: range selects on a
-        20M-sample segmented coord must not touch the concatenated values.
+        segmented coord must not touch the concatenated values, here more
+        than the address space can hold.
         """
-        c1 = get_coord(start=0.0, stop=1e7, step=1.0)
-        c2 = get_coord(start=2e7, stop=3e7, step=1.0)
+        c1 = get_coord(start=0.0, stop=float(HUGE), step=1.0)
+        c2 = get_coord(start=2.0 * HUGE, stop=2.0 * HUGE + 1e6, step=1.0)
         coord = concat_coords(c1, c2)
-
-        def _boom(self):
-            msg = "select must not materialize concatenated values"
-            raise AssertionError(msg)
-
-        monkeypatch.setattr(NumericCoord, "values", property(_boom))
-        out, indexer = coord.select((5.0, 2.5e7))
+        out, indexer = coord.select((5.0, 2.0 * HUGE + 1e3))
         assert isinstance(indexer, slice)
-        assert out.min() == 5.0 and out.max() == 2.5e7
+        assert out.min() == 5.0 and out.max() == 2.0 * HUGE + 1e3
         # empty, full, and relative selects also stay off the values path.
-        empty, _ = coord.select((1.2e7, 1.8e7))
+        empty, _ = coord.select((HUGE + 10.0, 2.0 * HUGE - 10.0))
         assert len(empty) == 0
         full, _ = coord.select(None)
         assert len(full) == len(coord)

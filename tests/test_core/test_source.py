@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pickle
+import shutil
 from dataclasses import replace
 
 import h5py
@@ -17,7 +18,6 @@ from dascore.exceptions import (
     ParameterError,
     PatchAttributeError,
 )
-from dascore.io import core as io_core
 from dascore.utils.downloader import fetch
 
 
@@ -42,14 +42,13 @@ def source(patch):
 
 
 @pytest.fixture()
-def reads(monkeypatch):
-    """Count the arrays the loader reads."""
-    calls = []
-    original = io_core._load_array_source
-    monkeypatch.setattr(
-        io_core, "_load_array_source", lambda x: calls.append(x) or original(x)
-    )
-    return calls
+def gone(path, tmp_path):
+    """The source of a copy of the file, deleted since, so any read raises."""
+    copy = tmp_path / "gone.h5"
+    shutil.copyfile(path, copy)
+    out = dc.read(copy, snap=False)[0]._source
+    copy.unlink()
+    return out
 
 
 class TestDescription:
@@ -78,11 +77,12 @@ class TestDescription:
 class TestLoad:
     """Loading gives exactly the described array."""
 
-    def test_load(self, source, patch, reads):
+    def test_load(self, source, patch):
         """The whole array loads, and numpy can ask for it."""
         assert np.array_equal(source.load(), patch.data)
         out = np.asarray(source, dtype=np.float32)
-        assert out.dtype == np.float32 and len(reads) == 2
+        assert out.dtype == np.float32
+        assert np.array_equal(out, patch.data.astype(np.float32))
 
     def test_stale_description(self, source):
         """An array which is not the one described is refused."""
@@ -112,11 +112,12 @@ class TestLoad:
 class TestSlicing:
     """Slicing composes windows and reads nothing."""
 
-    def test_lazy(self, source, patch, reads):
+    def test_lazy(self, gone, path, patch):
         """Slices compose, and only `load` touches the file."""
-        sub = source[10:20, 5:][2:4]
+        # The file is gone while slicing, so a slice which read would raise.
+        sub = gone[10:20, 5:][2:4]
         assert sub.windows == ((12, 14), (5, patch.shape[1]))
-        assert not reads
+        shutil.copyfile(path, gone.path)
         assert np.array_equal(sub.load(), patch.data[12:14, 5:])
 
     def test_negative_and_open(self, source, patch):
@@ -241,13 +242,13 @@ class TestConstant:
         """A two dimensional block of NaN."""
         return ArraySource.full((2, 3), np.nan)
 
-    def test_full(self, nans, reads):
+    def test_full(self, nans):
         """A constant loads without a path, and gives what `np.full` would."""
         assert nans.filled and nans.loadable and not nans.path
         expected = np.full((2, 3), np.nan)
         assert np.array_equal(nans.load(), expected, equal_nan=True)
+        # With no path or format, reading a file for it would raise.
         assert np.asarray(nans).shape == (2, 3)
-        assert not reads
 
     def test_dtype_and_value(self):
         """The dtype follows the value, and the value is a plain scalar."""
@@ -260,11 +261,11 @@ class TestConstant:
         assert type(source.value) is float
         assert source == ArraySource.full((3,), 2.0, dtype="float32")
 
-    def test_slice(self, nans, reads):
+    def test_slice(self, nans):
         """Slicing gives a smaller constant, still without reading."""
         sub = nans[1:, :2]
         assert sub.filled and sub.load().shape == (1, 2)
-        assert np.isnan(sub.load()).all() and not reads
+        assert np.isnan(sub.load()).all()
 
     @pytest.mark.parametrize(
         ("value", "dtype", "match"),

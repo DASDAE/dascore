@@ -55,7 +55,12 @@ class TestBoundedMetadata:
     @pytest.mark.parametrize("index", [0, 5, -1, -12])
     @pytest.mark.parametrize("order", ["original", "sorted", "reordered"])
     def test_item_projects_one_row(self, indexed_spool, index, order):
-        """Integer reads preserve ordering while decoding only their metadata row."""
+        """
+        Integer reads preserve ordering while decoding only their metadata row.
+
+        A performance guard that keeps its spy: projecting every row gives the
+        same patch, only slowly, so the rows projected are its only witness.
+        """
         spool = indexed_spool
         if order == "sorted":
             spool = spool.sort("time")
@@ -80,7 +85,12 @@ class TestBoundedMetadata:
             indexed_spool[index]
 
     def test_cached_item_reuses_frame(self, indexed_spool):
-        """An already realized relation still serves repeated access without SQL."""
+        """
+        An already realized relation still serves repeated access without SQL.
+
+        A performance guard that keeps its spy: querying again gives the same
+        patch, only slowly, so the call count is its only witness.
+        """
         catalog = indexed_spool._catalog
         catalog.to_df()
         with mock.patch.object(
@@ -92,7 +102,13 @@ class TestBoundedMetadata:
     @pytest.mark.parametrize("sorted_view", [False, True])
     @pytest.mark.parametrize("stride", [1, 3])
     def test_repeated_items_reuse_frame(self, indexed_spool, sorted_view, stride):
-        """Repeated positional reads pay for at most two metadata projections."""
+        """
+        Repeated positional reads pay for at most two metadata projections.
+
+        A performance guard that keeps its spy: projecting again for each read
+        gives the same patches, only slowly, so the rows projected are its only
+        witness.
+        """
         spool = indexed_spool.sort("time") if sorted_view else indexed_spool
         backend = spool._catalog.backend
         with mock.patch.object(
@@ -103,7 +119,12 @@ class TestBoundedMetadata:
         assert [len(call.args[0]) for call in pivot.call_args_list] == [1, 12]
 
     def test_items_after_revision(self, indexed_spool):
-        """A new catalog revision starts with a bounded read again."""
+        """
+        A new catalog revision starts with a bounded read again.
+
+        A performance guard that keeps its spy: projecting every row gives the
+        same patches, only slowly, so the rows projected are its only witness.
+        """
         catalog = indexed_spool._catalog
         backend = catalog.backend
         with mock.patch.object(
@@ -116,7 +137,13 @@ class TestBoundedMetadata:
         assert [len(call.args[0]) for call in pivot.call_args_list] == [1, 12, 1]
 
     def test_slice_returns_only_requested_ids(self, indexed_spool):
-        """A forward slice returns bounded membership without projecting metadata."""
+        """
+        A forward slice returns bounded membership without projecting metadata.
+
+        A performance guard that keeps its spies: fetching every row and slicing
+        in Python gives the same membership, only slowly, so the SQL sent is its
+        only witness.
+        """
         backend = indexed_spool._catalog.backend
         with mock.patch.object(backend, "_fetch_df", wraps=backend._fetch_df) as fetch:
             with mock.patch.object(
@@ -187,7 +214,12 @@ class TestBoundedMetadata:
         assert catalog.backend.count(catalog._queries) == 3
 
     def test_regex_item_filters_once(self, indexed_spool):
-        """Regex extraction must not realize separate count and membership frames."""
+        """
+        Regex extraction must not realize separate count and membership frames.
+
+        A performance guard that keeps its spy: projecting twice gives the same
+        patch, only slowly, so the call count is its only witness.
+        """
         spool = indexed_spool.select(tag=re.compile("patch-0[579]"))
         backend = spool._catalog.backend
         with mock.patch.object(
@@ -210,7 +242,13 @@ class TestBoundedMetadata:
         assert len(unitless_selection) == 2
 
     def test_unitful_count_stays_in_sql(self):
-        """A count over known compatible units does not project matching rows."""
+        """
+        A count over known compatible units does not project matching rows.
+
+        A performance guard that keeps its spy: projecting the matching rows
+        gives the same count, only slowly, so the call count is its only
+        witness.
+        """
         patches = [
             dc.Patch(
                 data=np.arange(4), coords={"distance": np.arange(4)}, dims=("distance",)
@@ -227,7 +265,13 @@ class TestBoundedMetadata:
         spool._catalog.close()
 
     def test_mixed_unit_count_stays_in_sql(self):
-        """Steps in other units do not make a wide range look narrow (#1703)."""
+        """
+        Steps in other units do not make a wide range look narrow (#1703).
+
+        A performance guard that keeps its spy: projecting the matching rows
+        gives the same count, only slowly, so the call count is its only
+        witness.
+        """
         coords = [
             get_coord(start=0, step=1, shape=(400,), units="m"),
             get_coord(start=0, step=1000, shape=(400,), units="mm"),
@@ -249,7 +293,12 @@ class TestBoundedMetadata:
         assert [patch.attrs.tag for patch in selected] == ["10", "11"]
 
     def test_positive_index_needs_no_count(self, indexed_spool):
-        """Nonnegative extraction detects bounds from its limited result."""
+        """
+        Nonnegative extraction detects bounds from its limited result.
+
+        A performance guard that keeps its spy: counting first gives the same
+        patch, only slowly, so the call count is its only witness.
+        """
         backend = indexed_spool._catalog.backend
         with mock.patch.object(backend, "count", wraps=backend.count) as count:
             assert indexed_spool[0].attrs.tag == "patch-00"
@@ -264,7 +313,12 @@ class TestBoundedMetadata:
         assert patch.shape == (2,)
 
     def test_chained_absolute_bounds(self, indexed_spool):
-        """Composing ordinary absolute ranges keeps the first read bounded."""
+        """
+        Composing ordinary absolute ranges keeps the first read bounded.
+
+        A performance guard that keeps its spy: projecting every row gives the
+        same patch, only slowly, so the rows projected are its only witness.
+        """
         start = np.datetime64("2024-01-01T00:00:11", "ns")
         spool = indexed_spool.select(time=(start, None)).select(
             time=(None, start + np.timedelta64(40, "s"))
@@ -291,7 +345,12 @@ class TestSplitMembership:
 
     @pytest.mark.parametrize("options", [{"size": 2}, {"count": 6}])
     def test_one_membership_fetch(self, indexed_spool, options):
-        """The number of full membership queries does not grow with batches."""
+        """
+        The number of full membership queries does not grow with batches.
+
+        A performance guard that keeps its spy: a query per batch gives the same
+        parts, only slowly, so the call count is its only witness.
+        """
         backend = indexed_spool._catalog.backend
         with mock.patch.object(
             backend, "query_rows", wraps=backend.query_rows

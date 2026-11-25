@@ -94,7 +94,13 @@ class TestSpoolIterate:
 
     @pytest.mark.parametrize("limit", [0, 2])
     def test_call_time_config(self, monkeypatch, limit):
-        """Threads capture call-time config; zero follows ordinary iteration."""
+        """
+        Threads capture call-time config; zero follows ordinary iteration.
+
+        A concurrency test that keeps its spy: a patch of a memory spool
+        carries nothing of the config it was loaded under, so what each
+        load saw is its only witness.
+        """
         spool = dc.get_example_spool(length=3, shape=(2, 5))
         seen = []
         original = dc.Spool.__iter__
@@ -129,7 +135,12 @@ class TestSpoolIterate:
 
     @pytest.mark.parametrize("limit", [1, 2, np.int64(3)])
     def test_overlap_and_bound(self, monkeypatch, limit):
-        """Loading advances during consumer work, then stops at its bound."""
+        """
+        Loading advances during consumer work, then stops at its bound.
+
+        A concurrency test that keeps its spy: loading ahead, or past the
+        bound, yields the same patches, so the loads are its only witness.
+        """
         original = dc.Spool.__iter__
         full, overflow, closed = threading.Event(), threading.Event(), threading.Event()
         worker_ids = []
@@ -167,7 +178,12 @@ class TestSpoolIterate:
         assert not any(t.ident == worker_ids[0] for t in threading.enumerate())
 
     def test_close_cancels_pending(self, monkeypatch):
-        """Closing waits for the active read without starting queued reads."""
+        """
+        Closing waits for the active read without starting queued reads.
+
+        A concurrency test that keeps its spy: a queued read started anyway
+        is never yielded, so the reads are its only witness.
+        """
         original = dc.Spool.__iter__
         running, release = threading.Event(), threading.Event()
         cancelled, closed = threading.Event(), threading.Event()
@@ -237,7 +253,11 @@ class TestSpoolIterate:
         assert closed.is_set()
 
     def test_skips_unresolvable(self, monkeypatch):
-        """Missing patches retain ordinary iteration's warning-and-skip policy."""
+        """
+        Missing patches retain ordinary iteration's warning-and-skip policy.
+
+        Fault injection: the count only picks the row which fails.
+        """
         spool = dc.get_example_spool(length=3, shape=(2, 5))
         spool.get_contents()
         original = spool._catalog.resolve_row

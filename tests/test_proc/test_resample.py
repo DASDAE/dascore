@@ -200,7 +200,13 @@ class TestDecimate:
             small_patch.decimate(distance=2)
 
     def test_scipy_decimation_gets_data(self, random_patch, monkeypatch):
-        """The scipy decimation helper receives the data, never the patch."""
+        """
+        The scipy decimation helper receives the data, never the patch.
+
+        An engine interface test that keeps its spy: scipy reads a patch
+        through its array interface, to the same values, so what the helper
+        is handed is its only witness.
+        """
         calls = []
 
         def decimate_spy(data, factor, ftype, axis):

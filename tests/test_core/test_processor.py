@@ -1843,17 +1843,13 @@ def lazy_patch():
 
 
 @pytest.fixture()
-def recipe_loads(monkeypatch):
-    """Record each recipe which is loaded, whatever loads it."""
-    calls = []
-    original = Recipe.load
-
-    def recorded(self):
-        calls.append(self)
-        return original(self)
-
-    monkeypatch.setattr(Recipe, "load", recorded)
-    return calls
+def unwritten(tmp_path):
+    """A lazy patch like `lazy_patch` of a file never written: reading it raises."""
+    path = tmp_path / "never_written.h5"
+    source = ArraySource(path=str(path), format="DASDAE", version="1")
+    recipe = Recipe.from_source(source.describe((4, 3), np.float64))
+    coords = {"distance": np.arange(4), "time": np.arange(3)}
+    return dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
 
 
 class TestLazyKernelFor:
@@ -1923,9 +1919,7 @@ class TestLazyKernelFor:
         assert Parent.kernel_for("lazy") is _parent
         assert Child.kernel_for("lazy") is lazy_kernel
 
-    def test_registered_kernel_only_is_not_metadata_only(
-        self, lazy_patch, recipe_loads
-    ):
+    def test_registered_kernel_only_is_not_metadata_only(self, unwritten):
         """A class whose kernel is registered for numpy alone still computes."""
 
         class Triple(PatchProcessor):
@@ -1941,8 +1935,7 @@ class TestLazyKernelFor:
         assert Triple.kernel_for("lazy") is lazy_kernel
         # No contract, so refused rather than handed back untouched.
         with pytest.raises(LazyOperationError, match="Triple cannot run"):
-            Triple()(lazy_patch)
-        assert not recipe_loads
+            Triple()(unwritten)
 
     def test_dask_is_unchanged(self):
         """Dask keeps the array api kernel and the numpy fallback."""
@@ -1962,18 +1955,17 @@ class TestLazyRefusal:
         ),
         ids=("seam", "array_api_kernel", "numpy_kernel", "filter"),
     )
-    def test_refused(self, lazy_patch, recipe_loads, run):
+    def test_refused(self, unwritten, run):
         """The error is the lazy one, and names a way out."""
         with pytest.raises(LazyOperationError, match=r"patch\.load\(\)"):
-            run(lazy_patch)
-        assert not recipe_loads
+            run(unwritten)
 
     def test_names_the_operation(self, lazy_patch):
         """The message says which operation was refused."""
         with pytest.raises(LazyOperationError, match=r"^normalize cannot run"):
             lazy_patch.normalize("time")
 
-    def test_any_contract_is_chained(self, lazy_patch, recipe_loads):
+    def test_any_contract_is_chained(self, unwritten):
         """A contract of the operation's own kind is chained like any other."""
 
         class Shifted(ChunkContract):
@@ -1988,11 +1980,10 @@ class TestLazyRefusal:
                 """A contract nothing in DASCore defines."""
                 return Shifted()
 
-        out = Own()(lazy_patch)
+        out = Own()(unwritten)
         assert isinstance(out.data.chain.last.contract, Shifted)
-        assert not recipe_loads
 
-    def test_reconcile_refused_before_it_runs(self, lazy_patch, recipe_loads):
+    def test_reconcile_refused_before_it_runs(self, unwritten):
         """A reconcile is given the kernel's result, so it never sees lazy data."""
 
         class Reading(SeamLazyScale):
@@ -2006,10 +1997,9 @@ class TestLazyRefusal:
                 return out
 
         with pytest.raises(LazyOperationError, match="Reading cannot run"):
-            Reading(factor=3)(lazy_patch)
-        assert not recipe_loads
+            Reading(factor=3)(unwritten)
 
-    def test_reconciled_patch_refused(self, lazy_patch, recipe_loads):
+    def test_reconciled_patch_refused(self, unwritten):
         """With a lazy kernel of its own, a reconcile returning a patch is refused."""
 
         class Reconciled(SeamLazyScale):
@@ -2027,8 +2017,7 @@ class TestLazyRefusal:
             return data._appended(Node(processor, plan))
 
         with pytest.raises(LazyOperationError, match="reconcile returns a patch"):
-            Reconciled()(lazy_patch)
-        assert not recipe_loads
+            Reconciled()(unwritten)
 
 
 class TestInheritedContract:
@@ -2066,17 +2055,15 @@ class TestInheritedContract:
 
     @pytest.mark.parametrize("make", ("_doubled_real", "_running_abs"))
     def test_overriding_kernel_drops_parents_contract(
-        self, lazy_patch, recipe_loads, make
+        self, lazy_patch, unwritten, make
     ):
         """The parent's contract describes the parent's kernel, so it is refused."""
         cls = getattr(self, make)()
         # The eager result is not the input: a lazy no-op would be wrong.
         eager = lazy_patch.load()
         assert not np.array_equal(cls()(eager).data, eager.data)
-        recipe_loads.clear()
         with pytest.raises(LazyOperationError, match=cls.__name__):
-            cls()(lazy_patch)
-        assert not recipe_loads
+            cls()(unwritten)
 
     def test_inherited_kernel_and_contract_kept(self, lazy_patch):
         """A subclass which changes neither keeps both."""
@@ -2108,12 +2095,11 @@ class TestInheritedContract:
 class TestLazyStep:
     """An operation with a contract appends a step and reads nothing."""
 
-    def test_pointwise_appends(self, lazy_patch, recipe_loads):
+    def test_pointwise_appends(self, unwritten):
         """The step is settled with what the patch says it holds."""
-        out = SeamLazyScale(factor=3)(lazy_patch)
-        assert not recipe_loads
+        out = SeamLazyScale(factor=3)(unwritten)
         assert backend_name(out.data) == "lazy"
-        assert out.data.recipe is lazy_patch.data.recipe
+        assert out.data.recipe is unwritten.data.recipe
         node = out.data.chain.last
         assert len(out.data.chain) == 1 and not node.pending
         assert node.processor == SeamLazyScale(factor=3)
@@ -2131,14 +2117,13 @@ class TestLazyStep:
         assert loaded.attrs == eager.attrs
         assert loaded.attrs.data_id == eager.attrs.data_id
 
-    def test_unchanged_is_a_no_op(self, lazy_patch, recipe_loads):
+    def test_unchanged_is_a_no_op(self, lazy_patch, unwritten):
         """The patch itself comes back, as it does eagerly."""
-        assert SeamLazyScale(factor=1)(lazy_patch) is lazy_patch
-        assert not recipe_loads
+        assert SeamLazyScale(factor=1)(unwritten) is unwritten
         eager = lazy_patch.load()
         assert SeamLazyScale(factor=1)(eager) is eager
 
-    def test_unchanged_data_new_metadata(self, lazy_patch, recipe_loads):
+    def test_unchanged_data_new_metadata(self, lazy_patch, unwritten):
         """Data handed back under new metadata keep the array, as eagerly."""
 
         class Relabel(PatchProcessor):
@@ -2158,20 +2143,20 @@ class TestLazyStep:
                 """Hand the data back."""
                 return data
 
+        unread = Relabel()(unwritten)
+        assert unread.data is unwritten.data
+        assert unread.attrs.tag == "relabelled"
         out = Relabel()(lazy_patch)
         assert out.data is lazy_patch.data
-        assert out.attrs.tag == "relabelled"
-        assert not recipe_loads
         eager = Relabel()(lazy_patch.load())
         assert out.attrs.data_id == eager.attrs.data_id != lazy_patch.attrs.data_id
 
-    def test_metadata_only_keeps_the_data(self, lazy_patch, recipe_loads):
+    def test_metadata_only_keeps_the_data(self, unwritten):
         """An operation with no kernel leaves the lazy array as it was."""
-        out = lazy_patch.update_attrs(station="here").rename_coords(time="t")
-        assert out.data is lazy_patch.data
+        out = unwritten.update_attrs(station="here").rename_coords(time="t")
+        assert out.data is unwritten.data
         assert out.attrs.station == "here"
         assert "t" in out.dims
-        assert not recipe_loads
 
     def test_undeclared_dtype_raises_at_load(self, lazy_patch):
         """A kernel whose result differs from its metadata is caught."""

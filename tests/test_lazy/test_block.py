@@ -85,7 +85,12 @@ class TestClipEnds:
 
     @pytest.mark.wasm_skip
     def test_matches_general_path(self, arrays, monkeypatch):
-        """Random windows, chains and transposes clip as the general path does."""
+        """
+        Random windows, chains and transposes clip as the general path does.
+
+        Keeps its spy: the fast path gives the general path's members, so
+        the calls counted are the only witness that it was taken.
+        """
         rng = np.random.default_rng(21)
         taken, clip_ends = [], block_module._clip_ends
         monkeypatch.setattr(

@@ -53,7 +53,13 @@ class TestH5Simple:
         return new_path
 
     def test_read_traverses_layout_once(self, h5simple_path, monkeypatch):
-        """Metadata and samples share one traversal of the HDF5 root nodes."""
+        """
+        Metadata and samples share one traversal of the HDF5 root nodes.
+
+        A performance guard that keeps its spy: a second traversal finds the
+        same nodes, only slower, so the count of traversals is its only
+        witness.
+        """
         original = h5py.Group.items
         calls = []
 
@@ -67,30 +73,30 @@ class TestH5Simple:
         assert patch.size
         assert len(calls) == 1
 
-    def test_bounded_read_only_loads_selected_samples(self, tmp_path, monkeypatch):
-        """The prepared reader slices storage before loading samples."""
+    def test_bounded_read_only_loads_selected_samples(self, tmp_path):
+        """
+        The prepared reader slices storage before loading samples, so only
+        the selected samples, each its own chunk, need to decode.
+        """
         path = tmp_path / "bounded.h5"
         data = np.arange(20_000).reshape(200, 100)
         with h5py.File(path, "w") as handle:
-            handle["raw"] = data
+            raw = handle.create_dataset(
+                "raw", data.shape, data.dtype, chunks=(1, 1), compression="gzip"
+            )
+            # Selected chunks skip the gzip filter; the rest fail to inflate.
+            for (row, col), value in np.ndenumerate(data):
+                if 2 <= row < 4 and 3 <= col < 5:
+                    raw.id.write_direct_chunk((row, col), value.tobytes(), 1)
+                else:
+                    raw.id.write_direct_chunk((row, col), b"not gzip")
             handle["time"] = np.arange(200, dtype=float)
             handle["distance"] = np.arange(100)
             handle.attrs["dims"] = "time,distance"
-        original = h5py.Dataset.__getitem__
-        reads = []
-
-        def getitem(dataset, selection):
-            result = original(dataset, selection)
-            if dataset.name == "/raw":
-                reads.append(np.asarray(result).size)
-            return result
-
-        monkeypatch.setattr(h5py.Dataset, "__getitem__", getitem)
         patch = dc.read(
             path, file_format="H5Simple", samples=True, time=(2, 4), distance=(3, 5)
         )[0]
         np.testing.assert_array_equal(patch.data, data[2:4, 3:5])
-        assert reads == [4]
 
     @pytest.fixture
     def isolated_registry(self, monkeypatch):
@@ -267,7 +273,13 @@ class TestH5Simple:
     def test_compatible_array_hook_is_kept(
         self, h5simple_path, source_registry, monkeypatch
     ):
-        """A subclass pairing its own array hook with its read_array keeps it."""
+        """
+        A subclass pairing its own array hook with its read_array keeps it.
+
+        A performance guard that keeps its spies: a hook prepared per window,
+        or a layout walked again, gives the same arrays, only slower, so the
+        calls are its only witness.
+        """
         prepared = []
 
         class Compatible(H5Simple):
@@ -298,7 +310,13 @@ class TestH5Simple:
         assert prepared == [""] and not traversals
 
     def test_subclass_keeps_prepared_read(self, h5simple_path, monkeypatch):
-        """A subclass which overrides nothing still reuses the parsed layout."""
+        """
+        A subclass which overrides nothing still reuses the parsed layout.
+
+        A performance guard that keeps its spy: parsing the layout again
+        gives the same patch, only slower, so the count of traversals is its
+        only witness.
+        """
         monkeypatch.setattr(H5Simple, "manager", copy.deepcopy(H5Simple.manager))
 
         class Plain(H5Simple):
@@ -644,6 +662,17 @@ def _stored(path, window):
         return h5["raw"][window]
 
 
+def _unopenable(path):
+    """
+    Overwrite a file's HDF5 signature, keeping its size and mtime, so h5py
+    cannot open it while its chunks are still where its offsets say.
+    """
+    stat = os.stat(path)
+    with open(path, "r+b") as handle:
+        handle.write(bytes(8))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+
 # The storage layouts of a (30, 5) array the offset reads cover.
 LAYOUTS = {
     "contiguous": {},
@@ -680,25 +709,39 @@ class TestOffsetReads:
         ],
     )
     @pytest.mark.parametrize("dtype", ["<f4", ">i2"])
-    def test_equals_hdf5(self, tmp_path, stored_reads, window, dtype):
-        """Each window equals what h5py reads, dtype, byte order and all."""
+    def test_equals_hdf5(self, tmp_path, window, dtype):
+        """
+        Each window equals what h5py reads, dtype, byte order and all, from
+        a file h5py can no longer open.
+        """
         data = np.arange(150).reshape(30, 5).astype(dtype)
         for name, options in LAYOUTS.items():
             path = _write_simple(tmp_path / f"{name}.h5", data, **options)
-            source = dc.read(path)[0]._source
-            out, expected = source[window].load(), _stored(path, window)
+            source, expected = dc.read(path)[0]._source, _stored(path, window)
+            _unopenable(path)
+            out = source[window].load()
             assert out.dtype == expected.dtype and out.flags.c_contiguous
             np.testing.assert_array_equal(out, expected)
         offsets = source.offsets  # the last layout's chunks are apart
         assert any(
             b - a != 7 * 5 * data.itemsize for a, b in itertools.pairwise(offsets)
         )
-        assert not stored_reads
 
     @needs_chunk_iter
-    def test_one_open_for_many_windows(self, path, stored_reads, monkeypatch):
-        """A lazy array of several windows of one file opens it once."""
+    def test_one_open_for_many_windows(self, path, monkeypatch):
+        """
+        A lazy array of several windows of one file h5py cannot open opens
+        it once.
+
+        A performance guard that keeps its spy: a file opened per window
+        gives the same arrays, only slower, so the count of opens is its
+        only witness.
+        """
         source, opened = dc.read(path)[0]._source, []
+        expected = np.concatenate(
+            [_stored(path, slice(*x)) for x in ((20, 30), (0, 4), (9, 12))]
+        )
+        _unopenable(path)
         original = open
 
         def counted(*args, **kwargs):
@@ -707,36 +750,34 @@ class TestOffsetReads:
 
         monkeypatch.setattr("builtins.open", counted)
         array = Recipe.from_sources([source[20:30], source[0:4], source[9:12]])
-        expected = np.concatenate(
-            [_stored(path, slice(*x)) for x in ((20, 30), (0, 4), (9, 12))]
-        )
         np.testing.assert_array_equal(array.load(), expected)
-        assert len(opened) == 1 and not stored_reads
+        assert len(opened) == 1
 
-    def test_narrow_window_uses_reader(self, tmp_path, stored_reads):
-        """A window of few columns of a wide array is left to the reader."""
+    def test_narrow_window_uses_reader(self, tmp_path):
+        """
+        A window of few columns of a wide array is left to the reader, so
+        offsets pointed at the file's start do not change its samples.
+        """
         data = np.arange(500, dtype=np.float32).reshape(10, 50)
         path = _write_simple(tmp_path / "wide.h5", data)
         source = dc.read(path)[0]._source
+        source = replace(source, offsets=(0,) * len(source.offsets))
         np.testing.assert_array_equal(source[:, 3:8].load(), data[:, 3:8])
-        assert len(stored_reads) == 1
 
-    def test_rewritten_file_uses_reader(self, path, stored_reads):
+    def test_rewritten_file_uses_reader(self, path):
         """A file changed since its offsets were taken is read by its reader."""
         source = dc.read(path)[0]._source
         data = -np.arange(150, dtype=np.float32).reshape(30, 5)
         _write_simple(path, data, chunks=(3, 5), gaps=True)
         np.testing.assert_array_equal(source[2:20].load(), data[2:20])
-        assert len(stored_reads) == 1
 
-    def test_offsets_past_the_end(self, path, stored_reads):
+    def test_offsets_past_the_end(self, path):
         """Offsets which find too few bytes leave the read to the reader."""
         source = dc.read(path)[0]._source
         source = replace(source, offsets=(source.size_bytes,) * len(source.offsets))
         np.testing.assert_array_equal(source.load(), _stored(path, slice(None)))
-        assert len(stored_reads) == 1
 
-    def test_remote_path_uses_reader(self, path, stored_reads):
+    def test_remote_path_uses_reader(self, path):
         """
         A source in a remote store is read by its reader, never from the local
         file its path would spell, here a copy with the same size and mtime.
@@ -747,7 +788,6 @@ class TestOffsetReads:
         fsspec.filesystem("memory").pipe(str(local), remote.read_bytes())
         source = replace(source, path=f"memory://{local}")
         np.testing.assert_array_equal(source.load(), -_stored(path, ()))
-        assert len(stored_reads) == 1
 
     def test_missing_file(self, path):
         """A file gone since its offsets were taken fails as the reader fails."""
@@ -795,7 +835,7 @@ class TestOffsetReads:
         np.testing.assert_array_equal(source[2:9].load(), data[2:9, :3])
 
     @needs_chunk_iter
-    def test_array_override_is_honored(self, path, registry, stored_reads):
+    def test_array_override_is_honored(self, path, registry):
         """A subclass transforming read_array is not bypassed by offsets."""
 
         class Doubled(H5Simple):
@@ -807,9 +847,8 @@ class TestOffsetReads:
         source = replace(dc.read(path)[0]._source, format=Doubled.name)
         assert source.offsets
         np.testing.assert_array_equal(source.load(), _stored(path, slice(None)) * 2)
-        assert len(stored_reads) == 1
 
-    def test_external_link(self, tmp_path, stored_reads):
+    def test_external_link(self, tmp_path):
         """A data node linked from another file is read from that file."""
         data = np.arange(150, dtype=np.float32).reshape(30, 5)
         with h5py.File(tmp_path / "target.h5", "w") as h5:
@@ -868,6 +907,9 @@ class TestOffsetReads:
         """
         Abutting chunks are one read, and a read returning fewer bytes than
         asked, as one over 2 GiB does, is continued rather than given up.
+
+        A performance guard that keeps its count: a read per chunk gives the
+        same array, only slower, so the reads made are its only witness.
         """
         data = np.arange(150, dtype=np.float32).reshape(30, 5)
         path = _write_simple(tmp_path / "a.h5", data, **LAYOUTS["chunked"])
@@ -924,12 +966,15 @@ class TestIndexedOffsetReads:
         return tmp_path, data
 
     @needs_chunk_iter
-    def test_merge(self, directory, stored_reads):
-        """A reopened index merges every file from its offsets."""
+    def test_merge(self, directory):
+        """A reopened index merges every file from its offsets, h5py or not."""
         path, data = directory
+        files = sorted(path.glob("*.h5"))
+        assert files
+        for file in files:
+            _unopenable(file)
         merged = dc.spool(path).chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data, data)
-        assert not stored_reads
 
     def test_trimmed_merge(self, directory):
         """A selection across files of both layouts reads only its rows."""
@@ -942,7 +987,7 @@ class TestIndexedOffsetReads:
         np.testing.assert_array_equal(spool[0].data, data[16:71])
 
     @needs_chunk_iter
-    def test_rewritten_file(self, directory, stored_reads, monkeypatch):
+    def test_rewritten_file(self, directory, monkeypatch):
         """
         A file rewritten after indexing, past the merge's own check of its
         sources, is read by its reader rather than from stale offsets.
@@ -955,7 +1000,6 @@ class TestIndexedOffsetReads:
         monkeypatch.setattr(PlanResolver, "_sources_unchanged", lambda *_: True)
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data[80:100], -data[80:100])
-        assert len(stored_reads) == 1
 
 
 def _event_file(path, time, time_units, data_units="m/s"):
