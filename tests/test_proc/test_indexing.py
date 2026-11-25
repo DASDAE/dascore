@@ -17,6 +17,10 @@ from dascore.utils.array_api import to_numpy
 
 xr = pytest.importorskip("xarray")
 
+# More samples than the address space can hold as labels: expanding such a
+# grid fails at once, as 7 PiB on 64-bit or 8 GiB on 32-bit WebAssembly.
+HUGE = 10**15 if np.intp(0).itemsize == 8 else 1_000_000_007
+
 
 @pytest.fixture()
 def patch():
@@ -470,9 +474,9 @@ class TestCompactRangeIndexing:
 
     @pytest.mark.parametrize("kind", ["int", "float", "datetime", "timedelta"])
     @pytest.mark.parametrize("reverse", [False, True])
-    def test_large_range(self, monkeypatch, kind, reverse):
+    def test_large_range(self, kind, reverse):
         """Exact, nearest, strided, and empty selections allocate only their results."""
-        size = 1_000_000_007
+        size = HUGE
         start, step = 0, 2
         if kind == "float":
             start, step = 0.1, 0.25
@@ -482,29 +486,15 @@ class TestCompactRangeIndexing:
                 if kind == "datetime"
                 else np.timedelta64(0, "s")
             )
-            step = np.timedelta64(2, "s")
+            # Small enough that the last label of the huge grid still fits in ns.
+            step = np.timedelta64(2, "us")
         coord = get_coord(start=start, step=step, shape=(size,))
         if reverse:
             coord = coord[::-1]
         patch = dc.Patch(
             data=np.broadcast_to(np.array(1), (size,)), coords={"x": coord}, dims=("x",)
         )
-        original = NumericCoord.values.fget
-        original_index_values = NumericCoord._get_index_values
-
-        def bounded_index_values(self, indices):
-            """Refuse full-grid allocation through sparse evaluation as well."""
-            assert np.size(indices) < 1000, "Selection evaluated the original grid"
-            return original_index_values(self, indices)
-
-        def bounded_values(self):
-            """Allow output labels to materialize, but refuse a full input grid."""
-            assert self.size < 1000, "Selection expanded the original coordinate"
-            return original(self)
-
-        monkeypatch.setattr(NumericCoord, "values", property(bounded_values))
-        monkeypatch.setattr(NumericCoord, "_get_index_values", bounded_index_values)
-        labels = coord._get_index_values(np.array([50, 54]))
+        labels = patch.isel(x=[50, 54]).get_array("x")
         assert patch.sel(x=labels[0]).get_array("x") == labels[0]
         assert patch.sel(x=slice(None, labels[0])).shape == (51,)
         if kind == "datetime":
@@ -535,7 +525,12 @@ class TestCompactRangeIndexing:
     @pytest.mark.parametrize("reverse", [False, True])
     @pytest.mark.parametrize("method", [None, "nearest"])
     def test_bulk_labels(self, monkeypatch, size, count, kind, reverse, method):
-        """Bulk queries neither expand the input nor search each label in Python."""
+        """
+        Bulk queries neither expand the input nor search each label in Python.
+
+        A performance guard that keeps its spies: a search per label gives the
+        right answer, only slowly, so the call count is its only witness.
+        """
         start, step = 0, 0.5
         if kind == "datetime":
             start, step = np.datetime64("2020-01-01"), np.timedelta64(1, "ms")
@@ -680,8 +675,8 @@ class TestCompactRangeIndexing:
 class TestRangeLookupPrecision:
     """Floating precision limits never trigger full-coordinate lookup."""
 
-    @pytest.mark.parametrize("size", [3, 30, 1_000_000_007])
-    def test_ambiguous_grid(self, monkeypatch, size):
+    @pytest.mark.parametrize("size", [3, 30, HUGE])
+    def test_ambiguous_grid(self, size):
         """Ambiguous array labels fail safely without expanding a huge grid."""
         coord = get_coord(start=1e16, step=1.8, shape=(size,)).change_length(size)
         patch = dc.Patch(
@@ -689,13 +684,6 @@ class TestRangeLookupPrecision:
             coords={"x": coord},
             dims=("x",),
         )
-        original = NumericCoord.values.fget
-
-        def bounded_values(self):
-            assert self.size < 3, "Precision checking expanded the input grid"
-            return original(self)
-
-        monkeypatch.setattr(NumericCoord, "values", property(bounded_values))
         if size == 3:
             assert patch.sel(x=[coord[0]]).shape == (1,)
         else:
@@ -712,7 +700,12 @@ class TestRangeLookupPrecision:
         ],
     )
     def test_unique_rounded_grid(self, monkeypatch, start, step, size):
-        """The effective linspace step can be unique despite a smaller stated step."""
+        """
+        The effective linspace step can be unique despite a smaller stated step.
+
+        A performance guard that keeps its spy: these grids must stay short to
+        round this way, and a short grid survives being expanded.
+        """
         coord = get_coord(start=start, step=step, shape=(size,)).change_length(size)
         patch = dc.Patch(data=np.arange(size), coords={"x": coord}, dims=("x",))
         labels = coord._get_index_values([0, size - 1, 1])
