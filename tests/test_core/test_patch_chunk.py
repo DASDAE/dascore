@@ -4417,11 +4417,16 @@ def _frozen_stats(monkeypatch, paths, mtime=0, size=0):
     trusting the index reads the window it promised, where the patch path
     reads the file as it now is.
     """
-    frozen = {str(x): (x.stat().st_mtime_ns, x.stat().st_size) for x in paths}
+
+    def _key(path):
+        # rows may spell a path another way (separators, Windows short names)
+        return os.path.normcase(os.path.realpath(path))
+
+    frozen = {_key(x): (x.stat().st_mtime_ns, x.stat().st_size) for x in paths}
     original = planned.scan_unit_stats
 
     def scanned(path):
-        if (stat := frozen.get(str(path))) is None:
+        if (stat := frozen.get(_key(path))) is None:
             return original(path)
         return stat[0] + mtime, stat[1] + size
 
