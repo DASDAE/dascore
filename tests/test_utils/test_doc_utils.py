@@ -8,24 +8,13 @@ import pandas as pd
 import pytest
 
 import dascore.utils.namespace as ns_module
-from dascore.core.attrs import PatchAttrs
 from dascore.examples import EXAMPLE_PATCHES
 from dascore.utils.docs import (
     compose_docstring,
-    format_dtypes,
     get_docstring,
     get_plugin_table,
     objs_to_doc_df,
 )
-
-
-class TestFormatDtypes:
-    """Tests for formatting datatypes to display in docstrings."""
-
-    def test_formatting(self):
-        """Test for formatting StationDtypes."""
-        out = format_dtypes(PatchAttrs.__annotations__)
-        assert isinstance(out, str)
 
 
 class TestDocstring:

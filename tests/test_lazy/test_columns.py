@@ -19,13 +19,13 @@ from dascore.lazy.columns import SOURCE_FIELDS
 from dascore.lazy.recipe import Recipe, RecipeTable, concat
 from tests.test_lazy.conftest import (
     ALIKE_VALUES,
-    FORMAT,
     assert_same_members,
     constant,
     many_members,
     mixed_member,
     mixed_sources,
     stored,
+    stored_files,
 )
 
 
@@ -52,20 +52,16 @@ class TestFoldedColumns:
     @staticmethod
     def many(count=2000):
         """Return many members over a few files, with one-valued columns."""
-        return Recipe.from_columns(
-            [f"/data/f{x % 97:03d}.h5" for x in range(count)],
-            (2, 3),
-            key=[["", "k"][x % 3 == 0] for x in range(count)],
-            **FORMAT,
-        )
+        sources = stored_files(count, (2, 3), root="/data/", files=97, keys=True)
+        return Recipe.from_sources(sources)
 
     def test_memory_per_member(self):
         """A large array of like members keeps well under a column per field."""
-        paths = [f"/data/f{x:05d}.h5" for x in range(20_000)]
-        array = Recipe.from_columns(paths, (1000, 100), **FORMAT)
-        assert len(array) == len(paths)
+        count = 20_000
+        array = Recipe.from_sources(stored_files(count, (1000, 100), root="/data/"))
+        assert len(array) == count
         # What the array holds, not what the allocator has yet to release.
-        assert held_bytes(array) / len(paths) < 120
+        assert held_bytes(array) / count < 120
 
     def test_folding_changes_nothing(self, monkeypatch):
         """Folded and unfolded tables give the same arrays."""
@@ -131,10 +127,8 @@ class TestStringColumns:
     def test_missing_strings_stay_distinct(self, repeats):
         """A missing value among strings is a value of its own."""
         keys = pd.Series(["k1", None, "k2"] * repeats)
-        array = Recipe.from_columns("/a", (2,), key=keys, **FORMAT)
-        members = array.table.members
-        key = members.sources.key
-        assert key.codes[members.source_row].tolist() == [0, 1, 2] * repeats
+        key = columns_module._Column.of(keys)
+        assert key.codes.tolist() == [0, 1, 2] * repeats
         assert key.values[0] == "k1" and key.values[2] == "k2"
         assert pd.isna(key.values[1])
 
@@ -232,9 +226,6 @@ class TestSourceTable:
         array = Recipe.from_sources(sources, base_uri="/root/")
         assert array.sources == tuple(sources)
         assert array.sources[2].path == ""
-        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
-        assert back.sources == tuple(sources)
-        assert back.data_id == array.data_id
         first = Recipe.from_sources(sources[:2], base_uri="/root/")
         joined = concat([array[4:], first, array[8:]])
         assert joined.sources == (*sources[2:], *sources[:2], sources[-1])
@@ -313,8 +304,7 @@ class TestSourceTable:
 
     def test_most_read_is_kept_whole(self):
         """A join reading most of a table shares it rather than cutting it."""
-        paths = [f"/a/f{x}.h5" for x in range(300)]
-        array = Recipe.from_columns(paths, (2,), **FORMAT)
+        array = Recipe.from_sources(stored_files(300, (2,), root="/a/"))
         joined = concat([array[:-2], array[:0]])
         assert joined.table.members.sources is array.table.members.sources
 

@@ -17,7 +17,6 @@ from pathlib import Path
 import fsspec
 import h5py
 import numpy as np
-import pandas as pd
 import pytest
 
 import dascore as dc
@@ -766,30 +765,6 @@ class TestOffsetReads:
         assert source[2:5].data_id == bare[2:5].data_id
         assert source[2:5].offsets == source.offsets
         assert ArraySource.from_dict(source.to_dict()).offsets == source.offsets
-
-    @needs_chunk_iter
-    def test_frames(self, path, tmp_path, stored_reads):
-        """
-        A frame joined with one stating no layout loads, through the reader;
-        one with empty layout cells keeps its offsets exactly through parquet.
-        """
-        source = dc.read(path)[0]._source
-        frame = Recipe.from_sources([source[0:10], source[10:20]]).to_frame()
-        layout = ["offsets", "chunk_rows", "mtime_ns", "size_bytes"]
-        older = frame[frame["ordinal"] == 0].drop(columns=layout)
-        joined = pd.concat([older, frame[frame["ordinal"] == 1]])
-        expected = _stored(path, slice(0, 20))
-        back = Recipe.from_frame(joined, (20, 5), source.dtype)
-        np.testing.assert_array_equal(back.load(), expected)
-        assert len(stored_reads) == 1
-        pytest.importorskip("pyarrow")
-        filled = ArraySource.full((4, 5), 0.0, dtype=source.dtype)
-        array = Recipe.from_sources([source[0:10], filled])
-        array.to_frame().to_parquet(tmp_path / "frame.parquet")
-        stored = pd.read_parquet(tmp_path / "frame.parquet")
-        back = Recipe.from_frame(stored, array.shape, array.dtype)
-        np.testing.assert_array_equal(back.load(), array.load())
-        assert len(stored_reads) == 1
 
     @pytest.mark.parametrize("distance", [4, 6])
     def test_declared_shape_differs(self, tmp_path, distance):

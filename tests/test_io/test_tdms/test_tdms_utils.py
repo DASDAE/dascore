@@ -313,19 +313,15 @@ class TestTDMSUtils:
             "next_segment_offset": 12,
             "order": "<",
         }
-        attrs = {"tag": "example"}
         data = bytearray(52)
         data[0:12] = np.array([1.0, 2.0, 3.0], dtype=np.float32).tobytes()
         data[24:40] = struct.pack("<qq", 12, 0)
         data[40:52] = np.array([4.0, 5.0, 6.0], dtype=np.float32).tobytes()
         fake = _FakeTDMSFile(bytes(data))
-        monkeypatch.setattr(tdms_utils, "_get_fileinfo", lambda _: (fileinfo, attrs))
         monkeypatch.setattr(tdms_utils.mmap, "mmap", lambda *args, **kwargs: data)
-        out_data, channel_length, out_attrs = tdms_utils._get_data(fake)
+        out_data = tdms_utils._read_sample_range(fake, fileinfo)
         # Three samples on one channel from each of the two segments.
         assert out_data.shape == (6, 1)
-        assert channel_length == 6
-        assert out_attrs == attrs
 
     def test_get_data_decimated_whole_chunks(self, monkeypatch):
         """A decimated segment whose chunks are all full still has its data."""
@@ -339,14 +335,11 @@ class TestTDMSUtils:
             "next_segment_offset": 8,
             "order": "<",
         }
-        attrs = {"tag": "example"}
         data = np.array([1.0, 2.0], dtype=np.float32).tobytes()
         fake = _FakeTDMSFile(data)
-        monkeypatch.setattr(tdms_utils, "_get_fileinfo", lambda _: (fileinfo, attrs))
         monkeypatch.setattr(tdms_utils.mmap, "mmap", lambda *args, **kwargs: data)
-        out_data, channel_length, _ = tdms_utils._get_data(fake)
+        out_data = tdms_utils._read_sample_range(fake, fileinfo)
         assert out_data.shape == (2, 1)
-        assert channel_length == 2
 
 
 class TestSampleOrder:
@@ -410,10 +403,10 @@ class TestMultiSegment:
 
     def test_segments_stack_along_time(self, two_segment_path):
         """Both segments are read, and they stack along time, not distance."""
-        with open(two_segment_path, "rb") as fi:
-            data, channel_length, _ = tdms_utils._get_data(fi)
+        patch = dc.spool(two_segment_path)[0]
+        data = patch.data
         assert data.shape == (2000, 1152)
-        assert channel_length == 2000
+        assert len(patch.get_coord("time")) == 2000
         # One segment written twice, so the halves are the same samples.
         assert np.array_equal(data[:1000], data[1000:])
 

@@ -71,7 +71,6 @@ from dascore.utils.misc import (
     _merge_tuples,
     get_parent_code_name,
     iterate,
-    to_object_array,
     validate_warn_level,
     warn_or_raise,
 )
@@ -583,50 +582,6 @@ def patch_function(
         return patch_func
 
     return _wrapper
-
-
-def patches_to_df(
-    patches: Sequence[dc.Patch] | dc.Spool | pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Return a dataframe.
-
-    Parameters
-    ----------
-    patches
-        A sequence of :class:`dascore.Patch`
-
-    Returns
-    -------
-    A dataframe with the attrs of each patch converted to a columns
-    plus a field called 'patch' which contains a reference to the patches.
-    """
-    # Handle spool case (or anything else exposing spool-style get_contents)
-    if callable(get_contents := getattr(patches, "get_contents", None)):
-        df = get_contents()
-        # get_contents() carries only metadata; embed the patches so the
-        # flat-dump path can serve them (the "patch" column is the point).
-        if "patch" not in df.columns:
-            df = df.assign(patch=to_object_array(list(patches)))
-    elif isinstance(patches, pd.DataFrame):
-        df = patches
-    else:
-        df = dc.scan_to_df(
-            patches,
-            exclude=(),
-        )
-        if df.empty:  # create empty df with appropriate columns
-            cols = list(dc.PatchAttrs().model_dump())
-            df = pd.DataFrame(columns=cols).assign(patch=None, history=None)
-        else:  # else populate with patches and concat history
-            history = df["history"].apply(lambda x: ",".join(x))
-            df = df.assign(patch=to_object_array(patches), history=history)
-    # Ensure history is in df
-    if "history" not in df.columns:
-        df = df.assign(history="")
-    if "patch" not in df.columns:
-        df["patch"] = None
-    return df
 
 
 def _get_merge_dim(df) -> str | None:
@@ -1581,72 +1536,6 @@ def _merge_models(attrs1, attrs2):
         and _is_missing(dump1.get(key))
     }
     return merged.update(**fill) if fill else merged
-
-
-def merge_compatible_coords_attrs(
-    patch1: PatchType,
-    patch2: PatchType,
-    *,
-    dim_intersection: bool = False,
-    validate_coords: bool = True,
-) -> tuple[dc.core.CoordManager, dc.PatchAttrs]:
-    """
-    Merge the coordinates and attributes of patches or raise if incompatible.
-
-    The rules for compatibility are:
-
-    - The patches must be the same kind: no conflicting values for the
-      attributes named by the config option `patch_kind_attrs` (see
-      [`check_kind`](`dascore.utils.patch.check_kind`)).
-    - Patches must share the same dimensions unless dim_intersection == True.
-    - All shared dimensional coordinates must be strictly equal
-    - If patches share a non-dimensional coordinate they must be equal.
-
-    The remaining attributes never decide compatibility: the first patch's
-    values are kept and attributes only the second has are added. Any
-    coordinates contained by a single patch will be included in the output.
-
-    Parameters
-    ----------
-    patch1
-        The first patch
-    patch2
-        The second patch
-    dim_intersection
-        If True, merge if any dimensions overlap, else raise if all do not
-        overlap.
-    validate_coords
-        If True, ensure the coords are equal, else the responsibility for this
-        was handled upstream.
-    """
-
-    def _merge_coords(coords1, coords2):
-        out = {}
-        cmap1, cmap2 = coords1.coord_map, coords2.coord_map
-        coord_names = set(cmap1) | set(cmap2)
-        # fast path to update identical coordinates
-        if coord_names == set(cmap1):
-            return coords1
-        if coord_names == set(cmap2):
-            return coords2
-        # otherwise just squish coords from both managers together.
-        for name in coord_names:
-            coord = coords1 if name in coords1.coord_map else coords2
-            dims = coord.dim_map[name]
-            out[name] = (dims, coord.coord_map[name])
-        # Need to get coordinate that are in output, but preserve order.
-        dims = _merge_tuples(coords1.dims, coords2.dims)
-        return dc.core.coordmanager.get_coord_manager(out, dims=dims)
-
-    check_kind(patch1, patch2)
-    check_dims(patch1, patch2, intersection=dim_intersection)
-    if validate_coords:
-        check_coords(patch1, patch2)
-    coord1, coord2 = patch1.coords, patch2.coords
-    attrs1, attrs2 = patch1.attrs, patch2.attrs
-    coord_out = _merge_coords(coord1, coord2)
-    attrs = _merge_models(attrs1, attrs2)
-    return coord_out, attrs
 
 
 def _concatenate_group(

@@ -12,7 +12,6 @@ from dascore.core.source import ArraySource
 from dascore.lazy import read as read_module
 from dascore.lazy import recipe as recipe_module
 from dascore.lazy.recipe import Recipe, concat
-from tests.test_lazy.conftest import FORMAT
 
 
 @pytest.fixture(scope="module")
@@ -139,20 +138,16 @@ class TestCoalescedReads:
     @pytest.mark.parametrize(("dtype", "merged"), [("f4", 1), ("S10", 2)])
     def test_only_numbers_merge(self, dtype, merged):
         """Text, whose casts may take their unit from the samples, is read apart."""
-        array = Recipe.from_columns(
-            ["/a.h5", "/a.h5"],
-            (1,),
-            start=[[0], [1]],
-            extent=2,
-            **{**FORMAT, "source_dtype": dtype},
-        )
+        whole = ArraySource(path="/a.h5", format="DASDAE", version="1")
+        source = whole.describe((2,), dtype)
+        array = Recipe.from_sources([source[0:1], source[1:2]])
         assert len(read_module._coalesced(array._block())) == merged
 
     def test_extents_must_match(self):
         """Windows of one source which state different extents are read apart."""
-        array = Recipe.from_columns(
-            ["/a.h5", "/a.h5"], (4,), start=[[0], [4]], extent=[[8], [9]], **FORMAT
-        )
+        whole = ArraySource(path="/a.h5", format="DASDAE", version="1")
+        first, second = whole.describe((8,), "f4"), whole.describe((9,), "f4")
+        array = Recipe.from_sources([first[0:4], second[4:8]])
         assert len(read_module._coalesced(array._block())) == 2
 
     def test_reads_stop_at_the_byte_budget(

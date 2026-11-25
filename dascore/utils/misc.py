@@ -20,8 +20,6 @@ from typing import Literal, TypeVar, get_args, overload
 
 import numpy as np
 import pandas as pd
-from scipy.linalg import solve
-from scipy.special import factorial
 
 from dascore.compat import UPath, is_array
 from dascore.config import config_context, get_config
@@ -689,30 +687,6 @@ def unbyte(byte_or_str) -> str | _T:
     return byte_or_str
 
 
-def _get_stencil_weights(array, ref_point, order):
-    """
-    Computes the derivative stencil weights.
-
-    Parameters
-    ----------
-        array
-            An array representing the stencil domain.
-        ref_point
-            The point in the domain to base the stencil weights on.
-        order
-            The order of the derivative.
-
-    Returns
-    -------
-        The vector of stencil weights.
-    """
-    ell = np.arange(len(array))
-    assert order in ell, "Order must be in domain"
-    mat = (((array - ref_point)[:, np.newaxis] ** ell) / factorial(ell)).T
-    weights = solve(mat, ell == order)
-    return weights.flatten()
-
-
 def _maybe_make_parent_directory(path):
     """Maybe make parent directories."""
     path = Path(path)
@@ -720,12 +694,6 @@ def _maybe_make_parent_directory(path):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     return
-
-
-def get_stencil_coefs(order, derivative=2):
-    """Get centered coefficients for a derivative of specified order and derivative."""
-    dx = np.arange(-order, order + 1)
-    return _get_stencil_weights(dx, 0, derivative)
 
 
 def get_parent_code_name(levels: int = 2) -> str:

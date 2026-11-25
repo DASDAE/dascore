@@ -63,9 +63,14 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `dascore.utils.patch.merge_patches(patches)` | `dc.spool(patches).chunk(time=None)` |
 | `dascore.utils.patch.concatenate_patches(patches, time=None)` | `dc.spool(patches).concatenate(time=None)`, which puts patches that cannot be concatenated together in separate outputs rather than skipping them |
 | `dascore.utils.patch.get_patch_window_size`, `get_window_axis_step` | `dascore.utils.window.resolve_window(...)`; `.full_size()` gives the window along every axis |
+| `dascore.utils.patch.merge_compatible_coords_attrs` | no replacement; arithmetic between patches merges their coordinates and attributes |
+| `dascore.utils.patch.patches_to_df(patches)` | `dc.spool(patches).get_contents()` for a sequence of patches or a spool, which holds no `patch` column; a dataframe has no replacement |
 | `dascore.utils.pd.get_regex` | `dascore.utils.misc.glob_to_regex`, which negates a character class with `[^...]` rather than fnmatch's `[!...]` |
+| `dascore.utils.pd.list_ser_to_str`, `fill_defaults_from_pydantic` | no replacement |
 | `dascore.utils.hdf5.unpack_scalar_h5_dataset(dataset)` | `dataset[()]`, taking the first element of a length-one array |
 | `dascore.utils.misc.yield_sub_sequences` | slice the sequence directly |
+| `dascore.utils.misc.get_stencil_coefs` | no replacement |
+| `dascore.utils.docs.format_dtypes` | no replacement |
 
 ## Attributes and coordinates
 

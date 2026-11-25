@@ -7,7 +7,6 @@ import os
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
@@ -21,34 +20,6 @@ experimental_note = (
     "`dascore/docs/contributing/general_guidelines`#experimental-features"
     ") means."
 )
-
-
-def format_dtypes(dtype_dict: dict[str, Any]) -> str:
-    """
-    Convert dict to string for printing.
-
-    Convert a dictionary of {name: type} to a string printable format for
-    displaying in docstrings.
-
-    Parameters
-    ----------
-    dtype_dict
-        A dict of columns (keys) and values (dtypes).
-
-    Returns
-    -------
-    A string formatted for
-    [compose_docstring](`dascore.utils.docs.compose_docstring`)
-    """
-
-    def _format_cls_str(cls):
-        """Format str representation of classes to be nicer on the eyes."""
-        cls_str = str(cls)
-        return cls_str.replace("<class ", "").replace(">", "").replace("'", "")
-
-    str_list = [f"{x}: {_format_cls_str(y)}" for x, y in dtype_dict.items()]
-    out = "\n".join(str_list)
-    return out
 
 
 def get_docstring(obj) -> str:

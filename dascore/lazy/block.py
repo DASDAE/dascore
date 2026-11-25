@@ -13,7 +13,6 @@ from dataclasses import dataclass, replace
 from typing import Any, NamedTuple
 
 import numpy as np
-import pandas as pd
 from pandas.api.types import is_list_like
 
 from dascore.core.source import ArraySource, _offsets_text
@@ -235,9 +234,6 @@ def _block_of_columns(
     split = [_split_path(x, base_uri) for x in path.values]
     base = _Column.of([x[0] for x in split])
     dtypes = _broadcast(columns["source_dtype"], count, "source_dtype")
-    if any(x is None or x is pd.NA or x != x for x in dtypes.values):
-        msg = "Every member needs a source_dtype."
-        raise ParameterError(msg)
     axes = {
         "out_start": np.zeros((count, ndim), np.int64),
         "out_stop": lengths,
