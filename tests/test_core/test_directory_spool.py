@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+import math
 import os
 import pickle
 import shutil
@@ -463,28 +465,42 @@ class TestSampleSelectPushdown:
     """A samples=True select reads only the selected samples (#1318)."""
 
     @staticmethod
-    def _decodable(spool, directory, dim, keep):
+    def _decodable(spool, directory, keep):
         """
         Index a copy of the spool's one file whose patches store their data
-        as gzip chunks one sample thick along `dim`, where only the chunks at
-        `keep` decode, so a read of more than they hold raises.
+        as gzip chunks, where only the chunks inside the kept sample range of
+        each dimension in `keep` decode, so a read of more than they hold
+        raises.
         """
         path = Path(shutil.copy(spool.spool_path / "multi_patch.h5", directory))
         with h5py.File(path, "r+") as h5:
             for group in h5["waveforms"].values():
-                axis = group.attrs["_dims"].split(",").index(dim)
+                dims = group.attrs["_dims"].split(",")
                 data, attrs = group["data"][()], dict(group["data"].attrs)
                 del group["data"]
-                chunks = tuple(1 if x == axis else n for x, n in enumerate(data.shape))
+                # Chunks end on the kept range's ends, so each is all in or out.
+                ranges = [keep.get(x, (0, n)) for x, n in zip(dims, data.shape)]
+                chunks = [
+                    math.gcd(first, stop, n)
+                    for (first, stop), n in zip(ranges, data.shape)
+                ]
                 node = group.create_dataset(
-                    "data", data.shape, data.dtype, chunks=chunks, compression="gzip"
+                    "data",
+                    data.shape,
+                    data.dtype,
+                    chunks=tuple(chunks),
+                    compression="gzip",
                 )
                 node.attrs.update(attrs)
-                for index in range(data.shape[axis]):
-                    at = tuple(index if x == axis else 0 for x in range(data.ndim))
-                    if index in keep:  # stored as if the gzip filter were skipped
-                        block = np.take(data, [index], axis=axis).tobytes()
-                        node.id.write_direct_chunk(at, block, 1)
+                starts = [range(0, n, c) for n, c in zip(data.shape, chunks)]
+                for at in itertools.product(*starts):
+                    inside = all(
+                        first <= x and x + c <= stop
+                        for x, c, (first, stop) in zip(at, chunks, ranges)
+                    )
+                    if inside:  # stored as if the gzip filter were skipped
+                        box = tuple(slice(x, x + c) for x, c in zip(at, chunks))
+                        node.id.write_direct_chunk(at, data[box].tobytes(), 1)
                     else:
                         node.id.write_direct_chunk(at, b"not gzip")
         return dc.spool(directory).update()
@@ -517,14 +533,16 @@ class TestSampleSelectPushdown:
     ):
         """
         Each patch reads the window and equals the eager selection, so only
-        the samples the window holds along its first dimension need decode.
+        the samples the window holds along each selected dimension decode.
         """
         spool = multi_patch_file_spool
         expected = [x.select(samples=True, relative=relative, **select) for x in spool]
-        dim = next(iter(select))
-        held = expected[0].get_coord(dim).values
-        keep = np.flatnonzero(np.isin(spool[0].get_coord(dim).values, held))
-        decodable = self._decodable(spool, tmp_path, dim, set(keep))
+        keep = {}
+        for dim in select:
+            held = expected[0].get_coord(dim).values
+            found = np.flatnonzero(np.isin(spool[0].get_coord(dim).values, held))
+            keep[dim] = (int(found[0]), int(found[-1]) + 1)
+        decodable = self._decodable(spool, tmp_path, keep)
         out = list(decodable.select(samples=True, relative=relative, **select))
         assert out == expected
 

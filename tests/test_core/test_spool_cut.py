@@ -409,6 +409,7 @@ class TestCut:
         dc.examples.spool_to_directory(spool, path=tmp_path)
         directory = dc.spool(tmp_path).update()
         files = sorted(tmp_path.glob("*.hdf5"))
+        assert len(files) == len(spool)
         for path in files:
             path.rename(path.with_suffix(".aside"))
         cut = directory.cut(_ranges(start, (5, 12)))
@@ -510,8 +511,14 @@ class TestCutWindows:
         assert [_span(x) for x in cut] == [[3.0, 6.0], [0.0, 0.0]]
         assert cut.get_contents()["window"].tolist() == [0, 2]
 
-    def test_refusals(self, spool, unplannable, start):
-        """Bad window arguments are refused before planning."""
+    def test_refusals(self, spool, start):
+        """
+        Bad window arguments are refused before planning.
+
+        A guard that keeps its spy: planning these windows succeeds on any
+        spool, so a refusal raised after planning gives the same error, and
+        the planner's calls are the only witness of the order.
+        """
         cases = [
             ({"time": 4}, "(n, 2)"),
             ({"time": _windows(start, (1, 2)), "distance": np.ones((2, 2))}, "same"),
@@ -521,8 +528,10 @@ class TestCutWindows:
             ({"tolerance": np.ones((1, 2))}, "got no windows"),
         ]
         for kwargs, match in cases:
-            with pytest.raises(ParameterError, match=re.escape(match)):
-                unplannable.cut(**kwargs)
+            with mock.patch("dascore.core.spool.window_plan") as plan:
+                with pytest.raises(ParameterError, match=re.escape(match)):
+                    spool.cut(**kwargs)
+            assert not plan.call_count
         with pytest.raises(ParameterError, match="cut pad time="):
             spool.cut(_ranges(start, (1, 2)), time=_windows(start, (1, 2)))
         for positional in (_windows(start, (1, 2)), [[1, 2]]):
@@ -848,7 +857,9 @@ class TestCutWindows:
         dc.examples.spool_to_directory(spool, path=tmp_path)
         directory = dc.spool(tmp_path).update()
         cut = directory.cut(time=_windows(start, (5, 12)))
-        for path in tmp_path.glob("*.hdf5"):
+        files = sorted(tmp_path.glob("*.hdf5"))
+        assert len(files) == len(spool)
+        for path in files:
             _unopenable(path)
         (patch,) = cut
         assert _span(patch) == _seconds(start, 5, 12)

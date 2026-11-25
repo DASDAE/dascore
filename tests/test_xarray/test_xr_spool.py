@@ -180,8 +180,8 @@ class TestSpoolToXarray:
 
     def test_compute_reads_only_needed_blocks(self, diverse_spool_directory, tmp_path):
         """
-        A small selection loads only the member blocks it touches, so the
-        files of the others can be gone.
+        A small selection loads only the member blocks it touches, so every
+        other file, in this segment or another, can be gone.
         """
         ignore = shutil.ignore_patterns(".dascore_index*")
         directory = shutil.copytree(
@@ -196,7 +196,10 @@ class TestSpoolToXarray:
         merged = segment.chunk(time=None)[0]
         expected = merged.data[:, :5] if merged.dims[0] != "time" else merged.data[:5]
         rows = segment.get_contents().sort_values("time_min")
-        for path in rows["source_path"].iloc[1:]:
+        needed = rows["source_path"].iloc[0]
+        others = set(spool.get_contents()["source_path"]) - {needed}
+        assert len(others) >= 2
+        for path in others:
             (directory / path).unlink()
         leaf = next(
             x
@@ -583,7 +586,9 @@ class TestToXarrayReadArray:
         directory = shutil.copytree(dasdae_directory, tmp_path / "x")
         spool = dc.spool(directory).update()
         eager = spool.chunk(time=None)[0].data
-        for path in directory.glob("*.h5"):
+        files = sorted(directory.glob("*.h5"))
+        assert files
+        for path in files:
             _unpatchable(path)
         tree = spool.io.to_xarray()
         out = self._leaf(tree)["data"].data.compute()
@@ -614,7 +619,9 @@ class TestToXarrayReadArray:
         directory = shutil.copytree(dasdae_directory, tmp_path / "x")
         spool = dc.spool(directory).update().chunk(time=3)
         eager = spool.chunk(time=None)[0].data
-        for path in directory.glob("*.h5"):
+        files = sorted(directory.glob("*.h5"))
+        assert files
+        for path in files:
             _unpatchable(path)
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
@@ -625,17 +632,26 @@ class TestToXarrayReadArray:
         Two half-overlapping files merge into one segment, so the second
         member's window starts mid-file — the case where a wrong window
         anchor would silently read the wrong samples. Both read as array
-        windows, so files which no longer read as patches still load.
+        windows, so files which no longer read as patches still load, and
+        the second's overlapped samples no longer decode, so it must read
+        from inside the file.
         """
-        first = dc.get_example_patch()
+        first = dc.get_example_patch().update_attrs(history=[])
         time = first.get_coord("time")
         half = time.values[len(time) // 2]
         # distinct data so reading the wrong file cannot pass parity
         second = first.update_coords(time_min=half).new(data=first.data + 1)
+        second = second.update_attrs(history=[])
+        eager = dc.spool([first, second]).chunk(time=None)[0].data
         for num, patch in enumerate((first, second)):
-            patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        axis = first.dims.index("time")
+        kept = eager.shape[axis] - len(time)  # the second's samples in the merge
+        assert 0 < kept < len(time)
+        _only_decodable(
+            tmp_path / "p1.h5", axis, set(range(len(time) - kept, len(time)))
+        )
         spool = dc.spool(tmp_path).update()
-        eager = spool.chunk(time=None)[0].data
         for num in range(2):
             _unpatchable(tmp_path / f"p{num}.h5")
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
@@ -1029,7 +1045,9 @@ class TestToXarrayBlockSize:
         """
         spool = dc.spool(self._write(tmp_path)).update()
         data = self._leaf(spool.io.to_xarray())
-        for path in tmp_path.glob("*.h5"):
+        files = sorted(tmp_path.glob("*.h5"))
+        assert files
+        for path in files:
             path.unlink()
         out = data.isel(time=slice(0, 0)).compute()
         assert out.sizes["time"] == 0

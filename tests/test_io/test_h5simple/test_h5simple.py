@@ -969,7 +969,9 @@ class TestIndexedOffsetReads:
     def test_merge(self, directory):
         """A reopened index merges every file from its offsets, h5py or not."""
         path, data = directory
-        for file in path.glob("*.h5"):
+        files = sorted(path.glob("*.h5"))
+        assert files
+        for file in files:
             _unopenable(file)
         merged = dc.spool(path).chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data, data)

@@ -73,11 +73,6 @@ def lookups(monkeypatch):
     return calls
 
 
-def open_files() -> int:
-    """Return how many HDF5 files h5py has open, whatever their path."""
-    return h5py.h5f.get_obj_count(types=h5py.h5f.OBJ_FILE)
-
-
 def broadcast_array(shape=(2, 3), length=4):
     """Return an array whose first axis is broadcast from a stored one."""
     stacked = stack([constant(shape)], axis=0)
@@ -600,11 +595,18 @@ class TestViews:
         sys.platform == "emscripten", reason="emscripten does not support threads"
     )
     def test_threads_share_one_table(self, monkeypatch):
-        """Threads resolving one view at once all get the one table."""
-        clip = recipe_module._clip
+        """
+        Threads resolving one view at once all get the one table.
+
+        A guard that keeps its spy: threads which each clip the view and
+        publish one winner also agree on the table, so the count of clips is
+        the only witness that the work is shared.
+        """
+        clip, calls = recipe_module._clip, []
 
         def slow(*args):
             # Slowed, so every thread asks before the first one is done.
+            calls.append(1)
             time.sleep(0.05)
             return clip(*args)
 
@@ -612,7 +614,7 @@ class TestViews:
         view = concat([constant((4, 3), float(x)) for x in range(20)])[5:30]
         with ThreadPoolExecutor(8) as pool:
             tables = list(pool.map(lambda _: view.table, range(8)))
-        assert all(x is tables[0] for x in tables)
+        assert all(x is tables[0] for x in tables) and len(calls) == 1
         assert view.ndim == 2 and view.dtype == np.float64
 
     def test_bare_transpose_keeps_members(self):
@@ -985,7 +987,8 @@ class TestLoad:
     The tests which record handles and reads are performance guards that
     keep their spies: opening a file again for each member, or reading a
     member twice, gives the same array, only slowly, so the counts are
-    their only witness.
+    their only witness. The failure tests follow the one handle opened, as
+    a leaked handle is otherwise freed with the traceback, unseen.
     """
 
     def test_many_files(self, joined, patch, reads):
@@ -1056,17 +1059,16 @@ class TestLoad:
         assert np.array_equal(array.load(), expected.astype(array.dtype))
         assert len(handles.opened) == 1
 
-    def test_changed_resource_raises_and_closes(self, two_sources):
+    def test_changed_resource_raises_and_closes(self, two_sources, handles):
         """A member which no longer matches its source is refused, not cast."""
         stale = replace(two_sources[0], dtype=np.dtype(np.float32))
         array = Recipe.from_sources([stale[0:10], stale[20:30]])
-        before = open_files()
         with pytest.raises(InvalidFiberIOError, match="may have changed"):
             array.load()
-        assert open_files() == before
+        assert len(handles.opened) == 1 and not handles.opened[0].id.valid
 
     @pytest.mark.parametrize("error", [ValueError, KeyboardInterrupt])
-    def test_placing_failure_closes(self, two_sources, monkeypatch, error):
+    def test_placing_failure_closes(self, two_sources, handles, monkeypatch, error):
         """A failure between reads still releases the open resource."""
 
         def fail(data, axes):
@@ -1074,10 +1076,9 @@ class TestLoad:
 
         monkeypatch.setattr(recipe_module, "_to_output", fail)
         array = Recipe.from_sources([two_sources[0][0:10], two_sources[0][20:30]])
-        before = open_files()
         with pytest.raises(error, match="placing failed"):
             array.load()
-        assert open_files() == before
+        assert len(handles.opened) == 1 and not handles.opened[0].id.valid
 
     def test_numpy_asks_for_it(self, lazy, patch):
         """Numpy can ask for the array, with or without a dtype."""
