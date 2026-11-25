@@ -8,6 +8,7 @@ import pickle
 import re
 import warnings
 import weakref
+from fractions import Fraction
 from typing import Any, cast
 
 import numpy as np
@@ -17,7 +18,6 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
-import dascore.utils.array as array_module
 from dascore.compat import random_state
 from dascore.core import Patch, PatchMeta
 from dascore.core.coords import BaseCoord
@@ -1404,18 +1404,17 @@ class TestApplyOperator:
         assert (10 - random_patch).attrs.data_id != (20 - random_patch).attrs.data_id
         assert (True ^ mask).attrs.data_id != (False ^ mask).attrs.data_id
 
-    def test_patch_operand_data_is_not_hashed(self, random_patch, monkeypatch):
-        """Two patches' data never become operation parameters."""
-        seen = []
-        original = array_module.try_operation_id
-
-        def spy(kind, params):
-            seen.append(params["operands"])
-            return original(kind, params)
-
-        monkeypatch.setattr(array_module, "try_operation_id", spy)
-        _ = random_patch + random_patch
-        assert seen == [()]
+    def test_patch_operand_data_is_not_hashed(self, random_patch):
+        """
+        Two patches' data never become operation parameters, so data no id
+        can encode, fractions here, still gives a sum one repeatable id.
+        """
+        small = random_patch.select(time=(0, 3), distance=(0, 3), samples=True)
+        patch = small.new(data=np.vectorize(Fraction, otypes=[object])(small.data))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            first, second = patch + patch, patch + patch
+        assert first.attrs.data_id and first.attrs.data_id == second.attrs.data_id
 
     def test_invert_and_abs(self, random_patch):
         """~ inverts a boolean patch and abs() is np.abs."""

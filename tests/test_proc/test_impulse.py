@@ -171,7 +171,13 @@ class TestReach:
         assert str(impulse_module._plan_key(first)) not in kept
 
     def test_measured_once_for_a_plan(self, patch, monkeypatch):
-        """The measurement is kept for the plan, and not made again."""
+        """
+        The measurement is kept for the plan, and not made again.
+
+        A performance guard that keeps its spy: measuring again gives the
+        same reach, only slower, so the count of measurements is its only
+        witness.
+        """
         calls = []
         original = impulse_module._impulsed
 
@@ -365,7 +371,14 @@ class TestReviewedLimits:
         assert _relative_error(out.load().data, expected.data) < 4e-6
 
     def test_many_dimensions_within_the_budget(self, monkeypatch):
-        """Probes of a patch of many dimensions stay within the budget."""
+        """
+        Probes of a patch of many dimensions stay within the budget.
+
+        A memory guard that keeps its spy: a probe over every dimension
+        gives the same reach, only with more memory, and no patch whose
+        data fits makes it unaffordable, so the probe sizes are its only
+        witness.
+        """
         sizes = []
         original = impulse_module._impulsed
 
@@ -472,7 +485,13 @@ class TestReviewedLimits:
         assert _relative_error(out.data.compute(), expected.data) < 1
 
     def test_probe_memory_is_bounded(self, monkeypatch):
-        """However long the response, a probe holds no more than the budget."""
+        """
+        However long the response, a probe holds no more than the budget.
+
+        A memory guard that keeps its spy: a probe past the budget gives the
+        same reach, only with more memory, so the probe sizes are its only
+        witness.
+        """
         sizes = []
         original = impulse_module._impulsed
 
@@ -545,7 +564,12 @@ class TestUnsettled:
         assert windowed.chunk_contract(patch.dtype, plan) == Halo({1: (whole, whole)})
 
     def test_probe_never_past_four_axes(self, monkeypatch):
-        """A short axis is never probed longer than four times itself."""
+        """
+        A short axis is never probed longer than four times itself.
+
+        A performance guard that keeps its spy: a longer probe gives the
+        same reach, only slower, so the probe lengths are its only witness.
+        """
         lengths = []
         original = impulse_module._response
 
