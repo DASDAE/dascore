@@ -3,6 +3,7 @@ Tests for optoDAS files.
 """
 
 import json
+import os
 import shutil
 import warnings
 from fractions import Fraction
@@ -13,7 +14,6 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.index import planned
 from dascore.io.optodas import OptoDASV8
 from dascore.utils.downloader import fetch
 
@@ -148,36 +148,40 @@ class TestDataScale:
         assert str(out.dtype) == dc.scan(scaled_file)[0].dtype
 
 
+def _indexed_adjacent(path):
+    """Index two adjacent OptoDAS files in path, the second shifted by 10 s."""
+    for num in range(2):
+        out = path / f"file_{num}.hdf5"
+        shutil.copyfile(fetch("opto_das_1.hdf5"), out)
+        with h5py.File(out, "r+") as h5:
+            h5["header/time"][()] = 1695736872.0 + 10 * num
+    dc.spool(path).update()
+    return path
+
+
 class TestIndexedMerge:
     """An index row restates the OptoDAS attrs, so merges plan from it."""
 
     @pytest.fixture(scope="class")
     def directory(self, tmp_path_factory):
         """Two adjacent OptoDAS files, the second shifted by 10 s."""
-        path = tmp_path_factory.mktemp("optodas_adjacent")
-        for num in range(2):
-            out = path / f"file_{num}.hdf5"
-            shutil.copyfile(fetch("opto_das_1.hdf5"), out)
-            with h5py.File(out, "r+") as h5:
-                h5["header/time"][()] = 1695736872.0 + 10 * num
-        dc.spool(path).update()
-        return path
+        return _indexed_adjacent(tmp_path_factory.mktemp("optodas_adjacent"))
 
-    def test_merge_equals_reader_merge(self, directory, monkeypatch):
-        """The indexed merge loads no member through the reader."""
-        loads = []
-        original = planned.PlanResolver._load_member
-
-        def counted(resolver, kwargs):
-            loads.append(kwargs)
-            return original(resolver, kwargs)
-
-        monkeypatch.setattr(planned.PlanResolver, "_load_member", counted)
-        merged = dc.spool(directory).chunk(time=None)[0]
-        assert not loads
+    def test_merge_equals_reader_merge(self, tmp_path):
+        """
+        The indexed merge loads no member through the reader, so a start time
+        overwritten after indexing, which the reader would decode, is unseen.
+        """
+        directory = _indexed_adjacent(tmp_path)
         files = sorted(directory.glob("*.hdf5"))
         patches = [dc.read(x)[0] for x in files]
         expected = dc.spool(patches).chunk(time=None)[0]
+        for path in files:  # in place, so size and mtime stay as indexed
+            stat = os.stat(path)
+            with h5py.File(path, "r+") as h5:
+                h5["header/time"][()] = np.nan
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        merged = dc.spool(directory).chunk(time=None)[0]
         assert merged.shape == (40000, 550)
         np.testing.assert_array_equal(merged.data, expected.data)
         assert merged.coords == expected.coords

@@ -124,20 +124,19 @@ class TestRead:
             "MG.0001..ESN",
         ]
 
-    def test_join_points(self, tmp_path, monkeypatch):
+    def test_join_points(self, tmp_path):
         """The docstring's recipe joins per-point patches in channel order."""
-        spool = dc.spool(write_asdf(tmp_path / "points.h5", _POINTS))
+        path = write_asdf(tmp_path / "points.h5", _POINTS)
+        spool = dc.spool(path)
         assert len(spool) == 3
-        opened = []
-        parse = asdf_utils._parse_trace
-        monkeypatch.setattr(
-            asdf_utils, "_parse_trace", lambda *x: opened.append(x[0]) or parse(*x)
-        )
+        # Each patch's read opens only its own waveform, never this one,
+        # which lacks the timing a waveform needs.
+        with h5py.File(path, "a") as h5:
+            group = h5["Waveforms"].require_group("MG.0009")
+            group["MG.0009.09.ESN__start__end__raw_data"] = np.zeros(6)
         (patch,) = spool.concatenate(channel=None, group=(), conflict="drop")
         assert patch.get_coord("channel").values.tolist() == [0, 1, 2]
         assert np.array_equal(patch.data, np.stack([_data(i, 6) for i in range(3)]))
-        # Each patch's read opens only its own waveform.
-        assert len(opened) == 3
 
     def test_dotted_location(self, tmp_path):
         """Fields between station and the last field form the location."""
@@ -163,7 +162,12 @@ class TestRead:
             )
 
     def test_lazy_loads_share_one_scan(self, asdf_path, monkeypatch):
-        """Loading every patch through one open file scans it once."""
+        """
+        Loading every patch through one open file scans it once.
+
+        A performance guard that keeps its spy: a scan per load gives the
+        same arrays, only slowly, so the count of scans is its only witness.
+        """
         metas = dc.scan_payloads(asdf_path)
         calls = []
         scan = asdf_utils._scan
@@ -181,20 +185,33 @@ class TestRead:
         (patch,) = [x for x in out if x.shape[0] == 2]
         assert np.array_equal(patch.data, np.stack([_data(i, 6)[2:5] for i in (1, 2)]))
 
-    def test_keyed_read_reads_only_the_window(self, asdf_path, monkeypatch):
-        """read_array slices only the selected channels' datasets."""
+    def test_keyed_read_reads_only_the_window(self, asdf_path, tmp_path):
+        """
+        read_array slices only the selected channels' datasets, so samples
+        outside the window, each its own gzip chunk, need not decode.
+        """
         (meta,) = [x for x in ASDFV1().get_metadata(asdf_path) if x.shape[0] == 3]
-        reads = []
-        original = h5py.Dataset.__getitem__
-
-        def spy(self, item):
-            reads.append((self.name.rsplit("/", 2)[1], item))
-            return original(self, item)
-
-        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        array = ASDFV1().read_array(asdf_path, ((1, 3), (2, 5)), key=meta._source.key)
+        path = tmp_path / "window.h5"
+        with h5py.File(asdf_path) as source, h5py.File(path, "w") as h5:
+            h5.attrs.update(source.attrs)
+            for name, node in source["Waveforms"].items():
+                for trace, dataset in node.items():
+                    out = h5.create_dataset(
+                        f"Waveforms/{name}/{trace}",
+                        dataset.shape,
+                        dataset.dtype,
+                        chunks=(1,),
+                        compression="gzip",
+                    )
+                    out.attrs.update(dataset.attrs)
+                    selected = trace.startswith(("MG.0001..", "MG.0002.."))
+                    for index, value in enumerate(dataset[()]):
+                        if selected and "raw_data" in trace and 2 <= index < 5:
+                            out.id.write_direct_chunk((index,), value.tobytes(), 1)
+                        else:
+                            out.id.write_direct_chunk((index,), b"not gzip")
+        array = ASDFV1().read_array(path, ((1, 3), (2, 5)), key=meta._source.key)
         assert np.array_equal(array, np.stack([_data(i, 6)[2:5] for i in (1, 2)]))
-        assert reads == [("MG.0001", slice(2, 5)), ("MG.0002", slice(2, 5))]
 
 
 class TestDetect:

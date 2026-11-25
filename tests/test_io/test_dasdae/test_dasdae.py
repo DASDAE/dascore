@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pickle
 import shutil
 from typing import ClassVar
@@ -304,19 +305,6 @@ def keyed_path(tmp_path_factory, request):
 class TestKeyedRead:
     """A keyed read decodes only the groups it names."""
 
-    @pytest.fixture
-    def decoded(self, monkeypatch):
-        """Record the name of each group whose metadata is decoded."""
-        names = []
-        original = dasdae_utils._get_metadata_from_group
-
-        def counted(group, *args, **kwargs):
-            names.append(group.name.rsplit("/", 1)[-1])
-            return original(group, *args, **kwargs)
-
-        monkeypatch.setattr(dasdae_utils, "_get_metadata_from_group", counted)
-        return names
-
     @pytest.mark.parametrize("index", [0, 1, 2])
     def test_matches_whole_read(self, keyed_path, index):
         """The keyed patch equals its counterpart in a whole-file read."""
@@ -326,13 +314,19 @@ class TestKeyedRead:
         assert out[0] == expected
         assert out[0]._source == expected._source
 
-    def test_spool_decodes_one_group(self, keyed_path, decoded):
-        """Loading one patch from an indexed spool decodes only its group."""
-        spool = dc.spool(keyed_path).update()
+    def test_spool_decodes_one_group(self, keyed_path, tmp_path):
+        """
+        Loading one patch from an indexed spool decodes only its group, so
+        groups whose dims no longer fit their data do not stop it.
+        """
+        path = shutil.copy(keyed_path, tmp_path / "multi.h5")
+        spool = dc.spool(path).update()
         key = spool.get_contents()["source_patch_key"].iloc[1]
-        decoded.clear()
+        with h5py.File(path, "r+") as h5:
+            for name, group in h5["waveforms"].items():
+                if name != key:
+                    group.attrs["_dims"] = "nonsense"
         assert spool[1]._source.key == key
-        assert decoded == [key]
 
 
 @pytest.fixture(scope="class")
@@ -343,6 +337,29 @@ def multi_patch_path(tmp_path_factory):
     patches = [p.update(data=p.data + i * 100) for i, p in enumerate(spool)]
     dc.write(dc.spool(patches), path, "DASDAE", file_version="1")
     return path
+
+
+def _only_decodable(path, axis, keep):
+    """
+    Store a one-patch DASDAE file's data as gzip chunks one index thick along
+    `axis`, where only the chunks at `keep` decode.
+    """
+    with h5py.File(path, "r+") as h5:
+        (group,) = h5["waveforms"].values()
+        data, attrs = group["data"][()], dict(group["data"].attrs)
+        del group["data"]
+        chunks = tuple(1 if x == axis else n for x, n in enumerate(data.shape))
+        node = group.create_dataset(
+            "data", data.shape, data.dtype, chunks=chunks, compression="gzip"
+        )
+        node.attrs.update(attrs)
+        for index in range(data.shape[axis]):
+            offset = tuple(index if x == axis else 0 for x in range(data.ndim))
+            if index in keep:  # stored as if the gzip filter were skipped
+                block = np.take(data, [index], axis=axis).tobytes()
+                node.id.write_direct_chunk(offset, block, 1)
+            else:
+                node.id.write_direct_chunk(offset, b"not gzip")
 
 
 class TestReadArray:
@@ -416,19 +433,16 @@ class TestReadArray:
             DASDAEV1().read_array(written_dascore_v1_random, (), time_min=1)
 
     def test_reads_only_the_window(
-        self, written_dascore_v1_random, random_patch, monkeypatch
+        self, written_dascore_v1_random, random_patch, tmp_path
     ):
-        """The dataset is sliced in the file, not read whole then trimmed."""
-        seen = []
-        original = h5py.Dataset.__getitem__
-
-        def spy(self, index):
-            seen.append(index)
-            return original(self, index)
-
-        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        DASDAEV1().read_array(written_dascore_v1_random, (None, (2, 6)))
-        assert seen == [(slice(0, random_patch.shape[0]), slice(2, 6))]
+        """
+        The dataset is sliced in the file, not read whole then trimmed, so
+        columns outside the window need not decode.
+        """
+        path = shutil.copy(written_dascore_v1_random, tmp_path / "window.h5")
+        _only_decodable(path, 1, range(2, 6))
+        out = DASDAEV1().read_array(path, (None, (2, 6)))
+        np.testing.assert_array_equal(out, random_patch.data[:, 2:6])
 
 
 class TestSpoolReadHints:
@@ -436,10 +450,11 @@ class TestSpoolReadHints:
 
     @pytest.mark.parametrize("dim", ["distance", "time"])
     @pytest.mark.parametrize("uneven", [False, True])
-    def test_single_range_reads_only_selected_data(
-        self, tmp_path, monkeypatch, dim, uneven
-    ):
-        """A single range needs no regular step to read only its selected samples."""
+    def test_single_range_reads_only_selected_data(self, tmp_path, dim, uneven):
+        """
+        A single range needs no regular step to read only its selected
+        samples, so samples outside it need not decode.
+        """
         increments = [1, 2] if uneven else [1, 1]
         distance = np.cumsum(np.resize(increments, 150)).astype(float)
         time = np.datetime64("2020-01-01", "ns") + np.cumsum(
@@ -456,22 +471,25 @@ class TestSpoolReadHints:
         values = source.get_array(dim)
         selection = {dim: (values[5], values[20])}
         expected = source.select(**selection)
-        read_shapes = []
-        original = h5py.Dataset.__getitem__
-
-        def spy(dataset, index):
-            out = original(dataset, index)
-            if dataset.name.endswith("/data"):
-                read_shapes.append(out.shape)
-            return out
-
-        monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
+        assert expected.data.size < source.data.size / 8
+        keep = np.flatnonzero(np.isin(values, expected.get_array(dim)))
+        _only_decodable(tmp_path / "source.h5", patch.dims.index(dim), keep)
         selected = spool.select(**selection)[0]
-        assert read_shapes == [expected.shape]
-        assert selected.data.size < source.data.size / 8
+        assert selected.shape == expected.shape
         assert np.array_equal(selected.data, expected.data)
         assert selected.attrs.data_id == expected.attrs.data_id
         assert selected.attrs.history == expected.attrs.history
+
+
+def _unopenable(path):
+    """
+    Overwrite a file's HDF5 signature, keeping its size and mtime, so h5py
+    cannot open it while its data is still where its offsets say.
+    """
+    stat = os.stat(path)
+    with open(path, "r+b") as handle:
+        handle.write(bytes(8))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
 class TestDataOffsets:
@@ -489,25 +507,28 @@ class TestDataOffsets:
         (summary,) = dc.scan(path)
         assert len(summary.data_offsets) == 1 and summary.data_chunk_rows
 
-    def test_spool_reads_by_offset(self, path, random_patch, stored_reads):
-        """A merge of files loads their data with plain reads, not through h5py."""
+    def test_spool_reads_by_offset(self, path, random_patch):
+        """
+        A merge of files loads their data with plain reads, not through h5py,
+        so files h5py can no longer open still merge.
+        """
         time = random_patch.get_coord("time")
         later = random_patch.update_coords(time_min=time.max() + time.step)
         later.io.write(path.with_name("later.h5"), "DASDAE")
         spool = dc.spool(path.parent).update(progress=None)
+        for file in (path, path.with_name("later.h5")):
+            _unopenable(file)
         merged = spool.chunk(time=None)[0]
         expected = np.concatenate([random_patch.data, later.data], axis=1)
         np.testing.assert_array_equal(merged.data, expected)
-        assert not stored_reads
 
-    def test_rewritten_file_uses_reader(self, path, random_patch, stored_reads):
+    def test_rewritten_file_uses_reader(self, path, random_patch):
         """A file changed since its offsets were taken is read by its reader."""
         source = dc.read(path)[0]._source
         spool = dc.spool(path.parent).update(progress=None)
         version = dc.get_format(path)[1]
         (random_patch * 2).io.write(path, "DASDAE", file_version=version)
         np.testing.assert_array_equal(source[2:20].load(), random_patch.data[2:20] * 2)
-        assert len(stored_reads) == 1
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data, random_patch.data * 2)
 

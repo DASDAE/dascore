@@ -172,6 +172,10 @@ class TestHTTPFormatAndSpool:
         An HDF5 file opens from its first block, but a reader probing past it
         needs the refused local copy; the scan must still ask for the opt-in,
         and no later HDF5 reader reopens the file.
+
+        A performance guard that keeps its spy: a reader reopening the file
+        raises the same error, only after more requests, so the handles
+        built are its only witness.
         """
         fname = "terra15_das_1_trimmed.hdf5"
         ensure_http_regression_file(fname)

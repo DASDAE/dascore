@@ -1248,7 +1248,8 @@ class TestSintelaProtobufScanCost:
         because the full path reports the same errors and returns the same
         data. Only the cost differs, so the call sites are checked directly:
         without this, `read` could quietly revert to decoding every packet up
-        front and nothing would notice.
+        front and nothing would notice. A performance guard that keeps its
+        spy for that reason.
         """
         path = write_sintela_file("ts_shortcut.pb", ts_records)
         for target in (path, Path(sintela_protobuf_path)):
@@ -1316,7 +1317,7 @@ class TestSintelaProtobufScanCost:
         assert found[1] == len(payload)
 
     def test_scan_hands_the_parser_headers_not_payloads(
-        self, monkeypatch, write_sintela_file, band_records
+        self, write_sintela_file, band_records
     ):
         """
         The non-timeseries scan path asks the iterator for header-only records.
@@ -1324,24 +1325,15 @@ class TestSintelaProtobufScanCost:
         Testing the iterator directly leaves the call site untested, and bytes
         read cannot tell the difference: a payload streamed past and dropped
         costs the same I/O as one that is kept. What changes is what reaches
-        the parser, so that is what this measures.
+        the parser, so each payload here ends in a field cut short, which
+        only a parser handed the whole payload trips on.
         """
         records = _pad_samples(band_records, "BandPacket", 200_000)
+        # Field 2047, length-delimited, claims 127 bytes and has none.
+        records = [(tag, payload + b"\xfa\x7f\x7f") for tag, payload in records]
         path = write_sintela_file("band_wiring.pb", records)
-        payload_sizes = []
-        original = sintela_utils._parse_records
-
-        def _spy(records, **kwargs):
-            records = list(records)
-            payload_sizes.extend(len(record.payload) for record in records)
-            return original(records, **kwargs)
-
-        monkeypatch.setattr(sintela_utils, "_parse_records", _spy)
         with path.open("rb") as handle:
-            sintela_utils.scan_payload(handle)
-        assert payload_sizes
-        # A padded BAND payload is ~1 MB; a header is a few hundred bytes.
-        assert max(payload_sizes) < 4096
+            assert len(sintela_utils.scan_payload(handle)) == 1
 
     def test_detection_does_not_pull_whole_payloads(
         self, write_sintela_file, band_records
@@ -1455,7 +1447,9 @@ class TestSintelaProtobufScanCost:
         Protobuf releases a packet's arena only when the whole message dies, so
         one that outlives its turn keeps owning its samples whatever is done to
         its fields. Process memory is too noisy to assert on at fixture size;
-        the object graph is exact.
+        the object graph is exact. A memory guard that keeps its spies: a
+        packet held too long gives the same data, so the live packets seen at
+        each decode are its only witness.
         """
         sample_cls = sintela_utils._get_proto_messages(include_sample_fields=True)[
             "TimeseriesPacket"
@@ -2011,7 +2005,12 @@ class TestPackedTimeseriesSamples:
         np.testing.assert_array_equal(packet, values)
 
     def test_stream_uses_packed_view(self, tmp_path, monkeypatch):
-        """A read must pass wire payloads through the bulk conversion path."""
+        """
+        A read must pass wire payloads through the bulk conversion path.
+
+        A performance guard that keeps its spy: boxing each sample gives the
+        same values, only slowly, so the views made are its only witness.
+        """
         records = []
         cls = _get_test_proto_messages()["TimeseriesPacket"]
         for tag, payload in _build_ts_payloads():
@@ -2103,7 +2102,12 @@ class TestWindowedTimeseriesReads:
 
     @pytest.mark.parametrize("api", ["array", "read", "spool"])
     def test_allocation_is_bounded(self, windowed_path, monkeypatch, api):
-        """A tiny selection allocates only its output while traversing headers."""
+        """
+        A tiny selection allocates only its output while traversing headers.
+
+        A memory guard that keeps its spy: allocating the whole array gives
+        the same selection, so the shapes allocated are its only witness.
+        """
         original = np.empty
         shapes = []
 
@@ -2274,39 +2278,29 @@ class TestWindowedTimeseriesReads:
         )
 
     def test_larger_headers_do_not_decode_unselected_samples(
-        self, windowed_path, tmp_path, monkeypatch
+        self, windowed_path, tmp_path
     ):
-        """Headers beyond the small prefix still allow packet sample filtering."""
+        """
+        Headers beyond the small prefix still allow packet sample filtering,
+        so unselected packets whose samples cannot decode still read.
+        """
         records = []
         cls = _get_test_proto_messages()["TimeseriesPacket"]
+        # A packed float field one byte short of whole floats fails to parse.
+        malformed = b"\x1a\xff\xff\x03" + bytes(65535)
         with windowed_path.open("rb") as stream:
-            for record in sintela_utils._iter_envelope_records(stream, strict=True):
+            records_in = sintela_utils._iter_envelope_records(stream, strict=True)
+            for index, record in enumerate(records_in):
                 header = sintela_utils._leading_header_bytes(record.payload)
                 assert header is not None
                 msg = cls()
                 msg.ParseFromString(header)
                 msg.header.MergeFromString(b"\x9a\x06\x80\x10" + bytes(2048))
-                records.append(
-                    (
-                        record.tag,
-                        msg.SerializeToString() + record.payload[len(header) :],
-                    )
-                )
+                samples = record.payload[len(header) :] if index < 2 else malformed
+                records.append((record.tag, msg.SerializeToString() + samples))
         path = tmp_path / "large_headers.pb"
         _write_records(path, records)
-        original = sintela_utils._parse_packet
-        decoded = []
-
-        def track(tag, payload, messages, error):
-            """Count packets for which the full samples field was decoded."""
-            out = original(tag, payload, messages, error)
-            if hasattr(out, "samples") and len(out.samples):
-                decoded.append(tag)
-            return out
-
-        monkeypatch.setattr(sintela_utils, "_parse_packet", track)
         actual = SintelaProtobufV1().read_array(path, windows=((255, 258), (2, 5)))
         np.testing.assert_array_equal(
             actual, np.arange(64 * 16384).reshape(-1, 64)[255:258, 2:5]
         )
-        assert len(decoded) == 2

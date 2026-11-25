@@ -478,7 +478,13 @@ class TestReadArray:
         assert out.shape == (20, 4)
 
     def test_only_touched_segments_are_decoded(self, two_segment_path, monkeypatch):
-        """A window inside the second segment decodes that segment alone."""
+        """
+        A window inside the second segment decodes that segment alone.
+
+        A performance guard that keeps its spy: decoding every segment gives
+        the same rows, only slowly, so the segments decoded are its only
+        witness.
+        """
         from dascore.io.tdms import utils as tdms_utils  # noqa: PLC0415
 
         decoded = []

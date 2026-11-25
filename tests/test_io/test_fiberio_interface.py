@@ -227,7 +227,13 @@ class TestSourceLoading:
     """A reader with only read_array serves every source of a resource."""
 
     def test_default_read_prepares_each_key_once(self, monkeypatch):
-        """The default loader reuses one reader for repeated windows of a key."""
+        """
+        The default loader reuses one reader for repeated windows of a key.
+
+        A performance guard that keeps its spy: a reader prepared per window
+        gives the same arrays, only slowly, so the keys prepared are its only
+        witness.
+        """
         prepared = []
         original = FiberIO._prepare_array_reader
 

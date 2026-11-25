@@ -20,6 +20,9 @@ from dascore.io.dasdae.utils import _read_stored_coord, _save_coord
 from dascore.warnings import SnapWarning
 from tests.conftest import join_patches, segment_layout
 
+# More samples than the address space can hold as labels: expanding such a
+# grid fails at once, as 7 PiB on 64-bit or 8 GiB on 32-bit WebAssembly.
+HUGE = 10**15 if np.intp(0).itemsize == 8 else 1_000_000_007
 T0 = np.datetime64("2020-01-01T00:00:00")
 MS = np.timedelta64(1, "ms")
 
@@ -390,19 +393,22 @@ class TestDefaultSnap:
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
         return dc.write(patch, path, "DASDAE")
 
-    def test_grid_labels_are_not_expanded(self, tmp_path, monkeypatch):
-        """Scanning a grid reads none of its labels."""
+    @pytest.mark.parametrize("dim", ["distance", "time"])
+    def test_grid_labels_are_not_expanded(self, tmp_path, dim):
+        """Scanning a grid reads none of its labels, so any length scans."""
         path = dc.write(dc.get_example_patch(), tmp_path / "grid.h5", "DASDAE")
-        expanded = []
-        values = NumericCoord.values
-
-        def spy(coord):
-            expanded.append(coord.evenly_sampled)
-            return values.__get__(coord)
-
-        monkeypatch.setattr(NumericCoord, "values", property(spy))
-        dc.scan(path)
-        assert not any(expanded)
+        with h5py.File(path, "r+") as h5:
+            (group,) = h5["waveforms"].values()
+            # A step of 2 us keeps the last of HUGE time labels in range.
+            group[f"_coord_{dim}"].attrs.update(length=HUGE, step_numerator=2000)
+            attrs, shape = dict(group["data"].attrs), list(group["data"].shape)
+            shape[group.attrs["_dims"].split(",").index(dim)] = HUGE
+            del group["data"]
+            # Chunked and never written, so the samples take no space.
+            group.create_dataset("data", shape, "f8", chunks=(300, 2000))
+            group["data"].attrs.update(attrs)
+        (meta,) = dc.scan(path)
+        assert meta.coords[dim].len == HUGE
 
     @pytest.mark.parametrize("snap", [None, True])
     def test_large_integers_snap(self, tmp_path, snap):
