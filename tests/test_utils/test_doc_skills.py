@@ -70,6 +70,7 @@ class TestSkills:
         skill = SKILL_PATH / "dascore-make-inventory" / "SKILL.md"
         assert skill in set(validator.get_qmd_files())
 
+    @pytest.mark.wasm_skip
     def test_cli(self, cache, capsys):
         """Discovery lists canonical pages and retrieval serves their contents."""
         assert main(["skills"]) == 0

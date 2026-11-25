@@ -122,6 +122,7 @@ class TestEqualityOfMixedKinds:
         assert view == dc.spool(list(view))
 
 
+@pytest.mark.wasm_skip
 class TestEqualityComparesLoads:
     """Equality compares what each spool would load, reading no file (#1642)."""
 
@@ -439,6 +440,7 @@ class TestUpdateContract:
         assert new == spool
 
 
+@pytest.mark.wasm_skip
 class TestChunkPlanContract:
     """Planned views: collapse semantics and derived state."""
 

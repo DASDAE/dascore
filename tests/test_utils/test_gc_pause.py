@@ -116,6 +116,7 @@ class TestDeadlockProperty:
         gc.collect()
 
 
+@pytest.mark.wasm_skip
 class TestPauseAccounting:
     """The pause must never be left on, and never lifted early."""
 

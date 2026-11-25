@@ -272,6 +272,7 @@ class TestChunk:
         assert len(merged_spool)
 
 
+@pytest.mark.wasm_skip
 class TestChunkMerge:
     """Tests for merging patches together using chunk method."""
 
@@ -1014,6 +1015,7 @@ class TestStreamingMerge:
             assembler._merge_patches_streaming(None, [{}, {}], "time", samples)
 
 
+@pytest.mark.wasm_skip
 class TestDescendingChunk:
     """Public chunk behavior for descending coordinates (2026-07-18 F5)."""
 
@@ -1142,6 +1144,7 @@ class TestDescendingChunk:
         assert patch.attrs.description == plan.outputs["description"].iloc[0]
 
 
+@pytest.mark.wasm_skip
 class TestMixedUnitChunk:
     """Chunk partitioning and merging across unit differences."""
 
@@ -1480,6 +1483,7 @@ class TestNonSIUnitTrim:
         assert sum(x.shape[x.get_axis("distance")] for x in out) == patch.shape[axis]
 
 
+@pytest.mark.wasm_skip
 class TestChainedChunk:
     """Chunking a derived spool along another dimension (round-4 F1)."""
 
@@ -2196,6 +2200,7 @@ class TestSizeChunk:
             random_spool.chunk(time=np.array([1.0, 2.0]) * dc.units.MB)
 
 
+@pytest.mark.wasm_skip
 class TestChunkEdgeBetweenPatches:
     """
     Chunk lengths that are not a whole number of samples (#1008, #893).
@@ -2404,6 +2409,7 @@ class TestRegularChunkPartition:
         """Which spool of a case to chunk."""
         return request.param
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "case, route",
         [(x, "disk" if x in _DISK_CASES else "memory") for x in _PARTITION_CASES],
@@ -2431,6 +2437,7 @@ class TestRegularChunkPartition:
             gaps = np.abs(to_int(bounds)[:, None] - to_int(x)[None, :])
             _assert_labels(bounds, x[gaps.argmin(axis=1)])
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "values, length, count",
         [
@@ -2471,6 +2478,7 @@ class TestRegularChunkPartition:
         expected = _half_open_windows(whole, 0.75, None)
         assert [x.data.tolist() for x in out] == [x[1].tolist() for x in expected]
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "values, sizes, bounds, kind, length, route",
         [
@@ -2518,6 +2526,7 @@ class TestRegularChunkPartition:
         assert sum(x.shape[0] for x in out) == 600
 
 
+@pytest.mark.wasm_skip
 class TestFilledWindows:
     """Windows of a fill, planned straight onto the files."""
 
@@ -2629,6 +2638,7 @@ class TestLongFractionalGrid:
         assert np.array_equal(out.data, patch.data)
 
 
+@pytest.mark.wasm_skip
 class TestChunkWithAssociatedCoords:
     """Chunking must not trim on coordinates riding another dimension."""
 
@@ -2713,6 +2723,7 @@ class TestChunkWithAssociatedCoords:
                 assert set(np.unique(other.get_array("label"))) == labels
 
 
+@pytest.mark.wasm_skip
 class TestWindowedRiderStep:
     """A window keeps its rider's grid, so its row states the step (#1698)."""
 
@@ -2772,6 +2783,7 @@ class TestWindowedRiderStep:
         assert steps.equals(dc.spool(list(chunked)).get_contents()["lat_step"])
 
 
+@pytest.mark.wasm_skip
 class TestMergeDimCoords:
     """Coordinates riding the merge dimension are concatenated, not policed."""
 
@@ -3660,6 +3672,7 @@ class TestChunkFromIndex:
             assert name not in dict(attrs)
 
 
+@pytest.mark.wasm_skip
 class TestRecipeMerge:
     """A merge the rows describe is read as one recipe over its members."""
 
@@ -4073,6 +4086,7 @@ class TestChunkFillValue:
         assert int((merged.data == 0).all(axis=other).sum()) == self.hole
 
 
+@pytest.mark.wasm_skip
 class TestChunkFillWindows:
     """Windows laid over a bridged hole, which no source patch feeds."""
 
@@ -4452,6 +4466,7 @@ class TestUnionRevision:
         assert len(old + new) == 1
 
 
+@pytest.mark.wasm_skip
 class TestStaleSourceCheck:
     """A recipe reads a promised window, so a changed file leaves the route."""
 
@@ -4967,6 +4982,7 @@ class TestStatPrecision:
         assert out.shape[0] == 16
 
 
+@pytest.mark.wasm_skip
 class TestStoredDatetimeUnit:
     """A rebuilt coordinate is counted as the file counts it."""
 
@@ -5079,6 +5095,7 @@ class TestStoredDatetimeUnit:
         assert set(rows["_time_coord_dtype"]) == {"datetime64[ms]"}
 
 
+@pytest.mark.wasm_skip
 class TestTrimmedRecipeMerge:
     """A member the plan trims is a window of its source in the recipe."""
 
@@ -5274,7 +5291,6 @@ class TestTrimmedRecipeMerge:
             out[kind] = (_dim_spool(directory, name, kind), name)
         return out
 
-    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("kind", ["datetime", "float", "int64", "int32"])
     def test_every_chunking_matches_the_patch_path(
         self,
@@ -5411,6 +5427,7 @@ class TestTrimmedRecipeMerge:
             spool.chunk(time=None)[0]
 
 
+@pytest.mark.wasm_skip
 class TestSelectedRecipeMerge:
     """A value selection on the planned dimension still windows its members."""
 
@@ -5584,7 +5601,6 @@ class TestSelectedRecipeMerge:
             assert not planned._value_residuals_on((plain, residual), "time")
             assert not planned._value_residuals_on((residual, plain), "time")
 
-    @pytest.mark.wasm_skip
     def test_every_selection_matches_the_patch_path(self, spools, monkeypatch, route):
         """Random selections and chunkings read the same samples either way.
 
@@ -5641,6 +5657,7 @@ class TestSelectedRecipeMerge:
         assert recipes, "no selected spool merged from the index"
 
 
+@pytest.mark.wasm_skip
 class TestChunkMergeRegressions:
     """Chunk assembly preserves sample order, scale, and declared sampling."""
 

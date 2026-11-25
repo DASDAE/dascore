@@ -2637,6 +2637,7 @@ class TestFillGaps:
         assert patch.fill_gaps("time") is patch
 
 
+@pytest.mark.wasm_skip
 class TestFilledSpoolWindowRiders:
     """A window of a spool's fill cuts its riders, as a select of the fill does."""
 

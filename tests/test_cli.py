@@ -31,6 +31,7 @@ def corpus(tmp_path_factory):
     return root, doc_corpus.write_corpus(root)
 
 
+@pytest.mark.wasm_skip
 class TestDocuments:
     """Real API aliases and authored documents share one corpus."""
 
@@ -606,6 +607,7 @@ class TestUsageErrors:
 class TestKeywordMetadata:
     """Preserve usable keyword metadata in ordinary Markdown documents."""
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("value", ["[2024]", "false", "null", "{filtering: true}"])
     def test_invalid(self, tmp_path, monkeypatch, value):
         """Malformed keyword types fail with a document-specific diagnostic."""
@@ -619,6 +621,7 @@ class TestKeywordMetadata:
         ):
             doc_corpus.write_corpus(tmp_path / "output")
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "value, expected",
         [

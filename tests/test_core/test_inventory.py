@@ -3207,6 +3207,7 @@ class TestSerializationIsLossless:
         crs = dc.inventory(inventory.io.to_yaml()).coordinate_reference_system
         assert (crs.authority, crs.code, crs.name) == ("", "", "")
 
+    @pytest.mark.wasm_skip
     def test_every_blankable_field_survives(self):
         """Emptying any field of any model must survive a round trip.
 

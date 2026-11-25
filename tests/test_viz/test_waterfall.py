@@ -611,6 +611,7 @@ def _span_color(ax, axis, low, high):
     return colors.pop()
 
 
+@pytest.mark.wasm_skip
 class TestLabelCoord:
     """Tests for marking the stretches a label coordinate covers."""
 

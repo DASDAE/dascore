@@ -362,6 +362,7 @@ TIME_KINDS = {
 }
 
 
+@pytest.mark.wasm_skip
 class TestMixedKinds:
     """Patches timed in two kinds each plan as a spool of their kind alone (#1639)."""
 
@@ -536,6 +537,7 @@ def _time_runs_patch(count, samples=10):
     return dc.Patch(data=data, coords=coords, dims=DIMS)
 
 
+@pytest.mark.wasm_skip
 class TestGappedPatchRows:
     """A spool holds a patch with holes whole; its index states the holes."""
 
@@ -615,6 +617,7 @@ class TestGappedPatchRows:
         assert len(spool) == len(spool + dc.spool(list(spool))) == 1
 
 
+@pytest.mark.wasm_skip
 class TestChunkKeepsHoles:
     """Without tolerance, chunk never joins across a hole; with it, it refits."""
 
@@ -733,6 +736,7 @@ class TestChunkKeepsHoles:
         assert len(chunked) == len(yielded) == len(dc.spool(yielded))
 
 
+@pytest.mark.wasm_skip
 class TestSpoolFillGaps:
     """Spool.fill_gaps fills lazily, and chunk and cut join across what it filled."""
 
@@ -1144,6 +1148,7 @@ class TestSpoolSnapCoords:
             out.get_contents()["time_step"].iloc[0] == expected.get_coord("time").step
         )
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "kwargs", [{}, {"reverse": True}, {"step": 1.0}, {"step": 0.5}]
     )
@@ -1215,6 +1220,7 @@ class TestSpoolSnapCoords:
         assert wacky.snap_coords("time", step=step)[0].get_coord("time") == expected
 
 
+@pytest.mark.wasm_skip
 class TestConcatenatedRuns:
     """A concatenation's index row states each member's runs as segments."""
 

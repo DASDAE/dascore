@@ -867,6 +867,7 @@ class TestPartitions:
                 array = region_array(refine(layout, boxes), shape)
                 assert array.validate().data_id == whole.data_id
 
+    @pytest.mark.wasm_skip
     def test_staggered_partitions(self):
         """Tilings which no sequence of cuts can make are the array too."""
         rng = np.random.default_rng(8)

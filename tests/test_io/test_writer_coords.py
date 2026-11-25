@@ -265,6 +265,7 @@ class TestManySegments:
         assert back.runs_count == 1 and back.step is None
         assert back == patch.get_coord("time")
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("name", list(LIST_FORMATS))
     def test_concatenated_segments_round_trip(self, name, tmp_path):
         """
@@ -289,6 +290,7 @@ class TestManySegments:
         assert segment_layout(back) == segment_layout(coord)
         assert {x.step for x in back.segments} == {coord.segments[0].step}
 
+    @pytest.mark.wasm_skip
     def test_dasdae_records_up_to_its_segment_limit(self, tmp_path):
         """8,000 segments write and read back; one more is refused, saying why."""
         with dc.config_context(max_index_runs=10_000):

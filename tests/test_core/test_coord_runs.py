@@ -264,6 +264,7 @@ class TestFractionalGaps:
         assert not get_gap_edges(coord, GapTolerance.samples(2))[1].any()
         assert get_gap_edges(coord, GapTolerance.samples(1.5))[1].sum() == 1
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("one_patch", [False, True])
     @pytest.mark.parametrize("selected", [False, True])
     def test_spool(self, full, one_patch, selected):

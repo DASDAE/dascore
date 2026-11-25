@@ -1742,6 +1742,7 @@ class TestBatchOneParameters:
         expected = ndimage.sobel(patch.data, axis=axis, mode="constant", cval=1.0)
         assert np.allclose(out, expected)
 
+    @pytest.mark.wasm_skip
     def test_kurtosis_along_either_axis(self, patch):
         """The answer does not depend on where the dimension sits."""
         out = patch.kurtosis(time=16, samples=True)

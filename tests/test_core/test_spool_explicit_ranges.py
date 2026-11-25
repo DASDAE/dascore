@@ -416,6 +416,7 @@ class TestExplicitCut:
             spool.cut(distance=np.array([[1, 2]]), overlap=1)
 
 
+@pytest.mark.wasm_skip
 class TestExplicitMetadataSources:
     """File and in-memory sources report the same exact windows."""
 
@@ -743,6 +744,7 @@ class TestExplicitDerivedViews:
         assert _listed(selected.get_contents()) == [[5, 9], [10, 15]]
 
 
+@pytest.mark.wasm_skip
 class TestReviewRegressions:
     """Explicit windows agree with the samples and coordinates they yield."""
 
@@ -971,6 +973,7 @@ def _boxes(spool, dims=("time", "distance")):
     return [tuple(tuple(map(_s, pair)) for pair in box) for box in ends]
 
 
+@pytest.mark.wasm_skip
 class TestExplicitBoxes:
     """Row i of every explicit dimension is one rectangular window."""
 
@@ -1226,6 +1229,7 @@ class TestChainedExplicitCut:
             for name, args in _CHAINS.items()
         }
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "case, length, window",
         [
@@ -1242,6 +1246,7 @@ class TestChainedExplicitCut:
             first = spool.chunk(x=length, keep_partial=True)
             _assert_selects(first.cut(x=window[None]), whole, window)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("sign, shift", [(1, 0), (-1, 0), (1, 300)])
     def test_windows_then_regular_chunk(self, tmp_path, sign, shift):
         """
@@ -1298,6 +1303,7 @@ class TestChainedExplicitCut:
         out = spool._subdivided(sources, rows, cuts, "x")
         assert [x.shape for x in out.chunk(d=None)] == [(2, 100), (2, 200)]
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("seed", range(len(_CHAINS)))
     def test_random_plans(self, sources, seed):
         """Random lengths and windows: disk equals memory equals truth."""
@@ -1327,6 +1333,7 @@ def _gapped_2d(*starts, depth=False):
     return dc.spool([make(x) for x in starts]), time
 
 
+@pytest.mark.wasm_skip
 class TestWindowsOverFilledGaps:
     """Windows over a spool which filled its gaps keep the filled grid."""
 
@@ -1488,6 +1495,7 @@ class TestWindowForms:
         assert list(rows.itertuples(index=False, name=None)) == loaded
         return loaded
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_reversed_bounds_swap(self, forms_spool, method):
         """A row's reversed bounds are swapped, per row and dimension (rule 8)."""
@@ -1501,6 +1509,7 @@ class TestWindowForms:
         for dim in ("time", "distance"):
             assert self._spans(swapped, dim) == self._spans(forward, dim)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_infinite_end_is_open(self, forms_spool, method):
         """An infinity opens its own side, whichever column holds it."""
@@ -1511,6 +1520,7 @@ class TestWindowForms:
         got = call(distance=np.array([[np.inf, 290], [3, -np.inf]]))
         assert self._spans(got, "distance") == expected
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("method", ["select", "cut"])
     def test_quantity_array(self, forms_spool, method):
         """A quantity holding an (n, 2) array is windows, as quantities are."""

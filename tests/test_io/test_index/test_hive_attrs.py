@@ -248,6 +248,7 @@ class TestHiveWins:
         spool.indexer.close()
 
 
+@pytest.mark.wasm_skip
 class TestPatchStamping:
     """Hive attrs reach loaded patches in every load path."""
 

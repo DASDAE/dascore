@@ -1735,6 +1735,7 @@ class TestSpoolSetBackend:
             merged = held.set_backend("lazy").chunk(time=None)[0]
         assert backend_name(merged.data) == "numpy" and merged.equals(expected)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("backend", (None, "lazy"), ids=("unset", "lazy"))
     @pytest.mark.parametrize("policy", (None, "warn"))
     def test_lazy_patches_held_merge(self, spool, policy, backend, reads):
@@ -2028,6 +2029,7 @@ class TestLazyMerge:
         assert merged.attrs.data_units == dc.get_quantity("m/s")
         assert merged.dtype == np.float64
 
+    @pytest.mark.wasm_skip
     def test_files_which_state_data_units(self, whole, tmp_path):
         """Members already in the plan's units are not asked to convert."""
         spool = _in_four_files(whole.set_units("m/s"), tmp_path)

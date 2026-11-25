@@ -383,6 +383,7 @@ def mixed_backend():
     catalog.close()
 
 
+@pytest.mark.wasm_skip
 class TestTimeIndex:
     """Time selections seek the time index, and select what they always did."""
 

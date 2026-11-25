@@ -817,6 +817,7 @@ class TestEdgeCases:
         values = np.array([0.0, 1.0, 3.0])
         assert labels(values) != labels(values.astype(np.int64))
 
+    @pytest.mark.wasm_skip
     def test_eq_spells_out_no_grid(self):
         """Comparing long grids and their segments holds no labels in memory."""
         size = 50_000_000

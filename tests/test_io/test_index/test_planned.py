@@ -129,6 +129,7 @@ class TestHelpers:
         assert len(catalog) == 1
 
 
+@pytest.mark.wasm_skip
 class TestDerivedComposition:
     """Operation-order coverage over derived catalogs."""
 
@@ -275,6 +276,7 @@ class TestRemainingEdges:
         assert out.equals(df)
 
 
+@pytest.mark.wasm_skip
 class TestAuxiliaryCoords:
     """Derived catalogs keep non-dimension coords (2026-07-18 F2)."""
 
@@ -456,6 +458,7 @@ def _assert_holds(advertised, loaded, tolerance=1e-5):
         assert 0 <= high - last <= tolerance
 
 
+@pytest.mark.wasm_skip
 class TestWindowedRiders:
     """A window on one coordinate trims every coordinate on its dimension."""
 

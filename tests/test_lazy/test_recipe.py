@@ -434,6 +434,7 @@ def assert_same_array(view, eager, loadable):
         assert np.array_equal(view.load(), eager.load())
 
 
+@pytest.mark.wasm_skip
 class TestViews:
     """Slices and transposes wait to clip and permute the members."""
 
