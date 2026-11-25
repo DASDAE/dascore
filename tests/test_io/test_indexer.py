@@ -480,15 +480,14 @@ class TestUpdate:
         assert len(dc.spool(tmp_path).update(progress=None)) == 1
         (tmp_path / "sub").mkdir()
         (tmp_path / "a.h5").rename(tmp_path / "sub" / "a.h5")
-        scanned = []
-        monkeypatch.setattr(
-            fiber_io,
-            "scan",
-            lambda self, path, **kw: scanned.append(path) or scan(self, path, **kw),
-        )
+        # good.h5 is not rescanned, so its HDF5 signature, overwritten with
+        # its size and mtime kept, goes unnoticed.
+        good, stat = tmp_path / "good.h5", os.stat(tmp_path / "good.h5")
+        with good.open("r+b") as handle:
+            handle.write(bytes(8))
+        os.utime(good, ns=(stat.st_atime_ns, stat.st_mtime_ns))
         spool = dc.spool(tmp_path).update(progress=None, retry_unreadable=True)
         assert len(spool) == 2
-        assert len(scanned) == 1  # good.h5 is not rescanned
 
     def test_retry_unreadable_moved_into_scope(self, tmp_path, monkeypatch):
         """A retried source moved into a scoped update drops its old row."""
@@ -540,7 +539,13 @@ class TestScopedUpdate:
         return set(indexer._backend.source_stats()["source_path"])
 
     def test_new_file_without_full_walk(self, archive, walked):
-        """Naming a new file indexes it and walks nothing else."""
+        """
+        Naming a new file indexes it and walks nothing else.
+
+        A performance guard that keeps its spy: walking the whole directory
+        and keeping only the scope gives the same index, only slowly, so the
+        roots walked are its only witness.
+        """
         new = archive.path / "live" / "b.h5"
         dc.get_example_patch().io.write(new, "dasdae")
         archive.update(paths=[new], progress=None)
@@ -548,7 +553,13 @@ class TestScopedUpdate:
         assert "live/b.h5" in self._sources(archive)
 
     def test_directory_scope_prunes_only_inside(self, archive, walked):
-        """Removals inside the scope drop; those outside wait for a full update."""
+        """
+        Removals inside the scope drop; those outside wait for a full update.
+
+        A performance guard that keeps its spy: walking the whole directory
+        and pruning only the scope gives the same index, only slowly, so the
+        roots walked are its only witness.
+        """
         (archive.path / "live" / "a.h5").unlink()
         (archive.path / "old" / "a.h5").unlink()
         archive.update(paths=["live"], progress=None)

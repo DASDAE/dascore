@@ -743,7 +743,13 @@ class TestLineageIds:
             assert np.array_equal(out.data, expected.data)
 
     def test_float32_absolute_bound_uses_source_precision(self, tmp_path, monkeypatch):
-        """Native float32 rounding determines a no-op without losing reader hints."""
+        """
+        Native float32 rounding determines a no-op without losing reader hints.
+
+        A performance guard that keeps its spy: a read without the hint
+        gives the same patch, only slowly, so the trim the resolver is
+        handed is its only witness.
+        """
         values = np.float32(538.14794921875) + np.arange(
             300, dtype=np.float32
         ) * np.float32(3.3)
