@@ -9,7 +9,6 @@ the last path segment -- is never parsed.
 
 from __future__ import annotations
 
-import json
 import os
 import pickle
 import sqlite3
@@ -19,7 +18,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.spool import Spool
 from dascore.examples import inventory_patch_pair, spool_to_directory
 from dascore.io.index import indexer as indexer_mod
 from dascore.io.index import ingest
@@ -80,7 +78,7 @@ def hive_dir(tmp_path):
 @pytest.fixture()
 def hive_spool(hive_dir):
     """An updated directory spool over the hive tree."""
-    spool = Spool._from_directory(hive_dir).update(progress=None)
+    spool = dc.spool(hive_dir).update(progress=None)
     yield spool
     spool.indexer.close()
 
@@ -170,9 +168,8 @@ class TestHiveIndexing:
         """A plain directory spool gains no hive columns."""
         patch = dc.get_example_patch()
         patch.io.write(tmp_path / "plain_file.h5", "dasdae")
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         try:
-            assert spool._df["_path_attrs"].isnull().all()
             assert "cable" not in spool.get_contents().columns
         finally:
             spool.indexer.close()
@@ -189,7 +186,7 @@ class TestHiveWins:
         patch = dc.get_example_patch().update_attrs(station="B")
         patch.io.write(sub / "conflict.h5", "dasdae")
         with pytest.warns(UserWarning, match="override attrs"):
-            spool = Spool._from_directory(tmp_path).update(progress=None)
+            spool = dc.spool(tmp_path).update(progress=None)
         yield spool
         spool.indexer.close()
 
@@ -215,7 +212,7 @@ class TestHiveWins:
         for name in ("one.h5", "two.h5"):
             patch.io.write(sub / name, "dasdae")
         with pytest.warns(UserWarning, match="override attrs") as record:
-            spool = Spool._from_directory(tmp_path).update(progress=None)
+            spool = dc.spool(tmp_path).update(progress=None)
         overrides = [x for x in record if "override attrs" in str(x.message)]
         assert len(overrides) == 1
         assert "'station'" in str(overrides[0].message)
@@ -230,7 +227,7 @@ class TestHiveWins:
         patch.io.write(sub / "agree.h5", "dasdae")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            spool = Spool._from_directory(tmp_path).update(progress=None)
+            spool = dc.spool(tmp_path).update(progress=None)
         assert not [x for x in caught if "override attrs" in str(x.message)]
         assert spool.get_contents()["station"].iloc[0] == "A"
         spool.indexer.close()
@@ -242,7 +239,7 @@ class TestHiveWins:
         dc.get_example_patch().io.write(sub / "quiet.h5", "dasdae")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            spool = Spool._from_directory(tmp_path).update(progress=None)
+            spool = dc.spool(tmp_path).update(progress=None)
         assert not [x for x in caught if "override attrs" in str(x.message)]
         assert spool.get_contents()["cable"].iloc[0] == "north"
         spool.indexer.close()
@@ -264,7 +261,7 @@ class TestPatchStamping:
         sub = tmp_path / "network=XX"
         sub.mkdir()
         spool_to_directory(dc.get_example_spool("random_das"), path=sub)
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         try:
             merged = spool.chunk(time=None)
             assert merged[0].attrs.network == "XX"
@@ -313,7 +310,7 @@ class TestPatchStamping:
         other_dir = tmp_path_factory.mktemp("other") / "station=Z"
         other_dir.mkdir()
         dc.get_example_patch().io.write(other_dir / "other.h5", "dasdae")
-        other = Spool._from_directory(other_dir.parent).update(progress=None)
+        other = dc.spool(other_dir.parent).update(progress=None)
         try:
             union = hive_spool + other
             stations = set(union.get_contents()["station"])
@@ -375,7 +372,7 @@ class TestMoveDetection:
             tmp_path / "twin_b.h5"
         ).stat().st_size:
             pytest.skip("twin files did not serialize to equal sizes")
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         try:
             scan_calls.clear()
             sub = tmp_path / "tag=x"
@@ -427,7 +424,7 @@ class TestMoveDetection:
     def test_plain_rename_without_hive_keys(self, tmp_path, scan_calls):
         """A rename with no hive keys anywhere is still a cheap move."""
         dc.get_example_patch().io.write(tmp_path / "plain_a.h5", "dasdae")
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         try:
             scan_calls.clear()
             (tmp_path / "plain_a.h5").rename(tmp_path / "plain_b.h5")
@@ -464,7 +461,7 @@ class TestEdgeCases:
         sub.mkdir()
         dc.get_example_patch().io.write(sub / "file.h5", "dasdae")
         with pytest.warns(UserWarning, match="hive-style path key"):
-            spool = Spool._from_directory(tmp_path).update(progress=None)
+            spool = dc.spool(tmp_path).update(progress=None)
         spool.indexer.close()
 
     def test_restricted_update_leaves_moves_outside(
@@ -482,10 +479,10 @@ class TestEdgeCases:
 
     def test_old_index_version_rebuilds(self, hive_dir):
         """An index stamped with an older version rebuilds transparently."""
-        spool = Spool._from_directory(hive_dir).update(progress=None)
+        spool = dc.spool(hive_dir).update(progress=None)
         spool.indexer.close()
         _stamp_index_version(hive_dir, 3)
-        reopened = Spool._from_directory(hive_dir).update(progress=None)
+        reopened = dc.spool(hive_dir).update(progress=None)
         try:
             assert reopened.get_contents()["station"].iloc[0] == "A"
         finally:
@@ -504,16 +501,16 @@ class TestEdgeCases:
         sub.mkdir()
         dc.get_example_patch().io.write(sub / "cable=north.h5", "dasdae")
         monkeypatch.setattr(ingest, "parse_hive_path_attrs", _parse_including_name)
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         assert spool.get_contents()["cable"].iloc[0] == "north"
         spool.indexer.close()
         monkeypatch.undo()
         _stamp_index_version(tmp_path, _SOURCE_NAME_INDEX_VERSION)
-        reopened = Spool._from_directory(tmp_path).update(progress=None)
+        reopened = dc.spool(tmp_path).update(progress=None)
         try:
-            assert "cable" not in reopened.get_contents().columns
-            stored = reopened._df["_path_attrs"].iloc[0]
-            assert json.loads(stored) == {"station": "A"}
+            df = reopened.get_contents()
+            assert "cable" not in df.columns
+            assert df["station"].iloc[0] == "A"
         finally:
             reopened.indexer.close()
 
@@ -522,7 +519,7 @@ class TestEdgeCases:
         sub = tmp_path / "station=A"
         sub.mkdir()
         dc.get_example_patch().io.write(sub / "cable=north.h5", "dasdae")
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         try:
             df = spool.get_contents()
             assert df["station"].iloc[0] == "A"
@@ -538,10 +535,11 @@ class TestEdgeCases:
         (unit / "metadata.xml").write_text(metadata)
         rand = np.random.default_rng(0).random((5000, 10)).astype("float32")
         (unit / "DAS_20240530T011500_000000Z.raw").write_bytes(rand.tobytes())
-        spool = Spool._from_directory(tmp_path).update(progress=None)
+        spool = dc.spool(tmp_path).update(progress=None)
         try:
-            stored = spool._df["_path_attrs"].iloc[0]
-            assert json.loads(stored) == {"cable": "north"}
+            df = spool.get_contents()
+            assert df["cable"].iloc[0] == "north"
+            assert "tag" not in df.columns
         finally:
             spool.indexer.close()
 
@@ -586,7 +584,7 @@ class TestOverrideComparesMeaning:
         dc.get_example_patch().update_attrs(**attrs).io.write(sub / "f.h5", "dasdae")
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            spool = Spool._from_directory(tmp_path).update(progress=None)
+            spool = dc.spool(tmp_path).update(progress=None)
         spool.indexer.close()
         return [x for x in caught if "override attrs" in str(x.message)]
 

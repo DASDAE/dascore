@@ -286,10 +286,8 @@ class TestUpdateExecutor:
 
     def test_matches_serial(self, directory, tmp_path, client):
         """Full metadata, identities, and loaded data match the serial index."""
-        serial = dc.Spool._from_directory(directory, index_path=tmp_path / "serial.db")
-        parallel = dc.Spool._from_directory(
-            directory, index_path=tmp_path / "parallel.db"
-        )
+        serial = dc.spool(directory, index=tmp_path / "serial.db")
+        parallel = dc.spool(directory, index=tmp_path / "parallel.db")
         try:
             serial.update(progress=False)
             parallel.update(progress=False, client=client)

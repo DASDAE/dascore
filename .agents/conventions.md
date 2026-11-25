@@ -14,6 +14,9 @@ Read the section relevant to your change.
 - Mirror the package under `tests/` and group tests in classes.
 - Keep fixtures near use: class, module, then `conftest.py`.
 - Test behavior and boundaries; use short names and explanatory docstrings.
+- Test through public entry points: `dascore`, `dascore.io`, and Patch, Spool and coordinate methods. Do not read `_` attributes, `isinstance`-check unexported classes, monkeypatch internals to steer behaviour, or build fixtures through private constructors.
+- Test an internal only for a pure helper with many edge cases, a regression no public call reproduces, a JIT kernel body, a performance promise, or an engine's own interface; say which in its docstring. For a performance guard, prefer an input the slow path cannot survive to counting calls.
+- Mirroring the package under `tests/` decides where a test lives, not that every internal module needs its own tests.
 - Start with `python -m pytest tests/path/to/affected_test.py`. For broad changes use `python -m pytest tests`; add `--cov dascore --cov-report term-missing` when coverage is useful, rather than repeating the suite.
 - Check changed docstring examples with `python -m pytest path/to/module.py --doctest-modules`.
 

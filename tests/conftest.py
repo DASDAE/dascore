@@ -25,7 +25,6 @@ from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
 from dascore.core.coords import concat_coords
-from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
 from dascore.utils.coordmanager import merge_coord_managers
@@ -732,7 +731,7 @@ def adjacent_spool_no_overlap(random_patch) -> dc.BaseSpool:
 @pytest.fixture(scope="session")
 def one_file_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    return Spool._from_directory(one_file_dir).update()
+    return dc.spool(one_file_dir).update()
 
 
 @pytest.fixture(scope="session")
@@ -753,7 +752,7 @@ def diverse_directory_spool(diverse_spool_directory):
 @pytest.fixture(scope="session")
 def basic_file_spool(two_patch_directory):
     """Return a DAS bank on basic_bank_directory."""
-    out = Spool._from_directory(two_patch_directory).update().update()
+    out = dc.spool(two_patch_directory).update().update()
     yield out
     out.indexer.close()
 
