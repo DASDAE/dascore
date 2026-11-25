@@ -762,8 +762,9 @@ class TestFormatManager:
     def test_get_all_formatters(self, format_manager):
         """Ensure getting all formatters through yield_fiberio works."""
         formatters = set(format_manager.yield_fiberio())
-        # At least one per entry point the installed packages register.
-        assert len(formatters) >= len(entry_points(group="dascore.fiber_io"))
+        # At least one per entry-point name; the manager keeps one loader each.
+        names = {x.name for x in entry_points(group="dascore.fiber_io")}
+        assert len(formatters) >= len(names)
         for name in format_manager.known_formats:
             with suppress(UnknownFiberFormatError):  # a plugin which failed to load
                 assert set(format_manager.yield_fiberio(format=name)) <= formatters
