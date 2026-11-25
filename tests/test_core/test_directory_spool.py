@@ -15,7 +15,6 @@ import dascore as dc
 import dascore.examples
 from dascore.constants import ONE_SECOND
 from dascore.core.source import ArraySource
-from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
 from dascore.io.index.catalog import FileResolver
 from dascore.utils.misc import suppress_warnings
@@ -41,7 +40,7 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
 @pytest.fixture(scope="module")
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = Spool._from_directory(one_file_dir)
+    spool = dc.spool(one_file_dir)
     return spool.update()
 
 
@@ -100,7 +99,7 @@ class TestDirectorySpoolBasics:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
-        spool = Spool._from_directory(path).update().sort("time")
+        spool = dc.spool(path).update().sort("time")
         patch = spool[0]
         assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
@@ -246,7 +245,7 @@ class TestSelectedDirectorySpools:
         self, spool_dir, random_spool, first_patch_range
     ):
         """D1: any operation severs update()."""
-        spool = Spool._from_directory(spool_dir).update().select(time=first_patch_range)
+        spool = dc.spool(spool_dir).update().select(time=first_patch_range)
         with pytest.raises(InvalidSpoolError, match="root spool"):
             spool.update()
 

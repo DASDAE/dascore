@@ -286,13 +286,14 @@ class TestUpdateExecutor:
 
     def test_matches_serial(self, directory, tmp_path, client):
         """Full metadata, identities, and loaded data match the serial index."""
-        serial = dc.Spool._from_directory(directory, index_path=tmp_path / "serial.db")
-        parallel = dc.Spool._from_directory(
-            directory, index_path=tmp_path / "parallel.db"
-        )
+        serial = dc.spool(directory, index=tmp_path / "serial.db")
+        parallel = dc.spool(directory, index=tmp_path / "parallel.db")
         try:
             serial.update(progress=False)
             parallel.update(progress=False, client=client)
+            assert serial.indexer.index_path == tmp_path / "serial.db"
+            assert parallel.indexer.index_path == tmp_path / "parallel.db"
+            assert (tmp_path / "parallel.db").exists()
             pd.testing.assert_frame_equal(
                 serial.get_contents(), parallel.get_contents()
             )
