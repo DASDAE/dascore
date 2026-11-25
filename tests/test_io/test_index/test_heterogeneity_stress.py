@@ -196,6 +196,7 @@ class TestStressIngest:
         assert expected <= backend.attr_names()
 
 
+@pytest.mark.wasm_skip
 class TestStressNoFalseNegatives:
     """Random range queries never miss a matching patch."""
 

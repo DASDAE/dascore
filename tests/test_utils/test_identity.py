@@ -1196,6 +1196,7 @@ class TestInternalRoutes:
             assert chunked[index].attrs.data_id == chunked[index].attrs.data_id
 
 
+@pytest.mark.wasm_skip
 class TestCombinations:
     """Concatenate, stack and merge."""
 

@@ -34,6 +34,7 @@ def dir_spool(contiguous_patches, tmp_path_factory):
     return dc.spool(path).update()
 
 
+@pytest.mark.wasm_skip
 class TestMemoryUnion:
     """Unions of in-memory spools."""
 

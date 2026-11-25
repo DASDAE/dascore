@@ -149,6 +149,7 @@ class TestReadRouteParity:
         assert patch.attrs.data_id == patch._source.data_id
 
 
+@pytest.mark.wasm_skip
 class TestChunkRouteParity:
     """Chunking a file-backed spool names the same arrays either way."""
 
@@ -202,6 +203,7 @@ class TestChunkRouteParity:
         assert [x.data_id for x in outputs[0]._loads()] == loaded[0]
 
 
+@pytest.mark.wasm_skip
 class TestChunkLayout:
     """
     A chunk output is named by what was done (#1643): its members, the

@@ -457,6 +457,7 @@ class TestLayout:
         assert shown
 
 
+@pytest.mark.wasm_skip
 class TestColors:
     """The color policy per value kind and the overrides."""
 

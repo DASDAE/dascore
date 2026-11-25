@@ -41,6 +41,7 @@ def data_dir(tmp_path):
     return path
 
 
+@pytest.mark.wasm_skip
 class TestIndexArgument:
     """The index keyword of dc.spool on local paths."""
 

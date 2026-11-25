@@ -300,6 +300,7 @@ class TestSelections:
         assert row["time_max"] == patch.get_coord("time").max() == t0 + 1000 * MS
 
 
+@pytest.mark.wasm_skip
 class TestReviewFindings:
     """Runs and decodes survive what the review found losing them."""
 

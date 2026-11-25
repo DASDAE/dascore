@@ -445,6 +445,7 @@ class TestRelative:
         assert out.get_contents().empty
         assert list(out) == []
 
+    @pytest.mark.wasm_skip
     def test_mixed_lengths_and_positions(self, spool):
         """Counts and positional views use surviving rows before and after caching."""
         short = spool[:1].select(time=(0, 3), relative=True)
@@ -710,6 +711,7 @@ class TestPlansOverLocalSelections:
         self._assert_as_loaded(selected, "chunk", {"time": 4})
 
 
+@pytest.mark.wasm_skip
 class TestBoundBetweenSamples:
     """A range bound between samples states the samples it keeps (#1127)."""
 
@@ -994,6 +996,7 @@ class TestTwoKinds:
             out.append(dc.Patch(data=np.zeros(5), coords=coords, dims=("time",)))
         return out
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "selections",
         [
@@ -1545,6 +1548,7 @@ class TestEmptiedMembers:
         assert len(spool) == len(list(spool)) == 0
         assert PLANS[plan](spool) == []
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "selection",
         [dict(time=(1.2, 1.4)), dict(time=(0.2, 0.3), relative=True)],
@@ -1565,6 +1569,7 @@ class TestEmptiedMembers:
         spool = dc.spool([patch]).select(time=(1e9 + 2, 1e9 + 2))
         assert [x.shape for x in PLANS["chunk"](spool)] == [(2, 1)]
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("kind", ["memory", "directory"])
     @pytest.mark.parametrize("case", ["text", "durations"])
     def test_unmeasured_selection_plans(self, case, kind, tmp_path):
@@ -1596,6 +1601,7 @@ class TestEmptiedMembers:
         spool = dc.spool([patch]).select(time=(1.2, 1.4), relative=relative)
         assert PLANS["chunk"](spool) == []
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("on_disk", [False, True])
     @pytest.mark.parametrize("stepped", [True, False])
     @pytest.mark.parametrize("plan", list(PLANS))

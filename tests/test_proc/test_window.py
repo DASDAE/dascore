@@ -248,6 +248,7 @@ class TestReduce:
             window.mean().data, window.reduce(np.mean).data, rtol=1e-9, atol=1e-9
         )
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("name", REDUCERS)
     @pytest.mark.parametrize("align", ("center", "right", "left"))
     @pytest.mark.parametrize("step", (1, 3, 4))
@@ -1475,6 +1476,7 @@ class TestPositionFree:
             plans.append(operation.get_metadata(meta.new(coords=coords))[1])
         assert all(_same_plan(plans[0], x) for x in plans)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("name", FREE_CALLS)
     def test_declared_runs_in_a_window(self, patch, name):
         """Each declared operation is run in windows and gives a patch back."""
@@ -2048,6 +2050,7 @@ class TestOtherBackends:
         assert backend_name(out.data) == library
         np.testing.assert_allclose(_values(out), expected.data, rtol=0, atol=1e-12)
 
+    @pytest.mark.wasm_skip
     def test_numpy_only_operation_is_converted_for(self, patch, library):
         """An operation which says it is NumPy's own is converted for, and says so."""
         window = {"time": 100, "samples": True}

@@ -193,6 +193,7 @@ class TestRolling:
         assert isinstance(row.rolling(time=5, samples=True), _PandasPatchRoller)
         assert isinstance(random_patch.rolling(time=5, samples=True), _NumpyPatchRoller)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("name", ("mean", "median", "min", "max", "std", "sum"))
     @pytest.mark.parametrize("step", (1, 3))
     def test_default_long_window_uses_pandas(
@@ -208,6 +209,7 @@ class TestRolling:
         suffix = expected.attrs.history[-1].split(")", 1)[1]
         assert out.attrs.history[-1].endswith(suffix)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize(
         "case",
         ("short", "centered_step", "3d", "inf", "int64", "complex", "float16"),

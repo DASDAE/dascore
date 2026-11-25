@@ -1266,6 +1266,7 @@ def _refuse_reading(*args, **kwargs):
     raise AssertionError("a coordinate's labels were read")
 
 
+@pytest.mark.wasm_skip
 class TestUnknownRiders:
     """A cut rider the index can't place states an unknown range."""
 
@@ -1620,6 +1621,7 @@ def _assert_contents_hold_patches(spool, names):
             assert row[f"{name}_max"] >= coord.max()
 
 
+@pytest.mark.wasm_skip
 class TestSelectSharedDimensionHoldsWhatLoads:
     """No coordinate on a selected dimension is advertised short of what loads."""
 
@@ -1748,6 +1750,7 @@ class TestSelectSharedDimensionHoldsWhatLoads:
             assert row["sensor_max"] - row["sensor_min"] < 25
 
 
+@pytest.mark.wasm_skip
 class TestFloatEndsStateWhatLoads:
     """A float end a row rebuilds holds the label that loads (#1678, #1692)."""
 
@@ -2980,6 +2983,7 @@ class TestSpoolCoverageEdges:
         assert "Spool" in str(empty)
 
 
+@pytest.mark.wasm_skip
 class TestConcatenatePartitions:
     """Spool.concatenate partitions and polices as chunk does, then joins in order."""
 

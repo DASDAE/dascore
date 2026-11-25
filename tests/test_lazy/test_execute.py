@@ -429,6 +429,7 @@ class TestFilterArguments:
         assert loaded.data.dtype == eager_out.data.dtype
         np.testing.assert_allclose(loaded.data, eager_out.data, rtol=1e-12, atol=1e-12)
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("mode", ("wrap", "grid-wrap"))
     @pytest.mark.parametrize("name", ("gaussian_filter", "median_filter"))
     def test_wrapping_edges(self, lazy, eager, name, mode):
@@ -436,15 +437,8 @@ class TestFilterArguments:
         kwargs = {"distance": 3, "samples": True, "mode": mode}
         self._same(getattr(lazy, name)(**kwargs), getattr(eager, name)(**kwargs))
 
-    @pytest.mark.parametrize(
-        "mode",
-        (
-            "wrap",
-            "interp",
-            pytest.param("mirror", marks=pytest.mark.wasm_skip),
-            pytest.param("nearest", marks=pytest.mark.wasm_skip),
-        ),
-    )
+    @pytest.mark.wasm_skip
+    @pytest.mark.parametrize("mode", ("wrap", "interp", "mirror", "nearest"))
     def test_savgol_modes(self, lazy, eager, mode):
         """Each savgol edge mode gives the eager result, however it is cut."""
         kwargs = {"distance": 7, "polyorder": 2, "samples": True, "mode": mode}

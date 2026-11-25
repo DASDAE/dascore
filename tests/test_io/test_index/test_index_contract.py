@@ -482,6 +482,7 @@ class TestNameResolution:
         assert query.attrs == {"tag": "raw"} and "distance" in query.coords
 
 
+@pytest.mark.wasm_skip
 class TestNoFalseNegatives:
     """Property: reference-matching patches always appear in results."""
 
@@ -876,6 +877,7 @@ class TestLineageIds:
         assert view[0].attrs.data_id == direct.attrs.data_id
         assert view[0].attrs.history == direct.attrs.history
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("repeats", [2, 64])
     @pytest.mark.parametrize("regular", [False, True])
     def test_untracked_trims_replay_exactly(self, tmp_path, repeats, regular):

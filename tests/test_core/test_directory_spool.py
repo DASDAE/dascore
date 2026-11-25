@@ -647,6 +647,7 @@ class TestIndexing:
         assert all(isinstance(patch, dc.Patch) for patch in chunked)
 
 
+@pytest.mark.wasm_skip
 class TestFileBackedSpoolIntegrations:
     """Small integration tests for the file spool."""
 

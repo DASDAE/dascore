@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.exceptions import ParameterError
 
 
+@pytest.mark.wasm_skip
 class TestWienerFilter:
     """Tests for the wiener_filter function."""
 

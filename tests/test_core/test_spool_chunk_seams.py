@@ -615,6 +615,7 @@ def late_spool():
     return dc.spool([_at(i * 10 + 0.15 * i) for i in range(5)])
 
 
+@pytest.mark.wasm_skip
 class TestRejoin:
     """Chunk outputs are slices of one grid, so they rejoin exactly."""
 
@@ -698,6 +699,7 @@ class TestWriters:
         )
 
 
+@pytest.mark.wasm_skip
 class TestSteplessWindows:
     """Windows cut labels with no step by the labels themselves (rule 9)."""
 

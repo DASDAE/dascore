@@ -74,6 +74,7 @@ def _ranges(start, *pairs, dims=DIMS):
     return dc.AnnotationSet(pd.DataFrame(frame), dims=dims)
 
 
+@pytest.mark.wasm_skip
 class TestCut:
     """Tests for Spool.cut."""
 
@@ -435,6 +436,7 @@ class TestChunkRefusesWindows:
             getattr(spool, method)(time=4, on_incomplete="ignore")
 
 
+@pytest.mark.wasm_skip
 class TestCutWindows:
     """Spool.cut by explicit (n, 2) windows."""
 

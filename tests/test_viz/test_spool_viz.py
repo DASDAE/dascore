@@ -126,6 +126,7 @@ class TestNamespace:
             whole.viz.nope()
 
 
+@pytest.mark.wasm_skip
 class TestCoverage:
     """What the spool holds, and where it does not."""
 

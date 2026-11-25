@@ -82,6 +82,7 @@ class TestClipEnds:
             concat([stacked := mixed_stack(rng, 20, 0, 2), stacked], axis=1),
         ]
 
+    @pytest.mark.wasm_skip
     def test_matches_general_path(self, arrays, monkeypatch):
         """Random windows, chains and transposes clip as the general path does."""
         rng = np.random.default_rng(21)

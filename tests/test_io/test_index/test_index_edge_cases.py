@@ -1065,6 +1065,7 @@ class TestIngestEdges:
         assert ids == ["0", "1"]
 
 
+@pytest.mark.wasm_skip
 class TestIndexerEdges:
     """DBDirectoryIndexer edge behavior."""
 
@@ -1213,6 +1214,7 @@ class TestPatchRowsNeverReused:
         back.close()
         return out
 
+    @pytest.mark.wasm_skip
     @pytest.mark.parametrize("remove", ["rewrite", "delete", "clear"])
     def test_rows_after_removal_are_new(self, path, remove):
         """Rows freed by a rescan, delete, or clear are not handed out again."""
@@ -1271,6 +1273,7 @@ class TestFinalCoverage:
         assert typed_value(_Odd()) is None
 
 
+@pytest.mark.wasm_skip
 class TestCoordDeduplication:
     """Coord summaries are stored once per unique definition."""
 
@@ -1474,6 +1477,7 @@ class TestCompositeSourceIdentity:
 class TestResourceCleanup:
     """Backends must not leak SQLite connections (review P2)."""
 
+    @pytest.mark.wasm_skip
     def test_gc_closes_connection(self):
         """Garbage collection closes the backend connection silently."""
         spool = dc.spool([dc.get_example_patch()])
