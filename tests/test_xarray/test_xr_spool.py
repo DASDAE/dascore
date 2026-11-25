@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tracemalloc
 import typing
 from contextlib import contextmanager
 
 import fsspec
+import h5py
 import numpy as np
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
@@ -37,6 +39,43 @@ def array_reads(monkeypatch):
 
     monkeypatch.setattr(io_core, "_open_array_reader", _recording)
     return reads
+
+
+def _unpatchable(path):
+    """
+    Shorten a one-patch DASDAE file's stored time coordinate by a sample, in
+    place and keeping its mtime, so it no longer reads as a patch while its
+    data still read as an array.
+    """
+    stat = os.stat(path)
+    with h5py.File(path, "r+") as h5:
+        (group,) = h5["waveforms"].values()
+        attrs = group["_coord_time"].attrs
+        attrs.modify("length", attrs["length"] - 1)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+
+def _only_decodable(path, axis, keep):
+    """
+    Store a one-patch DASDAE file's data as gzip chunks one index thick along
+    `axis`, where only the chunks at `keep` decode.
+    """
+    with h5py.File(path, "r+") as h5:
+        (group,) = h5["waveforms"].values()
+        data, attrs = group["data"][()], dict(group["data"].attrs)
+        del group["data"]
+        chunks = tuple(1 if x == axis else n for x, n in enumerate(data.shape))
+        node = group.create_dataset(
+            "data", data.shape, data.dtype, chunks=chunks, compression="gzip"
+        )
+        node.attrs.update(attrs)
+        for index in range(data.shape[axis]):
+            offset = tuple(index if x == axis else 0 for x in range(data.ndim))
+            if index in keep:  # stored as if the gzip filter were skipped
+                block = np.take(data, [index], axis=axis).tobytes()
+                node.id.write_direct_chunk(offset, block, 1)
+            else:
+                node.id.write_direct_chunk(offset, b"not gzip")
 
 
 class TestSpoolToXarray:
@@ -139,25 +178,26 @@ class TestSpoolToXarray:
         tree = spool.io.to_xarray()
         assert len(self._leaves(tree))
 
-    def test_compute_reads_only_needed_blocks(
-        self, diverse_spool_directory, monkeypatch, array_reads
-    ):
-        """A small selection loads only the member blocks it touches."""
-        spool = dc.spool(diverse_spool_directory).update()
+    def test_compute_reads_only_needed_blocks(self, diverse_spool_directory, tmp_path):
+        """
+        A small selection loads only the member blocks it touches, so the
+        files of the others can be gone.
+        """
+        ignore = shutil.ignore_patterns(".dascore_index*")
+        directory = shutil.copytree(
+            diverse_spool_directory, tmp_path / "x", ignore=ignore
+        )
+        spool = dc.spool(directory).update()
         tree = spool.io.to_xarray()
-        calls = []
-        # A block reads through whichever path its format offers, so both
-        # are counted: what the test pins is how many members are read.
-        original = PlanResolver._load_member
-
-        def _counting(self, kwargs):
-            calls.append("patch")
-            return original(self, kwargs)
-
-        monkeypatch.setattr(PlanResolver, "_load_member", _counting)
         # The DAS2.R2D1..RAW random segment merges three source patches;
         # slicing inside the first must load exactly one of the three,
         # and the loaded values must match the eagerly chunked patch.
+        segment = spool.select(acquisition_key="DAS2.R2D1..RAW")
+        merged = segment.chunk(time=None)[0]
+        expected = merged.data[:, :5] if merged.dims[0] != "time" else merged.data[:5]
+        rows = segment.get_contents().sort_values("time_min")
+        for path in rows["source_path"].iloc[1:]:
+            (directory / path).unlink()
         leaf = next(
             x
             for x in self._leaves(tree)
@@ -166,9 +206,6 @@ class TestSpoolToXarray:
         data = leaf.dataset["data"]
         assert data.data.npartitions == 3
         small = data.isel(time=slice(0, 5)).compute()
-        assert len(calls) + len(array_reads) == 1
-        merged = spool.select(acquisition_key="DAS2.R2D1..RAW").chunk(time=None)[0]
-        expected = merged.data[:, :5] if merged.dims[0] != "time" else merged.data[:5]
         np.testing.assert_array_equal(small.values, expected)
 
     def test_plan_backed_spool(self, random_spool):
@@ -538,54 +575,57 @@ class TestToXarrayReadArray:
         out = self._leaf(spool.io.to_xarray(dim="distance"))["data"].data.compute()
         assert np.array_equal(out, spool.chunk(distance=None)[0].data)
 
-    def test_fast_path_loads_blocks(
-        self, dasdae_directory, override_calls, monkeypatch
-    ):
-        """With an override, computing never builds a member Patch."""
-        spool = dc.spool(dasdae_directory).update()
+    def test_fast_path_loads_blocks(self, dasdae_directory, tmp_path):
+        """
+        With an override, computing never builds a member Patch, so files
+        which no longer read as patches still compute.
+        """
+        directory = shutil.copytree(dasdae_directory, tmp_path / "x")
+        spool = dc.spool(directory).update()
         eager = spool.chunk(time=None)[0].data
-        # The eager reference can use dev's array fast path too; count
-        # only reads made by constructing and computing the xarray tree.
-        override_calls.clear()
+        for path in directory.glob("*.h5"):
+            _unpatchable(path)
         tree = spool.io.to_xarray()
-        assert not override_calls
-
-        def _fail(*args, **kwargs):
-            raise AssertionError("fast path fell back to patch loading")
-
-        monkeypatch.setattr(PlanResolver, "_load_member", _fail)
         out = self._leaf(tree)["data"].data.compute()
         assert np.array_equal(out, eager)
-        assert len(override_calls) == len(spool)
 
     def test_residual_spool_falls_back(self, dasdae_directory, override_calls):
-        """A samples-selected spool loads through the exact patch path."""
+        """
+        A samples-selected spool loads through the exact patch path.
+
+        A guard that keeps its spy: array reads of the same files give the
+        same values, so the reads are its only witness.
+        """
         spool = dc.spool(dasdae_directory).update()
         sub = spool.select(time=(2, 100), samples=True)
         out = self._leaf(sub.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, sub.chunk(time=None)[0].data)
         assert override_calls == []
 
-    def test_chunked_spool_reads_file_windows(self, dasdae_directory, override_calls):
+    def test_chunked_spool_reads_file_windows(self, dasdae_directory, tmp_path):
         """A plan-backed spool's trimmed rows read windows of their files.
 
         Its collapsed member rows state trimmed envelopes beside each
         file's own range, so each window is placed on the file's grid;
         one placed on the trimmed envelope would read the wrong samples.
+        The windows are array reads, so files which no longer read as
+        patches still load.
         """
-        spool = dc.spool(dasdae_directory).update().chunk(time=3)
+        directory = shutil.copytree(dasdae_directory, tmp_path / "x")
+        spool = dc.spool(directory).update().chunk(time=3)
         eager = spool.chunk(time=None)[0].data
-        override_calls.clear()
+        for path in directory.glob("*.h5"):
+            _unpatchable(path)
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
-        assert len(override_calls) > len(dc.spool(dasdae_directory))
 
-    def test_interior_window_fast_path(self, tmp_path, override_calls):
+    def test_interior_window_fast_path(self, tmp_path):
         """An overlap-trimmed member reads an interior file window.
 
         Two half-overlapping files merge into one segment, so the second
         member's window starts mid-file — the case where a wrong window
-        anchor would silently read the wrong samples.
+        anchor would silently read the wrong samples. Both read as array
+        windows, so files which no longer read as patches still load.
         """
         first = dc.get_example_patch()
         time = first.get_coord("time")
@@ -596,16 +636,13 @@ class TestToXarrayReadArray:
             patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         eager = spool.chunk(time=None)[0].data
-        override_calls.clear()
+        for num in range(2):
+            _unpatchable(tmp_path / f"p{num}.h5")
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
-        assert np.array_equal(out, eager)
         # the trimmed member's window must not be anchored at the start
-        axis = first.dims.index("time")
-        starts = sorted(windows[axis][0] for _, windows in override_calls)
-        assert len(override_calls) == 2
-        assert starts[0] == 0 and starts[1] > 0
+        assert np.array_equal(out, eager)
 
-    def test_mixed_data_units_convert_as_chunk(self, tmp_path, override_calls):
+    def test_mixed_data_units_convert_as_chunk(self, tmp_path):
         """A file in other data units loads as a patch, converted to the first's."""
         first = dc.get_example_patch()
         time = first.get_coord("time")
@@ -617,11 +654,11 @@ class TestToXarrayReadArray:
         spool = dc.spool(tmp_path).update()
         kwargs = dict(group=[], conflict="keep_first")
         (merged,) = spool.chunk(time=None, **kwargs)
-        override_calls.clear()
+        # the first is in the merged units already, so reads as a window,
+        # from a file which no longer reads as a patch
+        _unpatchable(tmp_path / "a.h5")
         out = self._leaf(spool.io.to_xarray(**kwargs))["data"].values
         np.testing.assert_allclose(out, merged.data)
-        # the first is in the merged units already, so reads as a window
-        assert [path for path, _ in override_calls] == [str(tmp_path / "a.h5")]
 
     def test_a_file_rewritten_after_building_raises(self, tmp_path):
         """A window read which is not the shape indexed says to update."""
@@ -822,14 +859,26 @@ class TestToXarrayBlockSize:
         pytest.importorskip("xarray")
         pytest.importorskip("dask")
 
+    @staticmethod
+    def _write(path, decodable=None):
+        """
+        Write three adjacent DASDAE files with distinct data per file; with
+        `decodable`, a dimension and indices along it, only the data there
+        decode, so a read of anything more raises.
+        """
+        spool = dc.get_example_spool("random_das", length=3, time_gap=0)
+        for num, patch in enumerate(spool):
+            name = path / f"p{num}.h5"
+            patch.new(data=patch.data + num).io.write(name, "dasdae")
+            if decodable is not None:
+                dim, keep = decodable
+                _only_decodable(name, patch.dims.index(dim), keep)
+        return path
+
     @pytest.fixture(scope="class")
     def dasdae_directory(self, tmp_path_factory):
         """Three adjacent DASDAE files with distinct data per file."""
-        path = tmp_path_factory.mktemp("to_xarray_block_size")
-        spool = dc.get_example_spool("random_das", length=3, time_gap=0)
-        for num, patch in enumerate(spool):
-            patch.new(data=patch.data + num).io.write(path / f"p{num}.h5", "dasdae")
-        return path
+        return self._write(tmp_path_factory.mktemp("to_xarray_block_size"))
 
     @pytest.fixture(scope="class")
     def file_spool(self, dasdae_directory):
@@ -869,38 +918,38 @@ class TestToXarrayBlockSize:
         return [windows[axis] for _, windows in reads]
 
     @pytest.mark.parametrize("quarters", [0, 1])
-    def test_a_selection_reads_only_its_samples(
-        self, file_spool, array_reads, quarters
-    ):
+    def test_a_selection_reads_only_its_samples(self, file_spool, tmp_path, quarters):
         """A window reaches the reader as itself, whatever the blocks are.
 
         The selection fuses into the segment source's own read, so the
-        blocks bound a bulk read and say nothing about this one.
+        blocks bound a bulk read and say nothing about this one: only the
+        window's samples need to decode.
         """
         block_size = quarters * file_spool[0].data.nbytes // 4
-        data = self._leaf(file_spool.io.to_xarray(block_size=block_size))
+        spool = dc.spool(self._write(tmp_path, ("time", range(3, 11)))).update()
+        data = self._leaf(spool.io.to_xarray(block_size=block_size))
         piece = data.isel(time=slice(3, 11)).compute()
-        assert self._time_windows(file_spool, array_reads) == [(3, 11)]
         assert piece.sizes["time"] == 8
 
-    def test_a_selection_reads_only_the_members_it_covers(
-        self, file_spool, array_reads
-    ):
-        """A window inside one member never opens the others."""
+    def test_a_selection_reads_only_the_members_it_covers(self, file_spool, tmp_path):
+        """A window inside one member never opens the others, so they can be gone."""
         samples = len(file_spool[0].get_coord("time"))
-        data = self._leaf(file_spool.io.to_xarray())
+        spool = dc.spool(self._write(tmp_path)).update()
+        data = self._leaf(spool.io.to_xarray())
         # a window straddling the first seam covers two of three members
+        (tmp_path / "p2.h5").unlink()
         straddle = data.isel(time=slice(samples - 2, samples + 2)).compute()
         assert straddle.sizes["time"] == 4
-        assert len({path for path, _ in array_reads}) == 2
 
-    def test_a_selection_on_another_dimension_reads_less(self, file_spool, array_reads):
-        """A distance window is pushed into the read, not applied after."""
-        data = self._leaf(file_spool.io.to_xarray())
-        axis = file_spool[0].dims.index("distance")
+    def test_a_selection_on_another_dimension_reads_less(self, tmp_path):
+        """
+        A distance window is pushed into the read, not applied after, so
+        only its samples need to decode.
+        """
+        spool = dc.spool(self._write(tmp_path, ("distance", range(3)))).update()
+        data = self._leaf(spool.io.to_xarray())
         narrow = data.isel(distance=slice(0, 3)).compute()
         assert narrow.sizes["distance"] == 3
-        assert {windows[axis] for _, windows in array_reads} == {(0, 3)}
 
     @pytest.mark.parametrize("block_size", [0, 1_000_000])
     def test_every_index_form_matches_the_merged_patch(self, file_spool, block_size):
@@ -951,26 +1000,39 @@ class TestToXarrayBlockSize:
         expected = random_patch.transpose(*data.dims).isel(**index)
         assert np.array_equal(data.isel(**index).compute().values, expected.data)
 
-    def test_a_window_ending_on_a_seam_reads_one_member(self, file_spool, array_reads):
-        """The member after a window's end is not opened for no samples."""
+    def test_a_window_ending_on_a_seam_reads_one_member(
+        self, file_spool, array_reads, tmp_path
+    ):
+        """
+        The member after a window's end is not opened for no samples, so it
+        can be gone.
+
+        Its second half keeps its spy: an empty read beside the whole
+        compute gives the same values, so the windows are its only witness.
+        """
         samples = len(file_spool[0].get_coord("time"))
-        data = self._leaf(file_spool.io.to_xarray())
+        spool = dc.spool(self._write(tmp_path)).update()
+        data = self._leaf(spool.io.to_xarray())
+        for num in (1, 2):
+            (tmp_path / f"p{num}.h5").unlink()
         data.isel(time=slice(0, samples)).compute()
-        assert self._time_windows(file_spool, array_reads) == [(0, samples)]
         array_reads.clear()
         self._leaf(file_spool.io.to_xarray(block_size=0)).compute()
         windows = self._time_windows(file_spool, array_reads)
         assert len(windows) == len(file_spool)
         assert all(stop > start for start, stop in windows)
 
-    def test_a_selection_missing_every_member_reads_nothing(
-        self, file_spool, array_reads
-    ):
-        """An empty window has no member to ask, and is empty rather than absent."""
-        data = self._leaf(file_spool.io.to_xarray())
+    def test_a_selection_missing_every_member_reads_nothing(self, tmp_path):
+        """
+        An empty window has no member to ask, and is empty rather than
+        absent, so every file can be gone.
+        """
+        spool = dc.spool(self._write(tmp_path)).update()
+        data = self._leaf(spool.io.to_xarray())
+        for path in tmp_path.glob("*.h5"):
+            path.unlink()
         out = data.isel(time=slice(0, 0)).compute()
         assert out.sizes["time"] == 0
-        assert array_reads == []
 
     def test_a_patch_read_still_narrows_other_dimensions(self, file_spool, monkeypatch):
         """A member loading as a patch applies the other dimensions' windows itself."""
@@ -981,13 +1043,16 @@ class TestToXarrayBlockSize:
         got = data.isel(distance=slice(0, 4), time=slice(0, 6)).compute().values
         assert np.array_equal(got, whole[:4, :6])
 
-    def test_a_block_reads_only_its_own_window(self, file_spool, array_reads):
-        """Computing one piece reads that piece's samples, not the file."""
+    def test_a_block_reads_only_its_own_window(self, file_spool, tmp_path):
+        """
+        Computing one piece reads that piece's samples, not the file, so
+        only they need to decode.
+        """
         quarter = file_spool[0].data.nbytes // 4
-        data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
         samples = len(file_spool[0].get_coord("time"))
+        path = self._write(tmp_path, ("time", range(samples // 4)))
+        data = self._leaf(dc.spool(path).update().io.to_xarray(block_size=quarter))
         piece = data.isel(time=slice(0, samples // 4)).compute()
-        assert self._time_windows(file_spool, array_reads) == [(0, samples // 4)]
         assert piece.sizes["time"] == samples // 4
 
     def test_a_member_the_index_cannot_window_stays_whole(self, random_spool):

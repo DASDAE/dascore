@@ -582,7 +582,13 @@ class TestAlignment:
         "steps,same,reads", [((1, (7, 6)), True, 8), (((6, 5), (4, 3)), False, 6)]
     )
     def test_labels_compare_in_blocks(self, monkeypatch, steps, same, reads):
-        """Labels are read a block at a time, stopping at the first difference."""
+        """
+        Labels are read a block at a time, stopping at the first difference.
+
+        A performance guard that keeps its spy: reading every label, or all
+        of them at once, gives the same answer, only with more memory and
+        time, so the reads are its only witness.
+        """
         first, second = (get_coord(start=0, step=x, shape=(6,)) for x in steps)
         original, sizes = NumericCoord._get_index_values, []
 
