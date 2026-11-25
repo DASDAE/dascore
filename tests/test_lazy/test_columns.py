@@ -289,7 +289,13 @@ class TestSourceTable:
         assert joined.data_id == Recipe.from_sources(windows).data_id
 
     def test_copies_are_named_once(self, monkeypatch):
-        """Copies of one array joined keep, and name, one row per source."""
+        """
+        Copies of one array joined keep, and name, one row per source.
+
+        A performance guard that keeps its spy: naming each copy again
+        gives the same id, only slowly, so the names hashed are its only
+        witness.
+        """
         copies = [many_members(30) for _ in range(20)]
         expected = Recipe.from_sources([x for y in copies for x in y.sources]).data_id
         joined = concat(copies)
@@ -380,7 +386,13 @@ class TestMergedDictionaries:
             assert np.array_equal(merged.codes, expected.codes)
 
     def test_shared_dictionary_read_once(self, monkeypatch):
-        """Columns sharing one dictionary contribute it once, cut if it came first."""
+        """
+        Columns sharing one dictionary contribute it once, cut if it came first.
+
+        A performance guard that keeps its spy: encoding the dictionary for
+        each column gives the same merged column, only slowly, so the sizes
+        encoded are its only witness.
+        """
         big = columns_module._Column.of([f"v{x}" for x in range(50)])
         sizes, encode = [], columns_module._Column.of
         monkeypatch.setattr(

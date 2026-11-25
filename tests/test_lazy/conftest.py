@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise, product
@@ -292,3 +293,17 @@ def stored_float(tmp_path_factory):
     values = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
     directory = tmp_path_factory.mktemp("stored_float")
     return stored_patch(directory, values - values.mean())
+
+
+def unreadable(stored, directory, name="unreadable"):
+    """
+    Return the patch read from a copy of a stored patch's file, then delete it.
+
+    Its source names a file which is gone, so any read of it raises: what
+    runs on the patch, or on a lazy patch of it, read nothing.
+    """
+    path = directory / f"{name}.h5"
+    shutil.copyfile(stored._source.path, path)
+    out = dc.read(path)[0]
+    path.unlink()
+    return out

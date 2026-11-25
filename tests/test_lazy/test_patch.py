@@ -14,7 +14,7 @@ from dascore.utils.array_api import backend_name
 from dascore.utils.identity import operation_context
 from dascore.utils.patch import stack_patches
 
-from .conftest import lazy_patch
+from .conftest import lazy_patch, stored, unreadable
 
 
 class Negate(dc.PatchProcessor):
@@ -37,44 +37,52 @@ def lazy(stored_float):
     return lazy_patch(stored_float)
 
 
+@pytest.fixture()
+def gone(stored_float, tmp_path):
+    """The stored float patch read from a copy of its file, deleted since."""
+    return unreadable(stored_float, tmp_path)
+
+
+@pytest.fixture()
+def gone_lazy(gone):
+    """A lazy patch of the deleted copy: any read of it raises."""
+    return lazy_patch(gone)
+
+
 class TestRecipeInAPatch:
     """A recipe handed to a patch is held as a lazy array with nothing pending."""
 
-    def test_wrapped(self, stored_float, recipe_loads):
+    def test_wrapped(self, gone):
         """The patch holds a lazy array of the recipe, and reads nothing."""
-        recipe = Recipe.from_source(stored_float._source)
-        patch = dc.Patch(data=recipe, coords=stored_float.coords)
+        recipe = Recipe.from_source(gone._source)
+        patch = dc.Patch(data=recipe, coords=gone.coords)
         assert patch.data.recipe is recipe
         assert len(patch.data.chain) == 0
         assert backend_name(patch.data) == "lazy"
         assert patch.shape == recipe.shape
         assert patch.dtype == recipe.dtype
-        assert not recipe_loads
 
-    def test_to_patch_wraps(self, lazy, recipe_loads):
+    def test_to_patch_wraps(self, gone_lazy):
         """Giving metadata a recipe wraps it too."""
-        assert backend_name(lazy.data) == "lazy"
-        assert not recipe_loads
+        assert backend_name(gone_lazy.data) == "lazy"
 
     def test_len_is_first_axis(self, lazy):
         """The data's length is the first axis, not the number of members."""
         assert len(lazy.data) == lazy.shape[0]
         assert len(lazy.data.recipe) == 1
 
-    def test_bool_refused(self, lazy, recipe_loads):
+    def test_bool_refused(self, gone_lazy):
         """As for an eager patch of more than one element, and nothing is read."""
         with pytest.raises(ValueError, match="ambiguous"):
-            bool(lazy)
-        assert not recipe_loads
+            bool(gone_lazy)
 
 
 class TestLoad:
     """`Patch.load` reads the data into memory and keeps the id."""
 
-    def test_keeps_id_and_attrs(self, lazy, stored_float, recipe_loads):
+    def test_keeps_id_and_attrs(self, lazy, stored_float):
         """The array read is the one described, so the id stands."""
         loaded = lazy.load()
-        assert len(recipe_loads) == 1
         assert isinstance(loaded.data, np.ndarray)
         assert np.array_equal(loaded.data, stored_float.data)
         assert loaded.attrs == lazy.attrs
@@ -112,12 +120,11 @@ class TestNoFallback:
     """Nothing outside an operation reads lazy data unasked."""
 
     @pytest.mark.parametrize("show", (repr, str, lambda x: x._repr_html_()))
-    def test_repr_reads_nothing(self, lazy, recipe_loads, show):
+    def test_repr_reads_nothing(self, gone_lazy, show):
         """The data are described, not printed."""
-        text = show(Negate()(lazy))
+        text = show(Negate()(gone_lazy))
         assert "not read yet; 1 operation pending" in text
         assert "float64" in text
-        assert not recipe_loads
 
     def test_repr_counts_steps(self, lazy):
         """The number of pending operations is stated."""
@@ -136,11 +143,10 @@ class TestNoFallback:
         ),
         ids=("add", "negative", "multiply", "ufunc", "reduce", "array_function"),
     )
-    def test_numpy_fallback_refused(self, lazy, recipe_loads, run):
+    def test_numpy_fallback_refused(self, gone_lazy, run):
         """What would convert to numpy raises the lazy error instead."""
         with pytest.raises(LazyOperationError, match=r"patch\.load\(\)"):
-            run(lazy)
-        assert not recipe_loads
+            run(gone_lazy)
 
     @pytest.mark.parametrize(
         "run",
@@ -152,25 +158,22 @@ class TestNoFallback:
         ),
         ids=("other_first", "lazy_first", "np_add", "np_subtract"),
     )
-    def test_any_operand_lazy_refused(self, lazy, recipe_loads, run):
+    def test_any_operand_lazy_refused(self, lazy, gone_lazy, run):
         """Whichever operand comes first, a lazy one is refused, not read."""
         da = pytest.importorskip("dask.array")
         eager = lazy.load()
-        recipe_loads.clear()
         dask_patch = eager.new(data=da.from_array(np.asarray(eager.data)))
         with pytest.raises(LazyOperationError):
-            run(lazy, dask_patch)
-        assert not recipe_loads
+            run(gone_lazy, dask_patch)
 
     def test_names_the_ufunc(self, lazy):
         """The message names the operation refused."""
         with pytest.raises(LazyOperationError, match=r"^add cannot run"):
             lazy + 1
 
-    def test_asarray_reads(self, lazy, stored_float, recipe_loads):
+    def test_asarray_reads(self, lazy, stored_float):
         """Asking numpy for the values reads them; the caller asked."""
         out = np.asarray(Negate()(lazy))
-        assert len(recipe_loads) == 1
         assert np.array_equal(out, -np.asarray(stored_float.data))
 
     def test_write_reads(self, lazy, stored_float, tmp_path):
@@ -193,19 +196,16 @@ class TestOtherReaders:
         ),
         ids=("rolling", "rolling_pandas", "waterfall", "stack"),
     )
-    def test_refused(self, lazy, recipe_loads, run):
+    def test_refused(self, gone_lazy, run):
         """The lazy error, and nothing read."""
         with pytest.raises(LazyOperationError, match=r"patch\.load\(\)"):
-            run(lazy)
-        assert not recipe_loads
+            run(gone_lazy)
 
-    def test_stack_with_one_lazy(self, lazy, recipe_loads):
+    def test_stack_with_one_lazy(self, lazy, gone_lazy):
         """A lazy patch anywhere in the stack is refused."""
         eager = lazy.load()
-        recipe_loads.clear()
         with pytest.raises(LazyOperationError, match="stack"):
-            dc.spool([eager, lazy]).stack(dim_vary="time")
-        assert not recipe_loads
+            dc.spool([eager, gone_lazy]).stack(dim_vary="time")
 
     def test_stack_passes_once(self, random_patch):
         """Stacking goes over its patches once; a spool reads on each pass."""
@@ -221,11 +221,11 @@ class TestOtherReaders:
         stack_patches(patches, dim_vary="time")
         assert Counted.passes == 1
 
-    def test_specplot(self, recipe_loads):
+    def test_specplot(self):
         """A lazy patch with a Fourier coordinate is not drawn either."""
-        recipe = Recipe.from_source(ArraySource.full((4, 3), 1.0))
+        # A file which was never written, so drawing it would raise.
+        recipe = Recipe.from_source(stored((4, 3), dtype=np.float64))
         coords = {"x": np.arange(4.0), "ft_time": np.arange(3.0)}
         patch = dc.Patch(data=recipe, coords=coords, dims=("x", "ft_time"))
         with pytest.raises(LazyOperationError, match="specplot"):
             patch.viz.specplot(show=False)
-        assert not recipe_loads
