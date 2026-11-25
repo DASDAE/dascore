@@ -15,7 +15,6 @@ from pydantic import ValidationError
 import dascore as dc
 from dascore.core.coords import (
     Grid,
-    Labels,
     NumericCoord,
     concat_coords,
     get_coord,
@@ -451,7 +450,7 @@ class TestSegmentLimit:
             assert "max_index_runs" in str(said[0].message)
         assert coord.runs_count == (256 if stretches == 256 else 1)
         if stretches > 256:
-            assert isinstance(coord.runs[0], Labels) and coord.step is None
+            assert not coord.evenly_sampled and coord.step is None
         np.testing.assert_array_equal(coord.values, patch.get_coord("time")[mask])
         np.testing.assert_array_equal(out.data, patch.data[mask])
 
@@ -1167,7 +1166,7 @@ class TestFromArray:
             values[-1] += 0.004 * direction
         coord = get_coord(data=values, snap=False)
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Labels if late else Grid)
+        assert coord.evenly_sampled is not late
         np.testing.assert_array_equal(coord.values, values)
 
     @pytest.mark.parametrize("dtype", ["uint8", "int32", "float32"])
@@ -1177,14 +1176,14 @@ class TestFromArray:
         coord = get_coord(data=values, snap=False)
         assert coord.dtype == values.dtype
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Grid)
+        assert coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, values)
 
     @pytest.mark.parametrize("values", [[0.0, 1e308, 1.7e308], [1.0, 2.0, np.inf]])
     def test_unrepresentable_spacing_stays_stored(self, values):
         """Labels whose spacing overflows a grid stay stored labels."""
         coord = get_coord(data=np.array(values), snap=False)
-        assert isinstance(coord.runs[0], Labels)
+        assert coord.runs_count == 1 and not coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, values)
 
     def test_large_unsigned_fractional_labels(self):
@@ -1192,7 +1191,7 @@ class TestFromArray:
         values = np.uint64(2**64 - 100) + (np.arange(10) * 1.5).astype("uint64")
         coord = get_coord(data=values, snap=False)
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Labels)
+        assert not coord.evenly_sampled
         assert coord.dtype == values.dtype
         np.testing.assert_array_equal(coord.values, values)
 
@@ -1203,7 +1202,7 @@ class TestFromArray:
         )
         coord = get_coord(data=grid.values, snap=False)
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Grid)
+        assert coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, grid.values)
 
     @pytest.mark.parametrize("dtype", ["int64", "float64", "timedelta64[ns]"])
@@ -1223,7 +1222,7 @@ class TestFromArray:
         values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
         coord = get_coord(data=values, snap=False)
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Labels)
+        assert not coord.evenly_sampled
         assert np.array_equal(coord.values, values)
         gaps = coord.get_discontinuities("gaps")
         assert len(gaps) == 1

@@ -13,7 +13,6 @@ import dascore as dc
 import dascore.lazy
 from dascore.exceptions import IncompatiblePatchError, LazyOperationError
 from dascore.lazy.contract import (
-    ChunkContract,
     Halo,
     Pointwise,
     Tiles,
@@ -28,9 +27,8 @@ class TestContracts:
 
     @pytest.mark.parametrize("kind", (Pointwise, Unchanged))
     def test_is_a_contract(self, kind):
-        """Each is a contract, equal to another of its kind and frozen."""
+        """Each equals another of its kind and is frozen."""
         found = kind()
-        assert isinstance(found, ChunkContract)
         assert found == kind()
         with pytest.raises(dataclasses.FrozenInstanceError):
             found.extra = 1

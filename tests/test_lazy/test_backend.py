@@ -37,7 +37,6 @@ from dascore.exceptions import (
 )
 from dascore.io import core as io_core
 from dascore.lazy import execute
-from dascore.lazy.array import LazyArray
 from dascore.lazy.execute import chunk_boxes
 from dascore.lazy.recipe import Recipe
 from dascore.proc.filter import PassFilter
@@ -726,7 +725,7 @@ class TestNamespace:
     def test_lazy_chunks_run_its_kernels(self, spool, fast):
         """A lazy backend computing on the namespace runs its kernels."""
         lazy = spool.set_backend("lazy[fast_numpy]")[0]
-        assert isinstance(lazy.data, LazyArray)
+        assert backend_name(lazy.data) == "lazy"
         block = fast.data.nbytes // 6
         # Under the default setting, which refuses a conversion on lazy data.
         with config_context(lazy_block_size=block), warnings.catch_warnings():
@@ -856,7 +855,7 @@ class TestNamespace:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             out = dc.spool([fast[0], *lazy[1:]]).concatenate(time=None)[0]
-        assert isinstance(out.data, LazyArray) and not reads
+        assert backend_name(out.data) == "lazy" and not reads
         assert out.backend == LazyBackend(compute=_Fast()) and _triples(out.load())
 
     def test_lazy_steps_are_handed_its_arrays(self, spool):
@@ -1123,7 +1122,7 @@ class TestPatchOnABackend:
     def test_lazy_reads_nothing(self, patch, reads):
         """A patch from a file is handed out as a promise to read it."""
         lazy = _lazy(patch)
-        assert isinstance(lazy.data, LazyArray) and lazy.shape == patch.shape
+        assert backend_name(lazy.data) == "lazy" and lazy.shape == patch.shape
         assert lazy.attrs == patch.attrs and lazy.coords == patch.coords
         assert not reads
         loaded = lazy.load()
@@ -1222,7 +1221,7 @@ class TestPatchOnABackend:
         elsewhere.mkdir()
         monkeypatch.chdir(elsewhere)
         for lazy in (read, handed):
-            assert isinstance(lazy.data, LazyArray) and lazy.load().equals(patch)
+            assert backend_name(lazy.data) == "lazy" and lazy.load().equals(patch)
 
     def test_array_numpy_handles_is_left_alone(self, patch, strict):
         """An array-like of no array library is not made an ndarray of."""

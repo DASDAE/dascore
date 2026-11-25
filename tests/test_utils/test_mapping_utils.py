@@ -25,7 +25,6 @@ class TestFrozenDict:
     def test_init_on_dict(self):
         """Ensure a dict can be used to init frozendict."""
         out = FrozenDict({"bob": 1})
-        assert isinstance(out, FrozenDict)
         assert "bob" in out
 
     def test_init_on_frozen_dict(self):
@@ -51,7 +50,7 @@ class TestFrozenDict:
     def test_init_on_keys(self):
         """Ensure dict can be inited with keys as well."""
         out = FrozenDict(bob=1, bill=2)
-        assert isinstance(out, FrozenDict)
+        assert out == {"bob": 1, "bill": 2}
 
     def test_cant_add_keys(self, frozen_dict):
         """Ensure keys can't be added to the dict."""

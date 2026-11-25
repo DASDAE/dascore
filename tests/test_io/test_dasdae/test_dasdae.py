@@ -14,7 +14,7 @@ import pytest
 import dascore as dc
 from dascore.compat import random_state
 from dascore.config import config_context
-from dascore.core.coords import CoordString, Labels, NumericCoord
+from dascore.core.coords import NumericCoord
 from dascore.exceptions import (
     InvalidFiberFileError,
     MissingPatchError,
@@ -573,13 +573,21 @@ class TestAttrsClassRoundTrip:
         assert restored.attrs.gauge_length == 10.0
 
     def test_read_keeps_the_class(self, odh4_path):
-        """Reading rebuilds the class which was written."""
+        """
+        Reading rebuilds the class which was written.
+
+        The class is the promise here, and no attribute states it.
+        """
         attrs = dc.read(odh4_path)[0].attrs
         assert isinstance(attrs, ODH4PatchAttrs)
         assert attrs.gauge_length == 10.0
 
     def test_scan_keeps_the_class(self, odh4_path):
-        """Scanning takes the same path, so it says the same thing."""
+        """
+        Scanning takes the same path, so it says the same thing.
+
+        The class is the promise here, and no attribute states it.
+        """
         assert isinstance(dc.scan(odh4_path)[0].attrs, ODH4PatchAttrs)
 
     def test_a_file_naming_no_class_reads_as_patch_attrs(self, odh4_path, tmp_path):
@@ -1283,7 +1291,8 @@ class TestRoundTrips:
         patch.io.write(path, "dasdae")
         out = dc.read(path, file_format="DASDAE")[0]
         coord = out.get_coord("sensor")
-        assert isinstance(coord, CoordString)
+        assert coord.dtype.kind == "U"
+        assert len(coord.select("sensor_00*")[0]) == 10
         assert np.array_equal(coord.values, labels)
 
     def test_roundtrip_string_dim_coord(self, random_patch, tmp_path_factory):
@@ -1295,7 +1304,8 @@ class TestRoundTrips:
         patch.io.write(path, "dasdae")
         out = dc.read(path, file_format="DASDAE")[0]
         coord = out.get_coord("distance")
-        assert isinstance(coord, CoordString)
+        assert coord.dtype.kind == "U"
+        assert len(coord.select("ch_00*")[0]) == 10
         assert np.array_equal(coord.values, labels)
 
     def test_scan_includes_string_coords(self, random_patch, tmp_path_factory):
@@ -1375,7 +1385,7 @@ class TestExactLabels:
         dc.write(patch, path, "DASDAE", file_version=version)
         coord = dc.read(path, snap=False)[0].get_coord("time")
         assert coord.runs_count == 1
-        assert isinstance(coord.runs[0], Labels)
+        assert not coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, values)
 
     @pytest.mark.parametrize("snap", [True, False])

@@ -19,7 +19,6 @@ from dascore.exceptions import (
 from dascore.io.index.catalog import PatchCatalog
 from dascore.units import m, percent
 from dascore.utils.chunk_plan import (
-    ChunkPlan,
     _directions,
     _normalize_numeric_units,
     _order_key,
@@ -99,7 +98,6 @@ class TestMergePlan:
     def test_contiguous_spool_single_output(self, random_flat):
         """A contiguous spool merges to one output."""
         plan = build_chunk_plan(random_flat, time=None)
-        assert isinstance(plan, ChunkPlan)
         assert plan.merge_mode
         assert len(plan.outputs) == 1
         out = plan.outputs.iloc[0]

@@ -188,7 +188,12 @@ class TestRolling:
             range_patch_3d.rolling(time=1, engine="pandas").mean()
 
     def test_default_engine_ignores_length_one_dims(self, random_patch):
-        """A patch with one long dimension rolls through pandas, as 1D ones do."""
+        """
+        A patch with one long dimension rolls through pandas, as 1D ones do.
+
+        Both engines give the same values, so the roller's class is the only
+        sign of which one was chosen.
+        """
         row = random_patch.isel(distance=slice(0, 1))
         assert isinstance(row.rolling(time=5, samples=True), _PandasPatchRoller)
         assert isinstance(random_patch.rolling(time=5, samples=True), _NumpyPatchRoller)

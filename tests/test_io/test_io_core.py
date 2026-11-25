@@ -22,7 +22,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.core.coords import Grid, _float_allowance, get_coord
+from dascore.core.coords import _float_allowance, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     DependencyError,
@@ -499,7 +499,7 @@ class TestStoredCoord:
         """
         labels = np.linspace(4000, 4009.9, 100, dtype=np.float32)
         out = stored_coord(labels, snap, name="distance")
-        assert isinstance(out.runs[0], Grid) and out.runs_count == 1
+        assert out.evenly_sampled and out.runs_count == 1
         assert out.step == (labels[-1] - labels[0]) / np.float32(99)
         moved = np.abs(out.values - labels).max()
         assert moved <= 2 * _float_allowance(labels, out.step)

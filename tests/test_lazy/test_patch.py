@@ -8,7 +8,6 @@ import pytest
 import dascore as dc
 from dascore.core.source import ArraySource
 from dascore.exceptions import LazyOperationError
-from dascore.lazy.array import LazyArray
 from dascore.lazy.contract import Pointwise
 from dascore.lazy.recipe import Recipe
 from dascore.utils.array_api import backend_name
@@ -45,7 +44,6 @@ class TestRecipeInAPatch:
         """The patch holds a lazy array of the recipe, and reads nothing."""
         recipe = Recipe.from_source(stored_float._source)
         patch = dc.Patch(data=recipe, coords=stored_float.coords)
-        assert isinstance(patch.data, LazyArray)
         assert patch.data.recipe is recipe
         assert len(patch.data.chain) == 0
         assert backend_name(patch.data) == "lazy"
@@ -55,7 +53,7 @@ class TestRecipeInAPatch:
 
     def test_to_patch_wraps(self, lazy, recipe_loads):
         """Giving metadata a recipe wraps it too."""
-        assert isinstance(lazy.data, LazyArray)
+        assert backend_name(lazy.data) == "lazy"
         assert not recipe_loads
 
     def test_len_is_first_axis(self, lazy):

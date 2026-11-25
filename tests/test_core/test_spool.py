@@ -39,7 +39,6 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
 from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs
@@ -208,7 +207,6 @@ class TestLiveSpoolLazy:
         spool = dc.spool(patch_list)
         chunked = spool.chunk(time=1)
         assert chunked._catalog is not spool._catalog
-        assert isinstance(chunked._catalog.resolver, PlanResolver)
         # member loading shares the parent's live patches, not copies
         registry = chunked._catalog.resolver.live_entries()
         assert {id(p) for p in registry.values()} <= {id(p) for p in patch_list}
@@ -2936,7 +2934,7 @@ class TestSpoolCoverageEdges:
     def test_union_of_chunked_spool(self, many_contiguous):
         """A chunked spool is a derived catalog; unions compose it."""
         chunked = dc.spool(many_contiguous).chunk(time=None)
-        assert isinstance(chunked._catalog.resolver, PlanResolver)
+        assert len(chunked) == 1 < len(many_contiguous)
         combined = chunked + dc.spool([dc.get_example_patch(tag="other")])
         assert len(combined) == 2
         assert all(isinstance(p, dc.Patch) for p in combined)

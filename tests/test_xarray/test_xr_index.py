@@ -10,8 +10,6 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
-    Grid,
-    Labels,
     NumericCoord,
     _float_allowance,
     concat_coords,
@@ -303,7 +301,7 @@ class TestIsel:
         lazy, _ = _pair(coord)
         assert isinstance(lazy.isel(x=slice(10, 60)).xindexes["x"], CoordIndex)
         strided = lazy.isel(x=slice(10, 60, 2)).xindexes["x"]
-        assert all(isinstance(run, Grid) for run in strided.coordinate.runs)
+        assert all(x.evenly_sampled for x in strided.coordinate.segments)
         assert np.array_equal(strided.coordinate.values, coord.values[10:60:2])
 
     def test_fancy_indexing_holds_its_picks(self):
@@ -311,7 +309,7 @@ class TestIsel:
         lazy, eager = _pair(MS)
         index = lazy.isel(x=[1, 5]).xindexes["x"]
         assert isinstance(index, CoordIndex)
-        assert isinstance(index.coordinate.runs[0], Labels)
+        assert not index.coordinate.segments[0].evenly_sampled
         _assert_same(
             lambda: lazy.isel(x=[0, 1, 2]) + lazy.isel(x=slice(0, 3)),
             lambda: eager.isel(x=[0, 1, 2]) + eager.isel(x=slice(0, 3)),
@@ -461,7 +459,7 @@ class TestConcat:
         """Parts which do not chain in order keep their labels, held as they are."""
         parts = self._parts(*pieces)
         out = xr.concat(parts, dim="x")
-        assert isinstance(out.xindexes["x"].coordinate.runs[0], Labels)
+        assert not out.xindexes["x"].coordinate.segments[0].evenly_sampled
         expected = np.concatenate([x["x"].values for x in parts])
         np.testing.assert_array_equal(out["x"].values, expected)
 
@@ -698,7 +696,7 @@ class TestFromVariables:
         indexed = array.drop_indexes("distance").set_xindex("distance", CoordIndex)
         patch = xarray_to_patch(indexed)
         coord = patch.get_coord("distance")
-        assert isinstance(coord.runs[0], Grid) and coord.step == 0.1
+        assert coord.evenly_sampled and coord.step == 0.1
         moved = np.abs(coord.values - dist).max()
         assert moved <= 2 * _float_allowance(dist, 0.1)
         assert patch.pass_filter(distance=(None, 1)).shape == patch.shape

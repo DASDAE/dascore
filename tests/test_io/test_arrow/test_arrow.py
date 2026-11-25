@@ -209,7 +209,11 @@ class TestRoundTrip:
         assert np.isnan(new["missing"])
 
     def test_attrs_class(self, tmp_path):
-        """A registered attrs subclass comes back as itself."""
+        """
+        A registered attrs subclass comes back as itself.
+
+        The class is the promise here, and no attribute states it.
+        """
         patch = dc.get_example_patch()
         attrs = SR4731PatchAttrs.from_dict(patch.attrs.model_dump())
         patch = patch.update(attrs=attrs)

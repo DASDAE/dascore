@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.index.catalog import CompositeResolver, PatchCatalog, _absolutize_record
+from dascore.io.index.catalog import PatchCatalog, _absolutize_record
 from dascore.io.index.ingest import SourceRecord
 
 
@@ -161,7 +161,6 @@ class TestCompositeResolver:
         """memorypatch:// rows go to the live registry."""
         p1, _ = contiguous_patches
         cat = PatchCatalog.union([PatchCatalog.from_patches([p1])])
-        assert isinstance(cat.resolver, CompositeResolver)
         row = cat.to_df().iloc[0].to_dict()
         assert cat.resolve_row(row) is p1
 

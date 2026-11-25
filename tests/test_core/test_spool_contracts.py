@@ -574,7 +574,12 @@ class TestChunkPlanContract:
             assert np.array_equal(times, np.arange(count))
 
     def test_planned_state_is_derived(self, patches):
-        """A chunked spool is a fresh derived catalog, not a mode flag."""
+        """
+        A chunked spool is a fresh derived catalog, not a mode flag.
+
+        An engine test: which resolver the catalog holds is the state under
+        test, and nothing public names it, so its class is checked.
+        """
         spool = dc.spool(patches)
         chunked = spool.chunk(time=2)
         assert chunked._catalog is not spool._catalog
