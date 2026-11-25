@@ -291,6 +291,9 @@ class TestUpdateExecutor:
         try:
             serial.update(progress=False)
             parallel.update(progress=False, client=client)
+            assert serial.indexer.index_path == tmp_path / "serial.db"
+            assert parallel.indexer.index_path == tmp_path / "parallel.db"
+            assert (tmp_path / "parallel.db").exists()
             pd.testing.assert_frame_equal(
                 serial.get_contents(), parallel.get_contents()
             )

@@ -170,6 +170,7 @@ class TestHiveIndexing:
         patch.io.write(tmp_path / "plain_file.h5", "dasdae")
         spool = dc.spool(tmp_path).update(progress=None)
         try:
+            assert len(spool) == 1
             assert "cable" not in spool.get_contents().columns
         finally:
             spool.indexer.close()
@@ -511,6 +512,9 @@ class TestEdgeCases:
             df = reopened.get_contents()
             assert "cable" not in df.columns
             assert df["station"].iloc[0] == "A"
+            patch = reopened[0]
+            assert patch.attrs.get("cable") is None
+            assert patch.attrs.station == "A"
         finally:
             reopened.indexer.close()
 
@@ -533,13 +537,16 @@ class TestEdgeCases:
         unit = tmp_path / "cable=north" / "tag=ignored"
         unit.mkdir(parents=True)
         (unit / "metadata.xml").write_text(metadata)
-        rand = np.random.default_rng(0).random((5000, 10)).astype("float32")
-        (unit / "DAS_20240530T011500_000000Z.raw").write_bytes(rand.tobytes())
+        data = np.arange(10_000, dtype="uint16").reshape(1000, 10)
+        (unit / "DAS_20240530T011500_000000Z.raw").write_bytes(data.tobytes())
         spool = dc.spool(tmp_path).update(progress=None)
         try:
             df = spool.get_contents()
             assert df["cable"].iloc[0] == "north"
             assert "tag" not in df.columns
+            patch = spool[0]
+            assert patch.attrs.cable == "north"
+            assert patch.attrs.tag != "ignored"
         finally:
             spool.indexer.close()
 
