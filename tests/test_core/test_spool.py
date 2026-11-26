@@ -2624,13 +2624,15 @@ class TestGetSpool:
         """
         Opening one file sniffs its format once.
 
-        _from_file re-sniffed a format its caller had already resolved,
-        which opens the file again; for a remote source that is a second
-        round trip.
+        A performance guard (rule C): a second sniff opens the file again,
+        which for a remote source is a second round trip, and finds the same
+        format, so the calls into the format's own `get_format` are counted.
         """
+        fmt, version = dc.get_format(terra15_das_example_path)
         manager = dc.io.FiberIO.manager
+        fiber_io = type(manager.get_fiberio(format=fmt, version=version))
         with mock.patch.object(
-            manager, "_get_format", wraps=manager._get_format
+            fiber_io, "get_format", autospec=True, side_effect=fiber_io.get_format
         ) as probe:
             # Inside the block: a spool which sniffs while it builds rows
             # lazily would otherwise slip past the count.
@@ -3840,7 +3842,12 @@ class TestSpoolFromPaths:
         assert isinstance(spool[0], dc.Patch)
 
     def test_one_catalog_union(self, file_paths):
-        """The paths' catalogs combine in one union, not one per path."""
+        """
+        The paths' catalogs combine in one union, not one per path.
+
+        A performance guard (rule C): a union per path builds the same spool,
+        only in time quadratic in the paths, so the unions are counted.
+        """
         with mock.patch.object(
             PatchCatalog, "union", wraps=PatchCatalog.union
         ) as union:
@@ -4071,7 +4078,12 @@ class TestSpoolRepr:
         assert "group 0" not in rendered
 
     def test_a_big_spool_degrades(self):
-        """Past the limit a repr states its count and never reads the frame."""
+        """
+        Past the limit a repr states its count and never reads the frame.
+
+        A performance guard (rule C): reading the frame gives the same text,
+        only slowly for a large index, so the frame's reads are watched.
+        """
         spool = dc.get_example_spool("diverse_das")
         with config_context(display_max_patches=1):
             with mock.patch.object(
@@ -4427,7 +4439,12 @@ class TestSpoolRepr:
         assert "mixed units: ft, m" in rendered
 
     def test_the_count_is_asked_for_once(self):
-        """Counting a view can project the relation; a repr does it once."""
+        """
+        Counting a view can project the relation; a repr does it once.
+
+        A performance guard (rule C): counting again gives the same text, only
+        slowly, so the count is its witness.
+        """
         spool = dc.get_example_spool("diverse_das")
         with mock.patch.object(Spool, "__len__", return_value=18) as counted:
             str(spool)
