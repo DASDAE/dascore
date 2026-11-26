@@ -52,6 +52,7 @@ def _assert_same(theirs, ours, where: str = "result") -> None:
             _assert_same(getattr(theirs, name), getattr(ours, name), f"{where}.{name}")
     elif isinstance(ours, dc.Patch):
         assert isinstance(theirs, dc.Patch), f"{where} is not a Patch"
+        _assert_same(theirs.backend, ours.backend, f"{where}.backend")
         _assert_same(theirs.coords, ours.coords, f"{where}.coords")
         # The history is left out: it is being retired.
         mine, expected = (
@@ -61,6 +62,7 @@ def _assert_same(theirs, ours, where: str = "result") -> None:
         _assert_same(np.asarray(theirs.data), np.asarray(ours.data), f"{where}.data")
     elif isinstance(ours, BaseSpool):
         assert isinstance(theirs, BaseSpool), f"{where} is not a spool"
+        _assert_same(theirs.backend, ours.backend, f"{where}.backend")
         _assert_same(list(theirs), list(ours), where)
     elif isinstance(ours, pd.DataFrame):
         pd.testing.assert_frame_equal(theirs, ours, check_exact=True, obj=where)

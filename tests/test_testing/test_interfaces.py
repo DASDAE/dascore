@@ -168,6 +168,12 @@ class TestCheck:
         with pytest.raises(AssertionError):
             _check(lambda x: x, theirs, ours)
 
+    def test_another_backend(self, random_patch):
+        """A spool whose patches are on another backend fails."""
+        spool = dc.spool([random_patch])
+        with pytest.raises(AssertionError, match="backend"):
+            _check(lambda x: x, spool, spool.set_backend("numpy"))
+
     def test_other_patches(self, random_patch):
         """A spool of other patches fails."""
         spool = dc.spool([random_patch])

@@ -107,6 +107,8 @@ def _kind_of(node) -> str | None:
     """The kind a class expression names: one of HOMES, 'own' or None."""
     names = _classes(node)
     kinds = {"own" if x in OWN else INTERFACES.get(x) for x in names or ()}
+    # An interface in a union with dascore's class may be another package's.
+    kinds -= {"own"} if len(kinds) > 1 else set()
     return kinds.pop() if len(kinds) == 1 else None
 
 
@@ -192,6 +194,7 @@ class _Reads(ast.NodeVisitor):
 
     def visit_If(self, node):
         self.visit(node.test)
+        incoming = dict(self.names)
         test = node.test
         both = isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And)
         narrowed = {}
@@ -210,8 +213,12 @@ class _Reads(ast.NodeVisitor):
         # Narrowed only inside the `if`; what the body assigned holds on.
         for name, kind in narrowed.items():
             self.bind(name, kind)
+        # The other branch starts from what held before the `if`; after it,
+        # a name holds what either branch left it holding.
+        after_body, self.names = self.names, incoming
         for child in node.orelse:
             self.visit(child)
+        self.names = {**after_body, **self.names}
 
     def visit_Assign(self, node):
         self.generic_visit(node)
@@ -279,7 +286,7 @@ def attribute_reads(source: str, path: str = "") -> dict[str, set[str]]:
 
 def _statements(name: str):
     """The methods and annotations an interface states, with its bases'."""
-    tree = ast.parse(Path(interfaces.__file__).read_text())
+    tree = ast.parse(Path(interfaces.__file__).read_text(encoding="utf-8"))
     classes = {x.name: x for x in tree.body if isinstance(x, ast.ClassDef)}
     todo = [name]
     while todo:
@@ -329,7 +336,9 @@ def reads():
         relative = path.relative_to(ROOT).as_posix()
         if relative.startswith("docs/"):
             continue
-        for kind, names in attribute_reads(path.read_text(), relative).items():
+        for kind, names in attribute_reads(
+            path.read_text(encoding="utf-8"), relative
+        ).items():
             found[kind, relative] = names
     return found
 
@@ -434,6 +443,18 @@ def f(cm: BaseCoordManager, spool):
             "coord": {"three", "four", "five", "six", "segments", "seven"},
             "spool": {"select", "eight"},
         }
+
+    def test_unions_and_branches(self):
+        """An interface in a union is followed, and each branch starts afresh."""
+        source = """
+def f(a: BaseNumericCoord | NumericCoord, b: NumericCoord, coord, flag):
+    a.one, b.two
+    if flag:
+        coord = None
+    else:
+        coord.three
+"""
+        assert attribute_reads(source) == {"coord": {"one", "three"}}
 
     def test_own_module(self):
         """Reads in a class's own module are its own."""
