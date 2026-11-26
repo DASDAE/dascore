@@ -56,6 +56,7 @@ import dascore as dc
 from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
+from dascore.core.provider import providing
 from dascore.exceptions import LazyOperationError, ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.array_api import (
@@ -546,8 +547,8 @@ class PatchProcessor(DascoreBaseModel):
             # operation running another inside itself records that one.
             _RECORD.set(True)
         # The body is an operation, which names itself; the replacements it
-        # makes on the way do not.
-        with operation_context():
+        # makes on the way do not. It builds with the patch's provider.
+        with operation_context(), providing(patch._builds_with()):
             return self._run(patch, record=record)
 
     def _finished(self, patch, out, record: bool):

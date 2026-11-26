@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
+from dascore.core.provider import providing
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     CoordError,
@@ -409,7 +410,9 @@ def _joined(meta: dc.PatchMeta, patch, dim: str):
     if not (old[dim].evenly_sampled and new[dim].evenly_sampled):
         return None
     try:
-        joined = get_coord(segments=(old[dim], new[dim]))
+        # writing is no operation, so join with the patch's provider
+        with providing(patch._provider):
+            joined = get_coord(segments=(old[dim], new[dim]))
     except CoordError:  # overlapping, or out of order
         return None
     # segments are joined in their own order, but the new samples go last

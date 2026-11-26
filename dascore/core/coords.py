@@ -42,6 +42,7 @@ import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, _DASCORE_DIR, DIM_REDUCE_DOCS, dascore_styles
 from dascore.core.interfaces import BaseCoord, BaseNumericCoord, BaseStringCoord
+from dascore.core.provider import provided
 from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
@@ -4109,6 +4110,7 @@ class CoordString(_CoordModel, BaseStringCoord):
         return None if not values.size else max(values)
 
 
+@provided
 def get_coord(
     *,
     # An int names a length, producing a partial coord of that shape.
@@ -4194,6 +4196,10 @@ def get_coord(
         (data, step) - useful for length 1 arrays.
         (values)
         (values, step) - useful for length 1 arrays.
+
+    A patch class's [`Provider`](`dascore.core.provider.Provider`) can
+    build the coordinate instead; see
+    [Interfaces](`dascore/docs/notes/interfaces.qmd`).
 
     Examples
     --------

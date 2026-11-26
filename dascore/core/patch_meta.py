@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 from uuid import uuid4
 
 import numpy as np
@@ -22,6 +22,7 @@ from dascore.core.coordmanager import (
     CoordManager,
     get_coord_manager,
 )
+from dascore.core.provider import Provider, providing
 from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import ParameterError
@@ -137,6 +138,9 @@ class PatchMeta(NodeRepr):
     # The class `to_patch` builds; None means a plain `Patch`. Set by
     # `Patch.drop_data`, so an operation on a subclass returns that subclass.
     _patch_type: type | None = None
+    # What builds the managers and lazy arrays of this class's objects, and
+    # the objects of operations on them; None is dascore's own.
+    _provider: ClassVar[Provider | None] = None
 
     def __init__(
         self,
@@ -155,7 +159,16 @@ class PatchMeta(NodeRepr):
             )
             raise ValueError(msg)
         self._dtype = _as_dtype(dtype)
-        self._set_state(get_coord_manager(coords, dims=dims), attrs, source)
+        self._set_state(self._coord_manager(coords, dims=dims), attrs, source)
+
+    def _builds_with(self) -> Provider | None:
+        """The provider of this object's class, else of the patch it describes."""
+        return self._provider or getattr(self._patch_type, "_provider", None)
+
+    def _coord_manager(self, coords, dims=None, shape=None) -> CoordManager:
+        """Build the manager this object holds, with its provider."""
+        with providing(self._builds_with()):
+            return get_coord_manager(coords, dims=dims, shape=shape)
 
     def _set_state(self, coords, attrs, source) -> None:
         """Store the state every patch object holds, and mint its identity."""
