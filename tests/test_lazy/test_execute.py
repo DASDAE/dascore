@@ -23,7 +23,13 @@ from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
 from dascore.utils.array_api import backend_name
 
-from .conftest import constant, lazy_patch, stored_patch, unreadable
+from .conftest import (
+    constant,
+    lazy_patch,
+    only_decodable,
+    stored_patch,
+    unreadable,
+)
 
 # Bytes of one float64 row of the stored patch: 300 distances by 2000 times.
 ROW = 2000 * 8
@@ -70,17 +76,12 @@ class TestSelect:
         assert out.attrs.data_id == expected.attrs.data_id
         assert lazy.select(**kwargs).load() == expected
 
-    def test_reads_only_the_window(self, lazy, recipe_loads):
-        """
-        What is read has the selection's shape, not the array's.
-
-        A performance guard that keeps its spy: reading more of the file
-        and cutting it gives the same values, so the shape read is its only
-        witness.
-        """
+    def test_reads_only_the_window(self, eager, tmp_path):
+        """What is read has the selection's shape, not the array's."""
+        keep = (slice(10, 50), slice(100, 900))
+        lazy = only_decodable(tmp_path, eager.data, (10, 100), keep)
         out = lazy.select(time=(100, 900), distance=(10, 50), samples=True)
-        out.load()
-        assert [x.shape for x in recipe_loads] == [(40, 800)]
+        assert np.array_equal(out.load().data, eager.data[keep])
 
     def test_by_value(self, lazy, eager):
         """Coordinate values select as they do eagerly, ends included."""
@@ -92,18 +93,13 @@ class TestSelect:
         """A selection which keeps everything is a no-op, as eagerly."""
         assert lazy.select(time=(None, None)) is lazy
 
-    def test_selections_compose(self, lazy, eager, recipe_loads):
-        """
-        A window of a window reads the samples both keep.
-
-        A performance guard that keeps its spy, for the reason
-        `test_reads_only_the_window` gives.
-        """
+    def test_selections_compose(self, eager, tmp_path):
+        """A window of a window reads the samples both keep."""
+        keep = (slice(0, 300), slice(150, 160))
+        lazy = only_decodable(tmp_path, eager.data, (300, 10), keep)
         out = lazy.select(time=(100, 900), samples=True)
         out = out.select(time=(50, 60), samples=True)
-        expected = eager.select(time=(150, 160), samples=True)
-        assert np.array_equal(out.load().data, expected.data)
-        assert [x.shape for x in recipe_loads] == [(300, 10)]
+        assert np.array_equal(out.load().data, eager.data[keep])
 
     def test_values_refused(self, gone, eager):
         """Picking out separate values is no window, so it is refused."""
@@ -133,19 +129,16 @@ class TestReadSchedule:
             (slice(0, 300), slice(148, 162)),
         ]
 
-    def test_select_after_filter_reads_only_its_reach(self, lazy, eager, recipe_loads):
-        """
-        A selection made after a filter still narrows what is read.
-
-        A performance guard that keeps its spy, for the reason
-        `TestSelect.test_reads_only_the_window` gives.
-        """
+    def test_select_after_filter_reads_only_its_reach(self, eager, tmp_path):
+        """A selection made after a filter still narrows what is read."""
+        # the window and the filter's halo of two samples either side
+        keep = (slice(0, 300), slice(98, 902))
+        lazy = only_decodable(tmp_path, eager.data, (300, 2), keep)
         out = lazy.median_filter(time=5, samples=True)
         out = out.select(time=(100, 900), samples=True)
         expected = eager.median_filter(time=5, samples=True)
         expected = expected.select(time=(100, 900), samples=True)
         assert np.array_equal(out.load().data, expected.data)
-        assert [x.shape for x in recipe_loads] == [(300, 804)]
 
     def test_whole_axis_reads_it_all(self, lazy):
         """A selection after a recursive filter cannot narrow its axis."""

@@ -6,10 +6,12 @@ import copy
 import functools
 import re
 import shutil
+import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from itertools import islice
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -18,7 +20,6 @@ import pytest
 from pandas.errors import PerformanceWarning
 
 import dascore as dc
-import dascore.core.spool as spool_module
 import dascore.utils.patch_assembly as assembly_mod
 from dascore.config import config_context
 from dascore.core.coords import get_coord
@@ -43,7 +44,7 @@ from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.misc import MEMORY_HEADROOM, suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
@@ -305,10 +306,23 @@ class TestLoad:
 
     @pytest.fixture()
     def budget(self, monkeypatch):
-        """Set what load believes is available, in bytes."""
+        """
+        Set the bytes load may use, as the machine reports them.
+
+        An environment seam: a stand-in psutil reports the free memory, and
+        None stands for a machine without psutil.
+        """
 
         def _set(value):
-            monkeypatch.setattr(spool_module, "available_memory", lambda: value)
+            if value is None:
+                monkeypatch.setitem(sys.modules, "psutil", None)
+                return
+            free = int(value / MEMORY_HEADROOM)
+            while int(free * MEMORY_HEADROOM) < value:
+                free += 1
+            memory = SimpleNamespace(available=free)
+            psutil = SimpleNamespace(virtual_memory=lambda: memory)
+            monkeypatch.setitem(sys.modules, "psutil", psutil)
 
         return _set
 
@@ -480,16 +494,17 @@ class TestLoad:
         assert loaded.attrs.data_id == patch.attrs.data_id
         assert isinstance(loaded.data, np.ndarray)
 
-    def test_wide_time_span_loads(self, budget):
+    def test_wide_time_span_loads(self, tmp_path, budget):
         """A span too wide for nanosecond arithmetic is unknown, not an error."""
         budget(1)
-        years = ["1700-01-01", "1800-01-01", "2000-01-01", "2200-01-01"]
-        times = np.array(years, dtype="datetime64[ns]")
-        low, high = (pd.Series([x]) for x in times[[0, -1]])
-        step = pd.Series([np.timedelta64(1, "s")])
-        assert np.isnan(spool_module._dim_counts(low, high, step)).all()
-        patch = self._line(np.ones(4), times)
-        assert len(dc.spool(patch).load()) == 1
+        step = np.timedelta64(50 * 365, "D").astype("timedelta64[ns]")
+        start = np.datetime64("1700-01-01", "ns")
+        x = get_coord(start=start, step=step, shape=(10,))
+        path = tmp_path / "wide.h5"
+        dc.write(self._line(np.ones(10), x), path, "dasdae")
+        # Trimmed, the row is counted from its range: four centuries of ns.
+        trimmed = dc.spool(path).select(x=(x.values[1], None))
+        assert len(trimmed.load()) == 1
 
     def test_lazy_patch_is_read(self, random_patch, tmp_path, budget):
         """A patch holding a lazy array comes back holding the array itself."""
@@ -2609,13 +2624,15 @@ class TestGetSpool:
         """
         Opening one file sniffs its format once.
 
-        _from_file re-sniffed a format its caller had already resolved,
-        which opens the file again; for a remote source that is a second
-        round trip.
+        A performance guard (rule C): a second sniff opens the file again,
+        which for a remote source is a second round trip, and finds the same
+        format, so the calls into the format's own `get_format` are counted.
         """
+        fmt, version = dc.get_format(terra15_das_example_path)
         manager = dc.io.FiberIO.manager
+        fiber_io = type(manager.get_fiberio(format=fmt, version=version))
         with mock.patch.object(
-            manager, "_get_format", wraps=manager._get_format
+            fiber_io, "get_format", autospec=True, side_effect=fiber_io.get_format
         ) as probe:
             # Inside the block: a spool which sniffs while it builds rows
             # lazily would otherwise slip past the count.
@@ -3825,7 +3842,12 @@ class TestSpoolFromPaths:
         assert isinstance(spool[0], dc.Patch)
 
     def test_one_catalog_union(self, file_paths):
-        """The paths' catalogs combine in one union, not one per path."""
+        """
+        The paths' catalogs combine in one union, not one per path.
+
+        A performance guard (rule C): a union per path builds the same spool,
+        only in time quadratic in the paths, so the unions are counted.
+        """
         with mock.patch.object(
             PatchCatalog, "union", wraps=PatchCatalog.union
         ) as union:
@@ -4056,7 +4078,12 @@ class TestSpoolRepr:
         assert "group 0" not in rendered
 
     def test_a_big_spool_degrades(self):
-        """Past the limit a repr states its count and never reads the frame."""
+        """
+        Past the limit a repr states its count and never reads the frame.
+
+        A performance guard (rule C): reading the frame gives the same text,
+        only slowly for a large index, so the frame's reads are watched.
+        """
         spool = dc.get_example_spool("diverse_das")
         with config_context(display_max_patches=1):
             with mock.patch.object(
@@ -4412,7 +4439,12 @@ class TestSpoolRepr:
         assert "mixed units: ft, m" in rendered
 
     def test_the_count_is_asked_for_once(self):
-        """Counting a view can project the relation; a repr does it once."""
+        """
+        Counting a view can project the relation; a repr does it once.
+
+        A performance guard (rule C): counting again gives the same text, only
+        slowly, so the count is its witness.
+        """
         spool = dc.get_example_spool("diverse_das")
         with mock.patch.object(Spool, "__len__", return_value=18) as counted:
             str(spool)

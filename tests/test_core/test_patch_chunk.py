@@ -13,6 +13,7 @@ import pickle
 import random
 import sqlite3
 import threading
+import tracemalloc
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import closing, contextmanager
@@ -869,22 +870,38 @@ class TestStreamingMerge:
     pre-allocated array rather than concatenating all loaded patches.
     """
 
-    def test_streaming_path_used(self, adjacent_spool_no_overlap, monkeypatch):
-        """Ensure simple merges take the streaming path."""
-        called = []
-        original = PatchAssembler._merge_patches_streaming
+    def test_streaming_path_used(self, tmp_path):
+        """
+        A merge of loaded patches copies each into one array as it is read.
 
-        def wrapper(self, *args, **kwargs):
-            called.append(True)
-            return original(self, *args, **kwargs)
-
-        monkeypatch.setattr(PatchAssembler, "_merge_patches_streaming", wrapper)
-        merged = adjacent_spool_no_overlap.chunk(time=None)
-        assert isinstance(merged[0], dc.Patch)
-        assert called
+        Concatenating them once all are loaded holds every member beside the
+        output, twice its size at the peak; streaming holds one member more.
+        """
+        patches = ex.get_example_spool(
+            "random_das", length=6, time_gap=np.timedelta64(0, "s")
+        )
+        for num, patch in enumerate(patches):
+            # an integer no index column holds, so each member loads as a patch
+            patch = patch.update_attrs(counter=2**53 + 1)
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        spool.chunk(time=None)[0]  # so what a first merge caches is not counted
+        tracemalloc.start()
+        try:
+            merged = spool.chunk(time=None)[0]
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 1.6 * merged.data.nbytes
 
     def test_matches_materialized_merge(self, adjacent_spool_no_overlap, monkeypatch):
-        """Streaming and concatenating merges must produce identical patches."""
+        """
+        Streaming and concatenating merges must produce identical patches.
+
+        An engine test (rule E): a merge streams whenever the rows count its
+        samples, so only one route is open to any one spool and the estimate
+        is withheld to take the other.
+        """
         streamed = adjacent_spool_no_overlap.chunk(time=None)[0]
         # Disabling the sample estimate forces the materialized path.
         monkeypatch.setattr(
@@ -2948,52 +2965,82 @@ class TestMergeDimCoords:
             list(make_spool([first, second]).chunk(time=None))
 
 
-class _Route:
-    """Which route a merge took: its loads, its outcomes, and a forced fallback."""
+@contextmanager
+def unopenable(*paths):
+    """
+    The files with their HDF5 signature overwritten, size and mtime kept.
 
-    def __init__(self, patcher):
-        self._patcher = patcher
-        self.counts = {"patch": 0, "array": 0}
-        load_patch = planned.PlanResolver._load_member
-        array_source = planned.PlanResolver._member_array_source
-
-        def count_patch(resolver, kwargs):
-            self.counts["patch"] += 1
-            return load_patch(resolver, kwargs)
-
-        def count_array(resolver, row, shape):
-            self.counts["array"] += 1
-            return array_source(resolver, row, shape)
-
-        patcher.setattr(planned.PlanResolver, "_load_member", count_patch)
-        patcher.setattr(planned.PlanResolver, "_member_array_source", count_array)
-
-    def merges(self) -> list[bool]:
-        """Record, from here on, whether each merge came from the index."""
-        merged = []
-        merge_from_index = PatchAssembler._merge_from_index
-
-        def counted(assembler, *args, **kwargs):
-            out = merge_from_index(assembler, *args, **kwargs)
-            merged.append(out is not None)
-            return out
-
-        self._patcher.setattr(PatchAssembler, "_merge_from_index", counted)
-        return merged
-
-    def force_patches(self, patcher=None):
-        """Make every member load as a patch, as a format without read_array would."""
-        (patcher or self._patcher).setattr(
-            planned.PlanResolver,
-            "_member_array_source",
-            lambda resolver, row, shape: None,
-        )
+    h5py cannot open them, yet the index still trusts them and their arrays
+    are still where it recorded them: a merge built from the index reads
+    them, and a member loaded as a patch fails. The signatures come back on
+    exit.
+    """
+    saved = []
+    try:
+        for path in paths:
+            stat = os.stat(path)
+            with open(path, "r+b") as handle:
+                saved.append((path, handle.read(8), stat))
+                handle.seek(0)
+                handle.write(bytes(8))
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        yield
+    finally:
+        for path, head, stat in saved:
+            with open(path, "r+b") as handle:
+                handle.write(head)
+            os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
 
-@pytest.fixture
-def route(monkeypatch):
-    """The merge route one test watches: counts, outcomes, forced fallback."""
-    return _Route(monkeypatch)
+def h5_files(directory):
+    """The HDF5 files in a directory, by name."""
+    return sorted(directory.glob("*.h5"))
+
+
+def from_index(spool, directory, **kwargs):
+    """The loaded outputs of a chunk with no file openable, so read from the index."""
+    with unopenable(*h5_files(directory)):
+        return list(spool.chunk(**kwargs))
+
+
+def assert_loads_patches(spool, paths, **kwargs):
+    """Each of the files is loaded as a patch: alone unopenable, it stops the chunk."""
+    assert paths
+    for path in paths:
+        with unopenable(path), pytest.raises(OSError, match="signature"):
+            list(spool.chunk(**kwargs))
+
+
+def in_memory(directory):
+    """Every patch of a directory's files, held in memory: no index to merge from."""
+    return dc.spool([x for path in h5_files(directory) for x in dc.read(path)])
+
+
+def merges_from_index(spool, directory, **kwargs):
+    """
+    A chunk's outputs, and how many join several members: those load with
+    no file of directory openable, so are read from the index.
+    """
+    members = spool.chunk_plan(**kwargs).members["output_id"].value_counts()
+    chunked = spool.chunk(**kwargs)
+    outputs, merged = list(chunked), sorted(members[members > 1].index)
+    with unopenable(*h5_files(directory)):
+        for index in merged:
+            chunked[int(index)]
+    return outputs, len(merged)
+
+
+def _read_from_index(chunked, directory):
+    """How many of a chunk's outputs load with no file of directory openable."""
+    count = 0
+    with unopenable(*h5_files(directory)):
+        for index in range(len(chunked)):
+            try:
+                chunked[index]
+            except OSError:
+                continue
+            count += 1
+    return count
 
 
 def assert_same_patch(one, other, note=None, *, per_coord=False):
@@ -3135,7 +3182,7 @@ class TestChunkFromIndex:
     """
 
     @pytest.fixture(scope="class")
-    def dasdae_directory_spool(self, tmp_path_factory):
+    def dasdae_directory(self, tmp_path_factory):
         """Adjacent DASDAE files sharing their attrs, so they merge."""
         path = tmp_path_factory.mktemp("chunk_from_index")
         spool = ex.get_example_spool(
@@ -3144,14 +3191,17 @@ class TestChunkFromIndex:
         for num, patch in enumerate(spool):
             patch = patch.update_attrs(tag="x", vendor_thing=5, data_type="strain")
             patch.io.write(path / f"p{num}.h5", "dasdae")
-        return dc.spool(path).update()
+        return path
 
-    def test_matches_patch_path(self, dasdae_directory_spool, route, monkeypatch):
+    @pytest.fixture(scope="class")
+    def dasdae_directory_spool(self, dasdae_directory):
+        """The spool indexing the adjacent DASDAE files."""
+        return dc.spool(dasdae_directory).update()
+
+    def test_matches_patch_path(self, dasdae_directory_spool, dasdae_directory):
         """The index-built merge equals the patch-built one in every part."""
-        fast = dasdae_directory_spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": len(dasdae_directory_spool)}
-        route.force_patches()
-        slow = dasdae_directory_spool.chunk(time=None)[0]
+        (fast,) = from_index(dasdae_directory_spool, dasdae_directory, time=None)
+        slow = in_memory(dasdae_directory).chunk(time=None)[0]
         assert fast.dims == slow.dims
         assert np.array_equal(fast.data, slow.data)
         assert fast.coords == slow.coords
@@ -3170,7 +3220,7 @@ class TestChunkFromIndex:
     @pytest.mark.parametrize(
         "value", [np.datetime64("2021-01-01"), np.timedelta64(5, "s")]
     )
-    def test_temporal_attrs_remain_writable(self, tmp_path, route, monkeypatch, value):
+    def test_temporal_attrs_remain_writable(self, tmp_path, value):
         """Index reconstruction keeps temporal and integer attrs usable by IO."""
         directory = tmp_path / "sources"
         patches = ex.get_example_spool("random_das", length=2, time_gap=0)
@@ -3181,10 +3231,8 @@ class TestChunkFromIndex:
         spool = dc.spool(directory).update()
         # Export/import the catalog too: dtype metadata must survive unions.
         spool = spool + dc.spool([])
-        fast = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 2}
-        route.force_patches()
-        slow = spool.chunk(time=None)[0]
+        (fast,) = from_index(spool, directory, time=None)
+        slow = in_memory(directory).chunk(time=None)[0]
         for name in ("event_value", "n_ch"):
             assert type(fast.attrs[name]) is type(slow.attrs[name])
             assert fast.attrs[name] == slow.attrs[name]
@@ -3194,27 +3242,46 @@ class TestChunkFromIndex:
         assert restored.attrs.event_value == fast.attrs.event_value
         assert restored.attrs.n_ch == fast.attrs.n_ch
 
-    def test_large_integer_attr_loads_patch(self, tmp_path, route):
+    def test_large_integer_attr_loads_patch(self, tmp_path):
         """An integer SQL cannot store exactly must never be rebuilt from it."""
         value = 2**53 + 1
         for index, patch in enumerate(ex.get_example_spool("random_das", length=2)):
             patch.update_attrs(counter=value).io.write(
                 tmp_path / f"{index}.h5", "dasdae"
             )
-        out = dc.spool(tmp_path).update().chunk(time=None)[0]
+        spool = dc.spool(tmp_path).update()
+        out = spool.chunk(time=None)[0]
         assert out.attrs.counter == value
-        assert route.counts == {"patch": 2, "array": 0}
+        assert_loads_patches(spool, h5_files(tmp_path), time=None)
 
-    def test_trailing_trim_reads_no_arrays(self, dasdae_directory_spool, route):
-        """A trim on the last member prevents speculative reads of earlier ones."""
+    def test_trailing_trim_reads_no_arrays(
+        self, dasdae_directory_spool, dasdae_directory, monkeypatch
+    ):
+        """
+        A trim on the last member sends every member down the patch path,
+        without reading any array first.
+
+        The second half is a performance guard (rule C): a discarded read
+        changes no output, so the array readers opened are counted.
+        """
+        from dascore.io import core as io_core  # noqa: PLC0415
+
         stop = dasdae_directory_spool.get_contents()["time_max"].max()
         stop -= np.timedelta64(1, "s")
         view = dasdae_directory_spool.select(time=(None, stop))
+        assert_loads_patches(view, h5_files(dasdae_directory), time=None)
+        opened, original = [], io_core._open_array_reader
+
+        def counted(*args, **kwargs):
+            opened.append(args[0].path)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(io_core, "_open_array_reader", counted)
         out = view.chunk(time=None)[0]
         assert out.get_coord("time").max() <= stop
-        assert route.counts == {"patch": len(dasdae_directory_spool), "array": 0}
+        assert not opened
 
-    def test_history_is_not_rebuilt(self, tmp_path_factory, route, monkeypatch):
+    def test_history_is_not_rebuilt(self, tmp_path_factory):
         """A member built from the index states no history, by design.
 
         The index holds none, being a list rather than a column, so a
@@ -3229,11 +3296,9 @@ class TestChunkFromIndex:
             patch.pass_filter(time=(None, 100)).io.write(path / f"p{num}.h5", "dasdae")
         file_spool = dc.spool(path).update()
         assert file_spool[0].attrs.history  # the file kept it
-        fast = file_spool.chunk(time=None)[0]
-        assert route.counts["array"] == 3
+        (fast,) = from_index(file_spool, path, time=None)
         assert fast.attrs.history == ()
-        route.force_patches()
-        slow = file_spool.chunk(time=None)[0]
+        slow = in_memory(path).chunk(time=None)[0]
         assert slow.attrs.history
         # and history is the only thing the two paths disagree on
         differs = {
@@ -3247,7 +3312,7 @@ class TestChunkFromIndex:
         assert fast.attrs.data_id == slow.attrs.data_id
         assert fast.attrs.data_id
 
-    def test_unstateable_coord_loads_patch(self, tmp_path_factory, route):
+    def test_unstateable_coord_loads_patch(self, tmp_path_factory):
         """A coordinate the index cannot describe is still known to exist.
 
         Its values cannot be stated, so the member must be loaded; the
@@ -3265,11 +3330,9 @@ class TestChunkFromIndex:
         file_spool = dc.spool(path).update()
         out = file_spool.chunk(time=None)[0]
         assert "quality" in out.coords.coord_map
-        assert route.counts["array"] == 0
+        assert_loads_patches(file_spool, h5_files(path), time=None)
 
-    def test_trimmed_member_loads_patch(
-        self, dasdae_directory_spool, route, monkeypatch
-    ):
+    def test_trimmed_member_loads_patch(self, dasdae_directory_spool, dasdae_directory):
         """A select which cuts a source leaves no range to window it with.
 
         The trimmed row no longer states what the file holds, so the
@@ -3282,13 +3345,12 @@ class TestChunkFromIndex:
         narrowed = dasdae_directory_spool.select(time=(start, None))
         out = narrowed.chunk(time=None)[0]
         assert out.get_coord("time").min() >= start
-        assert route.counts["array"] == 0
-        assert route.counts["patch"] == len(dasdae_directory_spool) - 1
-        # and the mix of paths assembles what the patch path alone would
-        route.force_patches()
-        assert_same_patch(out, narrowed.chunk(time=None)[0])
+        assert_loads_patches(narrowed, h5_files(dasdae_directory)[1:], time=None)
+        # and it assembles what the same patches in memory do
+        memory = in_memory(dasdae_directory).select(time=(start, None))
+        assert_same_patch(out, memory.chunk(time=None)[0])
 
-    def test_associated_coords_load_patch(self, tmp_path_factory, route):
+    def test_associated_coords_load_patch(self, tmp_path_factory):
         """A catalog holding an associated coordinate never takes the array path."""
         path = tmp_path_factory.mktemp("chunk_assoc_coords")
         spool = ex.get_example_spool(
@@ -3299,12 +3361,12 @@ class TestChunkFromIndex:
             lat = np.linspace(40, 41, len(dist))
             patch = patch.update_coords(latitude=("distance", lat))
             patch.io.write(path / f"p{num}.h5", "dasdae")
-        out = dc.spool(path).update().chunk(time=None)[0]
+        indexed = dc.spool(path).update()
+        out = indexed.chunk(time=None)[0]
         assert "latitude" in out.coords.coord_map
-        assert route.counts["array"] == 0
-        assert route.counts["patch"] == 3
+        assert_loads_patches(indexed, h5_files(path), time=None)
 
-    def test_a_coord_associated_anywhere_loads_patch(self, tmp_path_factory, route):
+    def test_a_coord_associated_anywhere_loads_patch(self, tmp_path_factory):
         """
         A name which is a dimension on one patch may ride another on the next.
 
@@ -3325,13 +3387,13 @@ class TestChunkFromIndex:
             values = patch.get_coord("sensor").values * 2.0
             patch = patch.update_coords(distance=("sensor", values))
             patch.io.write(path / f"b{num}.h5", "dasdae")
-        merged = dc.spool(path).update().chunk(time=None)
-        riding = [p for p in merged if "sensor" in p.dims]
+        indexed = dc.spool(path).update()
+        riding = [p for p in indexed.chunk(time=None) if "sensor" in p.dims]
         assert len(riding) == 1
         assert "distance" in riding[0].coords.coord_map
-        assert route.counts["array"] == 0
+        assert_loads_patches(indexed, h5_files(path), time=None)
 
-    def test_a_moved_source_loads_patch(self, tmp_path_factory, route):
+    def test_a_moved_source_loads_patch(self, tmp_path_factory):
         """
         A renamed file's row states no id until the file is read again.
 
@@ -3350,8 +3412,8 @@ class TestChunkFromIndex:
         moved = dc.spool(path).update()
         assert (moved.get_contents()["origin_id"] == "").any()
         fast = moved.chunk(time=None)[0]
-        assert route.counts == {"patch": 2, "array": 0}
-        read = dc.spool([dc.read(p)[0] for p in sorted(path.glob("*.h5"))])
+        assert_loads_patches(moved, h5_files(path), time=None)
+        read = in_memory(path)
         assert fast.attrs.origin_id == read.chunk(time=None)[0].attrs.origin_id
 
     def test_extended_float_coordinate_survives_merge(self, tmp_path, permanent_config):
@@ -3409,7 +3471,7 @@ class TestChunkFromIndex:
             assert np.asarray(out.attrs["calibration"]).dtype == np.asarray(value).dtype
 
     @pytest.mark.parametrize("value", ["unknown", "10"])
-    def test_directory_override_keeps_its_string_type(self, tmp_path, route, value):
+    def test_directory_override_keeps_its_string_type(self, tmp_path, value):
         """A path override replaces a source number before reconstruction."""
         directory = tmp_path / f"channel_count={value}"
         directory.mkdir()
@@ -3420,17 +3482,14 @@ class TestChunkFromIndex:
             )
         with pytest.warns(UserWarning, match="override attrs"):
             indexed = dc.spool(tmp_path).update()
-        out = indexed.chunk(time=None)[0]
+        (out,) = from_index(indexed, directory, time=None)
         assert out.attrs["channel_count"] == value
-        assert route.counts == {"patch": 0, "array": 2}
         directory.rename(tmp_path / "channel_count=renamed")
         moved = dc.spool(tmp_path).update().chunk(time=None)[0]
         assert moved.attrs["channel_count"] == "renamed"
 
     @pytest.mark.parametrize("case", ["empty", "envelope", "skipped"])
-    def test_unreconstructable_attributes_keep_the_patch_path(
-        self, tmp_path, route, monkeypatch, case
-    ):
+    def test_unreconstructable_attributes_keep_the_patch_path(self, tmp_path, case):
         """Missing custom attrs and flat collisions survive merging."""
         spool = ex.get_example_spool("random_das", length=2, time_gap=0)
         for num, patch in enumerate(spool):
@@ -3444,17 +3503,15 @@ class TestChunkFromIndex:
         with suppress_warnings(UserWarning):
             indexed = dc.spool(tmp_path).update()
             out = indexed.chunk(time=None)[0]
-        assert route.counts == {"patch": 2, "array": 0}
-        route.force_patches()
-        with suppress_warnings(UserWarning):
-            expected = indexed.chunk(time=None)[0]
+            assert_loads_patches(indexed, h5_files(tmp_path), time=None)
+            expected = in_memory(tmp_path).chunk(time=None)[0]
         assert type(out.attrs) is type(expected.attrs)
         assert dict(out.attrs) == dict(expected.attrs)
         assert np.array_equal(out.data, expected.data)
         assert out.coords == expected.coords
 
     @pytest.mark.parametrize("gauges", [(None, None), (10.0, 20.0)])
-    def test_vendor_model_merges_from_the_index(self, tmp_path, route, gauges):
+    def test_vendor_model_merges_from_the_index(self, tmp_path, gauges):
         """A vendor model's defaults ride in the row, so no patch is read."""
         spool = ex.get_example_spool("random_das", length=2, time_gap=0)
         for num, (patch, gauge) in enumerate(zip(spool, gauges)):
@@ -3462,16 +3519,14 @@ class TestChunkFromIndex:
             patch = patch.update(attrs=FebusPatchAttrs(**attrs))
             patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
         indexed = dc.spool(tmp_path).update()
-        out = indexed.chunk(time=None, conflict="drop")[0]
-        assert route.counts == {"patch": 0, "array": 2}
-        route.force_patches()
-        expected = indexed.chunk(time=None, conflict="drop")[0]
+        (out,) = from_index(indexed, tmp_path, time=None, conflict="drop")
+        expected = in_memory(tmp_path).chunk(time=None, conflict="drop")[0]
         assert out.attrs.gauge_length is expected.attrs.gauge_length is None
         assert dict(out.attrs) == dict(expected.attrs)
         assert out.attrs.zone == expected.attrs.zone == ""
         assert np.array_equal(out.data, expected.data)
 
-    def test_mixed_models_merge_as_loaded(self, tmp_path, route):
+    def test_mixed_models_merge_as_loaded(self, tmp_path):
         """Vendor defaults are not compared as values against a plain model."""
         spool = ex.get_example_spool("random_das", length=2, time_gap=0)
         models = (NeubrexDASPatchAttrs, dc.PatchAttrs)
@@ -3479,13 +3534,11 @@ class TestChunkFromIndex:
             patch = patch.update(attrs=model(**patch.attrs.model_dump()))
             patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
         indexed = dc.spool(tmp_path).update()
-        out = indexed.chunk(time=None, conflict="drop")[0]
-        assert route.counts == {"patch": 0, "array": 2}
-        route.force_patches()
-        expected = indexed.chunk(time=None, conflict="drop")[0]
+        (out,) = from_index(indexed, tmp_path, time=None, conflict="drop")
+        expected = in_memory(tmp_path).chunk(time=None, conflict="drop")[0]
         assert dict(out.attrs) == dict(expected.attrs)
 
-    def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, route):
+    def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory):
         """An attr no column holds is on the patch, so no row stands in."""
         path = tmp_path_factory.mktemp("chunk_wide_attr")
         spool = ex.get_example_spool(
@@ -3497,10 +3550,11 @@ class TestChunkFromIndex:
         for num, patch in enumerate(spool):
             patch = patch.update_attrs(counter=wide)
             patch.io.write(path / f"p{num}.h5", "dasdae")
-        merged = dc.spool(path).update().chunk(time=None)
+        indexed = dc.spool(path).update()
+        merged = indexed.chunk(time=None)
         out = merged[0]
         assert out.attrs["counter"] == wide
-        assert route.counts == {"patch": 3, "array": 0}
+        assert_loads_patches(indexed, h5_files(path), time=None)
         # A plan on another dimension consumes the derived rows.
         nested = merged.chunk(distance=100)
         assert all(p.attrs["counter"] == wide for p in nested)
@@ -3603,9 +3657,14 @@ class TestChunkFromIndex:
         assert silent._recipe([row], [meta], meta.dims, 1) is None
 
     def test_file_which_changed_shape_loads_patch(
-        self, dasdae_directory_spool, route, monkeypatch
+        self, dasdae_directory_spool, monkeypatch
     ):
-        """A file which no longer holds the array its row states is not trusted."""
+        """
+        A file which no longer holds the array its row states is not trusted.
+
+        Fault injection (rule B): the stat check stops any file the index
+        would not still describe, so the reader's refusal is injected.
+        """
         from dascore.io import core as io_core  # noqa: PLC0415
 
         expected = dasdae_directory_spool.chunk(time=None)[0]
@@ -3619,13 +3678,12 @@ class TestChunkFromIndex:
             yield refuse
 
         monkeypatch.setattr(io_core, "_open_array_reader", changed)
-        route.counts.update(patch=0, array=0)
+        # a refusal not answered by loading the patches would raise here
         out = dasdae_directory_spool.chunk(time=None)[0]
-        assert route.counts["patch"] == len(dasdae_directory_spool)
         assert out.equals(expected)
 
     def test_whole_member_skips_a_residual_it_lies_inside(
-        self, dasdae_directory_spool, route, monkeypatch
+        self, dasdae_directory_spool, dasdae_directory
     ):
         """A value selection which cuts no member is a no-op on every one.
 
@@ -3636,10 +3694,8 @@ class TestChunkFromIndex:
         contents = dasdae_directory_spool.get_contents()
         span = (contents["time_min"].min(), contents["time_max"].max())
         selected = dasdae_directory_spool.select(time=span)
-        fast = selected.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": len(dasdae_directory_spool)}
-        route.force_patches()
-        slow = selected.chunk(time=None)[0]
+        (fast,) = from_index(selected, dasdae_directory, time=None)
+        slow = in_memory(dasdae_directory).select(time=span).chunk(time=None)[0]
         assert fast == slow
 
     def test_unitless_dim_stays_unitless(self, tmp_path):
@@ -3683,6 +3739,7 @@ class TestChunkFromIndex:
             ),
         )
         stateable = {
+            "origin_id": "abc",
             "dims": "distance,time",
             "distance_min": 0,
             "distance_max": 2,
@@ -3767,15 +3824,14 @@ class TestRecipeMerge:
         origin = np.datetime64("2020-01-01")
         return [origin + STEP * samples * num for num in range(count)]
 
-    def test_even_files_match_numpy(self, tmp_path, route):
+    def test_even_files_match_numpy(self, tmp_path):
         """Files of different lengths merge into the array numpy makes."""
         starts, patches, lengths = [np.datetime64("2020-01-01")], [], (5, 9, 4)
         for num, samples in enumerate(lengths):
             patches.append(self._patch(starts[-1], samples, seed=num))
             starts.append(starts[-1] + STEP * samples)
         spool = self._write(tmp_path, patches)
-        out = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": len(lengths)}
+        (out,) = from_index(spool, tmp_path, time=None)
         expected = np.concatenate([x.data for x in patches], axis=0)
         assert np.array_equal(out.data, expected)
         assert out.data.dtype == expected.dtype
@@ -3784,7 +3840,7 @@ class TestRecipeMerge:
         assert out.get_coord("time").step == STEP
         assert len(out.get_coord("time")) == sum(lengths)
 
-    def test_mixed_dtypes_promote(self, tmp_path, route):
+    def test_mixed_dtypes_promote(self, tmp_path):
         """Members stored at different dtypes promote as numpy does."""
         starts = self._grid(3, 6)
         dtypes = ("float32", "int16", "float64")
@@ -3793,8 +3849,7 @@ class TestRecipeMerge:
             for num, (start, dtype) in enumerate(zip(starts, dtypes))
         ]
         spool = self._write(tmp_path, patches)
-        out = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 3}
+        (out,) = from_index(spool, tmp_path, time=None)
         expected = np.concatenate([x.data for x in patches], axis=0)
         assert out.data.dtype == np.result_type(*[np.dtype(x) for x in dtypes])
         assert out.data.dtype == expected.dtype
@@ -3808,7 +3863,7 @@ class TestRecipeMerge:
             ("uint8", "int8", "float16"),
         ],
     )
-    def test_promotion_follows_placement_order(self, tmp_path, route, dtypes):
+    def test_promotion_follows_placement_order(self, tmp_path, dtypes):
         """Promotion is not associative, so the order the members are in wins."""
         starts = self._grid(len(dtypes), 6)
         patches = [
@@ -3818,12 +3873,11 @@ class TestRecipeMerge:
         expected = np.result_type(np.dtype(dtypes[0]), np.dtype(dtypes[1]))
         for dtype in dtypes[2:]:
             expected = np.result_type(expected, np.dtype(dtype))
-        out = self._write(tmp_path, patches).chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": len(dtypes)}
+        (out,) = from_index(self._write(tmp_path, patches), tmp_path, time=None)
         assert out.data.dtype == expected
         assert dc.spool(patches).chunk(time=None)[0].data.dtype == expected
 
-    def test_members_stored_the_other_way_round(self, tmp_path, route):
+    def test_members_stored_the_other_way_round(self, tmp_path):
         """Dimension order partitions the plan, so each order merges alone."""
         starts = self._grid(4, 7)
         orders = (None, None, ("distance", "time"), ("distance", "time"))
@@ -3832,14 +3886,13 @@ class TestRecipeMerge:
             for num, (start, dims) in enumerate(zip(starts, orders))
         ]
         spool = self._write(tmp_path, patches)
-        merged = spool.chunk(time=None)
+        merged = from_index(spool, tmp_path, time=None)
         assert len(merged) == 2
         for out, pair in zip(merged, (patches[:2], patches[2:])):
             axis = out.dims.index("time")
             assert out.dims == pair[0].dims
             expected = np.concatenate([x.data for x in pair], axis=axis)
             assert np.array_equal(out.data, expected)
-        assert route.counts == {"patch": 0, "array": 4}
 
     def test_a_member_in_another_order_takes_the_patch_path(self):
         """
@@ -3892,7 +3945,7 @@ class TestRecipeMerge:
         assert assembler._recipe([{"dims": "time,distance"}], [part], part.dims, 0)
         assert dict(part.attrs).get("data_id")
 
-    def test_three_dimensional_members(self, tmp_path, route):
+    def test_three_dimensional_members(self, tmp_path):
         """A cube merges along its planned dimension and no other."""
         rng = np.random.default_rng(3)
         patches, starts = [], self._grid(3, 5)
@@ -3907,36 +3960,33 @@ class TestRecipeMerge:
                 dc.Patch(data=data, coords=coords, dims=("time", "distance", "depth"))
             )
         spool = self._write(tmp_path, patches)
-        out = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 3}
+        (out,) = from_index(spool, tmp_path, time=None)
         assert out.shape == (15, 4, 2)
         assert np.array_equal(out.data, np.concatenate([x.data for x in patches], 0))
 
-    def test_multi_patch_file(self, tmp_path, route):
+    def test_multi_patch_file(self, tmp_path):
         """Several members of one file each read their own array."""
         starts = self._grid(6, 5)
         patches = [self._patch(x, 5, seed=n) for n, x in enumerate(starts)]
         dc.write(dc.spool(patches[:3]), tmp_path / "a.h5", "dasdae")
         dc.write(dc.spool(patches[3:]), tmp_path / "b.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        out = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 6}
+        (out,) = from_index(spool, tmp_path, time=None)
         assert np.array_equal(out.data, np.concatenate([x.data for x in patches], 0))
 
-    def test_trimmed_overlap_takes_the_recipe_path(self, tmp_path, route):
+    def test_trimmed_overlap_takes_the_recipe_path(self, tmp_path):
         """An overlap trims the second member to a window of its source."""
         first = self._patch(np.datetime64("2020-01-01"), 10, seed=1)
         second = self._patch(np.datetime64("2020-01-01") + STEP * 6, 10, seed=2)
         spool = self._write(tmp_path, [first, second])
-        out = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 2}
+        (out,) = from_index(spool, tmp_path, time=None)
         # the second patch starts 6 samples in, so its first 4 are the overlap
         kept = second.data[4:]
         assert out.shape[0] == 16
         assert np.array_equal(out.data, np.concatenate([first.data, kept], axis=0))
 
     @pytest.mark.parametrize("conflict", ["drop", "keep_first"])
-    def test_conflicting_attrs(self, tmp_path, route, conflict):
+    def test_conflicting_attrs(self, tmp_path, conflict):
         """Every conflict policy reaches the same patch either way."""
         starts = self._grid(3, 6)
         patches = [
@@ -3944,8 +3994,7 @@ class TestRecipeMerge:
             for num, start in enumerate(starts)
         ]
         spool = self._write(tmp_path, patches)
-        out = spool.chunk(time=None, conflict=conflict)[0]
-        assert route.counts == {"patch": 0, "array": 3}
+        (out,) = from_index(spool, tmp_path, time=None, conflict=conflict)
         expected = np.concatenate([x.data for x in patches], axis=0)
         assert np.array_equal(out.data, expected)
         if conflict == "keep_first":
@@ -3954,7 +4003,7 @@ class TestRecipeMerge:
             assert "instrument_id" not in dict(out.attrs)
 
     @pytest.mark.parametrize("fill", [0.0])
-    def test_gap_between_members(self, tmp_path, route, fill):
+    def test_gap_between_members(self, tmp_path, fill):
         """A bridged hole holds the fill value and nothing else moves."""
         gap = 3
         first = self._patch(np.datetime64("2020-01-01"), 8, seed=1)
@@ -3964,18 +4013,13 @@ class TestRecipeMerge:
         assert len(spool.chunk(time=None)) == 2
         merged = spool.fill_gaps(time=9, samples=True, fill_value=fill)
         assert len(merged) == 1
-        out = merged[0]
-        assert route.counts == {"patch": 0, "array": 2}
+        with unopenable(*h5_files(tmp_path)):
+            out = merged[0]
         hole = np.full((gap, first.shape[1]), fill, dtype=first.data.dtype)
         joined = np.concatenate([first.data, hole, second.data], axis=0)
         assert np.array_equal(out.data, joined)
 
-    def test_every_case_matches_the_patch_path(
-        self,
-        tmp_path_factory,
-        monkeypatch,
-        route,
-    ):
+    def test_every_case_matches_the_patch_path(self, tmp_path_factory):
         """The recipe merge and the patch merge agree in every part."""
         cases = {
             "even": [(0, 5, 4, "float32", None), (5, 9, 4, "float32", None)],
@@ -3996,9 +4040,7 @@ class TestRecipeMerge:
             ]
             spool = self._write(path, patches)
             fast = spool.chunk(time=None)[0]
-            with monkeypatch.context() as patcher:
-                route.force_patches(patcher)
-                slow = spool.chunk(time=None)[0]
+            slow = in_memory(path).chunk(time=None)[0]
             assert_same_patch(fast, slow, name)
 
 
@@ -4353,7 +4395,12 @@ class TestChunkFillWindows:
         assert not np.isnan(out[0].data).any()
 
     def test_all_fill_windows_read_one_sample(self, spool_and_tolerance, monkeypatch):
-        """A window inside a filled gap reads one sample, for its other dims."""
+        """
+        A window inside a filled gap reads one sample, for its other dims.
+
+        A performance guard (rule C): reading more of a source and filling it
+        over gives the same window, so the samples assembled are its witness.
+        """
         spool, tolerance = spool_and_tolerance
         chunked = spool.fill_gaps(time=tolerance).chunk(time=1)
         sizes = []
@@ -4465,24 +4512,30 @@ class TestSingleFileStats:
         """Two adjacent single-patch files, unindexed."""
         return _archive(tmp_path, indexed=False)[1]
 
-    def test_a_union_of_two_files_merges_from_the_index(self, paths, route):
+    def test_a_union_of_two_files_merges_from_the_index(self, paths):
         """Both members state stats, so the recipe stands."""
-        out = (dc.spool(paths[0]) + dc.spool(paths[1])).chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 2}
+        chunked = (dc.spool(paths[0]) + dc.spool(paths[1])).chunk(time=None)
+        with unopenable(*paths):
+            out = chunked[0]
         assert out.shape[0] == 16
 
-    def test_a_grown_file_leaves_the_recipe(self, paths, route):
+    def test_a_grown_file_leaves_the_recipe(self, paths):
         """A file grown under its key must not give back its old window."""
         chunked = (dc.spool(paths[0]) + dc.spool(paths[1])).chunk(time=None)
         grown = _grid_patch(ORIGIN, 12, seed=7)
         _rewrite_dasdae(paths[0], grown)
         out = chunked[0]
-        assert route.counts["patch"] == 2, "the changed file abandons the recipe"
+        # the recipe would read the eight samples the index promised
         assert out.shape[0] == 20
         assert np.array_equal(out.data[:12], grown.data)
 
-    def test_a_file_rewritten_mid_scan_leaves_the_recipe(self, paths, route):
-        """Rows and stats taken either side of a rewrite promise nothing."""
+    def test_a_file_rewritten_mid_scan_leaves_the_recipe(self, paths):
+        """
+        Rows and stats taken either side of a rewrite promise nothing.
+
+        Fault injection (rule B): the rewrite must land between the scan and
+        the stat after it, so the scan is wrapped to make it.
+        """
         first = dc.spool(paths[0])
         grown = _grid_patch(ORIGIN + STEP * 8, 12, seed=1)
         original = dc.scan
@@ -4495,16 +4548,19 @@ class TestSingleFileStats:
         with mock.patch.object(dc, "scan", scan_then_rewrite):
             second = dc.spool(paths[1])
         out = (first + second).chunk(time=None)[0]
-        assert route.counts["patch"] == 2, "the moved file abandons the recipe"
+        # the recipe would read the eight samples the scan saw
         assert out.shape[0] == 20
         assert np.array_equal(out.data[8:], grown.data)
 
-    def test_the_scan_is_bracketed_by_two_measurements(self, paths, monkeypatch):
+    def test_the_scan_is_bracketed_by_two_measurements(self, paths):
         """
         One before and one after; a single reading certifies nothing.
 
-        What is recorded is the file's own stat: a check which sees that
-        stat after a rewrite trusts it, and reads the recipe's window.
+        What is recorded is the file's own stat: a check which sees that stat
+        reads the recipe, from the index, with the file unopenable. The two
+        readings are counted (rule B): a rewrite between them is a race no call
+        makes on demand, and test_a_file_rewritten_mid_scan_leaves_the_recipe
+        injects one.
         """
         seen = []
         original = catalog.scan_unit_stats
@@ -4517,9 +4573,8 @@ class TestSingleFileStats:
             spool = dc.spool(paths[0])
             assert len(seen) == 2
         chunked = (spool + dc.spool(paths[1])).chunk(time=None)
-        _frozen_stats(monkeypatch, paths)
-        _rewrite_dasdae(paths[0], _grid_patch(ORIGIN, 12, seed=7))
-        assert chunked[0].shape[0] == 16
+        with unopenable(*paths):
+            assert chunked[0].shape[0] == 16
 
 
 class TestUnionRevision:
@@ -4527,7 +4582,10 @@ class TestUnionRevision:
 
     @pytest.fixture(scope="class")
     def two_indexes(self, tmp_path_factory):
-        """Two indexes of one two-patch file, taken either side of a rewrite."""
+        """
+        Two indexes of one two-patch file, taken either side of a rewrite, the
+        patch it was grown to, and the file.
+        """
         tmp_path = tmp_path_factory.mktemp("union_revision")
         data = tmp_path / "data"
         data.mkdir()
@@ -4543,33 +4601,35 @@ class TestUnionRevision:
         grown = _grid_patch(ORIGIN, 12, seed=7)
         _rewrite_dasdae(path, grown, group=key)
         new = dc.spool(data, index=tmp_path / "new.sqlite").update()
-        return old, new, grown
+        return old, new, grown, path
 
     def test_a_stale_row_never_meets_the_new_stats(self, two_indexes):
         """The old revision's row does not survive beside the new file."""
-        old, new, _ = two_indexes
+        old, new, *_ = two_indexes
         combined = old[:1] + new[1:]
         assert len(combined) == 1, "the later revision is the whole answer"
         out = combined.chunk(time=None)[0]
         assert out.shape[0] == 8
         assert np.array_equal(out.data, new[1].data)
 
-    def test_the_union_describes_the_file_on_disk(self, two_indexes, route):
+    def test_the_union_describes_the_file_on_disk(self, two_indexes):
         """Both revisions of the whole file union to the later one's rows."""
-        old, new, grown = two_indexes
+        old, new, grown, path = two_indexes
         combined = old + new
         assert len(combined) == 2
-        out = combined.chunk(time=None)[0]
-        assert route.counts["patch"] == 0
+        chunked = combined.chunk(time=None)
+        with unopenable(path):
+            out = chunked[0]
         assert np.array_equal(out.data[:12], grown.data)
 
-    def test_two_views_of_one_revision_still_union(self, two_indexes, route):
+    def test_two_views_of_one_revision_still_union(self, two_indexes):
         """Equal stats mean one revision, whose rows union as before."""
-        _, new, _ = two_indexes
+        _, new, _, path = two_indexes
         combined = new[:1] + new[1:]
         assert len(combined) == 2
-        assert combined.chunk(time=None)[0].shape[0] == 16
-        assert route.counts["patch"] == 0
+        chunked = combined.chunk(time=None)
+        with unopenable(path):
+            assert chunked[0].shape[0] == 16
 
     def test_a_patch_the_later_revision_dropped_is_gone(self, tmp_path):
         """The later record replaces the earlier whole, rows and stats."""
@@ -4599,24 +4659,25 @@ class TestStaleSourceCheck:
         """Two adjacent single-patch files and the spool indexing them."""
         return _archive(tmp_path)
 
-    def test_unchanged_sources_stay_on_the_recipe(self, spool_and_paths, route):
+    def test_unchanged_sources_stay_on_the_recipe(self, spool_and_paths):
         """Nothing changed, so nothing is loaded as a patch."""
-        spool, _ = spool_and_paths
-        out = spool.chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 2}
-        assert out.shape[0] == 16
+        spool, paths = spool_and_paths
+        chunked = spool.chunk(time=None)
+        with unopenable(*paths):
+            assert chunked[0].shape[0] == 16
 
-    def test_longer_rewrite_takes_the_patch_path(self, spool_and_paths, route):
+    def test_longer_rewrite_takes_the_patch_path(self, spool_and_paths):
         """A file grown under the same key must not give its first n samples."""
         spool, paths = spool_and_paths
         start = np.datetime64("2020-01-01")
         grown = self._patch(start, 12, seed=7)
         _rewrite_dasdae(paths[0], grown)
         out = spool.chunk(time=None)[0]
-        assert route.counts["patch"] == 2, "the changed file abandons the recipe"
+        # the recipe would read the eight samples the index promised
+        assert out.shape[0] == 20
         assert np.array_equal(out.data[:12], grown.data)
 
-    def test_same_shape_rewrite_takes_the_patch_path(self, spool_and_paths, route):
+    def test_same_shape_rewrite_takes_the_patch_path(self, spool_and_paths, tmp_path):
         """Identical shape, different values: the shape check cannot see it."""
         spool, paths = spool_and_paths
         start = np.datetime64("2020-01-01")
@@ -4627,21 +4688,31 @@ class TestStaleSourceCheck:
         moved = paths[0].stat().st_mtime_ns + 10**9
         os.utime(paths[0], ns=(moved, moved))
         out = spool.chunk(time=None)[0]
-        assert route.counts["patch"] == 2
         assert np.array_equal(out.data[:8], replaced.data)
+        # the ids too are the rewritten file's, not the ones the index holds
+        assert_same_patch(out, in_memory(tmp_path).chunk(time=None)[0])
+        assert_loads_patches(spool, paths[:1], time=None)
 
-    def test_a_stat_which_will_not_answer_refuses(
-        self, spool_and_paths, route, monkeypatch
-    ):
-        """A source which will not say what it is cannot be read blind."""
-        spool, _ = spool_and_paths
+    def test_a_stat_which_will_not_answer_refuses(self, spool_and_paths, monkeypatch):
+        """
+        A source which will not say what it is cannot be read blind.
+
+        Fault injection (rule B): a local file always answers its stat, so the
+        stat which will not is injected.
+        """
+        spool, paths = spool_and_paths
         monkeypatch.setattr(planned, "scan_unit_stats", lambda path: (None, None))
         out = spool.chunk(time=None)[0]
-        assert route.counts["patch"] == 2
         assert out.shape[0] == 16
+        assert_loads_patches(spool, paths, time=None)
 
-    def test_an_index_which_recorded_no_stats_refuses(self, tmp_path, route):
-        """A row with nothing measured beside it is no promise."""
+    def test_an_index_which_recorded_no_stats_refuses(self, tmp_path):
+        """
+        A row with nothing measured beside it is no promise.
+
+        Fault injection (rule B): a local file always answers its stat, so the
+        index is made to record none.
+        """
         patches = [_grid_patch(ORIGIN + STEP * 8 * n, 8, seed=n) for n in range(2)]
         paths = []
         for num, patch in enumerate(patches):
@@ -4651,8 +4722,8 @@ class TestStaleSourceCheck:
         with mock.patch.object(catalog, "scan_unit_stats", lambda path: (None, None)):
             spool = dc.spool(paths[0]) + dc.spool(paths[1])
         out = spool.chunk(time=None)[0]
-        assert route.counts["patch"] == 2
         assert np.array_equal(out.data, np.concatenate([x.data for x in patches]))
+        assert_loads_patches(spool, paths, time=None)
 
     def test_an_in_memory_patch_mixed_in_still_merges(self, spool_and_paths):
         """A live member has no file to measure, and merges all the same."""
@@ -4663,7 +4734,12 @@ class TestStaleSourceCheck:
         assert np.array_equal(out.data[16:], extra.data)
 
     def test_one_stat_per_file(self, tmp_path, monkeypatch):
-        """A multi-patch file is measured once, not once per member."""
+        """
+        A multi-patch file is measured once, not once per member.
+
+        A performance guard (rule C): measuring again gives the same verdict,
+        only with another call on the filesystem, so the stats are counted.
+        """
         start = np.datetime64("2020-01-01")
         patches = [self._patch(start + STEP * 8 * n, 8, seed=n) for n in range(3)]
         dc.write(dc.spool(patches[:2]), tmp_path / "a.h5", "dasdae")
@@ -4674,7 +4750,12 @@ class TestStaleSourceCheck:
         assert len(stats) == len(set(stats)) == 2, "three members, two files"
 
     def test_a_remote_source_is_never_stat_ed(self, spool_and_paths, monkeypatch):
-        """A store which charges for metadata is left alone, and read as patches."""
+        """
+        A store which charges for metadata is left alone, and read as patches.
+
+        An engine test (rule E): the files stand for a remote store, so the
+        resolver is told they are not local, and must not measure them.
+        """
         spool, paths = spool_and_paths
         monkeypatch.setattr(planned, "scan_unit_stats", _no_stat)
         monkeypatch.setattr(planned, "is_local_path", lambda path: False)
@@ -4793,7 +4874,8 @@ class TestStaleSourceCheck:
 
         The file grows under a stat which moves only as asked, so the
         recipe's eight samples of it show the check trusted the index, and
-        the patch path's twelve that it did not.
+        the patch path's twelve that it did not. The stat is faked (rule B):
+        a real rewrite which grows a file moves its size and mtime together.
         """
         spool, paths = spool_and_paths
         chunked = spool.chunk(time=None)
@@ -4833,39 +4915,35 @@ class TestStaleSourceCheck:
         resolver._source_stats = {}
         assert not resolver._sources_unchanged(resolver.member_rows)
 
-    def test_a_rechunk_keeps_what_the_index_recorded(
-        self, spool_and_paths, monkeypatch
-    ):
+    def test_a_rechunk_keeps_what_the_index_recorded(self, spool_and_paths):
         """The stats ride the members, which a derived catalog re-plans."""
         spool, paths = spool_and_paths
         rechunked = spool.chunk(time=None).chunk(time=None)
-        grown = self._patch(ORIGIN, 12, seed=7)
-        with monkeypatch.context() as context:
-            _frozen_stats(context, paths)
-            _rewrite_dasdae(paths[0], grown)
-            # a stat as recorded keeps the recipe, so the re-plan still has it
+        # a stat as recorded keeps the recipe, so the re-plan still has it
+        with unopenable(*paths):
             assert rechunked[0].shape[0] == 16
+        grown = self._patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
         out = rechunked[0]
         assert out.shape[0] == 20, "the changed file abandons the recipe"
         assert np.array_equal(out.data[:12], grown.data)
 
-    def test_a_pickled_plan_carries_what_it_needs(self, spool_and_paths, monkeypatch):
+    def test_a_pickled_plan_carries_what_it_needs(self, spool_and_paths):
         """The stats travel with the resolver, so no index is reopened."""
         spool, paths = spool_and_paths
         chunked = pickle.loads(pickle.dumps(spool.chunk(time=None)))
-        grown = self._patch(ORIGIN, 12, seed=7)
-        with monkeypatch.context() as context:
-            _frozen_stats(context, paths)
-            _rewrite_dasdae(paths[0], grown)
-            # a stat as recorded keeps the recipe, so the plan still has it
+        # a stat as recorded keeps the recipe, so the plan still has it
+        with unopenable(*paths):
             assert chunked[0].shape[0] == 16
+        grown = self._patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
         out = chunked[0]
         assert out.shape[0] == 20, "the changed file abandons the recipe"
         assert np.array_equal(out.data[:12], grown.data)
 
     @pytest.mark.parametrize("read_first", [False, True])
     def test_a_plan_across_an_update_describes_what_it_planned(
-        self, spool_and_paths, route, read_first
+        self, spool_and_paths, read_first
     ):
         """A plan checks against its own rows, read before the update or not."""
         spool, paths = spool_and_paths
@@ -4876,13 +4954,18 @@ class TestStaleSourceCheck:
         _rewrite_dasdae(paths[0], grown)
         spool.update()
         out = chunked[0]
-        assert route.counts["patch"] == 2, "the plan's rows describe the old file"
+        # the plan's rows describe the old file, whose window holds eight
         assert out.shape[0] == 20, "twelve grown samples and the eight beside them"
         assert np.array_equal(out.data[:12], grown.data)
 
     @pytest.mark.concurrency
     def test_a_paused_check_leaks_nothing_to_another_thread(self, spool_and_paths):
-        """Two threads merging at once each measure the files themselves."""
+        """
+        Two threads merging at once each measure the files themselves.
+
+        Fault injection (rule B): the first stat is held until the second
+        thread has merged, an order no call makes on demand.
+        """
         spool, paths = spool_and_paths
         chunked = spool.chunk(time=None)
         _rewrite_dasdae(paths[0], self._patch(np.datetime64("2020-01-01"), 12, seed=7))
@@ -4930,15 +5013,14 @@ class TestStaleSourceCheck:
         spool = dc.spool(data, index=index).update()
         return spool.chunk(time=None), paths, index
 
-    def test_a_plan_outlives_the_index_it_was_made_from(self, plan_and_index, route):
+    def test_a_plan_outlives_the_index_it_was_made_from(self, plan_and_index):
         """The rows carry the check, so a deleted index takes nothing away."""
         chunked, paths, index = plan_and_index
         blob = pickle.dumps(chunked)
         index.unlink()
         _rewrite_dasdae(paths[0], self._patch(ORIGIN, 12, seed=7))
         out = pickle.loads(blob)[0]
-        assert route.counts["patch"] == 2, "the changed file abandons the recipe"
-        assert out.shape[0] == 20
+        assert out.shape[0] == 20, "the changed file abandons the recipe"
 
     @pytest.fixture
     def selected_plan(self, tmp_path):
@@ -5008,7 +5090,12 @@ class TestStaleSourceCheck:
         assert list(shapes) == [(20, 4)]
 
     def test_planning_stats_nothing(self, spool_and_paths, monkeypatch):
-        """A plan which is never read touches no file."""
+        """
+        A plan which is never read touches no file.
+
+        A performance guard (rule C): a stat taken while planning changes no
+        plan, so the stats are counted.
+        """
         spool, _ = spool_and_paths
         stats = _stat_recorder(monkeypatch)
         for length in (to_timedelta64(0.05), None):
@@ -5019,7 +5106,12 @@ class TestStaleSourceCheck:
         assert len(stats) == 2
 
     def test_a_merge_stats_only_its_own_files(self, tmp_path, monkeypatch):
-        """Each output measures the files it reads, and no others."""
+        """
+        Each output measures the files it reads, and no others.
+
+        A performance guard (rule C): measuring the other outputs' files too
+        changes no verdict, so the stats are counted.
+        """
         patches = [_grid_patch(ORIGIN + STEP * 8 * n, 8, seed=n) for n in range(4)]
         spool = _write_spool(tmp_path, patches)
         chunked = spool.chunk(time=to_timedelta64(0.16))
@@ -5060,12 +5152,11 @@ class TestPromotionChain:
             (("float32", 1.5), ("float64", 2.5), ("longdouble", 3.5)),
         ],
     )
-    def test_both_routes_give_one_array(self, tmp_path, specs, route):
+    def test_both_routes_give_one_array(self, tmp_path, specs):
         """Promotion a member at a time is what the recipe must reproduce."""
         spool = self._write(tmp_path, specs)
-        fast = spool.chunk(time=None)[0]
-        route.force_patches()
-        slow = spool.chunk(time=None)[0]
+        (fast,) = from_index(spool, tmp_path, time=None)
+        slow = in_memory(tmp_path).chunk(time=None)[0]
         assert_same_patch(fast, slow, specs)
 
     @pytest.mark.parametrize(
@@ -5091,11 +5182,10 @@ class TestPromotionChain:
             recipe = data if via is None else data.astype(via)
             assert np.array_equal(buffered, recipe.astype(chain[-1]), equal_nan=True)
 
-    def test_a_member_rounds_where_the_buffer_rounded_it(self, tmp_path, route):
+    def test_a_member_rounds_where_the_buffer_rounded_it(self, tmp_path):
         """An integer the buffer put through float64 cannot come back whole."""
         specs = (("int64", 2**53 + 1), ("float64", 1), ("longdouble", 2))
-        out = self._write(tmp_path, specs).chunk(time=None)[0]
-        assert route.counts == {"patch": 0, "array": 3}
+        (out,) = from_index(self._write(tmp_path, specs), tmp_path, time=None)
         assert out.data.dtype == np.dtype(np.longdouble)
         assert out.data[0, 0] == np.longdouble(2**53)
 
@@ -5123,39 +5213,35 @@ class TestStatPrecision:
         live = _grid_patch(ORIGIN + STEP * 24, 8, seed=3)
         return spool + dc.spool([live]), paths
 
-    def test_the_recorded_stats_are_integers(self, mixed, monkeypatch):
+    def test_the_recorded_stats_are_integers(self, mixed):
         """
         A column with a NULL in it still states what it measured.
 
-        The first file's exact mtime must match the one recorded, so a
-        rewrite its stat cannot see keeps the recipe's eight samples of it.
+        The first file's exact mtime must match the one recorded, so its merge
+        is read from the index with the files unopenable.
         """
         spool, paths = mixed
         chunked = spool.chunk(time=to_timedelta64(0.16))
-        _frozen_stats(monkeypatch, paths)
-        grown = _grid_patch(ORIGIN, 12, seed=7)
-        _rewrite_dasdae(paths[0], grown)
-        out = chunked[0]
-        assert out.shape[0] == 16
-        assert np.array_equal(out.data[:8], grown.data[:8])
+        with unopenable(*paths):
+            assert chunked[0].shape[0] == 16
 
-    def test_unchanged_files_keep_the_recipe(self, mixed, route):
+    def test_unchanged_files_keep_the_recipe(self, mixed):
         """The file-backed outputs of a mixed spool are read as recipes."""
-        spool, _ = mixed
-        out = spool.chunk(time=to_timedelta64(0.16))[0]
-        assert route.counts == {"patch": 0, "array": 2}
-        assert out.shape[0] == 16
+        spool, paths = mixed
+        chunked = spool.chunk(time=to_timedelta64(0.16))
+        with unopenable(*paths):
+            assert chunked[0].shape[0] == 16
 
-    def test_a_nanosecond_of_change_is_noticed(self, mixed, route):
+    def test_a_nanosecond_of_change_is_noticed(self, mixed):
         """A file whose mtime moved by one nanosecond is not the file indexed."""
         spool, paths = mixed
         chunked = spool.chunk(time=to_timedelta64(0.16))
         moved = self._mtime - 1
         os.utime(paths[0], ns=(paths[0].stat().st_atime_ns, moved))
         assert paths[0].stat().st_mtime_ns == moved
-        out = chunked[0]
-        assert route.counts["patch"] == 2, "the moved file abandons the recipe"
-        assert out.shape[0] == 16
+        assert chunked[0].shape[0] == 16
+        with unopenable(paths[0]), pytest.raises(OSError, match="signature"):
+            chunked[0]
 
 
 @pytest.mark.wasm_skip
@@ -5183,50 +5269,51 @@ class TestStoredDatetimeUnit:
         return _write_spool(directory, patches)
 
     @pytest.mark.parametrize("unit", ["s", "ms"])
-    def test_a_whole_merge_keeps_the_stored_unit(self, tmp_path, unit, route):
+    def test_a_whole_merge_keeps_the_stored_unit(self, tmp_path, unit):
         """Every member is whole, so every coordinate comes from a row."""
         spool = self._spool(tmp_path, unit)
-        fast = spool.chunk(time=None)[0]
+        (fast,) = from_index(spool, tmp_path, time=None)
         assert fast.get_coord("time").dtype == np.dtype(f"datetime64[{unit}]")
-        route.force_patches()
-        assert_same_patch(fast, spool.chunk(time=None)[0], per_coord=True)
+        slow = in_memory(tmp_path).chunk(time=None)[0]
+        assert_same_patch(fast, slow, per_coord=True)
 
     @pytest.mark.parametrize("unit", ["s", "ms"])
-    def test_a_trimmed_merge_keeps_the_stored_unit(self, tmp_path, unit, route):
+    def test_a_trimmed_merge_keeps_the_stored_unit(self, tmp_path, unit):
         """A window of a source is counted as its source is."""
         spool = self._spool(tmp_path, unit)
         length = to_timedelta64(8) if unit == "s" else to_timedelta64(0.008)
-        fast = list(spool.chunk(time=length))
+        fast = from_index(spool, tmp_path, time=length)
         assert len(fast) > 1
         for patch in fast:
             assert patch.get_coord("time").dtype == np.dtype(f"datetime64[{unit}]")
-        route.force_patches()
-        slow = list(spool.chunk(time=length))
+        slow = list(in_memory(tmp_path).chunk(time=length))
         for one, other in zip(fast, slow, strict=True):
             assert_same_patch(one, other, per_coord=True)
 
-    def test_a_coordinate_beside_the_chunked_one_keeps_its_unit(self, tmp_path, route):
+    def test_a_coordinate_beside_the_chunked_one_keeps_its_unit(self, tmp_path):
         """The dimension a merge does not touch is rebuilt from a row too."""
         spool = self._spool(tmp_path, "ms", dim="distance")
         fast = list(spool.chunk(distance=2.5))
         assert len(fast) > 1
-        route.force_patches()
-        slow = list(spool.chunk(distance=2.5))
+        slow = list(in_memory(tmp_path).chunk(distance=2.5))
         for one, other in zip(fast, slow, strict=True):
             assert one.get_coord("time").dtype == np.dtype("datetime64[ms]")
             assert_same_patch(one, other, per_coord=True)
 
-    def test_a_changed_source_does_not_change_the_dtype(self, tmp_path, monkeypatch):
+    def test_a_changed_source_does_not_change_the_dtype(self, tmp_path):
         """The fallback the stale check forces reads the same coordinates."""
         spool = self._spool(tmp_path, "s")
         length = to_timedelta64(8)
         fast = list(spool.chunk(time=length))
-        monkeypatch.setattr(
-            planned.PlanResolver, "_sources_unchanged", lambda self, rows, **_: False
-        )
+        # a moved mtime is a changed file, which the patches are loaded from
+        for path in h5_files(tmp_path):
+            stat = path.stat()
+            later = stat.st_mtime_ns + 10**9
+            os.utime(path, ns=(stat.st_atime_ns, later))
         stale = list(spool.chunk(time=length))
         for one, other in zip(fast, stale, strict=True):
             assert_same_patch(one, other, per_coord=True)
+        assert_loads_patches(spool, h5_files(tmp_path)[:1], time=length)
 
     def test_a_unit_the_step_cannot_count_is_passed_over(self):
         """A step no coarser unit can hold leaves nothing to rebuild."""
@@ -5254,7 +5341,7 @@ class TestStoredDatetimeUnit:
         coord = dc.core.get_coord(start=0.0, step=1.0, shape=(5,))
         assert assembly_module.coord_at_stored_unit(coord, {}, "distance") is coord
 
-    def test_a_row_which_names_no_dtype_falls_back(self, tmp_path, route):
+    def test_a_row_which_names_no_dtype_falls_back(self, tmp_path):
         """
         Without a dtype nothing says what the file counts in.
 
@@ -5267,7 +5354,8 @@ class TestStoredDatetimeUnit:
         rows = resolver.member_rows
         resolver.member_rows = rows.drop(columns=["_time_coord_dtype"])
         assert list(chunked)
-        assert route.counts["patch"] > 0
+        with unopenable(*h5_files(tmp_path)), pytest.raises(OSError, match="signature"):
+            list(chunked)
 
     def test_the_index_records_the_unit(self, tmp_path):
         """
@@ -5290,25 +5378,21 @@ class TestTrimmedRecipeMerge:
         """`count` adjacent single-patch files and their indexed spool."""
         return _adjacent_spool(directory, count, samples, channels)
 
-    def test_a_trim_off_the_first_axis_reads_only_its_window(
-        self, tmp_path, route, monkeypatch
-    ):
+    def test_a_trim_off_the_first_axis_reads_only_its_window(self, tmp_path):
         """The window goes on the planned dimension, wherever it is stored."""
         patches = [
             _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num, dims=("distance", "time"))
             for num in range(4)
         ]
         spool = _write_spool(tmp_path, patches)
-        fast = list(spool.chunk(time=to_timedelta64(0.12)))
-        assert route.counts["patch"] == 0
+        fast = from_index(spool, tmp_path, time=to_timedelta64(0.12))
         assert [x.dims for x in fast] == [("distance", "time")] * len(fast)
-        route.force_patches()
-        slow = list(spool.chunk(time=to_timedelta64(0.12)))
+        slow = list(in_memory(tmp_path).chunk(time=to_timedelta64(0.12)))
         assert len(fast) == len(slow) > 1
         for one, other in zip(fast, slow, strict=True):
             assert_same_patch(one, other)
 
-    def test_an_archive_with_no_origins_takes_the_patch_path(self, tmp_path, route):
+    def test_an_archive_with_no_origins_takes_the_patch_path(self, tmp_path):
         """A column no row carries is a missing id, not an absent check."""
         with config_context(patch_provenance="disabled"):
             for num in range(3):
@@ -5317,11 +5401,10 @@ class TestTrimmedRecipeMerge:
                 patch.io.write(tmp_path / f"m{num}.h5", "dasdae")
             spool = dc.spool(tmp_path).update()
         assert "origin_id" not in spool.get_contents()
-        chunked = spool.chunk(time=to_timedelta64(0.12), keep_partial=True)
-        fast = list(chunked)
-        with pytest.MonkeyPatch.context() as context:
-            route.force_patches(context)
-            slow = list(spool.chunk(time=to_timedelta64(0.12), keep_partial=True))
+        kwargs = {"time": to_timedelta64(0.12), "keep_partial": True}
+        fast = list(spool.chunk(**kwargs))
+        assert_loads_patches(spool, h5_files(tmp_path), **kwargs)
+        slow = list(in_memory(tmp_path).chunk(**kwargs))
         assert len(fast) == len(slow) > 1
         for one, other in zip(fast, slow, strict=True):
             assert_same_patch(one, other)
@@ -5354,7 +5437,7 @@ class TestTrimmedRecipeMerge:
         # grid from its first label, so it holds positions 11 through 21
         assert out.data.tolist() == list(range(11, 22))
 
-    def test_an_integer_coordinate_trims_on_its_own_grid(self, tmp_path, route):
+    def test_an_integer_coordinate_trims_on_its_own_grid(self, tmp_path):
         """A chunk edge between integer samples keeps only what it names."""
         patches = []
         for num in range(2):
@@ -5369,18 +5452,16 @@ class TestTrimmedRecipeMerge:
                 dc.Patch(data=data, coords=coords, dims=("distance", "time"))
             )
         spool = _write_spool(tmp_path, patches)
-        merged = route.merges()
-        fast = list(spool.chunk(distance=7.8))
-        assert merged and all(merged)
+        fast, merged = merges_from_index(spool, tmp_path, distance=7.8)
+        assert merged
         # the second window is [7.8, 15.6), channels 8 through 15
         second = fast[1].get_coord("distance")
         assert np.array_equal(second.values, np.arange(8, 16))
-        route.force_patches()
-        slow = list(spool.chunk(distance=7.8))
+        slow = list(in_memory(tmp_path).chunk(distance=7.8))
         for one, other in zip(fast, slow, strict=True):
             assert_same_patch(one, other, per_coord=True)
 
-    def test_a_derived_patch_keeps_its_own_base_id(self, tmp_path, route, monkeypatch):
+    def test_a_derived_patch_keeps_its_own_base_id(self, tmp_path):
         """A window's id builds on the array's id, not on its lineage."""
         patches = [
             _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num) for num in range(4)
@@ -5389,16 +5470,19 @@ class TestTrimmedRecipeMerge:
         spool = _write_spool(tmp_path, patches)
         contents = spool.get_contents()
         assert (contents["origin_id"] != contents["data_id"]).all(), "a derived patch"
-        fast = list(spool.chunk(time=to_timedelta64(0.12)))
-        assert route.counts["patch"] == 0
-        route.force_patches()
-        slow = list(spool.chunk(time=to_timedelta64(0.12)))
+        fast = from_index(spool, tmp_path, time=to_timedelta64(0.12))
+        slow = list(in_memory(tmp_path).chunk(time=to_timedelta64(0.12)))
         assert len(fast) == len(slow) > 1
         for one, other in zip(fast, slow, strict=True):
             assert_same_patch(one, other)
 
     def test_an_unexpected_error_propagates(self, tmp_path, monkeypatch):
-        """Only a resource which cannot hold the array sends the merge back."""
+        """
+        Only a resource which cannot hold the array sends the merge back.
+
+        Fault injection (rule B): no file fails a read with some other error on
+        demand, so the read is made to.
+        """
         spool = self._spool(tmp_path)
 
         def boom(self):
@@ -5409,7 +5493,7 @@ class TestTrimmedRecipeMerge:
         with pytest.raises(RuntimeError, match="on fire"):
             spool.chunk(time=None)[0]
 
-    def test_a_member_in_another_unit_keeps_the_patch_path(self, tmp_path, route):
+    def test_a_member_in_another_unit_keeps_the_patch_path(self, tmp_path):
         """A trim in the plan's unit is not a window on the file's grid."""
         first = dc.get_example_patch().set_units(distance="m")
         coord = first.get_coord("distance")
@@ -5421,10 +5505,12 @@ class TestTrimmedRecipeMerge:
         spool = dc.spool(tmp_path).update()
         kwargs = {"distance": 200, "keep_partial": True, "conflict": "keep_first"}
         out = list(spool.chunk(**kwargs))
-        assert route.counts["patch"] > 0, "a feet member is not windowed in metres"
         assert sum(x.shape[x.get_axis("distance")] for x in out) == 2 * len(coord)
+        # a feet member is not windowed in metres
+        with unopenable(tmp_path / "u1.h5"), pytest.raises(OSError, match="signature"):
+            list(spool.chunk(**kwargs))
 
-    def test_an_uneven_source_keeps_the_patch_path(self, tmp_path, route):
+    def test_an_uneven_source_keeps_the_patch_path(self, tmp_path):
         """A source the index states no step for has no grid to window."""
         start = np.datetime64("2020-01-01")
         values = np.concatenate(
@@ -5445,9 +5531,10 @@ class TestTrimmedRecipeMerge:
         ).io.write(tmp_path / "e.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         with suppress_warnings(UserWarning):
-            out = spool.chunk(time=None, tolerance=np.inf)
-        assert list(out)
-        assert route.counts["patch"] > 0
+            assert list(spool.chunk(time=None, tolerance=np.inf))
+            assert_loads_patches(
+                spool, [tmp_path / "g.h5"], time=None, tolerance=np.inf
+            )
 
     def test_a_trimmed_member_states_its_window_id(self, tmp_path):
         """A trim carries the id of the window, not of the whole array."""
@@ -5480,17 +5567,11 @@ class TestTrimmedRecipeMerge:
         for kind in ("datetime", "float", "int64", "int32"):
             name = "time" if kind == "datetime" else "distance"
             directory = tmp_path_factory.mktemp(f"trim_{kind}")
-            out[kind] = (_dim_spool(directory, name, kind), name)
+            out[kind] = (_dim_spool(directory, name, kind), name, directory)
         return out
 
     @pytest.mark.parametrize("kind", ["datetime", "float", "int64", "int32"])
-    def test_every_chunking_matches_the_patch_path(
-        self,
-        grids,
-        kind,
-        monkeypatch,
-        route,
-    ):
+    def test_every_chunking_matches_the_patch_path(self, grids, kind):
         """Random chunk lengths, overlaps and edges read the same samples.
 
         The recipe places a window of each source; the patch path loads
@@ -5499,7 +5580,8 @@ class TestTrimmedRecipeMerge:
         spool -- the two must agree in every part of the patch. An
         integer coordinate is cut between its samples like any other.
         """
-        spool, dim = grids[kind]
+        spool, dim, directory = grids[kind]
+        memory = in_memory(directory)
         step = {"datetime": float(to_int(STEP)), "float": 2.0, "int64": 1.0}.get(
             kind, 3.0
         )
@@ -5512,7 +5594,6 @@ class TestTrimmedRecipeMerge:
             span - step / 2,
             *[rng.uniform(step * 2, span * 3) for _ in range(4)],
         ]
-        merged = route.merges()
         recipes = 0
         for index, length in enumerate(lengths):
             for keep_partial in (True, False):
@@ -5524,15 +5605,10 @@ class TestTrimmedRecipeMerge:
                         kwargs[dim] = to_timedelta64(length / 1e9)
                         if overlap:
                             kwargs["overlap"] = to_timedelta64(overlap / 1e9)
-                    del merged[:]
-                    fast = list(spool.chunk(**kwargs))
-                    # only the fast leg's merges: the forced one below
-                    # abandons the recipe on purpose
-                    assert all(merged), kwargs
-                    recipes += sum(merged)
-                    with monkeypatch.context() as context:
-                        route.force_patches(context)
-                        slow = list(spool.chunk(**kwargs))
+                    # every merge of several members is read from the index
+                    fast, merged = merges_from_index(spool, directory, **kwargs)
+                    recipes += merged
+                    slow = list(memory.chunk(**kwargs))
                     assert len(fast) == len(slow), kwargs
                     if length < span:  # a chunk inside one file cuts it up
                         assert len(fast) > 1, kwargs
@@ -5605,7 +5681,7 @@ class TestTrimmedRecipeMerge:
         )
         assert assembler._meta_from_index({**row, "data_id": None}) is None
 
-    def test_a_row_without_its_source_range_falls_back(self, tmp_path, route):
+    def test_a_row_without_its_source_range_falls_back(self, tmp_path):
         """
         Without the source's own range a trim cannot be placed.
 
@@ -5621,12 +5697,18 @@ class TestTrimmedRecipeMerge:
         ]
         resolver.member_rows = resolver.member_rows.drop(columns=columns)
         assert list(chunked)
-        assert route.counts["patch"] > 0
+        with unopenable(*h5_files(tmp_path)), pytest.raises(OSError, match="signature"):
+            list(chunked)
 
     def test_a_resource_of_another_rank_abandons_the_recipe(
         self, tmp_path, monkeypatch
     ):
-        """Windows name one range per axis, so fewer axes leave the route."""
+        """
+        Windows name one range per axis, so fewer axes leave the route.
+
+        Fault injection (rule B): the stat check would catch this first, so it is
+        made to pass, and the fallback is what is tested.
+        """
         spool = self._spool(tmp_path, count=2)
         path = tmp_path / "m0.h5"
         time = dc.core.get_coord(
@@ -5636,7 +5718,6 @@ class TestTrimmedRecipeMerge:
             data=np.arange(8, dtype="float32"), coords={"time": time}, dims=("time",)
         )
         _rewrite_dasdae(path, flat)
-        # the stat check would catch this first; the fallback is what is tested
         monkeypatch.setattr(
             planned.PlanResolver, "_sources_unchanged", lambda self, rows, **_: True
         )
@@ -5653,13 +5734,13 @@ class TestSelectedRecipeMerge:
 
     @pytest.fixture(scope="class")
     def spools(self, tmp_path_factory):
-        """One spool per kind of chunked coordinate and data dtype."""
+        """One spool, and its directory, per kind of chunked coordinate and dtype."""
         out = {}
         for kind in ("datetime", "float", "int64", "int32"):
             dim = "time" if kind == "datetime" else "distance"
             for dtype in ("float32", "int16"):
                 path = tmp_path_factory.mktemp(f"selected_{kind}_{dtype}")
-                out[kind, dtype] = (_dim_spool(path, dim, kind, dtype), dim)
+                out[kind, dtype] = (_dim_spool(path, dim, kind, dtype), dim, path)
         return out
 
     def _spool(self, spools, kind, dtype="float32"):
@@ -5706,19 +5787,16 @@ class TestSelectedRecipeMerge:
             assert np.array_equal(one.data, other.data)
             assert one.coords == other.coords
 
-    def test_the_interior_of_a_selection_is_windowed(self, spools, route):
+    def test_the_interior_of_a_selection_is_windowed(self, spools):
         """A member the selection leaves whole is still a window of its file."""
-        spool = self._spool(spools, "datetime")
+        spool, _, directory = spools["datetime", "float32"]
         labels = self._labels(spool, "time")
-        # only what the selected chunking does is counted; reading the
-        # labels merged the whole spool, from the index, already
-        merged = route.merges()
         selected = spool.select(time=(labels[3], labels[-4]))
         chunked = selected.chunk(time=STEP * 10)
         assert list(chunked)
         # every output holds a member the selection or the chunk cut, and a
         # merge from the index windows all its members or none
-        assert any(merged), "the selected merge was assembled from the index"
+        assert _read_from_index(chunked, directory), "no output merged from the index"
 
     def test_a_row_the_selection_cut_falls_back(self, spools):
         """
@@ -5827,7 +5905,7 @@ class TestSelectedRecipeMerge:
             assert not planned._value_residuals_on((plain, residual), "time")
             assert not planned._value_residuals_on((residual, plain), "time")
 
-    def test_every_selection_matches_the_patch_path(self, spools, monkeypatch, route):
+    def test_every_selection_matches_the_patch_path(self, spools):
         """Random selections and chunkings read the same samples either way.
 
         The recipe places a window of each source; the patch path loads
@@ -5838,14 +5916,11 @@ class TestSelectedRecipeMerge:
         part of the patch.
         """
         rng = random.Random(20260921)
-        # every label first: reading them merges each spool unselected,
-        # which the count below must not mistake for a selected merge
-        labels_by_key = {key: self._labels(*pair) for key, pair in spools.items()}
-        merged = route.merges()
         compared = 0
         recipes = 0
-        for key, (spool, dim) in spools.items():
-            labels = labels_by_key[key]
+        for spool, dim, directory in spools.values():
+            memory = in_memory(directory)
+            labels = self._labels(spool, dim)
             step = labels[1] - labels[0]
             span = step * self.samples
             half = step // 2 if dim == "time" else step / 2
@@ -5860,21 +5935,23 @@ class TestSelectedRecipeMerge:
             ]
             lengths = (span * 2 + half, span - half)
             for index, (low, high) in enumerate(bounds):
-                selected = spool.select(**{dim: (low, high)})
-                if rng.random() < 0.5 and len(selected):
-                    selected = selected.select(**{dim: (labels[5], labels[-6])})
+                selections = [{dim: (low, high)}]
+                if rng.random() < 0.5 and len(spool.select(**selections[0])):
+                    selections.append({dim: (labels[5], labels[-6])})
+                selected, expected = spool, memory
+                for selection in selections:
+                    selected = selected.select(**selection)
+                    expected = expected.select(**selection)
                 kwargs = {dim: lengths[index % 2], "keep_partial": rng.random() < 0.5}
                 if rng.random() < 0.5:
                     kwargs["overlap"] = step * 2
-                del merged[:]
                 try:
-                    fast = list(selected.chunk(**kwargs))
+                    chunked = selected.chunk(**kwargs)
+                    fast = list(chunked)
                 except ChunkError:
                     continue
-                recipes += sum(merged)
-                with monkeypatch.context() as context:
-                    route.force_patches(context)
-                    slow = list(selected.chunk(**kwargs))
+                recipes += _read_from_index(chunked, directory)
+                slow = list(expected.chunk(**kwargs))
                 assert len(fast) == len(slow), kwargs
                 for one, other in zip(fast, slow, strict=True):
                     compared += 1
