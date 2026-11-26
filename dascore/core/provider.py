@@ -124,7 +124,11 @@ class Readers:
       [`get_format`](`dascore.io.core.get_format`) finds it.
     - `prepare_read(fiber_io, manager, snap, keys)` returns what
       `FiberIO._prepare_read` does for the resource: its patches' metadata,
-      and a loader of their arrays. A scan takes the metadata.
+      and a loader of their arrays. A scan takes the metadata. The loader
+      fills the arrays a read loads; a backend which reads for itself, as
+      the lazy backend does, is handed each stored window instead and
+      reads it with dascore's reader, so the readers answer only for files
+      that reader reads too.
     - `reads(fiber_io, manager)` returns whether `prepare_read` answers for
       the resource, so that a scan hands it over unopened.
 

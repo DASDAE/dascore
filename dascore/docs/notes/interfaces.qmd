@@ -37,7 +37,7 @@ Where DASCore computes a result without an operation, as NumPy's functions on a 
 
 A package which reads some of DASCore's formats itself states its readers as a [`Readers`](`dascore.core.provider.Readers`) of three functions, and makes them active for a block with [`reading_with`](`dascore.core.provider.reading_with`). Inside it, DASCore asks them before its own readers: `get_format` for a file's format and version, `prepare_read` for the metadata of its patches and a loader of their arrays, as `FiberIO._prepare_read` gives them, which a read loads and a scan summarizes, and `reads` for whether `prepare_read` answers for a file, so a scan hands the file over unopened. Each returns None for a file it leaves to DASCore.
 
-The read or scan is still DASCore's: it walks directories, selects, validates the metadata, stamps the ids and raises its own errors. Outside the block, DASCore's readers read.
+The read or scan is still DASCore's: it walks directories, selects, validates the metadata, stamps the ids and raises its own errors. The loader fills the arrays a read loads. A backend which reads for itself, as the lazy backend does, is handed each stored window instead and reads it later with DASCore's reader of the format, so the readers answer only for files that reader reads too. Outside the block, DASCore's readers read.
 
 ## Testing one
 

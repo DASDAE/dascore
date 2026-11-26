@@ -400,6 +400,20 @@ class TestReaders:
             (summary,) = dc.scan(dasdae_file, on_error="raise")
         assert summary.shape == dc.get_example_patch().shape
 
+    def test_backend_reading_for_itself(self, dasdae_file):
+        """
+        A backend reading for itself reads the window through dascore's reader.
+
+        The loader fills what a read loads; a lazy array loads after the read.
+        """
+        readers = _Readers(dasdae_file)
+        active = Readers(_none, readers.prepare_read, readers.reads)
+        with reading_with(active):
+            eager = dc.spool(dasdae_file).set_backend("numpy")[0]
+            lazy = dc.spool(dasdae_file).set_backend("lazy")[0]
+        assert np.all(eager.data == 0)
+        assert np.array_equal(lazy.load().data, dc.read(dasdae_file)[0].data)
+
     def test_left_to_dascore(self, dasdae_file):
         """A file the readers say they read but then leave is dascore's."""
         nothing = Readers(_none, _none, lambda *args: True)
