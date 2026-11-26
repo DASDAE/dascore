@@ -2075,8 +2075,7 @@ def _check_grid(grid: Grid, dtype) -> None:
 def _exact_run(values, dtype: np.dtype) -> Grid:
     """Resolve the exact grid a set of range inputs describes."""
     start, stop, step = (
-        None if _is_null(v := values.get(x)) else _maybe_unpack(v)
-        for x in ("start", "stop", "step")
+        None if _is_null(v := values.get(x)) else v for x in ("start", "stop", "step")
     )
     shape = values.get("shape")
     start_tick = None if start is None else _to_tick(start)
@@ -2182,6 +2181,7 @@ def _float_run(values) -> tuple[Grid, np.dtype]:
 
 def _range_run(values) -> tuple[Grid, np.dtype]:
     """The single run, and its dtype, that a set of range inputs describes."""
+    values = {name: _maybe_unpack(value) for name, value in values.items()}
     get = values.get
     dtype = _exact_dtype(get("start"), get("stop"), get("step"), get("shape"))
     if dtype is None:
