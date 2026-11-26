@@ -29,6 +29,7 @@ from dascore.core.coords import (
     Grid,
     NumericCoord,
     _blank_coord,
+    _CoordModel,
     concat_coords,
     get_compatible_values,
     get_coord,
@@ -3085,7 +3086,7 @@ class TestChangeLength:
         """Ensure Change coords is not implemented in base class."""
         coord = evenly_sampled_coord
         with pytest.raises(NotImplementedError):
-            BaseCoord.change_length(coord, 10)
+            _CoordModel.change_length(coord, 10)
 
     @pytest.mark.parametrize("length", [-1, -10])
     def test_negative_length_raises(
@@ -3616,8 +3617,8 @@ class TestUnitNoOps:
 
         missing = [
             sub.__name__
-            for sub in _subclasses(BaseCoord)
-            if sub._convert_units is BaseCoord._convert_units
+            for sub in _subclasses(_CoordModel)
+            if sub._convert_units is _CoordModel._convert_units
         ]
         assert not missing
 
@@ -3629,7 +3630,7 @@ class TestUnitNoOps:
         calling the base one shows its error.
         """
         with pytest.raises(NotImplementedError, match="unit conversion"):
-            BaseCoord._convert_units(evenly_sampled_coord, "m")
+            _CoordModel._convert_units(evenly_sampled_coord, "m")
 
 
 class TestIndexCoordinate:

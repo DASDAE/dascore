@@ -18,6 +18,7 @@ from dascore.compat import array
 from dascore.constants import PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import (
+    BaseCoordManager,
     CoordManager,
     CoordManagerInput,
     get_coord_manager,
@@ -490,7 +491,7 @@ def update(
     """
     coords = coords if coords is not None else self.coords
     if dims is None:
-        dims = coords.dims if isinstance(coords, CoordManager) else self.dims
+        dims = coords.dims if isinstance(coords, BaseCoordManager) else self.dims
     coords = get_coord_manager(coords, dims)
     if attrs is not None:
         attrs = PatchAttrs.from_dict(attrs)

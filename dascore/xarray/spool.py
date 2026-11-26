@@ -21,7 +21,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.config import get_config
-from dascore.constants import CONFLICT, SpoolType
+from dascore.constants import CONFLICT
 from dascore.exceptions import InvalidFiberIOError, ParameterError, PatchConversionError
 from dascore.utils.misc import optional_import
 from dascore.utils.time import to_float
@@ -298,7 +298,7 @@ def _xarray_group_nodes(outputs, group_attrs):
 
 
 def spool_to_xarray(
-    spool: SpoolType,
+    spool: dc.Spool,
     dim: str = "time",
     group: str | typing.Sequence[str] | None = None,
     tolerance=None,

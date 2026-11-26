@@ -57,11 +57,14 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
+    BaseNumericCoord,
     CoordSummary,
     Labels,
     NumericCoord,
+    _CoordModel,
     get_coord,
 )
+from dascore.core.interfaces import BaseCoordManager
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -232,7 +235,7 @@ def _resolve_selection(cm, kwargs, samples=False, relative=False, operation="sel
 _COORD_NUMERIC = frozenset({"min", "max", "step", "shape"})
 
 
-class CoordManager(RichRepr, DascoreBaseModel):
+class CoordManager(RichRepr, DascoreBaseModel, BaseCoordManager):
     """
     Class for managing coordinates.
 
@@ -873,7 +876,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             ordered = isinstance(key[0], slice) or (
                 isinstance(key[0], np.ndarray) and key[0].size
             )
-            one_dim = isinstance(coord, NumericCoord) and coord.ndim == 1
+            one_dim = isinstance(coord, BaseNumericCoord) and coord.ndim == 1
             if one_dim and not coord._partial and ordered:
                 new_coord = coord[key[0]]
                 if not new_coord.size:
@@ -1059,7 +1062,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
     def equals(self, other) -> bool:
         """Return True if other coordinates are approx equal."""
-        if not isinstance(other, self.__class__):
+        if not isinstance(other, BaseCoordManager):
             return False
         if not set(self.dims) == set(other.dims):
             return False
@@ -1482,7 +1485,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
 
 
 def get_coord_manager(
-    coords: CoordManagerInput | CoordManager | None = None,
+    coords: CoordManagerInput | BaseCoordManager | None = None,
     dims: Sequence[str] | None = None,
     shape=None,
 ) -> CoordManager:
@@ -1527,14 +1530,16 @@ def get_coord_manager(
     # return coords if we already have a coord manager.
     # A list of dims would never compare equal to a CoordManager's tuple.
     dims = None if dims is None else tuple(dims)
-    if isinstance(coords, CoordManager):
+    if isinstance(coords, BaseCoordManager):
         # maybe try to rename dims.
         if dims is not None and dims != coords.dims:
             kwargs = {i: v for i, v in zip(coords.dims, dims, strict=True)}
             coords = coords.rename_coord(**kwargs)
-        if not coords.dims and shape is not None and coords.scalar != (shape == ()):
+        stale = not coords.dims and shape is not None and coords.scalar != (shape == ())
+        if stale and isinstance(coords, CoordManager):  # another package's is kept
             coords = coords.model_copy(update={"scalar": shape == ()})
-        return coords
+        # Type checkers see another package's manager as a CoordManager.
+        return cast("CoordManager", coords)
     # this allows a simple dict without dims to be passed and dims pulled
     # from dict keys.
     if dims is None:
@@ -1589,9 +1594,9 @@ def _get_coord_dim_map(coords, dims):
         # stored labels can be left non-canonical by slicing (e.g. an evenly
         # spaced subset that should collapse to a grid), and a partial coord
         # stating a whole range should canonicalize to one.
-        if isinstance(coord, BaseCoord) and coord._grid is not None:
+        if isinstance(coord, _CoordModel) and coord._grid is not None:
             return coord
-        stored = isinstance(coord, NumericCoord) and coord.runs_count == 1
+        stored = isinstance(coord, BaseNumericCoord) and coord.runs_count == 1
         if stored and isinstance(coord.runs[0], Labels):
             # the run would rebuild as itself; the inference reads its labels
             out = get_coord(data=coord.values, units=coord.units)

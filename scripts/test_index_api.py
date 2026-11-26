@@ -53,7 +53,7 @@ class TestAliases:
     """Tests that a second name for one object doesn't claim its page."""
 
     def test_class_documented_under_defined_name(self):
-        """BaseSpool is an alias of Spool; only Spool gets documented."""
+        """Spool, exported as dascore.Spool, is documented where it is defined."""
         data = parse_project(dc)
         assert data[str(id(dc.Spool))]["name"] == "Spool"
 

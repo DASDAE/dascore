@@ -6,6 +6,7 @@ These pages explain DASCore's implementation and design decisions.
 
 - [Coordinate Guidelines](coordinates.qmd) is the authoritative rule set for labels, steps, gaps, tolerance and joins; read it before changing coordinate behaviour.
 - [Coordinate Internals](coordinate_internals.qmd) explains coordinate families, segmented coordinates, summary envelopes, and exact scan payloads.
+- [Interfaces](interfaces.qmd) lists the members another package's classes give to stand in for DASCore's coordinates, managers, lazy arrays and spools.
 - [PatchAttrs](patch_attrs.qmd) explains non-coordinate metadata boundaries and `data_type` policy.
 - [Documentation Strategy](doc_strategy.qmd)
 - [Fourier Transforms](dft_notes.qmd)

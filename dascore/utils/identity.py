@@ -54,6 +54,7 @@ from pandas.core.util.hashing import hash_pandas_object
 from pint import Quantity, Unit
 
 from dascore.config import DascoreConfig, get_config
+from dascore.core.interfaces import BaseCoordManager
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.models.registry import TAG_FIELD, get_model_tag
@@ -755,6 +756,8 @@ def _encode(obj: Any) -> Any:
         return {_ID: list(identity())}
     if isinstance(obj, DascoreBaseModel):
         return _encode_model(obj)
+    if isinstance(obj, BaseCoordManager):
+        return _encode_manager(obj)
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         cls = type(obj)
         fields = {x.name: getattr(obj, x.name) for x in dataclasses.fields(obj)}
@@ -846,6 +849,16 @@ def _encode_model(model: DascoreBaseModel) -> Any:
     # out, so that two of them do not read alike.
     cls = type(model)
     tag = get_model_tag(cls) or f"{cls.__module__}.{cls.__qualname__}"
+    return {_MODEL: {TAG_FIELD: tag, "fields": _encode_mapping(fields)}}
+
+
+def _encode_manager(manager: BaseCoordManager) -> Any:
+    """Encode another package's manager as dascore's, so both get one id."""
+    # Imported here: the manager's module imports this one.
+    from dascore.core.coordmanager import CoordManager  # noqa: PLC0415
+
+    fields = {name: getattr(manager, name) for name in CoordManager.model_fields}
+    tag = get_model_tag(CoordManager)
     return {_MODEL: {TAG_FIELD: tag, "fields": _encode_mapping(fields)}}
 
 

@@ -29,6 +29,7 @@ from dascore.constants import (
     WARNING_ACTIONS,
     max_lens,
 )
+from dascore.core.interfaces import BaseLazyArray
 from dascore.exceptions import (
     FilterValueError,
     InvalidInventoryError,
@@ -1224,7 +1225,9 @@ def _apply_union_indexers(indexer, array):
     backend = backend_name(array)
     # Preserve direct NumPy/file-backed reads when orthogonal expansion is unnecessary.
     if backend == "numpy" and sum(is_array(ind) for ind in indexer) <= 1:
-        return xp.asarray(array[indexer])
+        out = array[indexer]
+        # A window of a lazy array is one too, read only when asked for.
+        return out if isinstance(out, BaseLazyArray) else xp.asarray(out)
     # Work backwards so scalar indexing cannot shift an axis still to index.
     for axis in reversed(range(len(indexer))):
         ind = indexer[axis]
@@ -1240,7 +1243,7 @@ def _apply_union_indexers(indexer, array):
                 array = xp.take(array, ind, axis=axis)
         elif ind != slice(None):
             array = array[broadcast_for_index(array.ndim, axis, ind)]
-    return xp.asarray(array)
+    return array if isinstance(array, BaseLazyArray) else xp.asarray(array)
 
 
 def _maybe_array_to_slice(int_array, data_len):

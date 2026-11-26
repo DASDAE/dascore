@@ -20,7 +20,6 @@ from fractions import Fraction
 from functools import cache
 from types import EllipsisType
 from typing import (
-    TYPE_CHECKING,
     Any,
     NoReturn,
     Self,
@@ -42,6 +41,7 @@ from rich.text import Text
 import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, _DASCORE_DIR, DIM_REDUCE_DOCS, dascore_styles
+from dascore.core.interfaces import BaseCoord, BaseNumericCoord, BaseStringCoord
 from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
@@ -487,9 +487,9 @@ def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
     return df[columns].reset_index(drop=True)
 
 
-class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
+class _CoordModel(RichRepr, DascoreBaseModel, BaseCoord):
     """
-    Coordinate interface.
+    The model dascore's coordinate classes share.
 
     Coordinates are used to manage labels and indexing along a single
     data dimension.
@@ -507,16 +507,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     # otherwise want shape passed at every construction site.
     shape: tuple[int, ...] = ()
     dtype: Any = None
-
-    if TYPE_CHECKING:
-        # Every coord exposes its values, but the array-backed coords store
-        # them in a pydantic field while the rest compute them in a property.
-        # Pydantic refuses to let a field shadow an inherited property (and a
-        # field here would make values a required init argument), so the
-        # shared interface is only declared for type checkers.
-        @property
-        def values(self) -> ArrayLike:
-            """The coordinate's values."""
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
@@ -2395,7 +2385,7 @@ def _too_many_segments(count: int) -> bool:
     return True
 
 
-class NumericCoord(BaseCoord):
+class NumericCoord(_CoordModel, BaseNumericCoord):
     """
     A coordinate whose labels are held as an ordered sequence of runs.
 
@@ -2482,7 +2472,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # Defined together, as the base class defines them: a class which states
     # __eq__ and not __hash__ is unhashable by a rule of python's, which
     # would replace the error the base class raises with a duller one.
-    __hash__ = BaseCoord.__hash__
+    __hash__ = _CoordModel.__hash__
 
     def __deepcopy__(self, memo=None) -> Self:
         """Copy the coordinate, keeping its sources sealed."""
@@ -2882,7 +2872,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             runs.extend(self._window_runs(span))
         return self._with_runs(runs)
 
-    def _slice_runs(self, indices: range) -> BaseCoord:
+    def _slice_runs(self, indices: range) -> Self:
         """The coordinate holding the samples a range of positions names."""
         return self._with_runs(self._window_runs(indices))
 
@@ -3209,7 +3199,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     # --- updates
 
-    @compose_docstring(doc=get_docstring(BaseCoord.change_length))
+    @compose_docstring(doc=get_docstring(_CoordModel.change_length))
     def change_length(self, length: int) -> Self:
         """
         {doc}
@@ -3311,7 +3301,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         out = get_coord(start=start, stop=stop, step=step, units=self.units)
         return out.change_length(len(self))
 
-    @compose_docstring(doc=get_docstring(BaseCoord.update_limits))
+    @compose_docstring(doc=get_docstring(_CoordModel.update_limits))
     def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
         """
         {doc}
@@ -3699,7 +3689,7 @@ def concat_coords(*coords, units=None) -> NumericCoord:
     >>> assert coord.runs_count == 2 and coord.step is None
     >>> assert coord == get_coord(data=coord.values)
     """
-    flat: list[NumericCoord] = []
+    flat: list[BaseNumericCoord] = []
     for coord in coords:
         if isinstance(coord, Mapping):  # model_dump round-trip payloads
             coord = get_coord(**coord)
@@ -3708,7 +3698,7 @@ def concat_coords(*coords, units=None) -> NumericCoord:
             raise CoordError(msg)
         if coord.degenerate:
             continue
-        if not isinstance(coord, NumericCoord):
+        if not isinstance(coord, BaseNumericCoord):
             msg = (
                 "concat_coords only supports numeric, monotonic coordinates, "
                 f"got {type(coord)}."
@@ -3855,7 +3845,7 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     are half a step off or either side has no step.
     """
     if (
-        not isinstance(coord, NumericCoord)
+        not isinstance(coord, BaseNumericCoord)
         or coord.evenly_sampled
         or coord._partial
         or len(coord) < 2
@@ -3915,7 +3905,6 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     for anchor, length, blocks in groups:
         if len(blocks) == 1:  # untouched: keep the labels as they are
             kept = coord._slice_runs(range(blocks[0][0], blocks[0][1]))
-            assert isinstance(kept, NumericCoord)
             runs.extend(kept.runs)
         else:
             runs.append(anchor.resized(length, coord.dtype))
@@ -3924,7 +3913,7 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     return coord._with_runs(runs), tuple(out), moved
 
 
-def _fill_position(coord: NumericCoord, anchor: Grid, piece) -> tuple[int, float]:
+def _fill_position(coord: BaseNumericCoord, anchor: Grid, piece) -> tuple[int, float]:
     """The anchor position nearest a piece, and its move in steps (inf: no fit)."""
     # a grid's offsets change evenly along it, so its ends bound them
     ends = isinstance(piece, Grid)
@@ -3945,7 +3934,7 @@ def _fill_position(coord: NumericCoord, anchor: Grid, piece) -> tuple[int, float
     return int(positions[0]), shift
 
 
-def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
+def _fill_limit(coord: BaseNumericCoord, step: Grid, limit, samples: bool):
     """The most missing positions a filled hole may have, or None for any."""
     if limit is None:
         return None
@@ -3977,7 +3966,7 @@ def _raise_string_coord_error(operation: str) -> NoReturn:
     raise CoordError(msg)
 
 
-class CoordString(BaseCoord):
+class CoordString(_CoordModel, BaseStringCoord):
     """A coordinate implementation for string/categorical values.
 
     See ['Coordinate Internals'](`dascore/docs/notes/coordinate_internals.qmd`) for the
@@ -4377,8 +4366,10 @@ def get_coord(
             units=units,
             dtype=dtype,
         )
-    if isinstance(data, BaseCoord):  # just return coordinate
+    if isinstance(data, _CoordModel):  # dascore's own is returned as it is
         return data
+    if isinstance(data, BaseCoord):  # another package's is rebuilt as dascore's
+        return get_coord(**data.model_dump(exclude_defaults=True))
     if isinstance(getattr(data, "dtype", None), pd.DatetimeTZDtype):
         # timezone-aware pandas times (index, series or array) become UTC
         data = to_datetime64(pd.DatetimeIndex(data))

@@ -121,10 +121,6 @@ class TestSpoolBasics:
         with pytest.raises(InvalidSpoolError, match="accepts a Patch"):
             Spool(42)
 
-    def test_base_spool_alias(self):
-        """BaseSpool is kept as an alias of the one spool class."""
-        assert BaseSpool is Spool is dc.BaseSpool
-
     def test_uninitialized_subclass_raises(self, random_spool):
         """A subclass which skips Spool.__init__ is refused, not copied."""
 

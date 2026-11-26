@@ -19,7 +19,7 @@ PatchType = TypeVar("PatchType", bound="dc.Patch")
 # patch, or the metadata describing one.
 PatchMetaType = TypeVar("PatchMetaType", bound="dc.PatchMeta")
 
-SpoolType = TypeVar("SpoolType", bound="dc.Spool")
+SpoolType = TypeVar("SpoolType", bound="dc.BaseSpool")
 
 
 @runtime_checkable

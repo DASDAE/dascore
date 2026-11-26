@@ -18,11 +18,15 @@ from dascore import transform
 from dascore.backends import ArrayBackend, LazyBackend, _settled, get_backend
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import (
+    BaseCoordManager,
+    CoordManager,
+    get_coord_manager,
+)
 from dascore.core.patch_meta import PatchMeta, _as_dtype
 from dascore.core.processor import check_patch_listings
 from dascore.core.source import ArraySource
-from dascore.lazy.array import LazyArray
+from dascore.lazy.array import BaseLazyArray, LazyArray
 from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
@@ -59,7 +63,7 @@ from dascore.utils.namespace import NamespaceOwner
 
 def _is_lazy(data) -> bool:
     """Whether an array's values are read only when asked for."""
-    return isinstance(data, LazyArray) or backend_name(data) == "dask"
+    return isinstance(data, BaseLazyArray) or backend_name(data) == "dask"
 
 
 def _handed_array_attrs(attrs):
@@ -177,7 +181,7 @@ class Patch(NamespaceOwner, PatchMeta):
             # operation nothing says the two belong together, so the array
             # is one of its own; where it came from still stands.
             attrs = _handed_array_attrs(attrs)
-        if dims is None and isinstance(coords, CoordManager):
+        if dims is None and isinstance(coords, BaseCoordManager):
             dims = coords.dims
         # By this point, everything should be defined.
         if data is None or coords is None or dims is None:
@@ -418,6 +422,10 @@ class Patch(NamespaceOwner, PatchMeta):
             # Computed on the backend asked for, which its pending steps are
             # asked about, so nothing is converted.
             data = data._with_backend(backend).load()
+        elif isinstance(data, BaseLazyArray) and eager:
+            # Another package's lazy array is read into memory, then put on
+            # the backend as any array in memory is.
+            data = to_numpy(data)
         new, kept = _settled(backend, data)
         if new is self._data and kept == self._backend:
             return self

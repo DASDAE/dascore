@@ -51,7 +51,7 @@ from dascore.constants import (
     windows_type,
 )
 from dascore.core.source import ArraySource
-from dascore.core.spool import Spool
+from dascore.core.spool import BaseSpool
 from dascore.core.summary import (
     PatchSummary,
     normalize_source_patch_key,
@@ -136,7 +136,7 @@ from dascore.warnings import DASCoreWarning
 ScanInput = (
     path_types
     | dc.PatchMeta
-    | dc.Spool
+    | dc.BaseSpool
     | IOResourceManager
     | Iterable[path_types | dc.PatchMeta | IOResourceManager]
 )
@@ -2092,7 +2092,7 @@ def scan_to_df(
     """
     if isinstance(path, pd.DataFrame):
         return path
-    if isinstance(path, Spool):
+    if isinstance(path, BaseSpool):
         return path.get_contents()
     info = scan(
         path=path,
@@ -2742,7 +2742,7 @@ def write(
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     _check_write_kwargs(fiber_io, kwargs)
-    if not isinstance(patch_or_spool, dc.Spool):
+    if not isinstance(patch_or_spool, BaseSpool):
         # a spool holds a patch with gaps whole; its writer keeps or refuses them
         patch_or_spool = dc.spool([patch_or_spool])
     if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:

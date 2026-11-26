@@ -35,6 +35,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from dascore.backends import ArrayBackend, NumpyBackend, _refuse_mixed
+from dascore.core.interfaces import BaseLazyArray
 from dascore.exceptions import ParameterError
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
@@ -52,7 +53,7 @@ from dascore.utils.array_api import (
 )
 
 
-class LazyArray:
+class LazyArray(BaseLazyArray):
     """
     A recipe, and the operations pending on it.
 

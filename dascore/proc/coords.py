@@ -14,7 +14,8 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, NumericCoord, _fill_layout
+from dascore.core.coords import BaseCoord, BaseNumericCoord, _fill_layout
+from dascore.core.interfaces import BaseLazyArray
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -712,7 +713,8 @@ def _selected(data, indexer, copy=False):
     if indexer is None:  # nothing was filtered out
         return data
     out = _apply_union_indexers(indexer, data)
-    return out.copy() if copy else out
+    # A lazy window holds no values yet, so there is nothing to copy.
+    return out.copy() if copy and not isinstance(out, BaseLazyArray) else out
 
 
 with warnings.catch_warnings():
@@ -766,6 +768,8 @@ class Select(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
+        Data not read yet stay unread and uncopied, so the result may keep
+        its source.
     relative
         If True, select ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative. The first bound
@@ -1035,6 +1039,8 @@ class Unselect(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
+        Data not read yet stay unread and uncopied, so the result may keep
+        its source.
     relative
         If True, unselect ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative.
@@ -1123,6 +1129,8 @@ class Order(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
+        Data not read yet stay unread and uncopied, so the result may keep
+        its source.
     relative
         If True, order values are relative to the start/end of the coordinates.
     samples
@@ -1518,7 +1526,7 @@ def split_gaps(self: PatchType) -> dc.Spool:
     """
     windows = []  # each dimension's (start, stop) per segment
     for coord in (self.get_coord(x) for x in self.dims):
-        runs = isinstance(coord, NumericCoord)
+        runs = isinstance(coord, BaseNumericCoord)
         starts = coord._run_offsets().tolist() if runs else [0]
         windows.append(list(zip(starts, [*starts[1:], coord.shape[0]], strict=True)))
     if all(len(x) == 1 for x in windows):

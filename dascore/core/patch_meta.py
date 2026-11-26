@@ -17,7 +17,11 @@ import dascore.proc.coords
 from dascore.backends import ArrayBackend, _settled
 from dascore.constants import ENRICH_CONFLICT, ON_MISSING
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.coordmanager import (
+    BaseCoordManager,
+    CoordManager,
+    get_coord_manager,
+)
 from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import ParameterError
@@ -142,7 +146,7 @@ class PatchMeta(NodeRepr):
         dtype: Any = None,
         source: ArraySource | None = None,
     ):
-        if dims is None and isinstance(coords, CoordManager):
+        if dims is None and isinstance(coords, BaseCoordManager):
             dims = coords.dims
         if coords is None or dims is None or dtype is None:
             msg = (
