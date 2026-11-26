@@ -405,6 +405,15 @@ class TestDropPrivateCoords:
         out = cm_basic.drop_private_coords()[0]
         assert out is cm_basic
 
+    def test_private_dimension_kept(self):
+        """A dimension stays whatever its name, and so does the array."""
+        coords = {"_x": np.arange(3), "y": np.arange(4), "_on_x": ("_x", np.ones(3))}
+        cm = get_coord_manager(coords, dims=("_x", "y"))
+        array = np.ones(cm.shape)
+        out, new = cm.drop_private_coords(array=array)
+        assert out.dims == cm.dims and set(out.coord_map) == {"_x", "y"}
+        assert np.array_equal(new, array)
+
 
 class TestSelect:
     """Tests for filtering coordinates."""

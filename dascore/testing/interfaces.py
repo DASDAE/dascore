@@ -289,6 +289,11 @@ _MANAGER_CASES = {
     "patch": _patch_coords,
     # A dimension of length one with no coordinate, as a reduction leaves.
     "flat": lambda make: make({"x": np.arange(5)}, dims=("x", "y"), shape=(5, 1)),
+    # A dimension named with an underscore, which drop_private_coords keeps.
+    "private": lambda make: make(
+        {"_x": np.arange(3), "y": np.arange(4.0), "_on_x": ("_x", np.ones(3))},
+        dims=("_x", "y"),
+    ),
 }
 _MANAGER_PROPERTIES = (
     "dims",

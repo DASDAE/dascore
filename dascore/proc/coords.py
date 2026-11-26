@@ -477,7 +477,9 @@ def _coords_to_attrs(meta, names):
 
 class DropPrivateCoords(PatchProcessor):
     """
-    Drop all private coords in the patch.
+    Drop the coordinates whose names begin with an underscore.
+
+    A dimension is kept, whatever its name, so the data are untouched.
 
     Examples
     --------
@@ -492,31 +494,11 @@ class DropPrivateCoords(PatchProcessor):
     """
 
     def get_metadata(self, meta):
-        """Return the coordinates whose names are public, and what that costs."""
+        """Return the coordinates whose names are public, dimensions kept."""
         coords, _ = meta.coords.drop_private_coords()
         if coords is meta.coords:  # there were no private coords
             return meta, {}
-        # Unlike drop_coords, nothing here refuses a private *dimension*, and
-        # dropping one takes its axis with it: the manager empties that axis
-        # rather than removing it, so the data are emptied to match. Private
-        # coordinates which are not dimensions leave every axis alone.
-        private = {x for x in meta.dims if x.startswith("_")}
-        if not private:
-            return meta.new(coords=coords), {}
-        indexer = tuple(
-            slice(0, 0) if dim in private else slice(None) for dim in meta.dims
-        )
-        return meta.new(coords=coords), {"indexer": indexer}
-
-    def chunk_contract(self, dtype, plan):
-        """Return that the data are as they were, or none for a private dimension."""
-        # Dropping a private dimension takes its axis with it, which no
-        # window of the input describes.
-        return Unchanged() if plan.get("indexer") is None else None
-
-    def kernel(self, data, *, indexer=None):
-        """Return the data, emptied along any dimension which was private."""
-        return _selected(data, indexer)
+        return meta.new(coords=coords), {}
 
 
 class MakeBroadcastableTo(PatchProcessor):

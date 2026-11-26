@@ -427,6 +427,10 @@ class PatchMeta(NodeRepr):
             self
         )
 
+    def drop_private_coords(self) -> Self:
+        """Drop coordinates, dimensions apart, whose names start with "_"."""
+        return dascore.proc.coords.DropPrivateCoords().run(self)
+
     def coords_from_df(
         self,
         dataframe: pd.DataFrame,
