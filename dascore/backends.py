@@ -45,6 +45,7 @@ from dascore.utils.array_api import (
     to_device,
     to_numpy,
 )
+from dascore.utils.imports import lazy_import
 from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
@@ -409,7 +410,7 @@ class LazyBackend(ArrayBackend):
 
     def from_recipe(self, recipe: Recipe) -> Any:
         """Return the recipe as a lazy array; nothing is read."""
-        return _lazy_array_class()(recipe, backend=self.compute)
+        return _LAZY_ARRAY(recipe, backend=self.compute)
 
     def from_array(self, array: Any) -> Any:
         """
@@ -420,7 +421,7 @@ class LazyBackend(ArrayBackend):
         and a dask array are other kinds of promise, and are left to
         whoever holds them.
         """
-        if isinstance(array, _lazy_array_class()):
+        if isinstance(array, _LAZY_ARRAY.resolve()):
             return array._with_backend(self.compute)
         if self._owns(array) or backend_name(array) == "dask":
             return array
@@ -436,15 +437,9 @@ class LazyBackend(ArrayBackend):
 
 # The class's own name is a spelling of the backend too.
 _BACKENDS["lazyarray"] = LazyBackend
-
-
-def _lazy_array_class() -> type:
-    """Return dascore's lazy array class."""
-    # Imported here: a lazy array holds the backend it computes on, so its
-    # module imports this one.
-    from dascore.lazy.array import LazyArray  # noqa: PLC0415
-
-    return LazyArray
+# Imported when first used: a lazy array holds the backend it computes
+# on, so its module imports this one.
+_LAZY_ARRAY = lazy_import("dascore.lazy.array", "LazyArray")
 
 
 def _settled(backend: ArrayBackend | None, array: Any) -> tuple[Any, Any]:
@@ -472,7 +467,7 @@ def _refuse_mixed(arrays, doing: str) -> None:
     another package's of the library it reports, and an array-like of no
     array library is NumPy's, as it is everywhere else.
     """
-    lazy = _lazy_array_class()
+    lazy = _LAZY_ARRAY.resolve()
     kinds = {
         x._backend._native if isinstance(x, lazy) else backend_name(x) for x in arrays
     }

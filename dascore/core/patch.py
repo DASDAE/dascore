@@ -509,9 +509,12 @@ class Patch(NamespaceOwner, PatchMeta):
             # is the one raised.
             if isinstance(data, LazyArray):
                 return self.update(data=data.load())
-            # Another kind of promise, which in memory is NumPy's: of no
-            # backend, since its own would make a promise of it again.
-            return self._with_backend(None).update(data=to_numpy(data))
+            # Another kind of promise, which in memory is NumPy's: on the
+            # backend a lazy one computes on, or else of no backend, since
+            # its own would make a promise of it again.
+            lazy = isinstance(self._backend, LazyBackend)
+            patch = self if lazy else self._with_backend(None)
+            return patch.update(data=to_numpy(data))
 
     def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
         """Return a patch of this one's class; without new data it keeps its own."""
