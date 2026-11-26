@@ -14,7 +14,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import NumericCoord, get_coord
+from dascore.core.coords import BaseNumericCoord, NumericCoord, get_coord
 from dascore.core.provider import Provider, providing
 from dascore.core.source import ArraySource
 from dascore.exceptions import PatchCoordinateError
@@ -55,6 +55,25 @@ class _Recorder:
     def provider(self):
         """The provider of these builders."""
         return Provider(self.get_coord, self.get_coord_manager, self.lazy_array)
+
+
+@BaseNumericCoord.register
+class _Coord:
+    """Another package's numeric coordinate, reading through to dascore's."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def __len__(self):
+        return len(self._inner)
+
+
+def _their_coord(**kwargs):
+    """Build another package's coordinate, of dascore's labels."""
+    return _Coord(get_coord(**kwargs))
 
 
 @pytest.fixture
@@ -236,3 +255,30 @@ class TestConstruction:
         assert isinstance(out.coords, CoordManager)
         assert isinstance(meta.coords, CoordManager)
         assert type(patch.data) is LazyArray
+
+
+class TestPartialProvider:
+    """A provider replacing only `get_coord` leaves dascore's arithmetic dascore's."""
+
+    @pytest.fixture
+    def provider(self):
+        """A provider building another package's coordinates, and nothing else."""
+        return Provider(_their_coord, get_coord_manager, lazy_array)
+
+    def test_step_update(self, provider):
+        """An operation gives a dascore coordinate of the patch a new step."""
+
+        class Provided(dc.Patch):
+            _provider = provider
+
+        out = Provided(dc.get_example_patch()).update_coords(distance_step=2)
+        assert out.get_coord("distance").step == 2
+
+    def test_limits(self, provider):
+        """A new step or new limits of dascore's coordinate are dascore's."""
+        coord = get_coord(start=0.0, stop=10.0, step=1.0)
+        with providing(provider):
+            stepped = coord.update_limits(step=2.0)
+            moved = coord.update_limits(min=0.0, max=5.0)
+        assert isinstance(stepped, NumericCoord) and stepped.step == 2.0
+        assert isinstance(moved, NumericCoord) and moved.max() < 5.0

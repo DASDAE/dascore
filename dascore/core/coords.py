@@ -42,7 +42,7 @@ import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, _DASCORE_DIR, DIM_REDUCE_DOCS, dascore_styles
 from dascore.core.interfaces import BaseCoord, BaseNumericCoord, BaseStringCoord
-from dascore.core.provider import provided
+from dascore.core.provider import provided, providing
 from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
@@ -3351,7 +3351,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 out = self._with_runs((new,))
             else:
                 new_step = (max - min) / len(self)
-                out = get_coord(start=min, stop=max, step=new_step, units=self.units)
+                with providing(None):  # arithmetic on this coordinate is dascore's
+                    out = get_coord(
+                        start=min, stop=max, step=new_step, units=self.units
+                    )
             return out.new(**kwargs) if kwargs else out
         if step is not None:
             out = self._with_step(grid, step)
@@ -3368,12 +3371,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             step = get_compatible_values(step, type(self.step))
         # Re-resolve: the inputs pick the representation the step needs,
         # and the start comes from the grid rather than from every label.
-        out = get_coord(
-            start=grid.labels(0, self.dtype)[()],
-            step=step,
-            shape=self.shape,
-            units=self.units,
-        )
+        with providing(None):  # arithmetic on this coordinate is dascore's
+            out = get_coord(
+                start=grid.labels(0, self.dtype)[()],
+                step=step,
+                shape=self.shape,
+                units=self.units,
+            )
         assert isinstance(out, NumericCoord)
         return out
 
