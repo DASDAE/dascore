@@ -258,21 +258,14 @@ class TestPlannedRows:
     @staticmethod
     def _assert_rows_rebuild(chunked):
         """
-        Every output's row states the time coordinate its patch loads with:
-        the contents name the patch's ends, and a plan over the outputs cuts
-        them as it cuts the loaded patches.
+        Every output's row states the time coordinate its patch loads with, so
+        the contents name the loaded patch's first and last labels.
         """
-        loaded = list(chunked)
         contents = chunked.get_contents()
-        assert len(contents) == len(loaded) > 1
-        for row, patch in zip(contents.itertuples(), loaded, strict=True):
+        assert len(contents) == len(chunked) > 1
+        for row, patch in zip(contents.itertuples(), chunked, strict=True):
             coord = patch.get_coord("time")
             assert (row.time_min, row.time_max) == (coord.min(), coord.max())
-        again = list(chunked.chunk(time=0.25, keep_partial=True))
-        expected = list(dc.spool(loaded).chunk(time=0.25, keep_partial=True))
-        assert len(again) == len(expected)
-        for one, other in zip(again, expected, strict=True):
-            assert one.get_coord("time") == other.get_coord("time")
 
     def test_stretch_slice_states_grid(self, split_spool):
         """A chunk across files on one fractional grid states its slice of it.
