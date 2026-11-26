@@ -30,7 +30,7 @@ from tests._stand_ins import (
 # The base tests run in other packages' suites, under a pytest which may
 # refuse what this one warns of.
 pytestmark = pytest.mark.filterwarnings(
-    "error:Class-scoped fixtures defined as instance methods"
+    "error:Class-scoped fixtures? defined as instance methods?"
 )
 
 
