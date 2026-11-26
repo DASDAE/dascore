@@ -61,14 +61,11 @@ def silixa_spool(tmp_path_factory):
 
 
 def _stored_keys(spool) -> dict[str, list[str]]:
-    """The stored source_patch_key of each source, by file name."""
-    rows = spool._catalog.backend._con.execute(
-        "SELECT s.source_path, p.source_patch_key FROM patches p "
-        "JOIN sources s ON s.source_row = p.source_row"
-    )
+    """The source_patch_key the contents state for each source, by file name."""
     out = {}
-    for path, key in rows:
-        out.setdefault(path.rsplit("/", 1)[-1], []).append(key)
+    frame = spool.get_contents()[["source_path", "source_patch_key"]]
+    for path, key in frame.itertuples(index=False):
+        out.setdefault(str(path).replace("\\", "/").rsplit("/", 1)[-1], []).append(key)
     return out
 
 
@@ -76,7 +73,11 @@ class TestStoredShapes:
     """The index stores nothing it can derive; pin the shapes it saves."""
 
     def test_coord_data_id_from_def_key(self, dasdae_spool):
-        """coord_defs has no data_id column; the id still round-trips."""
+        """
+        coord_defs has no data_id column; the id still round-trips.
+
+        An engine test (rule E) of the index's tables and export records.
+        """
         backend = dasdae_spool._catalog.backend
         info = backend._con.execute("PRAGMA table_info(coord_defs)")
         assert "data_id" not in {row[1] for row in info}
@@ -92,7 +93,12 @@ class TestStoredShapes:
         assert len(keys["two.h5"]) == 2 and all(keys["two.h5"])
 
     def test_dataset_path_key_kept(self, silixa_spool):
-        """An HDF5 dataset path is kept, so a merge reads without rescans."""
+        """
+        An HDF5 dataset path is kept, so a merge reads without rescans.
+
+        A performance guard (rule C): a rescan reads the same patch, so the
+        attribute reads are counted.
+        """
         assert list(_stored_keys(silixa_spool).values()) == [["/Acoustic"]] * 2
         calls = []
         original = silixa_utils._get_attr_dict
