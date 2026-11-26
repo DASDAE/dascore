@@ -49,6 +49,7 @@ from dascore.utils.imports import lazy_import
 from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
+    from dascore.core.source import ArraySource
     from dascore.lazy.recipe import Recipe
 
 __all__ = [
@@ -166,6 +167,24 @@ class ArrayBackend(BaseModel, ABC):
             array, and the array returned must have its `shape` and `dtype`.
         """
         return self.from_array(recipe.load())
+
+    def from_source(self, source: ArraySource) -> Any:
+        """
+        Return the array one stored window describes, which a read hands a patch.
+
+        The source is made a [`Recipe`](`dascore.lazy.recipe.Recipe`) and
+        handed to `from_recipe`. A backend which makes its arrays from a
+        source as it is, with no recipe, overrides this. Only a read comes
+        here: a merge and a lazy array's computation hand `from_recipe`
+        their recipes.
+
+        Parameters
+        ----------
+        source
+            A loadable [`ArraySource`](`dascore.core.source.ArraySource`)
+            at the origin: the one window of a stored array a read selected.
+        """
+        return self.from_recipe(_RECIPE.resolve().from_source(source))
 
     @abstractmethod
     def from_array(self, array: Any) -> Any:
@@ -437,9 +456,10 @@ class LazyBackend(ArrayBackend):
 
 # The class's own name is a spelling of the backend too.
 _BACKENDS["lazyarray"] = LazyBackend
-# Imported when first used: a lazy array holds the backend it computes
-# on, so its module imports this one.
+# Imported when first used, as both modules import this one: a lazy array
+# holds the backend it computes on, and the recipe's module imports dascore.
 _LAZY_ARRAY = lazy_import("dascore.lazy.array", "LazyArray")
+_RECIPE = lazy_import("dascore.lazy.recipe", "Recipe")
 
 
 def _settled(backend: ArrayBackend | None, array: Any) -> tuple[Any, Any]:
@@ -536,10 +556,10 @@ def reading_onto(backend: ArrayBackend | None) -> Iterator[None]:
     Have reads inside the block ask `backend` for each patch's array.
 
     None leaves reads as they are, filling memory. So does a backend whose
-    `from_recipe` is the default: its arrays are made from what was read,
-    and a reader fills memory best itself, a file at a time. A read which
-    a lazy backend cannot leave unread is the `numpy_fallback` setting's to
-    allow, which left unset raises
+    `from_recipe` and `from_source` are the defaults: its arrays are made
+    from what was read, and a reader fills memory best itself, a file at a
+    time. A read which a lazy backend cannot leave unread is the
+    `numpy_fallback` setting's to allow, which left unset raises
     [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) rather
     than read.
     """
@@ -553,9 +573,12 @@ def reading_onto(backend: ArrayBackend | None) -> Iterator[None]:
 def read_backend() -> ArrayBackend | None:
     """Return the backend reads hand their recipes to, or None when eager."""
     backend = _READING.get()
-    if backend is None or type(backend).from_recipe is ArrayBackend.from_recipe:
+    if backend is None:
         return None
-    return backend
+    # One which reads neither a recipe nor a source its own way fills memory.
+    kind, base = type(backend), ArrayBackend
+    eager = (kind.from_recipe, kind.from_source) == (base.from_recipe, base.from_source)
+    return None if eager else backend
 
 
 def spool_backend() -> ArrayBackend | None:
