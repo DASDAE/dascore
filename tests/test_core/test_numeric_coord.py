@@ -111,8 +111,8 @@ class TestMultiRunSlicing:
         assert out.runs_count == 2
         assert np.array_equal(out.values, gappy.values[3:7])
 
-    def test_slice_at_the_run_bounds_reuses_the_runs(self, gappy):
-        """A slice on a boundary hands the run back as it stands."""
+    def test_slice_at_the_run_bounds_keeps_the_run(self, gappy):
+        """A slice on a boundary keeps the run as it was defined."""
         assert gappy[5:].runs == (gappy.runs[1],)
 
     def test_strided_slice_keeps_the_labels(self, jittered):

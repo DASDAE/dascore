@@ -551,26 +551,30 @@ class TestCompactRangeIndexing:
         np.testing.assert_array_equal(actual.get_array("x"), labels)
         assert actual.shape == (count,)
 
+    @pytest.mark.parametrize("count", [1000, 200_000])
     @pytest.mark.parametrize("kind", ["float", "datetime"])
+    @pytest.mark.parametrize("reverse", [False, True])
     @pytest.mark.parametrize("method", [None, "nearest"])
-    def test_bulk_labels_are_searched_together(self, monkeypatch, kind, method):
+    def test_bulk_labels_are_searched_together(
+        self, monkeypatch, count, kind, reverse, method
+    ):
         """
         Bulk queries search their labels together, not one at a time.
 
         A performance guard (rule C): a search per label gives the same
         answer, only slowly, so the count of label reads is its witness.
         """
-        patch = _grid_patch(HUGE, kind, reverse=False)
-        labels = patch.isel(x=np.arange(1000) * (HUGE // 1000)).get_array("x")
+        patch = _grid_patch(HUGE, kind, reverse)
+        labels = patch.isel(x=np.arange(count) * (HUGE // count)).get_array("x")
         original, calls = NumericCoord._get_index_values, []
 
         def counted(self, indices):
             calls.append(np.size(indices))
+            assert len(calls) < 100, "bulk lookup searched each label alone"
             return original(self, indices)
 
         monkeypatch.setattr(NumericCoord, "_get_index_values", counted)
-        assert patch.sel(x=labels, method=method).shape == (1000,)
-        assert len(calls) < 100, "bulk lookup searched each label alone"
+        assert patch.sel(x=labels, method=method).shape == (count,)
 
     def test_select_float_dependents(self):
         """DASCore filtering retains compact dependent grids just like the main grid."""

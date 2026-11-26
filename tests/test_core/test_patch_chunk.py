@@ -3255,19 +3255,31 @@ class TestChunkFromIndex:
         assert_loads_patches(spool, h5_files(tmp_path), time=None)
 
     def test_trailing_trim_reads_no_arrays(
-        self, dasdae_directory_spool, dasdae_directory
+        self, dasdae_directory_spool, dasdae_directory, monkeypatch
     ):
         """
-        A trim on the last member sends every member down the patch path.
+        A trim on the last member sends every member down the patch path,
+        without reading any array first.
 
-        That none is read from the index first is test_falling_back_reads_no_arrays.
+        The second half is a performance guard (rule C): a discarded read
+        changes no output, so the array readers opened are counted.
         """
+        from dascore.io import core as io_core  # noqa: PLC0415
+
         stop = dasdae_directory_spool.get_contents()["time_max"].max()
         stop -= np.timedelta64(1, "s")
         view = dasdae_directory_spool.select(time=(None, stop))
+        assert_loads_patches(view, h5_files(dasdae_directory), time=None)
+        opened, original = [], io_core._open_array_reader
+
+        def counted(*args, **kwargs):
+            opened.append(args[0].path)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(io_core, "_open_array_reader", counted)
         out = view.chunk(time=None)[0]
         assert out.get_coord("time").max() <= stop
-        assert_loads_patches(view, h5_files(dasdae_directory), time=None)
+        assert not opened
 
     def test_history_is_not_rebuilt(self, tmp_path_factory):
         """A member built from the index states no history, by design.
@@ -3727,6 +3739,7 @@ class TestChunkFromIndex:
             ),
         )
         stateable = {
+            "origin_id": "abc",
             "dims": "distance,time",
             "distance_min": 0,
             "distance_max": 2,
@@ -4664,7 +4677,7 @@ class TestStaleSourceCheck:
         assert out.shape[0] == 20
         assert np.array_equal(out.data[:12], grown.data)
 
-    def test_same_shape_rewrite_takes_the_patch_path(self, spool_and_paths):
+    def test_same_shape_rewrite_takes_the_patch_path(self, spool_and_paths, tmp_path):
         """Identical shape, different values: the shape check cannot see it."""
         spool, paths = spool_and_paths
         start = np.datetime64("2020-01-01")
@@ -4676,6 +4689,8 @@ class TestStaleSourceCheck:
         os.utime(paths[0], ns=(moved, moved))
         out = spool.chunk(time=None)[0]
         assert np.array_equal(out.data[:8], replaced.data)
+        # the ids too are the rewritten file's, not the ones the index holds
+        assert_same_patch(out, in_memory(tmp_path).chunk(time=None)[0])
         assert_loads_patches(spool, paths[:1], time=None)
 
     def test_a_stat_which_will_not_answer_refuses(self, spool_and_paths, monkeypatch):
