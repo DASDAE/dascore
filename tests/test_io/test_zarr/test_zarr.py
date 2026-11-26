@@ -21,7 +21,9 @@ from upath import UPath
 from upath.implementations.memory import MemoryPath
 
 import dascore as dc
+from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.provider import Provider
 from dascore.exceptions import (
     InvalidFiberFileError,
     MissingOptionalDependencyError,
@@ -35,6 +37,7 @@ from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.netcdf.utils import COORD_PREFIX, STEP_ATTR
 from dascore.io.zarr import SPANS_ATTR, ZarrV3, coord_attrs
 from dascore.io.zarr import core as zarr_core
+from dascore.lazy.array import lazy_array
 from dascore.utils.misc import suppress_warnings
 from tests.conftest import segment_layout
 
@@ -1252,6 +1255,25 @@ class TestAppend:
             dc.write(later, path, "zarr", append=True)
         assert list(dc.read(path)) == [first]
         assert [x.name for x in tmp_path.iterdir()] == ["add.zarr"]
+
+    def test_extend_joins_with_the_patch_provider(self, zarr_patch, tmp_path):
+        """The patch's provider joins its coordinate to the stored one."""
+        calls = []
+
+        def recording(**kwargs):
+            calls.append(kwargs)
+            return get_coord(**kwargs)
+
+        class Provided(dc.Patch):
+            _provider = Provider(recording, get_coord_manager, lazy_array)
+
+        path = tmp_path / "grow.zarr"
+        first, second = _halves(zarr_patch)
+        dc.write(first, path, "zarr")
+        calls.clear()
+        dc.write(Provided(second), path, "zarr", append="time")
+        assert [list(x) for x in calls] == [["segments"]]
+        assert dc.read(path)[0] == zarr_patch
 
     def test_extend_twice(self, zarr_patch, tmp_path):
         """Several pieces in one write each extend what the last one left."""
