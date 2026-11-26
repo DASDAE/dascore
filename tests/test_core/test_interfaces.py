@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import dascore as dc
+from dascore.backends import LazyBackend, NumpyBackend
 from dascore.core import interfaces
 from dascore.core.coordmanager import (
     BaseCoordManager,
@@ -28,75 +29,19 @@ from dascore.core.coords import (
 )
 from dascore.core.source import ArraySource
 from dascore.core.spool import BaseSpool, Spool
+from dascore.exceptions import LazyOperationError
 from dascore.io.dasdae.utils import _save_coord
 from dascore.lazy.array import BaseLazyArray, LazyArray
 from dascore.lazy.recipe import Recipe
+from dascore.utils.gaps import GapTolerance, get_gap_edges
 from dascore.utils.identity import H
-
-
-class _StandIn:
-    """Another package's object: plain Python, answering as one of dascore's."""
-
-    def __init__(self, inner):
-        self._inner = inner
-
-    def __getattr__(self, name):
-        return getattr(self._inner, name)
-
-    def __len__(self):
-        return len(self._inner)
-
-    def __iter__(self):
-        return iter(self._inner)
-
-    def __getitem__(self, item):
-        return self._inner[item]
-
-    def __eq__(self, other):
-        return self._inner == getattr(other, "_inner", other)
-
-    def __array__(self, dtype=None, copy=None):
-        return np.asarray(self._inner, dtype=dtype)
-
-
-@BaseNumericCoord.register
-class _NumericCoord(_StandIn):
-    """Another package's numeric coordinate."""
-
-
-@BaseStringCoord.register
-class _StringCoord(_StandIn):
-    """Another package's text coordinate."""
-
-
-@BaseCoordManager.register
-class _Manager(_StandIn):
-    """Another package's coordinate manager."""
-
-
-@BaseSpool.register
-class _Spool(_StandIn):
-    """Another package's spool."""
-
-
-@BaseLazyArray.register
-class _LazyArray:
-    """Another package's lazy array, counting the times it is read."""
-
-    def __init__(self, array):
-        self._array = np.asarray(array)
-        self.reads = 0
-
-    shape = property(lambda self: self._array.shape)
-    dtype = property(lambda self: self._array.dtype)
-    ndim = property(lambda self: self._array.ndim)
-
-    def __getitem__(self, item):
-        return _LazyArray(self._array[item])
-
-    def __array__(self, dtype=None, copy=None):
-        self.reads += 1
-        return self._array
+from tests._stand_ins import (
+    _LazyArray,
+    _Manager,
+    _NumericCoord,
+    _Spool,
+    _StringCoord,
+)
 
 
 @pytest.fixture(scope="module")
@@ -424,6 +369,38 @@ class TestRegistered:
         assert patch.set_backend("lazy").data is lazy
         numpy = patch.set_backend("numpy")
         assert isinstance(numpy.data, np.ndarray) and numpy.equals(random_patch)
+
+    def test_lazy_backend_holds_a_registered_lazy_array(self, random_patch, tmp_path):
+        """The lazy backend takes another package's lazy array as its own."""
+        lazy = _LazyArray(random_patch.data)
+        patch = random_patch.new(data=lazy).set_backend("lazy[numpy]")
+        assert patch.data is lazy and patch.backend == LazyBackend()
+        assert "not read yet" in str(patch) and not lazy.reads
+        # Joined with dascore's lazy array, neither is read.
+        path = random_patch.io.write(tmp_path / "patch.h5", "DASDAE")
+        with pytest.raises(LazyOperationError):
+            patch + dc.spool(path).set_backend("lazy")[0]
+        assert not lazy.reads
+        # Loaded, it is on the backend the lazy one computes on.
+        loaded = patch.load()
+        assert loaded.backend == NumpyBackend() and loaded.equals(random_patch)
+
+    def test_gap_tolerance_in_units(self):
+        """A tolerance in units finds a registered coordinate's gaps."""
+
+        class Plain(_NumericCoord):
+            """A stand-in without dascore's `unit_str`, which no interface states."""
+
+            def __getattr__(self, name):
+                if name == "unit_str":
+                    raise AttributeError(name)
+                return super().__getattr__(name)
+
+        coord = get_coord(data=np.array([0.0, 1.0, 2.0, 6.0, 7.0]), units="m")
+        tolerance = GapTolerance(excess=dc.get_quantity("2 m"))
+        _, gaps = get_gap_edges(Plain(coord), tolerance)
+        assert gaps.tolist() == get_gap_edges(coord, tolerance)[1].tolist()
+        assert gaps.any()
 
     def test_patch_function_returns_a_registered_spool(self, random_patch):
         """A patch function hands back another package's spool as it is."""

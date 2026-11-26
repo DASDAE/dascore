@@ -316,7 +316,7 @@ class TestLoad:
         """Each patch comes back in memory, in order, holding the file's data."""
         budget(10**12)
         loaded = random_directory_spool.load()
-        assert isinstance(loaded, Spool)
+        assert isinstance(loaded, BaseSpool)
         assert len(loaded) == len(random_directory_spool)
         for before, after in zip(random_directory_spool, loaded, strict=True):
             assert isinstance(after.data, np.ndarray)

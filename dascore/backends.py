@@ -45,6 +45,7 @@ from dascore.utils.array_api import (
     to_device,
     to_numpy,
 )
+from dascore.utils.imports import lazy_import
 from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
@@ -377,9 +378,9 @@ class LazyBackend(ArrayBackend):
     """
 
     name = LAZY_BACKEND
-    # By where it is: a lazy array holds the backend it computes on, so its
-    # module imports this one.
-    array_type = "dascore.lazy.array.LazyArray"
+    # The interface, so another package's lazy array is one of this
+    # backend's too; by where it is, as dascore.core imports this module.
+    array_type = "dascore.core.interfaces.BaseLazyArray"
 
     compute: ArrayBackend = NumpyBackend()
 
@@ -409,22 +410,20 @@ class LazyBackend(ArrayBackend):
 
     def from_recipe(self, recipe: Recipe) -> Any:
         """Return the recipe as a lazy array; nothing is read."""
-        # Imported here: see `array_type`.
-        from dascore.lazy.array import LazyArray  # noqa: PLC0415
-
-        return LazyArray(recipe, backend=self.compute)
+        return _LAZY_ARRAY(recipe, backend=self.compute)
 
     def from_array(self, array: Any) -> Any:
         """
         Return a lazy array computed on `compute`, or an array held there.
 
         An array in memory has nothing to read later, so it is put where
-        the chunks of a lazy one are computed. A dask array is another kind
-        of promise, and is left to whoever holds it.
+        the chunks of a lazy one are computed. Another package's lazy array
+        and a dask array are other kinds of promise, and are left to
+        whoever holds them.
         """
-        if self._owns(array):
+        if isinstance(array, _LAZY_ARRAY.resolve()):
             return array._with_backend(self.compute)
-        if backend_name(array) == "dask":
+        if self._owns(array) or backend_name(array) == "dask":
             return array
         return self.compute.from_array(array)
 
@@ -438,8 +437,9 @@ class LazyBackend(ArrayBackend):
 
 # The class's own name is a spelling of the backend too.
 _BACKENDS["lazyarray"] = LazyBackend
-# Asked whether an array is a lazy one, without importing the lazy array.
-_LAZY = LazyBackend()
+# Imported when first used: a lazy array holds the backend it computes
+# on, so its module imports this one.
+_LAZY_ARRAY = lazy_import("dascore.lazy.array", "LazyArray")
 
 
 def _settled(backend: ArrayBackend | None, array: Any) -> tuple[Any, Any]:
@@ -463,10 +463,14 @@ def _refuse_mixed(arrays, doing: str) -> None:
     """
     Raise if arrays are of different array libraries; read none of them.
 
-    A lazy array is of the library it will be once it is loaded, and an
-    array-like of no array library is NumPy's, as it is everywhere else.
+    dascore's lazy array is of the library it will be once it is loaded,
+    another package's of the library it reports, and an array-like of no
+    array library is NumPy's, as it is everywhere else.
     """
-    kinds = {x._backend._native if _LAZY._owns(x) else backend_name(x) for x in arrays}
+    lazy = _LAZY_ARRAY.resolve()
+    kinds = {
+        x._backend._native if isinstance(x, lazy) else backend_name(x) for x in arrays
+    }
     if len(kinds) > 1:
         msg = (
             f"{doing} needs arrays of one array library, and these are of "

@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
+    BaseNumericCoord,
     Grid,
     Labels,
     NumericCoord,
@@ -739,7 +740,7 @@ class TestReviewRoundThree:
         """An integer index of an N-D coordinate returns a coordinate."""
         coord = get_coord(data=np.arange(12).reshape(3, 4), units="m")
         row = coord[0]
-        assert isinstance(row, NumericCoord)
+        assert isinstance(row, BaseNumericCoord)
         assert row == coord[0, :]
         assert np.array_equal(row.values, np.arange(4))
 

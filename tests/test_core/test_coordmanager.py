@@ -15,7 +15,7 @@ import dascore.proc.coords
 from dascore import to_datetime64
 from dascore.compat import random_state
 from dascore.core.coordmanager import (
-    CoordManager,
+    BaseCoordManager,
     get_coord_manager,
 )
 from dascore.core.coords import (
@@ -65,12 +65,12 @@ class TestGetCoordManager:
     def test_not_associated_coord_1(self):
         """Ensure a not associated coord works as only input."""
         coords = {"time": (None, np.arange(10))}
-        assert isinstance(get_coord_manager(coords), CoordManager)
+        assert isinstance(get_coord_manager(coords), BaseCoordManager)
 
     def test_not_associated_coord_2(self):
         """Ensure an empty string not associated coord works as only input."""
         coords = {"time": ("", np.arange(10))}
-        assert isinstance(get_coord_manager(coords), CoordManager)
+        assert isinstance(get_coord_manager(coords), BaseCoordManager)
 
 
 class TestBasicCoordManager:
@@ -78,7 +78,7 @@ class TestBasicCoordManager:
 
     def test_init(self, coord_manager):
         """Ensure values can be init'ed."""
-        assert isinstance(coord_manager, CoordManager)
+        assert isinstance(coord_manager, BaseCoordManager)
 
     def test_to_dict(self, coord_manager):
         """CoordManager should be convertible to dict."""
@@ -105,7 +105,7 @@ class TestBasicCoordManager:
     def test_empty(self):
         """And empty coord manager should be possible."""
         coord = get_coord_manager()
-        assert isinstance(coord, CoordManager)
+        assert isinstance(coord, BaseCoordManager)
         assert dict(coord) == {}
         # shape should be the same as an empty array.
         assert coord.shape == np.array([]).shape
@@ -254,7 +254,7 @@ class TestCoordManagerInputs:
     def test_simple_inputs(self):
         """Simplest input case."""
         out = get_coord_manager(COORDS, DIMS)
-        assert isinstance(out, CoordManager)
+        assert isinstance(out, BaseCoordManager)
 
     def test_additional_coords(self):
         """Ensure additional (non-dimensional) coords work."""
@@ -341,7 +341,7 @@ class TestCoordManagerInputs:
     def test_init_coord_manager_with_non_coord_dim(self, cm_non_coord_dim):
         """A non-coordinate dimension should be allowed."""
         cm = cm_non_coord_dim
-        assert isinstance(cm, CoordManager)
+        assert isinstance(cm, BaseCoordManager)
         assert cm.shape == (10, 5)
 
 
@@ -685,7 +685,7 @@ class TestSelect:
         lat = cm_multidim.get_array("latitude")
         lat_mean = np.mean(lat)
         out, _ = cm_multidim.select(latitude=(..., lat_mean))
-        assert isinstance(out, dc.CoordManager)
+        assert isinstance(out, BaseCoordManager)
         # Multi-dim coord should raise CoordError
         msg = "Only 1 dimensional coordinates"
         with pytest.raises(CoordError, match=msg):
@@ -1855,7 +1855,7 @@ class TestMakeBroadcastableTo:
     def test_returns_only_the_manager(self, collapsed):
         """The array the old signature took is gone, and so is the tuple."""
         out = collapsed.make_broadcastable_to((collapsed.shape[0], 3))
-        assert isinstance(out, CoordManager)
+        assert isinstance(out, BaseCoordManager)
         assert out.shape == (collapsed.shape[0], 3)
 
     def test_the_second_argument_is_keyword_only(self, collapsed):

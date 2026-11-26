@@ -25,6 +25,7 @@ from dascore.units import (
     Quantity,
     convert_units,
     get_quantity,
+    get_quantity_str,
     is_data_size,
     is_percent,
 )
@@ -371,7 +372,8 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
         # time in whole nanoseconds, whose rounding the tolerance allows for
         raw = np.asarray(getattr(coord, "values", coord))
         raw_step = to_timedelta64(step) if raw.dtype.kind in "mM" else step
-        tolerance = tolerance.resolve(raw.dtype, getattr(coord, "unit_str", None))
+        units = get_quantity_str(getattr(coord, "units", None))
+        tolerance = tolerance.resolve(raw.dtype, units)
         gap_mask = tolerance.is_gap(np.diff(raw), raw_step)
     if not np.any(gap_mask):
         edges = np.concatenate(

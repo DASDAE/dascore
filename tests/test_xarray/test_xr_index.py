@@ -10,6 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
+    BaseStringCoord,
     NumericCoord,
     _float_allowance,
     concat_coords,
@@ -729,7 +730,7 @@ class TestFromVariables:
         text = xr.DataArray(np.arange(3), dims="x", coords={"x": ["a", "b", "c"]})
         out = text.drop_indexes("x").set_xindex("x", CoordIndex)
         picked = out.isel(x=[0, 1])
-        assert type(picked.xindexes["x"].coordinate).__name__ == "CoordString"
+        assert isinstance(picked.xindexes["x"].coordinate, BaseStringCoord)
         joined = xr.concat([picked, out.isel(x=[2])], "x")
         np.testing.assert_array_equal(joined["x"].values, ["a", "b", "c"])
 

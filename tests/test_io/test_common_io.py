@@ -31,6 +31,7 @@ from dascore.constants import (
     STORAGE_PROVENANCE_ATTRS,
     VALID_DATA_TYPES,
 )
+from dascore.core.coordmanager import BaseCoordManager
 from dascore.exceptions import CoordError, ParameterError, UnknownFiberFormatError
 from dascore.io import BinaryReader, FiberIO
 from dascore.io import utils as io_utils
@@ -1025,7 +1026,7 @@ class TestScan:
         assert len(payloads) == len(patches)
         for payload, patch in zip(payloads, patches, strict=True):
             coords = payload.coords
-            assert isinstance(coords, dc.CoordManager)
+            assert isinstance(coords, BaseCoordManager)
             assert coords.dims == patch.dims
             assert coords.shape == patch.shape
             if not supports_exact_read:
