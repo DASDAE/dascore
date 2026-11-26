@@ -1731,6 +1731,23 @@ class TestUnitAttrSelection:
         """A glob which spells a unit is read as that unit: m*s is not m / s."""
         assert self._tags(unit_spool.select(data_units="m*s")) == []
 
+    @pytest.mark.parametrize("glob", ["m?", "m[ms]"])
+    def test_glob_only_syntax(self, glob):
+        """? and [ keep a glob a glob, though some unit parsers skip them."""
+        base = dc.get_example_patch()
+        units = ("m", "mm", "ms")
+        spool = dc.spool([base.update_attrs(data_units=x, tag=x) for x in units])
+        assert self._tags(spool.select(data_units=glob)) == ["mm", "ms"]
+
+    @pytest.mark.parametrize("value", [get_quantity("ns"), [get_quantity("ns")]])
+    def test_quantity_valued_attr(self, value):
+        """An extra attr holding a quantity is still found by that quantity."""
+        patch = dc.get_example_patch().update_attrs(
+            pulse_width_units=get_quantity("ns"), tag="quantity"
+        )
+        out = dc.spool([patch]).select(pulse_width_units=value)
+        assert self._tags(out) == ["quantity"]
+
     def test_other_unit_attr(self):
         """Any attr named for units is read as units, kept as given too."""
         base = dc.get_example_patch()

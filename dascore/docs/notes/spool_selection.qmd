@@ -21,7 +21,7 @@ The index evaluates equality, membership, ranges, and glob patterns. Regular exp
 
 Quantities are converted to the unit the index recorded for that attribute. A dimensionally incompatible query raises rather than quietly matching the wrong rows. Values stored without units can't be proven incompatible, so they stay candidates for quantity selectors.
 
-An attribute named for units, such as `data_units` or any other name ending in `_units`, reads its selector as a unit. `data_units` stores one spelling (strain as `ϵ`), so `"strain"`, `"ϵ"` and `get_quantity("strain")` select the same patches, as do `"m/s"` and `"meter/second"`. A string also matches its own text, for an extra attribute stored as written. A value that isn't a unit, such as a glob like `"μ*"`, selects as any string does.
+An attribute named for units, such as `data_units` or any other name ending in `_units`, reads its selector as a unit. `data_units` stores one spelling (strain as `ϵ`), so `"strain"`, `"ϵ"` and `get_quantity("strain")` select the same patches, as do `"m/s"` and `"meter/second"`. A string also matches its own text, and a quantity its own value, for an extra attribute stored that way. A value that isn't a unit, such as a glob like `"μ*"`, selects as any string does.
 
 ## Coordinate selectors
 

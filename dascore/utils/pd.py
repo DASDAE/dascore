@@ -138,16 +138,27 @@ def normalize_range_forms(value):
 
 
 def _unit_spellings(value) -> list | None:
-    """A unit's spellings as given and as attrs store it, or None for no unit."""
+    """
+    A unit's forms as given and as attrs store it, or None for no unit.
+
+    A unit object is given as its quantity, which an extra attr holding a
+    quantity is indexed by. ``?`` and ``[`` are glob syntax no unit uses,
+    though older unit parsers skip them.
+    """
+    if isinstance(value, str) and {"?", "["} & set(value):
+        return None
     if not isinstance(value, str | Quantity | Unit):
         return None
     try:
-        stored = get_quantity_str(get_quantity(value))
+        quantity = get_quantity(value)
+        stored = get_quantity_str(quantity)
     except Exception:  # not a unit
         return None
     if stored is None:
         return None
-    return [value, stored] if isinstance(value, str) and value != stored else [stored]
+    if not isinstance(value, str):
+        return [quantity, stored]
+    return [value, stored] if value != stored else [stored]
 
 
 def _read_unit_selector(name: str, value):
