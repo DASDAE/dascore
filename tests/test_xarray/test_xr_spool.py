@@ -221,7 +221,12 @@ class TestSpoolToXarray:
 
     @pytest.mark.parametrize("bad_dtype", [None, ""])
     def test_missing_dtype_raises(self, random_spool, monkeypatch, bad_dtype):
-        """An index without a dtype cannot size the arrays; say so."""
+        """
+        An index without a dtype cannot size the arrays; say so.
+
+        An engine test (rule E): every index built now records the dtype, so
+        the rows are stripped of it to stand for one which did not.
+        """
         original = PatchAssembler._df_to_dict_list
 
         def _null_dtype(self, df):
@@ -239,7 +244,12 @@ class TestSpoolToXarray:
         assert loose < default
 
     def test_stale_index_shape_raises(self, random_spool, monkeypatch):
-        """A block whose loaded shape breaks its promise raises clearly."""
+        """
+        A block whose loaded shape breaks its promise raises clearly.
+
+        Fault injection (rule B): the stale check refuses any file which no
+        longer holds what the index promised, so the short load is injected.
+        """
         original = PlanResolver._load_member
 
         def _truncated(self, kwargs):
@@ -1113,7 +1123,9 @@ class TestToXarrayBlockSize:
     ):
         """A file member which cannot be windowed is one block, read once.
 
-        Splitting it would load the whole file once per piece.
+        Splitting it would load the whole file once per piece. An engine test
+        (rule E): every format which writes also reads arrays, so the resolver
+        is made to name none, as a format without `read_array` would.
         """
         monkeypatch.setattr(PlanResolver, "_member_array_source", lambda *args: None)
         quarter = file_spool[0].data.nbytes // 4

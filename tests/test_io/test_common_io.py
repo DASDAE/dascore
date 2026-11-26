@@ -1201,7 +1201,12 @@ class TestSnapConformance:
                     ), (snap, dim)
 
     def test_stored_labels_are_checked(self, io_path_tuple, monkeypatch):
-        """Each dimension stored unevenly is snapped by the shared, checked grid."""
+        """
+        Each dimension stored unevenly is snapped by the shared, checked grid.
+
+        Fault injection (rule B): no registered file holds labels far enough
+        off its grid to warn, so the shared check is told each one is.
+        """
         _, path = io_path_tuple
         with skip_missing():
             stored = dc.read(path, snap=False)

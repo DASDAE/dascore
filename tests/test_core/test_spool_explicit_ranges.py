@@ -213,7 +213,12 @@ class TestExplicitSelect:
 
     @pytest.mark.concurrency
     def test_concurrent_add_keeps_a_coherent_parent_snapshot(self, monkeypatch):
-        """An update during realization keeps source and candidates coherent."""
+        """
+        An update during realization keeps source and candidates coherent.
+
+        Fault injection (rule B): the update must land while the parent is
+        realized, an order no call makes on demand, so it is started there.
+        """
         source = dc.spool(_patch(np.arange(10)))
         selected = source.select(distance=np.array([[5, 15]]))
         original = PatchCatalog.to_df
