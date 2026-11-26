@@ -272,7 +272,11 @@ class TestRunsPastTheCap:
     """A coordinate stored as its envelope is read when its runs are needed."""
 
     def test_reports_read_the_file(self, crowded):
-        """Reports and plans see every hole the index did not store."""
+        """
+        Reports and plans see every hole the index did not store.
+
+        That it stored none is asked of the index (rule E).
+        """
         backend = crowded._catalog.backend
         assert backend._fetch_df("SELECT * FROM coord_runs").empty
         assert len(crowded.get_gaps()) == 299
@@ -320,7 +324,12 @@ class TestReviewFindings:
         assert len(twice.get_gaps()) == len(once.get_gaps()) == len(once)
 
     def test_cap_applies_at_ingest(self):
-        """A summary taken under a larger cap still stores no more runs."""
+        """
+        A summary taken under a larger cap still stores no more runs.
+
+        An engine test (rule E): which runs the index stores is its own record;
+        the gaps come out the same either way.
+        """
         patch = _runs_patch(10)
         with dc.config_context(max_index_runs=20):
             assert len(patch.summary.coords["time"].runs) == 10
@@ -359,7 +368,12 @@ class TestReviewFindings:
         assert spool.chunk(distance=None).get_gaps().empty
 
     def test_unreadable_source_planned_whole(self, monkeypatch):
-        """A capped row whose coordinate cannot be read back is planned uncut."""
+        """
+        A capped row whose coordinate cannot be read back is planned uncut.
+
+        Fault injection (rule B): a held patch can always be read back, so the
+        spool is handed no source to read it from.
+        """
         monkeypatch.setattr(spool_module, "_source_manager", lambda *_, **__: None)
         many = _runs_patch(10).update_attrs(station="b")
         with dc.config_context(max_index_runs=5):
@@ -386,7 +400,11 @@ class TestReviewFindings:
         assert CoordSummary(**{**dumped, "runs": as_text}).runs == summary.runs
 
     def test_merged_outputs_state_no_parent_runs(self, gapped_directory):
-        """Outputs along the planned dimension hold no hole, and say so."""
+        """
+        Outputs along the planned dimension hold no hole, and say so.
+
+        An engine test (rule E) of the plan's stored definitions.
+        """
         chunked = gapped_directory.chunk(time=None)
         backend = chunked._catalog.backend
         assert backend._fetch_df("SELECT * FROM coord_runs").empty

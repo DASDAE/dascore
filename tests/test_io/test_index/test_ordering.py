@@ -242,7 +242,12 @@ class TestInterruptedInitialUpdate:
     """The initial-update marker only sets after renumbering (F6)."""
 
     def test_interruption_before_renumber_recovers(self, tmp_path):
-        """A crash after write_sources still renumbers on the retry."""
+        """
+        A crash after write_sources still renumbers on the retry.
+
+        Fault injection (rule B): the crash is injected, and the stored
+        ordinals are read back from the index.
+        """
         p0 = dc.get_example_patch()
         t = p0.get_coord("time")
         span = t.max() - t.min() + t.step
