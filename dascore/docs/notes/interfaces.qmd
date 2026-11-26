@@ -33,6 +33,12 @@ While an operation runs on one of the class's patches, the provider is active ([
 
 Where DASCore computes a result without an operation, as NumPy's functions on a patch do, the result's constructor hands DASCore's manager to the provider, so a provider builds its own from one of DASCore's too.
 
+## Reading with another package's readers
+
+A package which reads some of DASCore's formats itself states its readers as a [`Readers`](`dascore.core.provider.Readers`) of three functions, and makes them active for a block with [`reading_with`](`dascore.core.provider.reading_with`). Inside it, DASCore asks them before its own readers: `get_format` for a file's format and version, `prepare_read` for the metadata of its patches and a loader of their arrays, as `FiberIO._prepare_read` gives them, which a read loads and a scan summarizes, and `reads` for whether `prepare_read` answers for a file, so a scan hands the file over unopened. Each returns None for a file it leaves to DASCore.
+
+The read or scan is still DASCore's: it walks directories, selects, validates the metadata, stamps the ids and raises its own errors. Outside the block, DASCore's readers read.
+
 ## Testing one
 
 `dascore.testing` holds a class of tests for each interface but `BaseCoord`: `BaseNumericCoordTests`, `BaseStringCoordTests`, `BaseCoordManagerTests`, `BaseLazyArrayTests` and `BaseSpoolTests`. A package's suite subclasses one and gives its fixture, a function building the package's objects: `make_coord` takes the arguments of `get_coord`, `make_manager` those of `get_coord_manager`, `make_lazy_array` a NumPy array, and `make_spool` what `dascore.spool` takes. Each test checks the objects are instances of the interface, or that a fixed case gives what DASCore's own class gives, ids included, raising the same kind of error where DASCore's raises. A test the package means to differ on is replaced by a method of the same name. DASCore's suite runs the same tests on its own classes.

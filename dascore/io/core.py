@@ -50,6 +50,7 @@ from dascore.constants import (
     time_select_type,
     windows_type,
 )
+from dascore.core.provider import active_readers
 from dascore.core.source import ArraySource
 from dascore.core.spool import BaseSpool
 from dascore.core.summary import (
@@ -590,6 +591,13 @@ class _FiberIOManager:
         # would be caught by the robustness handler below and read as
         # "wrong format", silently skipping the reader which does match.
         with IOResourceManager(path) as man, suppress_gc_pause_warning():
+            # Another package's readers may find the format themselves.
+            if (readers := active_readers()) is not None and (
+                found := readers.get_format(
+                    man, file_format, file_version, fiber_io_hint
+                )
+            ) is not None:
+                return found
             # The source may still be an examples:// name if a manager was
             # handed in already wrapping one; the checks below need a path.
             path = resolve_example_uri(man.source)
@@ -992,7 +1000,8 @@ class FiberIO:
         if provenance_source is not None:
             identity = source_identity(provenance_source)
         with IOResourceManager(resource) as manager:
-            patches, load = _paired_hook(self, "_prepare_read")(
+            prepared = _prepared(self, manager, snap, wanted)
+            patches, load = prepared or _paired_hook(self, "_prepare_read")(
                 manager, snap, keys=wanted
             )
             # Filter before validating and stamping; ids and positional keys
@@ -1133,18 +1142,27 @@ class FiberIO:
             resource = coerce_to_upath(resource)
             resource = resource if resource.is_dir() else resource.parent
         with IOResourceManager(resource) as manager:
+            found = _prepared(self, manager, snap)
             # Cast outside the best-effort scan handler: invalid input types
-            # are caller errors, not an unsupported file variant.
+            # are caller errors, not an unsupported file variant. A scan hands
+            # over the manager uncast where another package's readers read it.
+            cast = kwargs.get("_pre_cast") and not isinstance(
+                resource, IOResourceManager
+            )
             metadata_resource = (
                 resource
-                if kwargs.get("_pre_cast")
+                if cast or found is not None
                 else manager.get_resource(_required_resource_type(self.get_metadata))
             )
             metadata_kwargs = {"snap": snap}
             if getattr(self.get_metadata, "_type_caster_wrapped", False):
                 metadata_kwargs["_pre_cast"] = True
             try:
-                patches = self.get_metadata(metadata_resource, **metadata_kwargs)
+                patches = (
+                    self.get_metadata(metadata_resource, **metadata_kwargs)
+                    if found is None
+                    else list(found[0])
+                )
             except NotImplementedError as exc:
                 if _is_wrapped_func(self.get_metadata, FiberIO.get_metadata):
                     raise
@@ -1311,6 +1329,14 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
     ):
         return getattr(FiberIO, hook).__get__(fiber_io)
     return getattr(fiber_io, hook)
+
+
+def _prepared(fiber_io: FiberIO, manager, snap, keys=frozenset()):
+    """What active readers of another package prepare to read, or None."""
+    readers = active_readers()
+    return (
+        None if readers is None else readers.prepare_read(fiber_io, manager, snap, keys)
+    )
 
 
 def _default_snap(cls: type[FiberIO]) -> snap_type:
@@ -2170,6 +2196,17 @@ def _get_fiber_io_and_req_type(
     fiber_io_hint = FiberIO.manager.get_fiberio(
         format=file_format_, version=file_version_
     )
+    # Another package's readers which read the file themselves need no
+    # resource. Only FiberIO's own scan asks them, and casts the file if
+    # they leave it to the reader.
+    readers = active_readers()
+    asked = (
+        readers is not None
+        and fiber_io_hint.input_type != "directory"
+        and _is_wrapped_func(fiber_io_hint.scan, FiberIO.scan)
+    )
+    if asked and readers.reads(fiber_io_hint, manager):
+        return fiber_io_hint, manager
     req_type = _required_resource_type(fiber_io_hint.get_metadata)
     resource = manager.get_resource(req_type)
     # this will get the required resource type to pass to scan.
