@@ -481,13 +481,15 @@ class BaseSpoolTests:
     call = _names(_SPOOL_CALLS)
 
     @pytest.fixture(scope="class")
-    def patches(self):
+    @classmethod
+    def patches(cls):
         """Three small patches, a second apart."""
         kwargs = {"time_gap": 1, "shape": (10, 100), "time_min": _START}
         return list(dc.get_example_spool("random_das", **kwargs))
 
     @pytest.fixture(scope="class")
-    def directory(self, patches, tmp_path_factory):
+    @classmethod
+    def directory(cls, patches, tmp_path_factory):
         """A directory of the patches, each in its own DASDAE file."""
         path = tmp_path_factory.mktemp("spool")
         for number, patch in enumerate(patches):
