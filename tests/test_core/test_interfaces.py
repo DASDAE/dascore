@@ -103,7 +103,10 @@ class _LazyArray:
 def coords():
     """A range, labels and text: one of each shape a coordinate takes."""
     return {
-        "range": get_coord(start=0, stop=10, step=1, units="m"),
+        # int64 ends, so the pinned dtype and id hold on 32-bit platforms.
+        "range": get_coord(
+            start=np.int64(0), stop=np.int64(10), step=np.int64(1), units="m"
+        ),
         "labels": NumericCoord.from_labels(np.array([0.0, 1.5, 4.0])),
         "text": get_coord(data=np.array(["a", "b"])),
     }
