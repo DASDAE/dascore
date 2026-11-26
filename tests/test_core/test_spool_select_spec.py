@@ -23,6 +23,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.catalog import PatchCatalog
+from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m, percent, s
 from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
@@ -36,11 +37,13 @@ def spool(request, tmp_path_factory):
     """
     The same patches served by each spool type and catalog state.
 
-    The ``*_derived`` params run every spec test over a derived spool,
-    made by a content-preserving concatenate — the parity net proving one
-    selector engine serves identity and restructured spools alike. That it
-    is derived shows in its patches' history, read from a twin so the
-    spool handed out stays cold.
+    The ``*_derived`` params run every spec test over a derived
+    (plan-backed) catalog via a content-preserving concatenate — the
+    parity net proving one selector engine serves identity and
+    restructured spools alike. That they are plan-backed shows only in the
+    catalog's resolver, which nothing public names, so it is checked there
+    (rule E): a derived spool's history would not tell a plan from an eager
+    concatenation, and checking it reads every output.
     """
     # Use 8,000 samples over 8 seconds to keep time windows narrower than a patch.
     # Distance must exceed the 10-sample selection to make that trim meaningful.
@@ -55,9 +58,8 @@ def spool(request, tmp_path_factory):
         )
         out = dc.spool(path).update(progress=None)
     if request.param.endswith("_derived"):
-        twin = out.concatenate(time=1)
-        assert all(x.attrs.history[-1:] == ("concatenate",) for x in twin)
         out = out.concatenate(time=1)
+        assert isinstance(out._catalog.resolver, PlanResolver)
     return out
 
 

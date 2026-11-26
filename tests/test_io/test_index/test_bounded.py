@@ -13,26 +13,22 @@ from dascore.core.coords import get_coord
 from dascore.units import m
 
 
-@pytest.fixture(scope="module")
-def indexed_directory(tmp_path_factory):
-    """Twelve short patches, one per file, and the index over them."""
-    path = tmp_path_factory.mktemp("bounded")
+@pytest.fixture()
+def indexed_spool():
+    """A small catalog in SQL, its frame unread, whose patches stay in memory."""
     start = np.datetime64("2024-01-01", "ns")
-    for i in range(12):
+    patches = [
         dc.Patch(
             data=np.arange(4),
             coords={"time": start + (10 * i + np.arange(4)) * np.timedelta64(1, "s")},
             dims=("time",),
             attrs={"tag": f"patch-{i:02d}"},
-        ).io.write(path / f"p{i:02d}.h5", "dasdae")
-    dc.spool(path).update(progress=None)
-    return path
-
-
-@pytest.fixture()
-def indexed_spool(indexed_directory):
-    """A fresh spool over the index, its rows not yet read."""
-    return dc.spool(indexed_directory)
+        )
+        for i in range(12)
+    ]
+    spool = dc.spool(patches)
+    spool.select(tag="*")  # a selection puts the catalog in SQL, caching nothing
+    return spool
 
 
 @pytest.fixture()
@@ -47,9 +43,7 @@ def unitless_selection():
         ).set_units(distance=None)
         for start in (0, 10, 11)
     ]
-    spool = dc.spool(patches).select(distance=(10 * m, 12 * m))
-    yield spool
-    spool._catalog.close()
+    return dc.spool(patches).select(distance=(10 * m, 12 * m))
 
 
 class TestBoundedMetadata:

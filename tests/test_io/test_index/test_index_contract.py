@@ -221,11 +221,16 @@ class TestElementDtype:
         assert got == expected
 
     def test_dtype_is_private_in_flat_relation(self):
-        """The spool states the dtype by its public name, never `_dtype`."""
+        """
+        The spool sees `_dtype`, never a public `dtype` column.
+
+        An engine test (rule E): the relation's own columns are the subject.
+        """
         spool = dc.get_example_spool("random_das")
-        contents = spool.get_contents()
-        assert "_dtype" not in contents.columns
-        assert set(contents["dtype"]) == {str(spool[0].data.dtype)}
+        df = spool._df
+        assert "dtype" not in df.columns
+        assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
+        assert "_dtype" not in spool.get_contents().columns
 
     def test_dtype_attr_does_not_shadow_column(self, tmp_path):
         """A patch attr named `dtype` is skipped, not written to the column."""

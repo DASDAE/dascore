@@ -299,9 +299,11 @@ class TestAuxiliaryCoords:
         held = p.update_attrs(station="B").update_coords(lat=("distance", lat))
         patches = [held, p.update_attrs(station="A")]
         chunked = dc.spool(patches if held_first else patches[::-1]).chunk(time=2)
-        assert len(chunked) and "lat_min" in chunked.get_contents().columns
-        with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
-            chunked.select(_attrs={"lat_min": 0.0})
+        envelope = [x for x in chunked.get_contents().columns if x.startswith("lat")]
+        assert len(chunked) and len(envelope) == 4
+        for name in envelope:
+            with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
+                chunked.select(_attrs={name: 0.0})
 
     @pytest.fixture()
     def sensor_spool(self):

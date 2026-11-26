@@ -1615,15 +1615,12 @@ class TestReservedAttrNames:
         assert not {"x_step", "x_units"} & set(df.columns)
 
     def test_data_units_attr_still_indexed(self):
-        """
-        A real ``*_units`` attr is not an envelope column; stays queryable.
-
-        An engine test (rule E): a selection finds it only by the stored
-        spelling (`"ϵ"`, not `"strain"`), so the index is asked for its names.
-        """
+        """A real ``*_units`` attr is not an envelope column; stays queryable."""
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
-        assert "data_units" in spool._catalog.backend.attr_names()
+        # the index holds the unit by its symbol
+        assert len(spool.select(data_units="ϵ")) == 1
+        assert not len(spool.select(data_units="m"))
 
 
 class TestWhatARowCannotState:

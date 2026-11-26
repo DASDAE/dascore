@@ -195,28 +195,37 @@ class TestFlatRelation:
         assert (defs["step_denominator"] == 2).any()
 
     def test_descending_whole_ticks_carry_grid(self, tmp_path):
-        """A descending range needs its grid: the envelope does not name its start."""
+        """
+        A descending range needs its grid: the envelope does not name its start.
+
+        An engine test (rule E) of the row codec: a load or a selection reads
+        the file whenever a row cannot state its coordinate.
+        """
         patch = dc.get_example_patch()
         reversed_patch = patch.update_coords(time=patch.get_coord("time")[::-1])
         dc.write(reversed_patch, tmp_path / "rev.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        time = reversed_patch.get_coord("time")
-        lims = (time.values[200], time.values[100])
-        part = spool.select(time=lims)[0].get_coord("time")
-        assert part == reversed_patch.select(time=lims).get_coord("time")
+        row = spool._catalog.to_df().iloc[0].to_dict()
+        assert row["_time_grid"] is not None
+        coord = coord_from_row(row, "time", units="s")
+        assert coord == reversed_patch.get_coord("time")
 
-    def test_descending_grid(self, hz_1024_patch, tmp_path):
-        """A descending exact grid survives indexing and comes back whole."""
-        reversed_patch = hz_1024_patch.update_coords(
-            time=hz_1024_patch.get_coord("time")[::-1]
-        )
-        dc.write(reversed_patch, tmp_path / "down.h5", "dasdae")
-        spool = dc.spool(tmp_path).update(progress=None)
-        time = reversed_patch.get_coord("time")
-        assert spool[0].get_coord("time") == time
-        lims = (time.values[200], time.values[100])
-        part = spool.select(time=lims)[0].get_coord("time")
-        assert part == reversed_patch.select(time=lims).get_coord("time")
+    def test_descending_grid(self, indexed, hz_1024_patch):
+        """
+        A descending grid rebuilds from its maximum, which the row states.
+
+        An engine test (rule E), for the reason the test above gives.
+        """
+        row = indexed._catalog.to_df().iloc[0].to_dict()
+        reversed_time = hz_1024_patch.get_coord("time")[::-1]
+        run = reversed_time.runs[0]
+        num, den, offset = run.step_num, run.step_den, run.phase
+        row["time_step"] = -row["time_step"]
+        row["_time_grid"] = (num, den, offset, len(reversed_time))
+        assert coord_from_row(row, "time", units="s") == reversed_time
+        # without the grid the row cannot say where a descending range starts
+        row["_time_grid"] = None
+        assert coord_from_row(row, "time", units="s") is None
 
     def test_float_row_skips_grid(self):
         """A plan row stating a float placeholder dtype cannot use an integer grid."""
@@ -258,14 +267,17 @@ class TestPlannedRows:
     @staticmethod
     def _assert_rows_rebuild(chunked):
         """
-        Every output's row states the time coordinate its patch loads with, so
-        the contents name the loaded patch's first and last labels.
+        Every output row rebuilds the time coordinate its patch loads with.
+
+        Asked of the plan's rows (rule E): the contents state the ends, not the
+        grid between them.
         """
-        contents = chunked.get_contents()
-        assert len(contents) == len(chunked) > 1
-        for row, patch in zip(contents.itertuples(), chunked, strict=True):
+        rows = chunked._catalog.to_df()
+        assert len(rows) == len(chunked) > 1
+        for patch, (_, row) in zip(chunked, rows.iterrows(), strict=True):
             coord = patch.get_coord("time")
-            assert (row.time_min, row.time_max) == (coord.min(), coord.max())
+            assert row["_time_grid"][::3] == (1953125, len(coord))
+            assert coord_from_row(row.to_dict(), "time", units="s") == coord
 
     def test_stretch_slice_states_grid(self, split_spool):
         """A chunk across files on one fractional grid states its slice of it.
