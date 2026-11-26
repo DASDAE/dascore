@@ -255,7 +255,7 @@ class BaseNumericCoord(BaseCoord):
 
     @abstractmethod
     def _run_offsets(self) -> Any:
-        """The index each run starts at."""
+        """The index each run starts at, as an integer array."""
 
     @abstractmethod
     def _run_labels(self, run, indices=None) -> Any:
@@ -270,7 +270,7 @@ class BaseNumericCoord(BaseCoord):
         """1 for ascending labels, -1 for descending, 0 for neither."""
 
     @abstractmethod
-    def _slice_runs(self, indices: range) -> BaseCoord:
+    def _slice_runs(self, indices: range) -> BaseNumericCoord:
         """The coordinate over a range of indices, its runs windowed."""
 
 

@@ -2872,7 +2872,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             runs.extend(self._window_runs(span))
         return self._with_runs(runs)
 
-    def _slice_runs(self, indices: range) -> BaseCoord:
+    def _slice_runs(self, indices: range) -> Self:
         """The coordinate holding the samples a range of positions names."""
         return self._with_runs(self._window_runs(indices))
 
@@ -3905,7 +3905,6 @@ def _fill_layout(coord: BaseCoord, limit=None, samples: bool = False) -> tuple |
     for anchor, length, blocks in groups:
         if len(blocks) == 1:  # untouched: keep the labels as they are
             kept = coord._slice_runs(range(blocks[0][0], blocks[0][1]))
-            assert isinstance(kept, BaseNumericCoord)
             runs.extend(kept.runs)
         else:
             runs.append(anchor.resized(length, coord.dtype))

@@ -768,6 +768,7 @@ class Select(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
+        Data not read yet stay unread, so there is nothing to copy.
     relative
         If True, select ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative. The first bound
