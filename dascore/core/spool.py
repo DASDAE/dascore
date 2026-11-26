@@ -91,6 +91,7 @@ from dascore.core._spool_inventory import (
     unjudged_rows,
     unsubdividable,
 )
+from dascore.core.interfaces import BaseSpool
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
 from dascore.core.patch import _is_lazy
@@ -706,9 +707,9 @@ def _spool_input_message(data) -> str:
     )
 
 
-class Spool(NodeRepr, NamespaceOwner):
+class Spool(NodeRepr, NamespaceOwner, BaseSpool):
     """
-    A container of patches: a view over a `PatchCatalog`.
+    dascore's container of patches: a view over a `PatchCatalog`.
 
     Construct directly from in-memory patches, or with
     [`dascore.spool`](`dascore.spool`) from patches, a directory of files,
@@ -4366,12 +4367,6 @@ class Spool(NodeRepr, NamespaceOwner):
         return blocks
 
 
-# There is one spool class; the old ABC name stays as an alias so
-# annotations and isinstance checks written against it keep working.
-# `Spool` is the name to use in new code.
-BaseSpool = Spool
-
-
 def spool(
     obj: path_types
     | Spool
@@ -4512,7 +4507,7 @@ def _spool_from_str(path, snap=None, **kwargs):
         raise InvalidSpoolError(msg)
 
 
-@_spool_from_obj.register(Spool)
+@_spool_from_obj.register(BaseSpool)
 def _spool_from_spool(spool, **kwargs):
     """Return a spool from a spool."""
     return spool

@@ -1,0 +1,40 @@
+---
+title: Interfaces
+---
+
+Another package's classes can stand in for some of DASCore's objects. For each such object, [`dascore.core.interfaces`](`dascore.core.interfaces`) holds an interface: an abstract base class stating the members DASCore uses on an object it did not build.
+
+| Interface | DASCore's class | Also imported from |
+|---|---|---|
+| [`BaseCoord`](`dascore.core.interfaces.BaseCoord`) | either kind below | `dascore.core.coords` |
+| [`BaseNumericCoord`](`dascore.core.interfaces.BaseNumericCoord`) | [`NumericCoord`](`dascore.core.coords.NumericCoord`) | `dascore.core.coords` |
+| [`BaseStringCoord`](`dascore.core.interfaces.BaseStringCoord`) | [`CoordString`](`dascore.core.coords.CoordString`) | `dascore.core.coords` |
+| [`BaseCoordManager`](`dascore.core.interfaces.BaseCoordManager`) | [`CoordManager`](`dascore.core.coordmanager.CoordManager`) | `dascore.core.coordmanager` |
+| [`BaseLazyArray`](`dascore.core.interfaces.BaseLazyArray`) | [`LazyArray`](`dascore.lazy.array.LazyArray`) | `dascore.lazy.array` |
+| [`BaseSpool`](`dascore.core.interfaces.BaseSpool`) | [`Spool`](`dascore.Spool`) | `dascore`, `dascore.core.spool` |
+
+## Checks and annotations
+
+A check or annotation that accepts any implementation names the interface; one naming a concrete class accepts only DASCore's, as `dict` does where `Mapping` accepts any mapping. `isinstance(x, dc.BaseSpool)` asks whether `x` is a spool, and `isinstance(x, dc.Spool)` whether it is DASCore's.
+
+## Implementing one
+
+DASCore's classes subclass their interfaces. Another package's classes register with them when their module is imported, as `BaseNumericCoord.register(MyCoord)`, and then pass every check DASCore makes with the interface, `functools.singledispatch` and model fields annotated with it included. A coordinate registers with its kind, `BaseNumericCoord` or `BaseStringCoord`, which makes it a `BaseCoord` too.
+
+Registering checks no member, so a registered class must give them all, with the meanings DASCore's class gives them. Members with a leading underscore are for implementers, not users. A numeric coordinate's `runs` are DASCore's run classes, [`Grid`](`dascore.core.coords.Grid`), [`Labels`](`dascore.core.coords.Labels`) and [`Blank`](`dascore.core.coords.Blank`).
+
+Where DASCore builds an object, it builds its own: [`get_coord(data=...)`](`dascore.core.coords.get_coord`) and [`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) rebuild another package's coordinate as DASCore's from its `model_dump`, so DASCore's managers hold DASCore's coordinates. Another package's manager, lazy array or spool is kept as it is: a patch holds the manager, a selection keeps the lazy array unread until `load`, or `set_backend` to a backend in memory, reads it, and `dc.spool` returns the spool. A DASDAE file names the kind of each coordinate it stores, whichever class held it.
+
+## Members
+
+**`BaseCoord`.** Fields `units`, `step`, `shape`, `dtype` and `values`. Properties `size`, `ndim`, `data_id`, `evenly_sampled`, `step_exact`, `degenerate`, `sorted` and `reverse_sorted`. Methods `min`, `max`, `coord_range`, `get_sample_count`, `get_next_index`, `approx_equal`, `select`, `order`, `index`, `sort`, `new`, `update`, `update_limits`, `snap`, `set_units`, `convert_units`, `simplify_units`, `change_length`, `reduce_coord`, `align_to`, `to_summary` and `model_dump`, with `len`, indexing and `==`. For implementers, `_grid`, `_partial`, `_rich_style`, `_get_compatible_value`, `_get_index_values`, `_get_index`, `_get_slice_tuple`, `_samples_in`, `_gap_tolerance`, `_identity` and `_repr_fields`.
+
+**`BaseNumericCoord`.** A coordinate's members, and fields `runs` and `sources`, properties `runs_count` and `segments`, and for implementers `_with_runs`, `_run_offsets`, `_run_labels`, `_run_records`, `_direction` and `_slice_runs`.
+
+**`BaseStringCoord`.** A coordinate's members, no more; registering with it says the labels are text.
+
+**`BaseCoordManager`.** Fields `dims`, `scalar`, `coord_map` and `dim_map`. Properties `shape`, `size`, `coord_shapes` and `dim_to_coord_map`. Methods `get_coord`, `get_array`, `get_axis`, `coord_range`, `coord_size`, `min`, `max`, `step`, `get_coord_tuple_map`, `to_summary_dict`, `validate_data`, `select`, `isel`, `select_indexers`, `update`, `drop_coords`, `drop_private_coords`, `drop_associated`, `disassociate_coord`, `rename_coord`, `set_dims`, `transpose`, `squeeze`, `flip`, `sort`, `snap`, `decimate`, `set_units`, `convert_units`, `simplify_units` and `make_broadcastable_to`, with indexing, `in`, iteration over `(name, coordinate)` pairs and `==`. For implementers, `_update_grid`, `_select`, `_get_coord_dims_tuple`, `_get_dim_summary` and `_repr_section`.
+
+**`BaseLazyArray`.** Properties `shape`, `dtype` and `ndim`, and `__array__`, which reads the values. DASCore selects from one by indexing it, so indexing should give a lazy array too, still unread; DASCore's own selects through its recipe instead.
+
+**`BaseSpool`.** Properties `spool_path` and `backend`. Methods `set_backend`, `select`, `chunk`, `concatenate`, `update`, `split`, `map`, `get_contents`, `get_gaps`, `get_coverage` and `get_patch_names`, with `len`, iteration, indexing and `+`.

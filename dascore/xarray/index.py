@@ -29,6 +29,7 @@ from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, Pandas
 
 from dascore.core.coords import (
     BaseCoord,
+    BaseNumericCoord,
     Grid,
     NumericCoord,
     concat_coords,
@@ -43,7 +44,7 @@ _LABEL_BLOCK = 1_000_000  # labels compared at a time, bounding memory
 
 def is_servable(coord) -> bool:
     """Whether `CoordIndex` can serve a coordinate's labels."""
-    if isinstance(coord, NumericCoord) and coord.runs_count > 1:
+    if isinstance(coord, BaseNumericCoord) and coord.runs_count > 1:
         return True
     # a zero step repeats one label, which no index can look up
     return getattr(coord, "evenly_sampled", False) and bool(coord.step)
@@ -83,7 +84,7 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
             first, second = first.set_units(None), second.set_units(None)
         if first.data_id == second.data_id:
             return True
-        if isinstance(first, NumericCoord) and isinstance(second, NumericCoord):
+        if isinstance(first, BaseNumericCoord) and isinstance(second, BaseNumericCoord):
             # Grids with different steps or parents can spell the same labels.
             ends = [0, len(first) - 1]
             if not np.array_equal(

@@ -117,7 +117,7 @@ filled = gapped.fill_gaps("x", fill_value=0)
 assert filled.shape == (12,) and filled.data.sum() == len(coord)
 ```
 
-[`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the boundaries between runs and, for a monotonic list of labels, every spacing other than its median spacing, within float rounding for float labels. Its `tolerance` is the excess over one step in coordinate units; [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) counts steps instead, as `waterfall(gap_factor=)` does. `Spool.chunk` judges seams between patches differently; see the [coordinate guidelines](../notes/coordinates.qmd).
+[`get_discontinuities`](`dascore.core.coords.NumericCoord.get_discontinuities`) reports the boundaries between runs and, for a monotonic list of labels, every spacing other than its median spacing, within float rounding for float labels. Its `tolerance` is the excess over one step in coordinate units; [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) counts steps instead, as `waterfall(gap_factor=)` does. `Spool.chunk` judges seams between patches differently; see the [coordinate guidelines](../notes/coordinates.qmd).
 
 ## Updating and units
 
@@ -163,7 +163,7 @@ from dascore.units import ft
 selected_in_feet, _ = regular.select((3 * ft, 20 * ft))
 ```
 
-`sort` permutes existing values. [`snap()`](`dascore.core.coords.BaseCoord.snap`) replaces them with one evenly sampled grid, so it returns only a coordinate; use `CoordManager.snap` or `Patch.snap_coords` when the data must be sorted along with it.
+`sort` permutes existing values. [`snap()`](`dascore.core.coords.NumericCoord.snap`) replaces them with one evenly sampled grid, so it returns only a coordinate; use `CoordManager.snap` or `Patch.snap_coords` when the data must be sorted along with it.
 
 ## String coordinates
 
@@ -182,7 +182,7 @@ Strings containing `*` or `?` are wildcard patterns, so avoid those characters i
 
 ## Finding insertion positions
 
-[`get_next_index`](`dascore.core.coords.BaseCoord.get_next_index`) returns where a value is or would be inserted in a sorted coordinate:
+[`get_next_index`](`dascore.core.coords.NumericCoord.get_next_index`) returns where a value is or would be inserted in a sorted coordinate:
 
 ```{python}
 assert regular.get_next_index(2) == 2

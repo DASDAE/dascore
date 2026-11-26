@@ -10,7 +10,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from dascore.core.coords import BaseCoord, Grid, Labels, NumericCoord
+from dascore.core.coords import BaseCoord, BaseNumericCoord, Grid, Labels
 from dascore.exceptions import ParameterError, UnknownCoordinateError
 from dascore.utils.time import dtype_time_like, to_timedelta64
 
@@ -192,7 +192,7 @@ def _label_index(coord, probes, require_unique=False):
     # A coordinate with holes is searched like a grid, run by run, but only
     # where its runs chain: a sparse lookup needs an order to bisect, which
     # one stored run and runs which disagree in direction do not have.
-    if not isinstance(coord, NumericCoord) or not coord._direction():
+    if not isinstance(coord, BaseNumericCoord) or not coord._direction():
         return pd.Index(coord.values), None
     if coord.runs_count == 1 and isinstance(coord.runs[0], Labels):
         return pd.Index(coord.values), None

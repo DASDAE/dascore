@@ -16,6 +16,8 @@ from dascore.core.attrs import PatchAttrs, _ArrayAttrError, _held_value
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
+    BaseNumericCoord,
+    CoordString,
     Grid,
     NumericCoord,
     _float_allowance,
@@ -241,9 +243,12 @@ def _save_coord(coord, name, group, compact: bool, options=None):
     its description, so a long acquisition costs a few numbers; anything
     else, and version 1 throughout, writes its values.
 
-    `CoordRange` is the format's own name, not a class's tag.
+    `CoordRange` is the format's own name, not a class's tag. Any other
+    node names the dascore class of its coordinate's kind, whichever class
+    holds it.
     """
-    object_type = get_model_tag(type(coord))
+    kind = NumericCoord if isinstance(coord, BaseNumericCoord) else CoordString
+    object_type = get_model_tag(kind)
     if compact and (fields := grid_fields(coord)) is not None:
         object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
@@ -425,7 +430,7 @@ def _read_coord(node, name, attrs2, snap):
     `snap` (None), and with the shared `SnapWarning` under a `snap` naming it.
     """
     coord = _read_stored_coord(node, name, attrs2)
-    plain = not isinstance(coord, NumericCoord) or coord.ndim != 1 or len(coord) < 2
+    plain = not isinstance(coord, BaseNumericCoord) or coord.ndim != 1 or len(coord) < 2
     if snap is False or plain or coord.evenly_sampled or coord.runs_count > 1:
         return coord, False
     values, where = np.asarray(coord.values), node.file

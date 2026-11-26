@@ -107,7 +107,10 @@ class TestDocuments:
     def test_aliases(self, corpus):
         """Export aliases resolve to one canonical document."""
         root, index = corpus
-        assert index["aliases"]["BaseSpool.chunk"] == index["aliases"]["Spool.chunk"]
+        assert (
+            index["aliases"]["Spool.chunk"]
+            == index["aliases"]["core.spool.Spool.chunk"]
+        )
         assert doc_cache.read_document(
             root, index, "Patch.select"
         ) == doc_cache.read_document(root, index, "dascore.proc.coords.select")

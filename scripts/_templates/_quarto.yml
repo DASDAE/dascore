@@ -295,6 +295,9 @@ website:
         - text: Coordinate Internals
           href: notes/coordinate_internals.qmd
 
+        - text: Interfaces
+          href: notes/interfaces.qmd
+
         - text: PatchAttrs
           href: notes/patch_attrs.qmd
 

@@ -390,7 +390,7 @@ def _record_members(out, patch, patch_func, args, kwargs):
         else x
         for index, x in enumerate(out)
     ]
-    if isinstance(out, dc.BaseSpool):
+    if isinstance(out, dc.Spool):
         return dc.spool(members)
     # A namedtuple takes its members one by one.
     return type(out)(*members) if hasattr(out, "_fields") else type(out)(members)
@@ -559,7 +559,8 @@ def patch_function(
                 # is what it records.
                 if out is not patch and hasattr(out, "attrs"):
                     out = record_call(out, patch, patch_func, args, kwargs)
-                elif isinstance(out, dc.BaseSpool | list | tuple):
+                # dascore's spool is rebuilt; another package's is returned as it is
+                elif isinstance(out, dc.Spool | list | tuple):
                     out = _record_members(out, patch, patch_func, args, kwargs)
                 if attr_updates and hasattr(out, "attrs"):
                     out = out.update_attrs(**attr_updates)
