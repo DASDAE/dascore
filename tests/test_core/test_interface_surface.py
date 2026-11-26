@@ -14,8 +14,11 @@ An expression holds such an object when it is
   `coords` or `cm` (a manager) or `spool`;
 - a name an `if isinstance(name, <interface>)` narrows, inside that `if`;
 - `x.coords` (a manager), `x.coord_map[...]`, a manager indexed, or a call
-  of `get_coord` (a coordinate), a call of `spool`, or a spool's `select`,
-  `chunk`, `update`, `concatenate` or `set_backend` (a spool);
+  of `get_coord` (a coordinate), or a call of `spool` (a spool);
+- what a method of one returns, as its interface annotates it, and the
+  first of a tuple it returns: `coord, indexer = coord.select(...)`;
+- a loop's or comprehension's coordinate, from `coord_map.items()` or
+  `.values()`, a manager or a coordinate's `segments`;
 - a local name assigned from one of these.
 
 A name annotated or narrowed with a concrete class holds dascore's own
@@ -46,30 +49,38 @@ INTERFACES = {
 }
 OWN = {"NumericCoord", "CoordString", "CoordManager", "LazyArray", "Spool"}
 PARAMETERS = {"coord": "coord", "coords": "manager", "cm": "manager", "spool": "spool"}
-SPOOL_METHODS = {"select", "chunk", "update", "concatenate", "set_backend"}
-# Each kind's own module, whose code runs on dascore's objects only, and
-# the interface whose members its reads must be.
+# Each kind's own module, skipped as its code runs on dascore's objects
+# only, and the interface whose members reads elsewhere must be.
 HOMES = {
     "coord": ("core/coords.py", "BaseNumericCoord"),
     "manager": ("core/coordmanager.py", "BaseCoordManager"),
     "lazy": ("lazy/array.py", "BaseLazyArray"),
     "spool": ("core/spool.py", "BaseSpool"),
 }
-# Reads on what a route takes for one of the objects, but is not.
-NOT_THE_OBJECT = {
-    "coord": {
-        # a netCDF variable (`io/netcdf/utils.py`)
-        "attrs",
-        "name",
-        # an index's coordinate record (`io/index/planned.py`)
-        "coord_name",
-        "is_relative",
-        "value_kind",
-        # an xarray coordinate (`xarray/patch.py`)
-        "dims",
+# Reads, by module, the guard sets aside: on what the pass mistakes for one
+# of the objects, or with a default another package's object need not give.
+SET_ASIDE = {
+    # The flag `map` sets on all but one of the spools a split gives, so one
+    # progress bar shows.
+    ("spool", "utils/misc.py"): {"_no_progress"},
+    # A parameter named `coord` holding a netCDF variable, an index's
+    # coordinate record or an xarray coordinate.
+    ("coord", "io/netcdf/utils.py"): {"attrs", "name"},
+    ("coord", "io/index/planned.py"): {"coord_name", "is_relative", "value_kind"},
+    ("coord", "xarray/patch.py"): {"attrs", "dims"},
+    # The `.coords` of a summary, a query, a plan or an xarray object, a mapping.
+    **{
+        ("manager", path): {"items"}
+        for path in (
+            "core/summary.py",
+            "io/index/catalog.py",
+            "io/index/ingest.py",
+            "io/index/query.py",
+            "io/netcdf/utils.py",
+            "utils/chunk_plan.py",
+            "xarray/patch.py",
+        )
     },
-    # The `.coords` of a summary, a query or an xarray object, a mapping.
-    "manager": {"items"},
 }
 
 
@@ -131,9 +142,36 @@ class _Reads(ast.NodeVisitor):
                 return "coord"
             if func.attr == "spool" and _on_module(func.value):
                 return "spool"
-            if func.attr in SPOOL_METHODS and self.kind(func.value) == "spool":
-                return "spool"
+            held = self.kind(func.value)
+            return RESULTS[held].get(func.attr) if held else None
         return None
+
+    def first(self, node) -> str | None:
+        """The kind of the first item of the tuple a method call returns."""
+        call = isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        held = self.kind(node.func.value) if call else None
+        return FIRSTS[held].get(node.func.attr) if held else None
+
+    def element(self, node) -> tuple[int | None, str | None]:
+        """Which item of each element of an iterable is a coordinate, if any."""
+        call = isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        if call and node.func.attr in ("items", "values"):
+            base = node.func.value
+            maps = isinstance(base, ast.Attribute) and base.attr == "coord_map"
+            if maps:
+                return (1 if node.func.attr == "items" else None), "coord"
+        if self.kind(node) == "manager":
+            return 1, "coord"
+        held = isinstance(node, ast.Attribute) and node.attr == "segments"
+        return None, ("coord" if held and self.kind(node.value) == "coord" else None)
+
+    def bind_target(self, target, kind: str | None, item: int | None = None):
+        """Bind a loop or assignment target, or one item of a tuple target."""
+        if isinstance(target, ast.Tuple) and item is not None:
+            for number, part in enumerate(target.elts):
+                self.bind_target(part, kind if number == item else None)
+        elif isinstance(target, ast.Name):
+            self.bind(target.id, kind if item is None else None)
 
     def bind(self, name: str, kind: str | None) -> None:
         """Say what a name holds from here on."""
@@ -177,10 +215,35 @@ class _Reads(ast.NodeVisitor):
 
     def visit_Assign(self, node):
         self.generic_visit(node)
-        kind = self.kind(node.value)
         for target in node.targets:
-            if isinstance(target, ast.Name):
-                self.bind(target.id, kind)
+            if isinstance(target, ast.Tuple):
+                self.bind_target(target, self.first(node.value), 0)
+            else:
+                self.bind_target(target, self.kind(node.value))
+
+    def visit_For(self, node):
+        self.visit(node.iter)
+        self.bind_target(node.target, *reversed(self.element(node.iter)))
+        for child in (*node.body, *node.orelse):
+            self.visit(child)
+
+    def _visit_comprehension(self, node):
+        outer = dict(self.names)
+        for loop in node.generators:
+            self.visit(loop.iter)
+            self.bind_target(loop.target, *reversed(self.element(loop.iter)))
+            for condition in loop.ifs:
+                self.visit(condition)
+        for field in ("elt", "key", "value"):
+            if hasattr(node, field):
+                self.visit(getattr(node, field))
+        self.names = outer
+
+    def visit(self, node):
+        comprehensions = ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp
+        if isinstance(node, comprehensions):
+            return self._visit_comprehension(node)
+        return super().visit(node)
 
     def visit_AnnAssign(self, node):
         self.generic_visit(node)
@@ -188,10 +251,22 @@ class _Reads(ast.NodeVisitor):
             stated = _kind_of(node.annotation)
             self.bind(node.target.id, stated or self.kind(node.value))
 
-    def visit_Attribute(self, node):
-        kind = self.kind(node.value)
+    def read(self, node, name: str) -> None:
+        """Record a read of an attribute on an expression, if it holds one."""
+        kind = self.kind(node)
         if kind is not None and self.path != HOMES[kind][0]:
-            self.found[kind].add(node.attr)
+            self.found[kind].add(name)
+
+    def visit_Attribute(self, node):
+        self.read(node.value, node.attr)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):
+        # `getattr(x, "name", default)` reads as `x.name` does.
+        args = node.args
+        named = len(args) > 1 and isinstance(args[1], ast.Constant)
+        if getattr(node.func, "id", None) == "getattr" and named:
+            self.read(args[0], args[1].value)
         self.generic_visit(node)
 
 
@@ -202,33 +277,70 @@ def attribute_reads(source: str, path: str = "") -> dict[str, set[str]]:
     return dict(reads.found)
 
 
-def members(name: str) -> set[str]:
-    """The members an interface states, with its bases' and object's."""
+def _statements(name: str):
+    """The methods and annotations an interface states, with its bases'."""
     tree = ast.parse(Path(interfaces.__file__).read_text())
     classes = {x.name: x for x in tree.body if isinstance(x, ast.ClassDef)}
-    out, todo = set(dir(object)), [name]
+    todo = [name]
     while todo:
         node = classes[todo.pop()]
         for child in ast.walk(node):
-            if isinstance(child, ast.FunctionDef):
-                out.add(child.name)
-            elif isinstance(child, ast.AnnAssign):
-                out.add(ast.unparse(child.target))
+            if isinstance(child, ast.FunctionDef | ast.AnnAssign):
+                yield child
         todo += [x.id for x in node.bases if getattr(x, "id", None) in classes]
+
+
+def members(name: str) -> set[str]:
+    """The members an interface states, with its bases' and object's."""
+    names = (
+        x.name if isinstance(x, ast.FunctionDef) else ast.unparse(x.target)
+        for x in _statements(name)
+    )
+    return set(dir(object)) | set(names)
+
+
+def _results(kind: str, first: bool) -> dict[str, str]:
+    """The kind each method of a kind's interface returns, or leads a tuple of."""
+    out = {}
+    for node in _statements(HOMES[kind][1]):
+        returns = getattr(node, "returns", None)
+        if returns is None:
+            continue
+        is_tuple = isinstance(returns, ast.Subscript) and ast.unparse(returns.value)
+        if first and is_tuple == "tuple":
+            returns = returns.slice.elts[0]
+        elif first or is_tuple:
+            continue
+        found = kind if ast.unparse(returns) == "Self" else _kind_of(returns)
+        if found in HOMES:
+            out[node.name] = found
     return out
+
+
+RESULTS = {x: _results(x, first=False) for x in HOMES}
+FIRSTS = {x: _results(x, first=True) for x in HOMES}
 
 
 @pytest.fixture(scope="module")
 def reads():
-    """Each kind's attributes read across dascore."""
-    found = defaultdict(set)
+    """Each module's attributes read on each kind, by (kind, module)."""
+    found = {}
     for path in sorted(ROOT.rglob("*.py")):
         relative = path.relative_to(ROOT).as_posix()
         if relative.startswith("docs/"):
             continue
         for kind, names in attribute_reads(path.read_text(), relative).items():
-            found[kind] |= names
+            found[kind, relative] = names
     return found
+
+
+def _read_on(reads, kind: str) -> set[str]:
+    """Every attribute read on a kind, less those set aside."""
+    out = set()
+    for key, names in reads.items():
+        if key[0] == kind:
+            out |= names - SET_ASIDE.get(key, set())
+    return out
 
 
 class TestSurface:
@@ -237,20 +349,19 @@ class TestSurface:
     @pytest.mark.parametrize("kind", sorted(HOMES))
     def test_reads_are_members(self, reads, kind):
         """Every attribute read on an object is a member of its interface."""
-        stated = members(HOMES[kind][1])
-        assert sorted(reads[kind] - stated - NOT_THE_OBJECT.get(kind, set())) == []
+        assert sorted(_read_on(reads, kind) - members(HOMES[kind][1])) == []
 
-    @pytest.mark.parametrize("kind", sorted(NOT_THE_OBJECT))
-    def test_exceptions_are_read(self, reads, kind):
-        """Each read the guard sets aside is still made, and is no member."""
-        stated = members(HOMES[kind][1])
-        assert NOT_THE_OBJECT[kind] <= reads[kind] - stated
+    @pytest.mark.parametrize("key", sorted(SET_ASIDE))
+    def test_exceptions_are_read(self, reads, key):
+        """Each read the guard sets aside is still made there, and is no member."""
+        stated = members(HOMES[key[0]][1])
+        assert SET_ASIDE[key] <= reads.get(key, set()) - stated
 
     def test_finds_reads(self, reads):
         """The pass sees the reads dascore makes on each kind."""
-        assert {"runs", "_grid", "data_id"} <= reads["coord"]
-        assert {"coord_map", "dims", "_update_grid"} <= reads["manager"]
-        assert {"get_gaps", "split"} <= reads["spool"]
+        assert {"runs", "_grid", "data_id"} <= _read_on(reads, "coord")
+        assert {"coord_map", "dims", "_update_grid"} <= _read_on(reads, "manager")
+        assert {"get_gaps", "split"} <= _read_on(reads, "spool")
 
 
 class TestRoutes:
@@ -298,6 +409,30 @@ def f(patch, path):
             "manager": {"one", "coord_map", "nine"},
             "coord": {"two", "three", "four", "eight"},
             "spool": {"five", "select"},
+        }
+
+    def test_results_loops_and_getattr(self):
+        """Method results, loop items and getattr reads are followed."""
+        source = """
+def f(cm: BaseCoordManager, spool):
+    new, _ = cm.select(time=None)
+    new.one
+    cm.update(time=None).two
+    cm.get_coord("time").three
+    for name, coord in cm.coord_map.items():
+        coord.four
+    for coord in cm.coord_map.values():
+        coord.five
+    for name, coord in cm:
+        coord.six
+    [x.seven for x in cm.get_coord("time").segments]
+    getattr(spool.select(time=None), "eight", None)
+    x.nine
+"""
+        assert attribute_reads(source) == {
+            "manager": {"select", "update", "get_coord", "coord_map", "one", "two"},
+            "coord": {"three", "four", "five", "six", "segments", "seven"},
+            "spool": {"select", "eight"},
         }
 
     def test_own_module(self):

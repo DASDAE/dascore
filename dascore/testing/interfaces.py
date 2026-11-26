@@ -1,30 +1,8 @@
 """
-Tests another package's implementation of an interface runs, as DASCore's do.
+Tests for another package's implementation of an interface, run on DASCore's too.
 
-Each class holds the tests for one interface in
-[`dascore.core.interfaces`](`dascore.core.interfaces`). A package's test
-suite subclasses it and gives the fixture its docstring names, which builds
-the package's objects, and pytest runs the tests on them. A test checks the
-objects are instances of the interface, or puts them through a fixed case
-and checks the result is what DASCore's own class gives, ids included.
-Where DASCore's raises, the implementation must raise the same kind of
-error.
-
-A subclass replaces a test it means to differ on with a method of the same
-name, as it would any inherited test.
-
-Examples
---------
->>> import pytest
->>> from dascore.core.coords import get_coord
->>> from dascore.testing import BaseNumericCoordTests
->>>
->>> class TestNumericCoord(BaseNumericCoordTests):
-...     '''DASCore's numeric coordinates, as another package tests its own.'''
-...
-...     @pytest.fixture
-...     def make_coord(self):
-...         return get_coord
+A package's suite subclasses a class here and gives the fixture named in
+its docstring; see [Interfaces](`dascore/docs/notes/interfaces.qmd`).
 """
 
 from __future__ import annotations
@@ -51,11 +29,9 @@ from dascore.utils.identity import H
 
 
 def _missing(value) -> bool:
-    """Whether a scalar is NaN or NaT."""
-    try:
-        return bool(pd.isna(value))
-    except (TypeError, ValueError):
-        return False
+    """Whether a value is a NaN or NaT scalar; None is not."""
+    scalar = value is not None and pd.api.types.is_scalar(value)
+    return scalar and bool(pd.isna(value))
 
 
 def _assert_same(theirs, ours, where: str = "result") -> None:
@@ -64,7 +40,10 @@ def _assert_same(theirs, ours, where: str = "result") -> None:
         numeric = isinstance(ours, BaseNumericCoord)
         kind = BaseNumericCoord if numeric else BaseStringCoord
         assert isinstance(theirs, kind), f"{where} is not a {kind.__name__}"
-        names = ("data_id", "units", "dtype", "shape", "step", "values")
+        names = (
+            *("data_id", "units", "dtype", "shape", "step", "values"),
+            *("evenly_sampled", "sorted", "reverse_sorted", "_partial", "_grid"),
+        )
         for name in (*names, "runs") if numeric else names:
             _assert_same(getattr(theirs, name), getattr(ours, name), f"{where}.{name}")
     elif isinstance(ours, BaseCoordManager):
@@ -84,17 +63,14 @@ def _assert_same(theirs, ours, where: str = "result") -> None:
         assert isinstance(theirs, BaseSpool), f"{where} is not a spool"
         _assert_same(list(theirs), list(ours), where)
     elif isinstance(ours, pd.DataFrame):
-        pd.testing.assert_frame_equal(theirs, ours, obj=where)
+        pd.testing.assert_frame_equal(theirs, ours, check_exact=True, obj=where)
     elif isinstance(ours, pd.Series):
-        pd.testing.assert_series_equal(theirs, ours, obj=where)
+        pd.testing.assert_series_equal(theirs, ours, check_exact=True, obj=where)
     elif isinstance(ours, np.ndarray):
-        theirs = np.asarray(theirs)
-        assert theirs.dtype == ours.dtype, (
-            f"{where} is {theirs.dtype}, not {ours.dtype}"
-        )
-        np.testing.assert_array_equal(theirs, ours, err_msg=where)
+        # Strict, so neither a scalar nor another dtype passes for an array.
+        np.testing.assert_array_equal(np.asarray(theirs), ours, where, strict=True)
     elif isinstance(ours, tuple | list):
-        assert isinstance(theirs, tuple | list), f"{where} is not a sequence"
+        assert isinstance(theirs, type(ours)), f"{where} is not a {type(ours)}"
         assert len(theirs) == len(ours), f"{where} has {len(theirs)} items"
         for number, (one, other) in enumerate(zip(theirs, ours, strict=True)):
             _assert_same(one, other, f"{where}[{number}]")
@@ -104,9 +80,18 @@ def _assert_same(theirs, ours, where: str = "result") -> None:
         for key, value in ours.items():
             _assert_same(theirs[key], value, f"{where}[{key!r}]")
     elif _missing(ours):
-        assert _missing(theirs), f"{where} is {theirs!r}, not {ours!r}"
+        # NaN for NaN, NaT for NaT.
+        kinds = (np.asarray(x).dtype.kind for x in (theirs, ours))
+        assert _missing(theirs) and len(set(kinds)) == 1, f"{where} is {theirs!r}"
     else:
-        assert theirs == ours, f"{where} is {theirs!r}, not {ours!r}"
+        # A number of the same kind (an int for an int, not a bool or an
+        # array), or else an instance of the same class.
+        if isinstance(ours, np.generic | int | float):
+            kinds = (np.asarray(x).dtype.kind for x in (theirs, ours))
+            same = np.ndim(theirs) == 0 and len(set(kinds)) == 1
+        else:
+            same = isinstance(theirs, type(ours))
+        assert same and theirs == ours, f"{where} is {theirs!r}, not {ours!r}"
 
 
 def _check(call, theirs, ours) -> None:
@@ -138,8 +123,8 @@ def _gapped(make):
     return make(segments=tuple(make(start=x, stop=x + 4, step=one) for x in starts))
 
 
-# Each case is built by a function taking get_coord's arguments; ends are
-# int64, so a 32-bit platform builds the same.
+# Each case is built by a function taking get_coord's arguments; integer
+# ends are int64, so a 32-bit platform builds the same.
 _NUMERIC_CASES = {
     "ints": lambda make: make(
         start=np.int64(0), stop=np.int64(10), step=np.int64(1), units="m"
@@ -173,6 +158,7 @@ _COORD_PROPERTIES = (
     "sorted",
     "reverse_sorted",
     "_partial",
+    "_rich_style",
 )
 # Each call is made on the implementation's coordinate and on DASCore's.
 _COORD_CALLS = {
@@ -193,6 +179,7 @@ _COORD_CALLS = {
     "update": lambda c: c.update(data=c.values[::-1]),
     "update_limits": lambda c: c.update_limits(min=c.values[1]),
     "new": lambda c: c.new(units="ft"),
+    "new_unchanged": lambda c: c.new(),
     "set_units": lambda c: c.set_units("km"),
     "convert_units": lambda c: c.convert_units("ft"),
     "simplify_units": lambda c: c.simplify_units(),
@@ -200,10 +187,15 @@ _COORD_CALLS = {
     "reduce": lambda c: c.reduce_coord(),
     "align": lambda c: c.align_to(c[2:5]),
     "approx_equal": lambda c: (c.approx_equal(c), c.approx_equal(c[1:])),
+    "approx_equal_dascore": lambda c: get_coord(data=c).approx_equal(c),
     "next_index": lambda c: c.get_next_index(c.values[2]),
     "summary": lambda c: c.to_summary(),
     "rebuilt": lambda c: get_coord(data=c),
     "identity": lambda c: c._identity(),
+    "index_values": lambda c: c._get_index_values(np.array([0, 2])),
+    "compatible_value": lambda c: c._get_compatible_value(c.values[1]),
+    "index_of": lambda c: c._get_index(c.values[2]),
+    "repr_fields": lambda c: c._repr_fields(),
 }
 _NUMERIC_CALLS = {
     **_COORD_CALLS,
@@ -351,6 +343,9 @@ _MANAGER_CALLS = {
     "simplify_units": lambda m: m.simplify_units(),
     "broadcast": lambda m: m.make_broadcastable_to((m.shape[0], 3)),
     "id": lambda m: H("conformance", m),
+    "dim_summary": lambda m: m._get_dim_summary(),
+    "repr_section": lambda m: str(m._repr_section()),
+    "update_grid": lambda m: m._update_grid(_first(m)),
 }
 
 
@@ -433,7 +428,7 @@ class BaseLazyArrayTests:
 
     @pytest.mark.parametrize("query", [{"x": (1, 2)}, {"y": (1, 3), "samples": True}])
     def test_selection_stays_lazy(self, patch, array, query):
-        """A selection from a patch holding the array is lazy until loaded."""
+        """A selection from a patch holding the array is a lazy array of its values."""
         out = patch.select(**query)
         assert isinstance(out.data, BaseLazyArray)
         _assert_same(out.load().data, _patch_of(array).select(**query).data)

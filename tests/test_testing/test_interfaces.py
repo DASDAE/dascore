@@ -126,7 +126,7 @@ class TestRegisteredSpool(BaseSpoolTests):
 
 
 class TestCheck:
-    """The comparison the tests make catches what differs from dascore's."""
+    """The comparison the tests make, a pure helper, fails what differs."""
 
     @pytest.fixture(scope="class")
     def coord(self):
@@ -149,6 +149,24 @@ class TestCheck:
         text = get_coord(data=np.array(["a", "b"]))
         with pytest.raises(pytest.fail.Exception):
             _check(lambda x: x.set_units("m"), coord, text)
+
+    @pytest.mark.parametrize(
+        ("theirs", "ours"),
+        [
+            (np.float64(0.0), np.zeros(3)),
+            (np.zeros(3, dtype=np.float32), np.zeros(3)),
+            (np.nan, None),
+            (np.datetime64("NaT"), np.nan),
+            ("float64", np.dtype("float64")),
+            ([1, 2], (1, 2)),
+            (np.array([3]), np.int64(3)),
+            (1, True),
+        ],
+    )
+    def test_alike_values(self, theirs, ours):
+        """A value of another type, kind, shape or dtype, equal or not, fails."""
+        with pytest.raises(AssertionError):
+            _check(lambda x: x, theirs, ours)
 
     def test_other_patches(self, random_patch):
         """A spool of other patches fails."""
