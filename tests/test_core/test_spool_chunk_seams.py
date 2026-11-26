@@ -391,7 +391,12 @@ class TestStretchGrid:
         assert rejoined.get_coord("time") == coord
 
     def test_month_long_spread_is_one_grid(self):
-        """A month of drifting files gets a grid ending within a tick."""
+        """
+        A month of drifting files gets a grid ending within a tick.
+
+        An engine test (rule E): the planner is handed a month of rows, which
+        as files would be 43,200 of them.
+        """
         _, frame = dc.spool([_at(0, 60_000)])._plan_frames("time")
         count, step = 43_200, 60_000 * STEP + 15 * STEP // 100
         frame = pd.concat([frame] * count, ignore_index=True)

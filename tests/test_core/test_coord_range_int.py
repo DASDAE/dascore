@@ -903,7 +903,7 @@ class TestValidationErrors:
 
     def test_time_units_do_not_convert(self, hz_1024):
         """Time coordinates hand themselves back from unit conversion."""
-        assert hz_1024._convert_units("ms") is hz_1024
+        assert hz_1024.convert_units("ms") is hz_1024
 
     def test_float_range_failure_is_still_partial(self):
         """A float range that cannot validate stays a partial, as before."""
@@ -983,7 +983,7 @@ class TestFloatRepresentation:
 
     def test_time_units_fixed(self, coarse_time):
         """Time coordinates do not convert units."""
-        assert coarse_time._convert_units("ms") is coarse_time
+        assert coarse_time.convert_units("ms") is coarse_time
 
     def test_zero_d_array_bound(self, floats):
         """A 0-d array bound is unboxed."""

@@ -87,7 +87,7 @@ class TestBasic:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path, "dasdae", file_version="1")
-        spool = Spool._from_file(path).sort("time")
+        spool = dc.spool(path).sort("time")
         loaded_patch = spool[0]
         assert loaded_patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
