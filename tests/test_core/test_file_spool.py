@@ -64,8 +64,8 @@ class TestBasic:
             spool.update()
 
     def test_local_upath_file(self, terra15_v5_path):
-        """Ensure _from_file accepts local UPath inputs."""
-        spool = Spool._from_file(UPath(terra15_v5_path))
+        """Ensure a local UPath opens as a file spool."""
+        spool = dc.spool(UPath(terra15_v5_path))
         assert isinstance(spool, Spool)
         assert len(spool)
 
