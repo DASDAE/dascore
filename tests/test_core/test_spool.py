@@ -6,12 +6,10 @@ import copy
 import functools
 import re
 import shutil
-import sys
 import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from itertools import islice
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -20,6 +18,7 @@ import pytest
 from pandas.errors import PerformanceWarning
 
 import dascore as dc
+import dascore.core.spool as spool_module
 import dascore.utils.patch_assembly as assembly_mod
 from dascore.config import config_context
 from dascore.core.coords import get_coord
@@ -44,7 +43,7 @@ from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
-from dascore.utils.misc import MEMORY_HEADROOM, suppress_warnings
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
@@ -307,22 +306,14 @@ class TestLoad:
     @pytest.fixture()
     def budget(self, monkeypatch):
         """
-        Set the bytes load may use, as the machine reports them.
+        Set what load believes is available, in bytes.
 
-        An environment seam: a stand-in psutil reports the free memory, and
-        None stands for a machine without psutil.
+        Patched where load asks (rule C): a stand-in psutil says the same
+        thing in three times the lines.
         """
 
         def _set(value):
-            if value is None:
-                monkeypatch.setitem(sys.modules, "psutil", None)
-                return
-            free = int(value / MEMORY_HEADROOM)
-            while int(free * MEMORY_HEADROOM) < value:
-                free += 1
-            memory = SimpleNamespace(available=free)
-            psutil = SimpleNamespace(virtual_memory=lambda: memory)
-            monkeypatch.setitem(sys.modules, "psutil", psutil)
+            monkeypatch.setattr(spool_module, "available_memory", lambda: value)
 
         return _set
 
