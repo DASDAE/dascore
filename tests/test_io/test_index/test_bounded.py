@@ -13,23 +13,26 @@ from dascore.core.coords import get_coord
 from dascore.units import m
 
 
-@pytest.fixture()
-def indexed_spool():
-    """A small realized catalog whose patch data remains independently readable."""
+@pytest.fixture(scope="module")
+def indexed_directory(tmp_path_factory):
+    """Twelve short patches, one per file, and the index over them."""
+    path = tmp_path_factory.mktemp("bounded")
     start = np.datetime64("2024-01-01", "ns")
-    patches = [
+    for i in range(12):
         dc.Patch(
             data=np.arange(4),
             coords={"time": start + (10 * i + np.arange(4)) * np.timedelta64(1, "s")},
             dims=("time",),
             attrs={"tag": f"patch-{i:02d}"},
-        )
-        for i in range(12)
-    ]
-    spool = dc.spool(patches)
-    assert spool._catalog.backend is not None
-    yield spool
-    spool._catalog.close()
+        ).io.write(path / f"p{i:02d}.h5", "dasdae")
+    dc.spool(path).update(progress=None)
+    return path
+
+
+@pytest.fixture()
+def indexed_spool(indexed_directory):
+    """A fresh spool over the index, its rows not yet read."""
+    return dc.spool(indexed_directory)
 
 
 @pytest.fixture()
@@ -177,9 +180,8 @@ class TestBoundedMetadata:
     )
     def test_slice_semantics(self, indexed_spool, item):
         """Open, negative, reversed, strided, and empty slices retain membership."""
-        catalog = indexed_spool._catalog
-        expected = catalog.ordered_rows()[item]
-        assert catalog.window(item).ordered_rows() == expected
+        tags = [f"patch-{i:02d}" for i in range(12)]
+        assert [x.attrs.tag for x in indexed_spool[item]] == tags[item]
 
     @pytest.mark.parametrize(
         "item", [slice(1.5, 3), slice(None, 2.5), slice(None, None, 1.5)]
@@ -209,9 +211,8 @@ class TestBoundedMetadata:
         assert list(selected) == []
 
     def test_backend_regex_count(self, indexed_spool):
-        """The backend count API still applies regex residuals exactly."""
-        catalog = indexed_spool.select(tag=re.compile("patch-0[579]"))._catalog
-        assert catalog.backend.count(catalog._queries) == 3
+        """The count still applies regex residuals exactly."""
+        assert len(indexed_spool.select(tag=re.compile("patch-0[579]"))) == 3
 
     def test_regex_item_filters_once(self, indexed_spool):
         """
@@ -380,7 +381,12 @@ class TestSplitMembership:
         ]
 
     def test_empty_cold_catalog(self):
-        """Splitting an empty in-memory spool does not allocate an index."""
+        """
+        Splitting an empty in-memory spool does not allocate an index.
+
+        A performance guard (rule C): an index built for nothing changes no
+        batch, so whether the catalog built one is asked of it.
+        """
         spool = dc.spool([])
         assert list(spool.split(size=1)) == []
         assert spool._catalog._backend is None
