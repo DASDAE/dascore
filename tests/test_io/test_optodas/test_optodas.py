@@ -190,7 +190,12 @@ class TestIndexedMerge:
         assert merged.attrs.gauge_length == patches[0].attrs.gauge_length
 
     def test_reopened_index_keeps_defaults(self, directory):
-        """A persisted index states the defaults it was written with."""
+        """
+        A persisted index states the defaults it was written with.
+
+        An engine test (rule E) of what a row stores; the merge it allows is
+        test_vendor_model_merges_from_the_index.
+        """
         row = dc.spool(directory)._df.iloc[0]
         assert row["_attrs_complete"]
         defaults = {"gauge_length": None, "schema_version": ""}

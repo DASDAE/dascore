@@ -503,7 +503,11 @@ class TestOlderIndex:
             get_backend(path)
 
     def test_directory_spool_rebuilds(self, tmp_path):
-        """A directory spool replaces it with a current index."""
+        """
+        A directory spool replaces it with a current index.
+
+        An engine test (rule E): only the index's own metadata names its version.
+        """
         dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
         spool = dc.spool(tmp_path).update(progress=None)
         index_path = spool.indexer.index_path

@@ -345,7 +345,8 @@ class TestDirectoryIndex:
         # ensure the index was created in the expected place
         assert spool1.indexer.index_path == index_path
         # ensure the default index file was not written
-        default_index_path = bank_path / spool1.indexer._index_name
+        other = dc.spool(tmp_path_factory.mktemp("other"))
+        default_index_path = bank_path / other.indexer.index_path.name
         assert not default_index_path.exists()
         # future banks should remember this path.
         spool2 = dc.spool(bank_path)

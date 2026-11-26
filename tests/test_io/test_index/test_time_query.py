@@ -141,7 +141,6 @@ class TestTimeQuery:
             "later",
             "relative",
         ]
-        spool._catalog.close()
 
     def test_date_strings(self):
         """Date strings on ordinary datetime catalogs retain coercion and trimming."""
@@ -155,7 +154,6 @@ class TestTimeQuery:
         selected = spool.select(time=("2024-01-01T00:00:01", "2024-01-01T00:00:02"))
         assert len(selected) == 1
         assert np.array_equal(selected[0].data, [1, 2])
-        spool._catalog.close()
 
     def test_unrepresentable_date_string_raises(self):
         """A bound no nanosecond time can hold raises rather than matching nothing."""

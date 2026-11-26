@@ -15,7 +15,7 @@ from dascore.units import m
 
 @pytest.fixture()
 def indexed_spool():
-    """A small realized catalog whose patch data remains independently readable."""
+    """A small catalog in SQL, its frame unread, whose patches stay in memory."""
     start = np.datetime64("2024-01-01", "ns")
     patches = [
         dc.Patch(
@@ -27,9 +27,8 @@ def indexed_spool():
         for i in range(12)
     ]
     spool = dc.spool(patches)
-    assert spool._catalog.backend is not None
-    yield spool
-    spool._catalog.close()
+    spool.select(tag="*")  # a selection puts the catalog in SQL, caching nothing
+    return spool
 
 
 @pytest.fixture()
@@ -44,9 +43,7 @@ def unitless_selection():
         ).set_units(distance=None)
         for start in (0, 10, 11)
     ]
-    spool = dc.spool(patches).select(distance=(10 * m, 12 * m))
-    yield spool
-    spool._catalog.close()
+    return dc.spool(patches).select(distance=(10 * m, 12 * m))
 
 
 class TestBoundedMetadata:
@@ -177,9 +174,8 @@ class TestBoundedMetadata:
     )
     def test_slice_semantics(self, indexed_spool, item):
         """Open, negative, reversed, strided, and empty slices retain membership."""
-        catalog = indexed_spool._catalog
-        expected = catalog.ordered_rows()[item]
-        assert catalog.window(item).ordered_rows() == expected
+        tags = [f"patch-{i:02d}" for i in range(12)]
+        assert [x.attrs.tag for x in indexed_spool[item]] == tags[item]
 
     @pytest.mark.parametrize(
         "item", [slice(1.5, 3), slice(None, 2.5), slice(None, None, 1.5)]
@@ -209,9 +205,8 @@ class TestBoundedMetadata:
         assert list(selected) == []
 
     def test_backend_regex_count(self, indexed_spool):
-        """The backend count API still applies regex residuals exactly."""
-        catalog = indexed_spool.select(tag=re.compile("patch-0[579]"))._catalog
-        assert catalog.backend.count(catalog._queries) == 3
+        """The count still applies regex residuals exactly."""
+        assert len(indexed_spool.select(tag=re.compile("patch-0[579]"))) == 3
 
     def test_regex_item_filters_once(self, indexed_spool):
         """
@@ -380,7 +375,12 @@ class TestSplitMembership:
         ]
 
     def test_empty_cold_catalog(self):
-        """Splitting an empty in-memory spool does not allocate an index."""
+        """
+        Splitting an empty in-memory spool does not allocate an index.
+
+        A performance guard (rule C): an index built for nothing changes no
+        batch, so whether the catalog built one is asked of it.
+        """
         spool = dc.spool([])
         assert list(spool.split(size=1)) == []
         assert spool._catalog._backend is None

@@ -866,7 +866,8 @@ class TestOffsetReads:
     def test_file_changed_while_scanned(self, path, monkeypatch):
         """
         Offsets are kept only for the file stated before the scan read it,
-        however the file stats after.
+        however the file stats after. Fault injection (rule B): the stat moves
+        between the two readings, and only the source says what was kept.
         """
         identity, calls = io_core.source_identity, []
 

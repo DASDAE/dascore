@@ -581,12 +581,11 @@ class TestViewSerialization:
         payload = pickle.dumps(view)
         baseline = pickle.dumps(dc.spool([patches[0]]))
         assert len(payload) < 2 * len(baseline)
-        # the round trip serves the right patch from a one-entry registry
+        # the round trip serves the right patch
         loaded = pickle.loads(payload)
-        assert len(loaded._catalog.resolver.live_entries()) == 1
-        assert loaded[0].attrs["tag"] == "0"
-        # and the root spool's registry is untouched
-        assert len(spool._catalog.resolver.live_entries()) == 5
+        assert len(loaded) == 1 and loaded[0] == patches[0]
+        # and the root spool still holds every patch
+        assert [x.attrs.tag for x in spool] == [str(i) for i in range(5)]
 
 
 class TestCatalogConcurrency:
@@ -651,8 +650,9 @@ class TestSelectingWithinAMembership:
         """
         spool = dc.get_example_spool("diverse_das")
         picked = spool[np.array([3, 1, 0])]
-        before = picked._df["_patch_row"].tolist()
-        assert picked.select(tag="*")._df["_patch_row"].tolist() == before
+        before = picked.get_contents()
+        assert not before["time_min"].is_monotonic_increasing
+        assert picked.select(tag="*").get_contents().equals(before)
 
 
 class TestGlobTranslation:

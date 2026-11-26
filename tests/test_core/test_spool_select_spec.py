@@ -41,7 +41,9 @@ def spool(request, tmp_path_factory):
     (plan-backed) catalog via a content-preserving concatenate — the
     parity net proving one selector engine serves identity and
     restructured spools alike. That they are plan-backed shows only in the
-    catalog's resolver, which nothing public names, so it is checked there.
+    catalog's resolver, which nothing public names, so it is checked there
+    (rule E): a derived spool's history would not tell a plan from an eager
+    concatenation, and checking it reads every output.
     """
     # Use 8,000 samples over 8 seconds to keep time windows narrower than a patch.
     # Distance must exceed the 10-sample selection to make that trim meaningful.

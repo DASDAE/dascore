@@ -97,7 +97,12 @@ class TestIndexArgument:
         _assert_same_spool(spool.chunk(time=None), expected.chunk(time=None))
 
     def test_read_only_never_scans(self, data_dir):
-        """A read-only spool neither scans new files nor writes its index."""
+        """
+        A read-only spool neither scans new files nor writes its index.
+
+        The last check asks the index connection itself (rule E): no write
+        through the spool reaches it to be refused.
+        """
         index = data_dir / INDEX_NAME
         before = index.read_bytes()
         dc.write(dc.get_example_patch(), data_dir / "new.h5", "DASDAE")
@@ -129,7 +134,8 @@ class TestIndexArgument:
         spool = dc.spool(index=data_dir / INDEX_NAME)[1:]
         out = pickle.loads(pickle.dumps(spool))
         _assert_same_spool(out, spool)
-        assert out._catalog.read_only
+        with pytest.raises(InvalidSpoolError, match="read-only"):
+            out.update()
 
     def test_other_snap_raises(self, data_dir):
         """Opening an index under another snap raises rather than rescanning."""

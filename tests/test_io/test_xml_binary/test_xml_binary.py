@@ -473,7 +473,12 @@ class TestDirectorySource:
 
 
 class TestDirectoryUnitStaleCheck:
-    """A directory source is compared the way the index recorded it."""
+    """
+    A directory source is compared the way the index recorded it.
+
+    Engine tests (rule E): the resolver's stale check is asked directly;
+    through a spool only the route a merge takes shows its verdict.
+    """
 
     @pytest.fixture
     def indexed_unit(self, binary_xml_directory, tmp_path):

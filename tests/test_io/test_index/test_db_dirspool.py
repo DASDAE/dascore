@@ -70,7 +70,12 @@ class TestDBDirectorySpools:
         assert patch.data.ndim == 2
 
     def test_update_is_incremental(self, db_spool):
-        """A second update with no changes rescans nothing."""
+        """
+        A second update with no changes rescans nothing.
+
+        A performance guard (rule C): a rescan builds the same index, so the
+        times the sources were indexed at are its witness.
+        """
         indexer = db_spool.indexer
         before = indexer._backend.get_sources()["last_indexed_ns"].max()
         db_spool.update(progress=None)
@@ -137,7 +142,11 @@ class TestUpdateLifecycle:
             root.indexer.close()
 
     def test_no_change_update_uses_narrow_projection(self, fresh, monkeypatch):
-        """A no-op update reads only the stat columns, not the wide table."""
+        """
+        A no-op update reads only the stat columns, not the wide table.
+
+        A performance guard (rule C): the wide read gives the same update.
+        """
         _path, spool = fresh
         backend = spool.indexer._backend
 

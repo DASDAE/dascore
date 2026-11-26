@@ -256,7 +256,7 @@ class TestSpoolIterate:
         """
         Missing patches retain ordinary iteration's warning-and-skip policy.
 
-        Fault injection: the count only picks the row which fails.
+        Fault injection (rule B): the count only picks the row which fails.
         """
         spool = dc.get_example_spool(length=3, shape=(2, 5))
         spool.get_contents()

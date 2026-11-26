@@ -78,7 +78,12 @@ class TestSchema:
         assert record.step_numerator is None
 
     def test_stored_columns(self, indexed):
-        """The coord_defs row stores the grid."""
+        """
+        The coord_defs row stores the grid.
+
+        An engine test (rule E): the stored row is the index's own record;
+        what it rebuilds is test_merge_through_index and TestPlannedRows.
+        """
         back = indexed._catalog.backend
         defs = back._fetch_df("SELECT * FROM coord_defs")
         assert defs["is_exact"].all()
@@ -99,7 +104,8 @@ class TestFlatRelation:
         """The private grid column holds a fractional grid and its length.
 
         A whole-tick grid is what the envelope already states, so it is
-        not carried.
+        not carried. An engine test (rule E): what a row holds is the
+        index's own interface, and the column has no public face.
         """
         df = indexed._catalog.to_df()
         grid = df["_time_grid"].iloc[0]
@@ -107,7 +113,11 @@ class TestFlatRelation:
         assert df["_distance_grid"].iloc[0] is None
 
     def test_coord_from_row(self, indexed, hz_1024_patch):
-        """A row rebuilds the exact coordinate, not the rounded one."""
+        """
+        A row rebuilds the exact coordinate, not the rounded one.
+
+        An engine test (rule E) of the row codec, which merges and plans use.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         coord = coord_from_row(row, "time", units="s")
         assert coord.evenly_sampled
@@ -116,7 +126,12 @@ class TestFlatRelation:
         assert distance == hz_1024_patch.get_coord("distance")
 
     def test_converted_units_drop_grid(self, indexed):
-        """A grid in the file's units cannot describe a converted envelope."""
+        """
+        A grid in the file's units cannot describe a converted envelope.
+
+        An engine test (rule E): time is stored in seconds everywhere, so the
+        row is restated in other units to reach this branch.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         row["_time_units_source"] = "ms"
         coord = coord_from_row(row, "time", units="s")
@@ -124,7 +139,11 @@ class TestFlatRelation:
         assert coord.step_exact != Fraction(1, 1024)
 
     def test_envelope_rebuild(self, indexed, hz_1024_patch):
-        """The catalog's stashed envelope rebuilds the exact coordinate."""
+        """
+        The catalog's stashed envelope rebuilds the exact coordinate.
+
+        An engine test (rule E) of the catalog's envelope codec.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         envelope = {k: row[k] for k in ("time_min", "time_max", "time_step")}
         assert _coord_from_envelope(envelope, "time", "s") != (
@@ -163,7 +182,12 @@ class TestFlatRelation:
         assert merged.get_coord("time") == hz_1024_patch.get_coord("time")
 
     def test_chunk_outputs_carry_grid(self, indexed):
-        """A chunk plan keeps the grid of the dimensions it leaves whole."""
+        """
+        A chunk plan keeps the grid of the dimensions it leaves whole.
+
+        An engine test (rule E): the plan's rows and stored definitions are
+        the index's own record.
+        """
         chunked = indexed.chunk(distance=100)
         rows = chunked._catalog.to_df()
         assert rows["_time_grid"].notna().all()
@@ -171,7 +195,12 @@ class TestFlatRelation:
         assert (defs["step_denominator"] == 2).any()
 
     def test_descending_whole_ticks_carry_grid(self, tmp_path):
-        """A descending range needs its grid: the envelope does not name its start."""
+        """
+        A descending range needs its grid: the envelope does not name its start.
+
+        An engine test (rule E) of the row codec: a load or a selection reads
+        the file whenever a row cannot state its coordinate.
+        """
         patch = dc.get_example_patch()
         reversed_patch = patch.update_coords(time=patch.get_coord("time")[::-1])
         dc.write(reversed_patch, tmp_path / "rev.h5", "dasdae")
@@ -182,7 +211,11 @@ class TestFlatRelation:
         assert coord == reversed_patch.get_coord("time")
 
     def test_descending_grid(self, indexed, hz_1024_patch):
-        """A descending grid rebuilds from its maximum, which the row states."""
+        """
+        A descending grid rebuilds from its maximum, which the row states.
+
+        An engine test (rule E), for the reason the test above gives.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         reversed_time = hz_1024_patch.get_coord("time")[::-1]
         run = reversed_time.runs[0]
@@ -207,7 +240,11 @@ class TestPlannedRows:
     """Plan outputs keep the grid only while the coordinate's identity holds."""
 
     def test_grid_with_identity(self, indexed):
-        """A kept def key brings the grid into the output record."""
+        """
+        A kept def key brings the grid into the output record.
+
+        An engine test (rule E) of the plan's record codec.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         record = _coord_record_from_row(row, "time")
         assert record is not None
@@ -215,7 +252,12 @@ class TestPlannedRows:
         assert record.is_exact
 
     def test_grid_without_identity(self, indexed):
-        """A re-planned output states a rounded step and no grid."""
+        """
+        A re-planned output states a rounded step and no grid.
+
+        An engine test (rule E): a plan row without its def key stands for a
+        re-planned output, which no public call names.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         row["_time_def_key"] = None
         record = _coord_record_from_row(row, "time")
@@ -224,7 +266,12 @@ class TestPlannedRows:
 
     @staticmethod
     def _assert_rows_rebuild(chunked):
-        """Every output row rebuilds the time coordinate its patch loads with."""
+        """
+        Every output row rebuilds the time coordinate its patch loads with.
+
+        Asked of the plan's rows (rule E): the contents state the ends, not the
+        grid between them.
+        """
         rows = chunked._catalog.to_df()
         assert len(rows) == len(chunked) > 1
         for patch, (_, row) in zip(chunked, rows.iterrows(), strict=True):

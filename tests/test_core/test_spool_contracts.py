@@ -57,7 +57,12 @@ class TestEqualityContract:
         assert one != other
 
     def test_plan_states_the_dtype_a_coordinate_it_passes_through_has(self):
-        """A plan equals its materialization, and agrees on the dtype."""
+        """
+        A plan equals its materialization, and agrees on the dtype.
+
+        The rows' stored dtype is read off the frame (rule E): nothing public
+        states it, and an output rebuilt from its row alone depends on it.
+        """
         patch = dc.get_example_patch()
         patch = patch.update_coords(distance=np.arange(patch.shape[0], dtype=np.int32))
         planned = dc.spool(patch).chunk(time=2)
@@ -301,7 +306,12 @@ class TestEqualityComparesLoads:
         assert snapped != dc.spool([numbered])
 
     def test_route_which_is_not_a_plan(self, ones, monkeypatch):
-        """Rows another library's route loads compare by metadata alone."""
+        """
+        Rows another library's route loads compare by metadata alone.
+
+        An engine test (rule E): no dascore spool routes rows to another
+        loader, so the resolver is handed one.
+        """
         chunked = dc.spool([ones]).chunk(time=3)
         resolver = chunked._catalog.resolver
         routes = {prefix: object() for prefix in resolver.plan_entries()}
@@ -577,7 +587,7 @@ class TestChunkPlanContract:
         """
         A chunked spool is a fresh derived catalog, not a mode flag.
 
-        An engine test: which resolver the catalog holds is the state under
+        An engine test (rule E): which resolver the catalog holds is the state under
         test, and nothing public names it, so its class is checked.
         """
         spool = dc.spool(patches)

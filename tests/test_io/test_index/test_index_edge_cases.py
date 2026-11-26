@@ -105,7 +105,11 @@ class TestIndexCoverageEdges:
             backend.query(Query(coords={"distance": (1 * m, 2 * s)}))
 
     def test_export_skips_source_without_patches(self, tmp_path):
-        """A non-fiber file gets a sources row with no patches; export skips it."""
+        """
+        A non-fiber file gets a sources row with no patches; export skips it.
+
+        An engine test (rule E) of the backend's source and export records.
+        """
         dc.get_example_patch().io.write(tmp_path / "a.h5", "dasdae")
         (tmp_path / "junk.txt").write_text("not a fiber file")
         spool = dc.spool(tmp_path).update(progress=None)
@@ -1396,6 +1400,9 @@ class TestPivotEdge:
         """
         A held coordinate with no data id has no identity key, yet a
         selection on it still trims the envelope the spool presents.
+
+        Fault injection (rule B): every summary states a data id, so the
+        index is handed one which does not, and its rows are checked for it.
         """
 
         def no_time_id(name, summary):
@@ -1580,9 +1587,7 @@ class TestReservedAttrNames:
         with pytest.warns(UserWarning, match="collide with coordinate envelope"):
             spool = dc.spool([p1, p2])
             df = spool.get_contents()
-        backend = spool._catalog.backend
         # the attr is indexed and stays queryable via the _attrs namespace.
-        assert "event_time_min" in backend.attr_names()
         assert len(spool.select(_attrs={"event_time_min": 123.0})) == 1
         # the flat column is the coordinate envelope, not the attr value.
         assert "event_time_min" in df.columns
@@ -1613,7 +1618,9 @@ class TestReservedAttrNames:
         """A real ``*_units`` attr is not an envelope column; stays queryable."""
         patch = dc.get_example_patch().update_attrs(data_units="strain")
         spool = dc.spool([patch])
-        assert "data_units" in spool._catalog.backend.attr_names()
+        # the index holds the unit by its symbol
+        assert len(spool.select(data_units="ϵ")) == 1
+        assert not len(spool.select(data_units="m"))
 
 
 class TestWhatARowCannotState:
@@ -1633,7 +1640,13 @@ class TestWhatARowCannotState:
         ],
     )
     def test_the_row_says_whether_it_holds_every_attr(self, attrs, complete):
-        """An attr the index cannot hold (a value, a name) marks the row."""
+        """
+        An attr the index cannot hold (a value, a name) marks the row.
+
+        An engine test (rule E): a merge of such files shows it only with the
+        files made unreadable, many times the lines and time of reading the
+        row's flag (test_unreconstructable_attributes_keep_the_patch_path).
+        """
         patch = dc.get_example_patch().update_attrs(**attrs)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
@@ -1642,7 +1655,12 @@ class TestWhatARowCannotState:
         assert "_attrs_complete" not in spool.get_contents().columns
 
     def test_numeric_types_survive_catalog_transfer(self):
-        """Exporting and combining catalogs retains original numeric scalar types."""
+        """
+        Exporting and combining catalogs retains original numeric scalar types.
+
+        An engine test (rule E): the merge these types rebuild is shown only with
+        the files made unreadable, many times the cost of reading the rows.
+        """
         patch = dc.get_example_patch().update_attrs(
             channel_count=5, scale=np.float32(1.25)
         )
@@ -1658,7 +1676,12 @@ class TestWhatARowCannotState:
             assert "_attr_dtypes" not in spool.get_contents().columns
 
     def test_vendor_defaults_ride_with_the_row(self):
-        """A vendor field the index stores no value for is kept as JSON."""
+        """
+        A vendor field the index stores no value for is kept as JSON.
+
+        An engine test (rule E) of the row's encoding; the merge it allows is
+        test_vendor_model_merges_from_the_index.
+        """
         patch = dc.get_example_patch().update(attrs=FebusPatchAttrs())
         row = dc.spool([patch])._df.iloc[0]
         assert row["_attrs_complete"]
@@ -1730,7 +1753,12 @@ class TestWhatARowCannotState:
         assert record.attr_defaults is None
 
     def test_source_dtypes_survive_shared_coordinate_definitions(self):
-        """Identical coordinates share a definition; a dtype is part of one."""
+        """
+        Identical coordinates share a definition; a dtype is part of one.
+
+        An engine test (rule E): the shared definitions are the index's own
+        record, which nothing public names.
+        """
         base = dc.get_example_patch()
         dtypes = (np.int32, np.float64, np.float64)
         patches = [
@@ -1752,7 +1780,12 @@ class TestWhatARowCannotState:
             assert keys[1] == keys[2] != keys[0]
 
     def test_flat_attribute_collision_requires_loading(self):
-        """Queryable attrs omitted from flat rows cannot be reconstructed there."""
+        """
+        Queryable attrs omitted from flat rows cannot be reconstructed there.
+
+        An engine test (rule E), for the reason
+        test_the_row_says_whether_it_holds_every_attr gives.
+        """
         patch = dc.get_example_patch().update_attrs(distance_units="custom")
         spool = dc.spool([patch])
         with pytest.warns(UserWarning, match="collide with coordinate envelope"):
@@ -1761,7 +1794,12 @@ class TestWhatARowCannotState:
         assert len(spool.select(_attrs={"distance_units": "custom"})) == 1
 
     def test_associated_anywhere_is_associated(self):
-        """A name dimensional on one patch and riding another on the next."""
+        """
+        A name dimensional on one patch and riding another on the next.
+
+        An engine test (rule E) of what the backend records; the merge it
+        forces is test_a_coord_associated_anywhere_loads_patch.
+        """
         first = dc.get_example_patch()
         second = first.rename_coords(distance="sensor")
         values = second.get_coord("sensor").values * 2.0

@@ -35,7 +35,11 @@ class TestGappedFile:
     """The gapped patch is indexed with its runs and loads whole."""
 
     def test_one_row_with_its_runs(self, gapped_file_spool):
-        """The index holds the patch as one row whose coordinate has two runs."""
+        """
+        The index holds the patch as one row whose coordinate has two runs.
+
+        An engine test (rule E): the stored runs are the index's own record.
+        """
         contents = gapped_file_spool.get_contents()
         assert len(contents) == 2
         # the flat contents state the step of a range only

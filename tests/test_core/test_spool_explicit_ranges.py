@@ -56,7 +56,12 @@ def _patch(values):
 
 @pytest.fixture
 def legacy_residual_source(tmp_path):
-    """Make real files whose second persisted key lacks exact metadata."""
+    """
+    Make real files whose second persisted key lacks exact metadata.
+
+    Fault injection (rule B): no index written now names a key its file does
+    not hold, so the second file's record is rewritten to stand for one.
+    """
 
     def make(second_start):
         for index, start in enumerate((0, second_start)):
@@ -140,7 +145,12 @@ class TestExplicitSelect:
         )
 
     def test_schema_answers_without_pieces(self, monkeypatch):
-        """Which coordinates every patch holds is known before pieces are built."""
+        """
+        Which coordinates every patch holds is known before pieces are built.
+
+        An engine test (rule E) and a performance guard (rule C): the backend
+        answers, and building the pieces would give the same answer slowly.
+        """
         spool = dc.spool(_patch(np.arange(10)))
         windowed = spool.select(distance=np.array([[0, 5]]))
 
@@ -196,7 +206,11 @@ class TestExplicitSelect:
         ] == [5, 1]
 
     def test_operational_backend_uses_realized_window_view(self):
-        """Backend operations beyond schema names describe the selected view."""
+        """
+        Backend operations beyond schema names describe the selected view.
+
+        An engine test (rule E) of the view's backend, which merges consult.
+        """
         selected = dc.spool(_patch(np.arange(10))).select(distance=np.array([[2, 4]]))
         backend = selected._catalog.backend
         assert backend.coord_dims_map() == {"distance": "distance"}
@@ -529,7 +543,11 @@ class TestExplicitMetadataSources:
             len(getattr(source, method)(distance=window))
 
     def test_missing_nested_member_metadata_is_not_assumed_complete(self):
-        """A derived view cannot invent a lost irregular member coordinate."""
+        """
+        A derived view cannot invent a lost irregular member coordinate.
+
+        Fault injection (rule B), for the reason the test above gives.
+        """
         source = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
         derived = source.chunk(distance=None)
         derived._catalog.resolver.loader.live._registry.clear()
@@ -609,7 +627,12 @@ class TestExplicitMetadataSources:
         assert merged.get_contents()["channel_units"].tolist() == ["m"]
 
     def test_missing_live_coordinate_metadata_is_not_assumed_complete(self):
-        """A stale live index cannot advertise unverified uneven samples."""
+        """
+        A stale live index cannot advertise unverified uneven samples.
+
+        Fault injection (rule B): a held patch never leaves its registry, so
+        the registry is emptied.
+        """
         source = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))
         source.get_contents()
         source._catalog.resolver._registry.clear()
@@ -740,7 +763,12 @@ class TestExplicitDerivedViews:
         assert _listed(piece.get_contents()) == [[6, 8]]
 
     def test_live_parent_revision_updates_selected_pieces(self):
-        """The view rebuilds its piece plan after a live parent changes."""
+        """
+        The view rebuilds its piece plan after a live parent changes.
+
+        An engine test (rule E): a spool never changes under its holder, so
+        only the catalog's own `add` changes a live parent.
+        """
         source = dc.spool(_patch(np.arange(10)))
         selected = source.select(distance=np.array([[5, 15]]))
         assert len(selected) == 1
@@ -1299,7 +1327,12 @@ class TestChainedExplicitCut:
         assert len(coord_from_row(row, "x")) == len(out[0].get_coord("x"))
 
     def test_subdivided_grid_is_not_trusted(self):
-        """Subdivided rows copy the source grid; each output states its own."""
+        """
+        Subdivided rows copy the source grid; each output states its own.
+
+        An engine test (rule E) of the spool's subdividing step, handed cuts
+        no public window makes on its own.
+        """
         coord = _exact_values(300)
         patch = dc.Patch(
             np.zeros((2, 300)), coords={"d": [0, 1], "x": coord}, dims=("d", "x")

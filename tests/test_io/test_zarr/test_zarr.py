@@ -300,7 +300,12 @@ class TestDirectorySpool:
         assert sorted(path.rglob("*")) == before
 
     def test_second_update_not_a_change(self, zarr_patch, tmp_path):
-        """A store spool's second update does not re-index the store."""
+        """
+        A store spool's second update does not re-index the store.
+
+        A performance guard (rule C): re-indexing builds the same index, so the
+        time the store was indexed at is its witness.
+        """
         path = tmp_path / "a.zarr"
         dc.write(zarr_patch, path, "zarr", file_version="2")
         spool = dc.spool(path).update()

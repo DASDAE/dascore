@@ -347,7 +347,8 @@ class TestMoveDetection:
     def test_directory_rename_no_rescan(self, hive_spool, hive_dir):
         """
         Renaming a partition directory never re-reads file contents, so a
-        file no scan can read keeps its row until it is read again.
+        file no scan can read keeps its row until it is read again. That the
+        rows are the same rows is asked of the frame (rule E).
         """
         ids_before = list(hive_spool._df["_patch_row"])
         name = "cable=north__tag=raw/das_file.h5"
@@ -473,7 +474,12 @@ class TestMoveDetection:
             spool.indexer.close()
 
     def test_detect_moves_skips_unstatted_and_root(self, hive_spool, hive_dir):
-        """Sources without stored stats and the root unit never match."""
+        """
+        Sources without stored stats and the root unit never match.
+
+        An engine test (rule E) of the indexer's move matching, on stats no
+        walk of a directory produces.
+        """
         files = {"new.h5": (1, 2, hive_dir / "new.h5")}
         stored = {"gone.h5": None, ".": (1, 2)}
         moves = hive_spool.indexer._detect_moves(["gone.h5", "."], stored, files)

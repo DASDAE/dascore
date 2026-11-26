@@ -146,7 +146,11 @@ class TestFileUnion:
         assert len(combined) == len(restricted) + 1
 
     def test_union_preserves_def_keys(self, dir_spool, contiguous_patches):
-        """Coord definitions deduplicate by def key across members."""
+        """
+        Coord definitions deduplicate by def key across members.
+
+        An engine test (rule E): a def key is the index's own record.
+        """
         _, p2 = contiguous_patches
         combined = dir_spool + dc.spool([p2])
         df = combined._catalog.to_df()
@@ -335,7 +339,12 @@ class TestSameFileUnion:
         assert len(combined) == 2
 
     def test_union_absorbs_only_member_registry_entries(self, contiguous_patches):
-        """Live entries outside a member's rows don't ride into the union."""
+        """
+        Live entries outside a member's rows don't ride into the union.
+
+        An engine test (rule E): which patches a resolver holds shows only in
+        its registries.
+        """
         p1, p2 = contiguous_patches
         t1 = p1.get_coord("time")
         narrowed = dc.spool([p1, p2]).select(time=(None, t1.max()))

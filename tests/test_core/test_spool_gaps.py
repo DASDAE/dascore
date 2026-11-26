@@ -609,7 +609,12 @@ class TestGappedPatchRows:
         assert (gap["time_min"], gap["time_max"]) == (11 * ONE_MS, 14 * ONE_MS)
 
     def test_identity_is_stable(self):
-        """A gapped patch given again is the same entry."""
+        """
+        A gapped patch given again is the same entry.
+
+        The catalog's own `add` is an engine call (rule E): a spool never
+        changes under its holder.
+        """
         patch = _time_runs_patch(3)
         assert len(dc.spool([patch, patch])) == 1
         spool = dc.spool([patch])
