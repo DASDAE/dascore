@@ -12,7 +12,11 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.exceptions import (
+    InvalidSpoolQueryError,
+    MissingPatchError,
+    ParameterError,
+)
 from dascore.io.index.planned import (
     PLAN_SCHEME,
     PlanResolver,
@@ -111,7 +115,11 @@ class TestHelpers:
             )
 
     def test_derived_catalog_adds_patch_rows(self, patches):
-        """source_rows without _patch_row get positional row numbers."""
+        """
+        source_rows without _patch_row get positional row numbers.
+
+        An engine test (rule E) of `derived_catalog`, handed rows no spool makes.
+        """
         spool = dc.spool(patches)
         rows = spool._df.drop(columns=["_patch_row"]).reset_index(drop=True)
         members = pd.DataFrame(
@@ -232,6 +240,9 @@ class TestDerivedComposition:
     def test_missing_live_patch_getitem(self, patches):
         """A missing registry entry surfaces as MissingPatchError, not
         out-of-bounds.
+
+        Fault injection (rule B): a held patch never leaves its registry, so
+        the registry is emptied.
         """
         spool = dc.spool(patches[:1])
         _ = spool.get_contents()  # realize rows
@@ -288,8 +299,9 @@ class TestAuxiliaryCoords:
         held = p.update_attrs(station="B").update_coords(lat=("distance", lat))
         patches = [held, p.update_attrs(station="A")]
         chunked = dc.spool(patches if held_first else patches[::-1]).chunk(time=2)
-        names = chunked._catalog.backend.attr_names()
-        assert len(chunked) and not {x for x in names if x.startswith("lat")}
+        assert len(chunked) and "lat_min" in chunked.get_contents().columns
+        with pytest.raises(InvalidSpoolQueryError, match="not an attribute"):
+            chunked.select(_attrs={"lat_min": 0.0})
 
     @pytest.fixture()
     def sensor_spool(self):
@@ -319,7 +331,12 @@ class TestAuxiliaryCoords:
         assert coord.max() == 20.0
 
     def test_aux_identity_preserved_when_unchanged(self, sensor_spool):
-        """Members sharing one def key off the planned dim keep identity."""
+        """
+        Members sharing one def key off the planned dim keep identity.
+
+        An engine test (rule E): a def key is the index's own record of a
+        coordinate, which no public call shows.
+        """
         derived = sensor_spool.chunk(time=None, conflict="drop")
         source_key = sensor_spool._catalog.to_df()["_sensor_def_key"].iloc[0]
         derived_key = derived._catalog.to_df()["_sensor_def_key"].iloc[0]
@@ -327,7 +344,11 @@ class TestAuxiliaryCoords:
         assert str(derived_key).startswith("fp:")
 
     def test_aux_identity_dropped_when_riding_trimmed_dim(self, sensor_spool):
-        """A residual trim on distance voids sensor's identity claim."""
+        """
+        A residual trim on distance voids sensor's identity claim.
+
+        An engine test (rule E), for the reason the test above gives.
+        """
         d = sensor_spool[0].get_coord("distance")
         lo, hi = d.min() + 5 * d.step, d.min() + 50 * d.step
         selected = sensor_spool.select(distance=(lo, hi))
@@ -495,7 +516,12 @@ class TestWindowedRiders:
             _assert_holds(*_bounds(contents, out, name))
 
     def test_windowed_identity(self, sensor_spool):
-        """A trimmed coordinate no longer claims its source's identity."""
+        """
+        A trimmed coordinate no longer claims its source's identity.
+
+        An engine test (rule E): a def key is the index's own record of a
+        coordinate, which no public call shows.
+        """
         source = sensor_spool._catalog.to_df()
         out = sensor_spool.select(sensor=np.array([[1020, 1040]]))
         key = out._catalog.to_df()["_distance_def_key"].iloc[0]
@@ -621,7 +647,11 @@ class TestCollapseGuard:
     """collapse_working_df only applies to plan-backed catalogs."""
 
     def test_non_plan_catalog_returns_none(self):
-        """A live catalog has no plan to collapse."""
+        """
+        A live catalog has no plan to collapse.
+
+        An engine test (rule E) of `collapse_working_df`.
+        """
         catalog = dc.spool([dc.get_example_patch()])._catalog
         assert collapse_working_df(catalog) is None
 
@@ -630,7 +660,8 @@ class TestCollapseGuard:
         The flag says a member is a trim rather than a whole source.
 
         Losing it makes the next plan mark such a member "load whole",
-        and the loader then reads the entire file it was a slice of.
+        and the loader then reads the entire file it was a slice of. An
+        engine test (rule E): the read it saves changes no output.
         """
         chunked = dc.spool(dc.get_example_patch()).chunk(time=2)
         collapsed = collapse_working_df(chunked._catalog)
@@ -704,7 +735,12 @@ class TestStatedUnits:
 
 
 class TestMemberArraySource:
-    """Tests for naming a member's stored array, and the gates before it."""
+    """
+    Tests for naming a member's stored array, and the gates before it.
+
+    Engine tests (rule E): the resolver's gates, on rows changed in ways no
+    index writes; through a spool only the route a merge takes shows them.
+    """
 
     @pytest.fixture(scope="class")
     def file_spool(self, tmp_path_factory):
