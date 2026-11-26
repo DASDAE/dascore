@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise, product
 
-import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -294,34 +293,6 @@ def stored_float(tmp_path_factory):
     values = np.arange(np.prod(shape), dtype=np.float64).reshape(shape)
     directory = tmp_path_factory.mktemp("stored_float")
     return stored_patch(directory, values - values.mean())
-
-
-def only_decodable(directory, data, chunks, keep):
-    """
-    A lazy patch of the example patch holding `data`, stored as gzip chunks
-    of shape `chunks` of which only those inside `keep`, a box of slices,
-    decode: a read past the box raises.
-    """
-    path = directory / "decodable.h5"
-    dc.write(dc.get_example_patch().new(data=data), path, "dasdae")
-    with h5py.File(path, "r+") as h5:
-        (group,) = h5["waveforms"].values()
-        attrs = dict(group["data"].attrs)
-        del group["data"]
-        node = group.create_dataset(
-            "data", data.shape, data.dtype, chunks=chunks, compression="gzip"
-        )
-        node.attrs.update(attrs)
-        starts = [range(0, n, c) for n, c in zip(data.shape, chunks, strict=True)]
-        for corner in product(*starts):
-            box = tuple(slice(a, a + c) for a, c in zip(corner, chunks, strict=True))
-            if all(k.start <= b.start and b.stop <= k.stop for b, k in zip(box, keep)):
-                # stored as if the gzip filter were skipped
-                raw = np.ascontiguousarray(data[box]).tobytes()
-                node.id.write_direct_chunk(corner, raw, 1)
-            else:
-                node.id.write_direct_chunk(corner, b"not gzip")
-    return dc.spool(path).set_backend("lazy")[0]
 
 
 def unreadable(stored, directory, name="unreadable"):
