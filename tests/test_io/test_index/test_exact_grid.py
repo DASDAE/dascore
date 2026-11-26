@@ -78,7 +78,12 @@ class TestSchema:
         assert record.step_numerator is None
 
     def test_stored_columns(self, indexed):
-        """The coord_defs row stores the grid."""
+        """
+        The coord_defs row stores the grid.
+
+        An engine test (rule E): the stored row is the index's own record;
+        what it rebuilds is test_merge_through_index and TestPlannedRows.
+        """
         back = indexed._catalog.backend
         defs = back._fetch_df("SELECT * FROM coord_defs")
         assert defs["is_exact"].all()
@@ -99,7 +104,8 @@ class TestFlatRelation:
         """The private grid column holds a fractional grid and its length.
 
         A whole-tick grid is what the envelope already states, so it is
-        not carried.
+        not carried. An engine test (rule E): what a row holds is the
+        index's own interface, and the column has no public face.
         """
         df = indexed._catalog.to_df()
         grid = df["_time_grid"].iloc[0]
@@ -107,7 +113,11 @@ class TestFlatRelation:
         assert df["_distance_grid"].iloc[0] is None
 
     def test_coord_from_row(self, indexed, hz_1024_patch):
-        """A row rebuilds the exact coordinate, not the rounded one."""
+        """
+        A row rebuilds the exact coordinate, not the rounded one.
+
+        An engine test (rule E) of the row codec, which merges and plans use.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         coord = coord_from_row(row, "time", units="s")
         assert coord.evenly_sampled
@@ -116,7 +126,12 @@ class TestFlatRelation:
         assert distance == hz_1024_patch.get_coord("distance")
 
     def test_converted_units_drop_grid(self, indexed):
-        """A grid in the file's units cannot describe a converted envelope."""
+        """
+        A grid in the file's units cannot describe a converted envelope.
+
+        An engine test (rule E): time is stored in seconds everywhere, so the
+        row is restated in other units to reach this branch.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         row["_time_units_source"] = "ms"
         coord = coord_from_row(row, "time", units="s")
@@ -124,7 +139,11 @@ class TestFlatRelation:
         assert coord.step_exact != Fraction(1, 1024)
 
     def test_envelope_rebuild(self, indexed, hz_1024_patch):
-        """The catalog's stashed envelope rebuilds the exact coordinate."""
+        """
+        The catalog's stashed envelope rebuilds the exact coordinate.
+
+        An engine test (rule E) of the catalog's envelope codec.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         envelope = {k: row[k] for k in ("time_min", "time_max", "time_step")}
         assert _coord_from_envelope(envelope, "time", "s") != (
@@ -163,7 +182,12 @@ class TestFlatRelation:
         assert merged.get_coord("time") == hz_1024_patch.get_coord("time")
 
     def test_chunk_outputs_carry_grid(self, indexed):
-        """A chunk plan keeps the grid of the dimensions it leaves whole."""
+        """
+        A chunk plan keeps the grid of the dimensions it leaves whole.
+
+        An engine test (rule E): the plan's rows and stored definitions are
+        the index's own record.
+        """
         chunked = indexed.chunk(distance=100)
         rows = chunked._catalog.to_df()
         assert rows["_time_grid"].notna().all()
@@ -176,23 +200,23 @@ class TestFlatRelation:
         reversed_patch = patch.update_coords(time=patch.get_coord("time")[::-1])
         dc.write(reversed_patch, tmp_path / "rev.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        row = spool._catalog.to_df().iloc[0].to_dict()
-        assert row["_time_grid"] is not None
-        coord = coord_from_row(row, "time", units="s")
-        assert coord == reversed_patch.get_coord("time")
+        time = reversed_patch.get_coord("time")
+        lims = (time.values[200], time.values[100])
+        part = spool.select(time=lims)[0].get_coord("time")
+        assert part == reversed_patch.select(time=lims).get_coord("time")
 
-    def test_descending_grid(self, indexed, hz_1024_patch):
-        """A descending grid rebuilds from its maximum, which the row states."""
-        row = indexed._catalog.to_df().iloc[0].to_dict()
-        reversed_time = hz_1024_patch.get_coord("time")[::-1]
-        run = reversed_time.runs[0]
-        num, den, offset = run.step_num, run.step_den, run.phase
-        row["time_step"] = -row["time_step"]
-        row["_time_grid"] = (num, den, offset, len(reversed_time))
-        assert coord_from_row(row, "time", units="s") == reversed_time
-        # without the grid the row cannot say where a descending range starts
-        row["_time_grid"] = None
-        assert coord_from_row(row, "time", units="s") is None
+    def test_descending_grid(self, hz_1024_patch, tmp_path):
+        """A descending exact grid survives indexing and comes back whole."""
+        reversed_patch = hz_1024_patch.update_coords(
+            time=hz_1024_patch.get_coord("time")[::-1]
+        )
+        dc.write(reversed_patch, tmp_path / "down.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        time = reversed_patch.get_coord("time")
+        assert spool[0].get_coord("time") == time
+        lims = (time.values[200], time.values[100])
+        part = spool.select(time=lims)[0].get_coord("time")
+        assert part == reversed_patch.select(time=lims).get_coord("time")
 
     def test_float_row_skips_grid(self):
         """A plan row stating a float placeholder dtype cannot use an integer grid."""
@@ -207,7 +231,11 @@ class TestPlannedRows:
     """Plan outputs keep the grid only while the coordinate's identity holds."""
 
     def test_grid_with_identity(self, indexed):
-        """A kept def key brings the grid into the output record."""
+        """
+        A kept def key brings the grid into the output record.
+
+        An engine test (rule E) of the plan's record codec.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         record = _coord_record_from_row(row, "time")
         assert record is not None
@@ -215,7 +243,12 @@ class TestPlannedRows:
         assert record.is_exact
 
     def test_grid_without_identity(self, indexed):
-        """A re-planned output states a rounded step and no grid."""
+        """
+        A re-planned output states a rounded step and no grid.
+
+        An engine test (rule E): a plan row without its def key stands for a
+        re-planned output, which no public call names.
+        """
         row = indexed._catalog.to_df().iloc[0].to_dict()
         row["_time_def_key"] = None
         record = _coord_record_from_row(row, "time")
@@ -224,13 +257,22 @@ class TestPlannedRows:
 
     @staticmethod
     def _assert_rows_rebuild(chunked):
-        """Every output row rebuilds the time coordinate its patch loads with."""
-        rows = chunked._catalog.to_df()
-        assert len(rows) == len(chunked) > 1
-        for patch, (_, row) in zip(chunked, rows.iterrows(), strict=True):
+        """
+        Every output's row states the time coordinate its patch loads with:
+        the contents name the patch's ends, and a plan over the outputs cuts
+        them as it cuts the loaded patches.
+        """
+        loaded = list(chunked)
+        contents = chunked.get_contents()
+        assert len(contents) == len(loaded) > 1
+        for row, patch in zip(contents.itertuples(), loaded, strict=True):
             coord = patch.get_coord("time")
-            assert row["_time_grid"][::3] == (1953125, len(coord))
-            assert coord_from_row(row.to_dict(), "time", units="s") == coord
+            assert (row.time_min, row.time_max) == (coord.min(), coord.max())
+        again = list(chunked.chunk(time=0.25, keep_partial=True))
+        expected = list(dc.spool(loaded).chunk(time=0.25, keep_partial=True))
+        assert len(again) == len(expected)
+        for one, other in zip(again, expected, strict=True):
+            assert one.get_coord("time") == other.get_coord("time")
 
     def test_stretch_slice_states_grid(self, split_spool):
         """A chunk across files on one fractional grid states its slice of it.
