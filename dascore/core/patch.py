@@ -18,15 +18,12 @@ from dascore import transform
 from dascore.backends import ArrayBackend, LazyBackend, _settled, get_backend
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
-from dascore.core.coordmanager import (
-    BaseCoordManager,
-    CoordManager,
-    get_coord_manager,
-)
+from dascore.core.coordmanager import BaseCoordManager, CoordManager
 from dascore.core.patch_meta import PatchMeta, _as_dtype
 from dascore.core.processor import check_patch_listings
+from dascore.core.provider import providing
 from dascore.core.source import ArraySource
-from dascore.lazy.array import BaseLazyArray, LazyArray
+from dascore.lazy.array import BaseLazyArray, LazyArray, lazy_array
 from dascore.lazy.recipe import Recipe
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
@@ -193,9 +190,10 @@ class Patch(NamespaceOwner, PatchMeta):
         # A recipe is data nothing has been done to yet. Held bare it would
         # read as numpy, and every operation would load it unasked.
         if isinstance(data, Recipe):
-            data = LazyArray(data)
+            with providing(self._provider):
+                data = lazy_array(data)
         data = array(data)
-        coords = get_coord_manager(coords, dims=dims, shape=data.shape)
+        coords = self._coord_manager(coords, dims=dims, shape=data.shape)
         data = array(coords.validate_data(data))
         if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
             msg = f"The data are {data.dtype}, not the dtype given: {dtype}."

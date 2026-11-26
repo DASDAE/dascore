@@ -36,6 +36,7 @@ import numpy as np
 
 from dascore.backends import ArrayBackend, NumpyBackend, _refuse_mixed
 from dascore.core.interfaces import BaseLazyArray
+from dascore.core.provider import provided
 from dascore.exceptions import ParameterError
 from dascore.lazy import execute
 from dascore.lazy.chain import Chain, Node
@@ -215,6 +216,27 @@ class LazyArray(BaseLazyArray):
     def __array_namespace__(self, api_version: str | None = None):
         """Return the namespace which names the lazy backend."""
         return _NAMESPACE
+
+
+@provided
+def lazy_array(recipe: Recipe) -> BaseLazyArray:
+    """
+    Return the lazy array a patch holds for a recipe, nothing read.
+
+    A patch class's [`Provider`](`dascore.core.provider.Provider`) can
+    build the array instead; see
+    [Interfaces](`dascore/docs/notes/interfaces.qmd`).
+
+    Examples
+    --------
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.lazy.array import LazyArray, lazy_array
+    >>> from dascore.lazy.recipe import Recipe
+    >>>
+    >>> recipe = Recipe.from_source(ArraySource.full((2, 3), 1.0))
+    >>> assert isinstance(lazy_array(recipe), LazyArray)
+    """
+    return LazyArray(recipe)
 
 
 # Names the backend only: the lazy backend runs operations through their

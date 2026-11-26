@@ -65,6 +65,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.core.interfaces import BaseCoordManager
+from dascore.core.provider import provided
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
@@ -1484,6 +1485,7 @@ class CoordManager(RichRepr, DascoreBaseModel, BaseCoordManager):
         return self.update(**out)
 
 
+@provided
 def get_coord_manager(
     coords: CoordManagerInput | BaseCoordManager | None = None,
     dims: Sequence[str] | None = None,
@@ -1504,6 +1506,12 @@ def get_coord_manager(
     shape
         The data array shape which will be managed by coord manager. This
         allows non-coordinate dimensions to be initiated.
+
+    Notes
+    -----
+    A patch class's [`Provider`](`dascore.core.provider.Provider`) can
+    build the manager instead; see
+    [Interfaces](`dascore/docs/notes/interfaces.qmd`).
 
     Examples
     --------
