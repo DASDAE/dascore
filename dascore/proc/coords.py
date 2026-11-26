@@ -768,7 +768,8 @@ class Select(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
-        Data not read yet stay unread, so there is nothing to copy.
+        Data not read yet stay unread and uncopied, so the result may keep
+        its source.
     relative
         If True, select ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative. The first bound
@@ -1038,6 +1039,8 @@ class Unselect(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
+        Data not read yet stay unread and uncopied, so the result may keep
+        its source.
     relative
         If True, unselect ranges are relative to the start of coordinate, if
         positive, or the end of the coordinate, if negative.
@@ -1126,6 +1129,8 @@ class Order(_Query):
     ----------
     copy
         Copy the result so it does not retain the original data array.
+        Data not read yet stay unread and uncopied, so the result may keep
+        its source.
     relative
         If True, order values are relative to the start/end of the coordinates.
     samples
