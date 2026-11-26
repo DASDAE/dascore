@@ -868,7 +868,7 @@ class Spool(NodeRepr, NamespaceOwner, BaseSpool):
         Return a view stating coordinates of unknown range exactly.
 
         Reads the labels of each named coordinate (by default, each of
-        [`unresolved_coords`](`dascore.Spool.unresolved_coords`)) for the
+        `unresolved_coords`) for the
         rows which state its range unknown, from their sources and without
         their data, warning how many files it read. Returns this spool
         where no row states one unknown.
