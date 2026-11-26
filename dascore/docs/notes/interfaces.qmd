@@ -23,7 +23,27 @@ DASCore's classes subclass their interfaces. Another package's classes register 
 
 Registration is known at run time only: a type checker does not see it, so a registered class does not type-check as the interface. Registering checks no member, so a registered class must give them all, with the meanings DASCore's class gives them. Members with a leading underscore are for implementers, not users. A numeric coordinate's `runs` are DASCore's run classes, [`Grid`](`dascore.core.coords.Grid`), [`Labels`](`dascore.core.coords.Labels`) and [`Blank`](`dascore.core.coords.Blank`).
 
-Where DASCore builds an object, it builds its own: [`get_coord(data=...)`](`dascore.core.coords.get_coord`) and [`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) rebuild another package's coordinate as DASCore's from its `model_dump`, so DASCore's managers hold DASCore's coordinates. Another package's manager, lazy array or spool is kept as it is: a patch holds the manager, a selection keeps the lazy array unread until `load`, or `set_backend` to a backend in memory, reads it, and `dc.spool` returns the spool. A DASDAE file names the kind of each coordinate it stores, whichever class held it.
+Where DASCore builds an object, it builds its own: [`get_coord(data=...)`](`dascore.core.coords.get_coord`) and [`get_coord_manager`](`dascore.core.coordmanager.get_coord_manager`) rebuild another package's coordinate as DASCore's from its `model_dump`, so DASCore's managers hold DASCore's coordinates. Another package's manager, lazy array or spool is kept as it is: a patch holds the manager, a selection keeps the lazy array unread until `load`, or `set_backend` to a backend in memory, reads it, the lazy backend holds it as one of its own, and `dc.spool` returns the spool. A DASDAE file names the kind of each coordinate it stores, whichever class held it.
+
+## Testing one
+
+`dascore.testing` holds a class of tests for each interface but `BaseCoord`: `BaseNumericCoordTests`, `BaseStringCoordTests`, `BaseCoordManagerTests`, `BaseLazyArrayTests` and `BaseSpoolTests`. A package's suite subclasses one and gives the fixture its docstring names, a function building the package's objects: `make_coord` takes the arguments of `get_coord`, `make_manager` those of `get_coord_manager`, `make_lazy_array` a NumPy array, and `make_spool` what `dascore.spool` takes. Each test checks the objects are instances of the interface, or that a fixed case gives what DASCore's own class gives, ids included, raising where DASCore's raises. A test the package means to differ on is replaced by a method of the same name. DASCore's suite runs the same tests on its own classes.
+
+```python
+import pytest
+
+from dascore.testing import BaseNumericCoordTests
+
+
+class TestNumericCoord(BaseNumericCoordTests):
+    """The package's numeric coordinates."""
+
+    @pytest.fixture
+    def make_coord(self):
+        return build_coord  # takes the arguments of get_coord
+```
+
+DASCore's suite also checks that every attribute DASCore reads on one of these objects, outside the module of DASCore's class, is a member its interface states.
 
 ## Members
 

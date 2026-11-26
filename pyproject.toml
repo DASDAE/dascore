@@ -374,10 +374,11 @@ exclude = ["dascore/docs"]
 # No type-checking rule is ignored globally.
 
 # These files import optional or untyped modules (xarray, numba,
-# h5py.h5r) that are not installed in the pre-commit hook's environment.
+# h5py.h5r, pytest) that are not installed in the pre-commit hook's environment.
 [[tool.ty.overrides]]
 include = [
     "dascore/compat.py",
+    "dascore/testing/interfaces.py",
     "dascore/utils/jit.py",
     "dascore/xarray/index.py",
     "dascore/io/dasvader/utils.py",
