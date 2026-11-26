@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import NumericCoord
+from dascore.core.coords import BaseNumericCoord
 from dascore.exceptions import CoordMergeError
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.warnings import DASCoreWarning
@@ -97,7 +97,7 @@ class TestMergeCoordManagers:
         cm2 = self._get_offset_coord_manager(cm1, time=-dt * 1.1)
         out = merge_coord_managers([cm1, cm2], dim="time")
         new_time = out.coord_map["time"]
-        assert isinstance(new_time, NumericCoord) and not new_time.sorted
+        assert isinstance(new_time, BaseNumericCoord) and not new_time.sorted
 
     def test_merge_snap_but_not_needed(self, cm_basic):
         """Specifying a snap tolerance even if coords line up should work."""

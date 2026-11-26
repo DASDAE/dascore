@@ -29,7 +29,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import NumericCoord, concat_coords, get_coord
+from dascore.core.coords import BaseNumericCoord, concat_coords, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     ChunkError,
@@ -64,7 +64,7 @@ from tests.conftest import join_patches
 
 def _is_segmented(coord) -> bool:
     """True when the coordinate holds more than one run, as a gap makes it."""
-    return isinstance(coord, NumericCoord) and coord.runs_count > 1
+    return isinstance(coord, BaseNumericCoord) and coord.runs_count > 1
 
 
 @pytest.fixture(scope="class")

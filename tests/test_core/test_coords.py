@@ -23,6 +23,7 @@ from dascore.compat import random_state
 from dascore.constants import ONE_SECOND
 from dascore.core.coords import (
     BaseCoord,
+    BaseNumericCoord,
     Blank,
     CoordString,
     CoordSummary,
@@ -1064,7 +1065,7 @@ class TestSelect:
     def test_crossed_segmented_relative_bounds(self, reverse):
         """A segment must not reorder relative bounds resolved by its parent."""
         coord = concat_coords(get_coord(data=np.arange(5)), get_coord(data=[8, 9]))
-        assert isinstance(coord, NumericCoord) and coord.runs_count > 1
+        assert isinstance(coord, BaseNumericCoord) and coord.runs_count > 1
         if reverse:
             coord = coord.sort(reverse=True)[0]
         selected, indexer = coord.select((3, -7), relative=True)
@@ -2110,7 +2111,7 @@ class TestNonOrderedArrayCoords:
     def test_sort(self, random_coord):
         """Ensure the coord can be ordered."""
         new, _ordering = random_coord.sort()
-        assert isinstance(new, NumericCoord)
+        assert isinstance(new, BaseNumericCoord)
         assert new.sorted and not new.evenly_sampled
 
     def test_snap(self, random_coord):
@@ -3201,7 +3202,7 @@ class TestIssues:
         dates = evenly_sampled_date_coord.values
         data = np.stack([dates, dates], axis=-1)
         coord = get_coord(data=data)
-        assert isinstance(coord, NumericCoord)
+        assert isinstance(coord, BaseNumericCoord)
 
     @pytest.mark.parametrize("dtype", ["m8[us]", "M8[us]"])
     def test_big_endian_labels_holding_nat_bytes(self, dtype):
@@ -3499,7 +3500,7 @@ class TestStringCoordUtilities:
             dtype=object,
         )
         out = get_coord(data=data)
-        assert isinstance(out, NumericCoord)
+        assert isinstance(out, BaseNumericCoord)
 
     def test_detect_string_like_array(self):
         """The helper should recognize string arrays only."""
@@ -3669,7 +3670,7 @@ class TestIndexCoordinate:
             get_coord(data=values[:4], snap=False),
             get_coord(data=values[4:], snap=False),
         )
-        assert isinstance(coord, NumericCoord) and coord.runs_count > 1
+        assert isinstance(coord, BaseNumericCoord) and coord.runs_count > 1
         indices = np.array([0, 2, 4, 6])
         if operation == "stride":
             out = coord.index(slice(None, None, 2))

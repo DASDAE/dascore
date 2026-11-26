@@ -8,7 +8,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.core.spool import Spool
+from dascore.core.spool import BaseSpool, Spool
 from dascore.exceptions import PatchAttributeError
 
 
@@ -17,7 +17,7 @@ class TestBasic:
 
     def test_type(self, terra15_file_spool, terra15_v5_path):
         """Ensure a file spool was returned."""
-        assert isinstance(terra15_file_spool, Spool)
+        assert isinstance(terra15_file_spool, BaseSpool)
         assert len(terra15_file_spool) == len(dc.scan_to_df(terra15_v5_path))
 
     def test_get_patch(self, terra15_file_spool):

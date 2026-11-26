@@ -24,6 +24,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.core.coordmanager import BaseCoordManager
 from dascore.core.coords import _float_allowance, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -1606,7 +1607,7 @@ class TestExampleUri:
     def test_scan_payloads(self, example_uri):
         """Payload scans accept the uri too."""
         payload = dc.scan_payloads(example_uri, snap=False)[0]
-        assert isinstance(payload.coords, dc.CoordManager)
+        assert isinstance(payload.coords, BaseCoordManager)
 
     def test_scan_through_manager_names_the_file(self, example_uri, example_path):
         """A manager wrapping a uri still reports a reloadable source path."""
@@ -1951,7 +1952,7 @@ class TestScanOnError:
 
         assert len(out) == 1
         payload = out[0]
-        assert isinstance(payload.coords, dc.CoordManager)
+        assert isinstance(payload.coords, BaseCoordManager)
         assert payload.coords == random_patch.coords
         assert payload.summary.source_path == ""
         assert payload.summary.source_format == ""
@@ -1966,7 +1967,7 @@ class TestScanOnError:
         out = dc.scan_payloads(spool)
 
         assert [payload.attrs.tag for payload in out] == ["one", "two"]
-        assert all(isinstance(payload.coords, dc.CoordManager) for payload in out)
+        assert all(isinstance(payload.coords, BaseCoordManager) for payload in out)
 
     def test_scan_multi_patch_includes_source_patch_key(self, tmp_path):
         """Multi-patch scan rows should include a stable source patch id."""
@@ -2260,7 +2261,7 @@ class TestReloadableSourcePath:
 
         assert seen["snap"] is False
         assert len(out) == 1
-        assert isinstance(out[0].coords, dc.CoordManager)
+        assert isinstance(out[0].coords, BaseCoordManager)
         assert str(out[0].summary.source_path) == str(path)
         assert out[0].summary.source_format == fiber_io.name
         assert out[0].summary.source_version == fiber_io.version
