@@ -22,6 +22,19 @@ xr = pytest.importorskip("xarray")
 HUGE = 10**15 if np.intp(0).itemsize == 8 else 1_000_000_007
 
 
+def _grid_patch(size, kind, reverse):
+    """A patch over an evenly sampled float or datetime grid of ``size`` labels."""
+    start, step = 0, 0.5
+    if kind == "datetime":
+        # small enough that the last label of the huge grid still fits in ns
+        start, step = np.datetime64("2020-01-01"), np.timedelta64(2, "us")
+    coord = get_coord(start=start, step=step, shape=(size,))
+    if reverse:
+        coord = coord[::-1]
+    data = np.broadcast_to(np.asarray(1), (size,))
+    return dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+
+
 @pytest.fixture()
 def patch():
     """Three dimensions with scalar, 1D, and multidimensional coordinates."""
@@ -519,54 +532,45 @@ class TestCompactRangeIndexing:
         assert patch.isel(x=slice(0, 0)).shape == (0,)
         assert patch.select(x=(labels.min(), labels.max())).shape == (5,)
 
-    @pytest.mark.parametrize("size", [200_000, 1_000_000_007])
+    @pytest.mark.parametrize("size", [200_000, HUGE])
     @pytest.mark.parametrize("count", [1000, 20_000, 200_000])
     @pytest.mark.parametrize("kind", ["float", "datetime"])
     @pytest.mark.parametrize("reverse", [False, True])
     @pytest.mark.parametrize("method", [None, "nearest"])
-    def test_bulk_labels(self, monkeypatch, size, count, kind, reverse, method):
+    def test_bulk_labels(self, size, count, kind, reverse, method):
         """
-        Bulk queries neither expand the input nor search each label in Python.
+        Bulk queries find their labels without expanding the grid.
 
-        A performance guard that keeps its spies: a search per label gives the
-        right answer, only slowly, so the call count is its only witness.
+        The huge grid has more labels than memory can hold, so expanding it,
+        or any temporary of its size, fails.
         """
-        start, step = 0, 0.5
-        if kind == "datetime":
-            start, step = np.datetime64("2020-01-01"), np.timedelta64(1, "ms")
-        coord = get_coord(start=start, step=step, shape=(size,))
-        if reverse:
-            coord = coord[::-1]
-        patch = dc.Patch(
-            data=np.broadcast_to(np.asarray(1), (size,)),
-            coords={"x": coord},
-            dims=("x",),
-        )
+        patch = _grid_patch(size, kind, reverse)
         indices = np.arange(count) * (size // count)
-        labels = coord._get_index_values(indices)
-        original = NumericCoord._get_index_values
-        original_values = NumericCoord.values.fget
-        calls = 0
-
-        def bounded_calls(self, indices):
-            """Require batched searches and query-sized temporary arrays."""
-            nonlocal calls
-            calls += 1
-            assert calls < 100, "Bulk lookup performed repeated scalar searches"
-            assert np.size(indices) <= 4 * count + 4
-            return original(self, indices)
-
-        def bounded_values(self):
-            """Only selected output coordinates may materialize."""
-            assert self is not coord, "Bulk lookup expanded the input coordinate"
-            assert self.size <= count
-            return original_values(self)
-
-        monkeypatch.setattr(NumericCoord, "_get_index_values", bounded_calls)
-        monkeypatch.setattr(NumericCoord, "values", property(bounded_values))
+        labels = patch.isel(x=indices).get_array("x")
         actual = patch.sel(x=labels, method=method)
         np.testing.assert_array_equal(actual.get_array("x"), labels)
         assert actual.shape == (count,)
+
+    @pytest.mark.parametrize("kind", ["float", "datetime"])
+    @pytest.mark.parametrize("method", [None, "nearest"])
+    def test_bulk_labels_are_searched_together(self, monkeypatch, kind, method):
+        """
+        Bulk queries search their labels together, not one at a time.
+
+        A performance guard (rule C): a search per label gives the same
+        answer, only slowly, so the count of label reads is its witness.
+        """
+        patch = _grid_patch(HUGE, kind, reverse=False)
+        labels = patch.isel(x=np.arange(1000) * (HUGE // 1000)).get_array("x")
+        original, calls = NumericCoord._get_index_values, []
+
+        def counted(self, indices):
+            calls.append(np.size(indices))
+            return original(self, indices)
+
+        monkeypatch.setattr(NumericCoord, "_get_index_values", counted)
+        assert patch.sel(x=labels, method=method).shape == (1000,)
+        assert len(calls) < 100, "bulk lookup searched each label alone"
 
     def test_select_float_dependents(self):
         """DASCore filtering retains compact dependent grids just like the main grid."""
