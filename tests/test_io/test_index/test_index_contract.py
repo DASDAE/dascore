@@ -221,12 +221,11 @@ class TestElementDtype:
         assert got == expected
 
     def test_dtype_is_private_in_flat_relation(self):
-        """The spool sees `_dtype`, never a public `dtype` column."""
+        """The spool states the dtype by its public name, never `_dtype`."""
         spool = dc.get_example_spool("random_das")
-        df = spool._df
-        assert "dtype" not in df.columns
-        assert set(df["_dtype"]) == {str(spool[0].data.dtype)}
-        assert "_dtype" not in spool.get_contents().columns
+        contents = spool.get_contents()
+        assert "_dtype" not in contents.columns
+        assert set(contents["dtype"]) == {str(spool[0].data.dtype)}
 
     def test_dtype_attr_does_not_shadow_column(self, tmp_path):
         """A patch attr named `dtype` is skipped, not written to the column."""
@@ -940,8 +939,11 @@ class TestLineageIds:
         dc.get_example_patch().abs().io.write(tmp_path / "source.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         view = spool.select(**{dim: bounds}, relative=True)
-        columns = ["_data_size", "data_id"]
-        assert view._df[columns].equals(spool._df[columns])
+        columns = ["data_size", "data_id"]
+        kept = view.get_contents()[columns]
+        assert kept.equals(spool.get_contents()[columns]) and kept.notna().all(
+            axis=None
+        )
         assert view[0].attrs.data_id == spool[0].attrs.data_id
         assert np.array_equal(view[0].data, spool[0].data)
 
@@ -963,23 +965,21 @@ class TestLineageIds:
         )
         view = spool.select(distance=(0, bound), relative=True)
         noop = spool.select(distance=(0, None), relative=True)
-        columns = ["_data_size", "data_id"]
+        columns = ["data_size", "data_id"]
+        rows, noop_rows = view.get_contents()[columns], noop.get_contents()[columns]
+        before = spool.get_contents()[columns]
         for index, (source, selected) in enumerate(zip(spool, view, strict=True)):
             direct = source.select(distance=(0, bound), relative=True)
             assert np.array_equal(selected.data, direct.data)
             assert selected.attrs.data_id == direct.attrs.data_id
-            row = view._df.iloc[index]
-            noop_row = noop._df.iloc[index][columns]
             assert noop[index].attrs.data_id == source.attrs.data_id
+            row, noop_row = rows.iloc[index], noop_rows.iloc[index]
             if source.get_coord("distance").dtype == np.dtype("float32"):
-                assert pd.isna(row["_data_size"])
-                assert pd.isna(row["data_id"])
-                assert noop_row.isna().all()
+                assert row.isna().all() and noop_row.isna().all()
             else:
-                assert row["_data_size"] == selected.data.size
+                assert row["data_size"] == selected.data.size
                 assert row["data_id"] == selected.attrs.data_id
-                assert noop_row.equals(spool._df.iloc[index][columns])
-                assert selected.shape == source.shape
+                assert noop_row.equals(before.iloc[index])
             # the whole span keeps every sample, float32 or not
             assert selected.shape == source.shape
 
@@ -991,14 +991,12 @@ class TestLineageIds:
             patch.io.write(tmp_path / f"{size}.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         view = spool.select(distance=(0, 10), relative=True)
-        whole = spool._df["distance_max"] <= 10
+        before, after = spool.get_contents(), view.get_contents()
+        whole = (before["distance_max"] <= 10).to_numpy()
         assert whole.any() and not whole.all()
-        for column in ("_data_size", "data_id"):
-            assert view._df.loc[~whole, column].isna().all()
-            assert (
-                view._df.loc[whole, column].to_numpy()
-                == spool._df.loc[whole, column].to_numpy()
-            ).all()
+        for column in ("data_size", "data_id"):
+            assert after[column][~whole].isna().all()
+            assert (after[column][whole] == before[column][whole]).all()
         for original, selected in zip(spool, view, strict=True):
             direct = original.select(distance=(0, 10), relative=True)
             assert selected.attrs.data_id == direct.attrs.data_id
@@ -1074,7 +1072,12 @@ class TestLineageIds:
         assert len(spool.select(tag="")) == int((tags == "").sum())
 
     def test_nothing_to_forget(self, written_spool):
-        """Forgetting the ids of no sources is not an error."""
+        """
+        Forgetting the ids of no sources is not an error.
+
+        An engine test (rule E): a move always names sources the index holds, so
+        only the backend is handed none.
+        """
         backend = written_spool.update()._catalog.backend
         assert backend._forget_lineage([]) is None
 
@@ -1165,7 +1168,12 @@ class TestCoordDefinitionDedup:
         return frame["def_key"].tolist()
 
     def test_scalar_spelling_shares_one_definition(self):
-        """A range written with an int start is the one written with a float."""
+        """
+        A range written with an int start is the one written with a float.
+
+        An engine test (rule E): how many definitions the index stores is its
+        own record, which no public call shows.
+        """
         base = dc.get_example_patch()
         n = base.shape[base.get_axis("distance")]
         as_ints = base.update_coords(distance=get_coord(start=0, stop=n, step=1.0))
@@ -1177,7 +1185,11 @@ class TestCoordDefinitionDedup:
         assert len(set(keys)) == 1
 
     def test_time_precision_shares_one_definition(self):
-        """A step in milliseconds is the same step in nanoseconds."""
+        """
+        A step in milliseconds is the same step in nanoseconds.
+
+        An engine test (rule E), for the reason the test above gives.
+        """
         t0 = np.datetime64("2020-01-01", "ns")
         data = np.random.default_rng(0).random((2, 100))
         coarse = get_coord(
