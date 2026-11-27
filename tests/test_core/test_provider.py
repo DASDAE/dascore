@@ -8,6 +8,7 @@ so these set it on subclasses as another package does.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -15,9 +16,16 @@ import pytest
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseNumericCoord, NumericCoord, get_coord
-from dascore.core.provider import Provider, providing
+from dascore.core.provider import (
+    Provider,
+    Readers,
+    active_readers,
+    providing,
+    reading_with,
+)
 from dascore.core.source import ArraySource
 from dascore.exceptions import PatchCoordinateError
+from dascore.io import FiberIO
 from dascore.lazy.array import LazyArray, lazy_array
 from dascore.lazy.recipe import Recipe
 
@@ -282,3 +290,144 @@ class TestPartialProvider:
             moved = coord.update_limits(min=0.0, max=5.0)
         assert isinstance(stepped, NumericCoord) and stepped.step == 2.0
         assert isinstance(moved, NumericCoord) and moved.max() < 5.0
+
+
+def _none(*args):
+    """Leave it to dascore."""
+
+
+class _Readers:
+    """Readers answering for a file with the metadata dascore read of another."""
+
+    def __init__(self, path):
+        name, version = dc.get_format(path)
+        fiber_io = dc.io.core.FiberIO.manager.get_fiberio(format=name, version=version)
+        self.metadata = fiber_io.get_metadata(path)
+        self.format = (name, version)
+        self.asked = []
+
+    def get_format(self, manager, *args):
+        self.asked.append(("format", manager.source))
+        return self.format
+
+    def prepare_read(self, fiber_io, manager, snap, keys):
+        self.asked.append(("read", fiber_io.name))
+
+        def load(requests):
+            for windows, _ in requests:
+                yield np.zeros([stop - start for start, stop in windows])
+
+        return self.metadata, load
+
+    def reads(self, fiber_io, manager):
+        return True
+
+
+class _ScansItself(FiberIO):
+    """A reader whose own scan takes a path, as a plugin's may."""
+
+    name = "_test_scans_itself"
+    version = "1"
+
+    def get_version(self, resource, **kwargs):
+        """Claim no file; the readers name the format."""
+
+    def scan(self, resource, **kwargs):
+        """Summarize the example patch, if handed the path."""
+        assert isinstance(resource, Path)
+        return [dc.get_example_patch().drop_data()]
+
+
+@pytest.fixture
+def dasdae_file(tmp_path):
+    """A DASDAE file of the example patch."""
+    path = tmp_path / "example.h5"
+    dc.write(dc.get_example_patch(), path, "DASDAE")
+    return path
+
+
+class TestReaders:
+    """Another package's readers answer for dascore's while active."""
+
+    def test_inactive_outside(self, dasdae_file):
+        """Outside the block dascore's readers read."""
+        readers = _Readers(dasdae_file)
+        with reading_with(Readers(readers.get_format, _none, _none)):
+            assert active_readers() is not None
+        dc.read(dasdae_file)
+        assert readers.asked == [] and active_readers() is None
+
+    def test_get_format(self, dasdae_file):
+        """A file's format is the active readers' answer."""
+        readers = _Readers(dasdae_file)
+        readers.format = ("DASDAE", "answered")
+        with reading_with(Readers(readers.get_format, _none, _none)):
+            assert dc.get_format(dasdae_file) == ("DASDAE", "answered")
+        assert readers.asked == [("format", dasdae_file)]
+
+    def test_read_and_scan(self, dasdae_file):
+        """A read loads the readers' arrays and a scan takes their metadata."""
+        readers = _Readers(dasdae_file)
+        active = Readers(_none, readers.prepare_read, readers.reads)
+        with reading_with(active):
+            patch = dc.read(dasdae_file)[0]
+            summary = dc.scan(dasdae_file)[0]
+        assert np.all(patch.data == 0)
+        assert readers.asked == [("read", "DASDAE")] * 2
+        # What dascore makes of the metadata, the ids included, is its own.
+        expected = dc.read(dasdae_file)[0]
+        assert patch.coords == expected.coords
+        assert patch.attrs.origin_id == expected.attrs.origin_id
+        assert summary == dc.scan(dasdae_file)[0]
+
+    def test_unopened(self, dasdae_file, tmp_path):
+        """A file the readers read is handed to them unopened."""
+        readers = _Readers(dasdae_file)
+        # Not an HDF5 file, so it fails wherever dascore opens it.
+        path = tmp_path / "unopenable.h5"
+        path.write_bytes(b"not a file dascore reads")
+        active = Readers(readers.get_format, readers.prepare_read, readers.reads)
+        with reading_with(active):
+            patch = dc.read(path)[0]
+            (summary,) = dc.scan(path)
+        assert patch.shape == summary.shape == readers.metadata[0].shape
+
+    def test_own_scan_gets_its_resource(self, dasdae_file):
+        """A reader with a scan of its own is handed its resource, as without."""
+        answer = ("_test_scans_itself", "1")
+        active = Readers(lambda *args: answer, _none, lambda *args: True)
+        with reading_with(active):
+            (summary,) = dc.scan(dasdae_file, on_error="raise")
+        assert summary.shape == dc.get_example_patch().shape
+
+    def test_backend_reading_for_itself(self, dasdae_file):
+        """
+        A backend reading for itself reads the window through dascore's reader.
+
+        The loader fills what a read loads; a lazy array loads after the read.
+        """
+        readers = _Readers(dasdae_file)
+        active = Readers(_none, readers.prepare_read, readers.reads)
+        with reading_with(active):
+            eager = dc.spool(dasdae_file).set_backend("numpy")[0]
+            lazy = dc.spool(dasdae_file).set_backend("lazy")[0]
+        assert np.all(eager.data == 0)
+        assert np.array_equal(lazy.load().data, dc.read(dasdae_file)[0].data)
+
+    def test_left_to_dascore(self, dasdae_file):
+        """A file the readers say they read but then leave is dascore's."""
+        nothing = Readers(_none, _none, lambda *args: True)
+        with reading_with(nothing):
+            patch = dc.read(dasdae_file)[0]
+            summary = dc.scan(dasdae_file)[0]
+        assert patch == dc.read(dasdae_file)[0]
+        assert summary == dc.scan(dasdae_file)[0]
+
+    def test_directory_scan(self, tmp_path):
+        """A directory's scan, readers active which read nothing, is dascore's."""
+        nothing = Readers(_none, _none, _none)
+        spool = dc.get_example_spool("random_das")
+        path = dc.examples.spool_to_directory(spool, tmp_path / "dir")
+        with reading_with(nothing):
+            summaries = dc.scan(path)
+        assert summaries == dc.scan(path)
