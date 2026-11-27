@@ -1297,7 +1297,7 @@ def resolve_channel_pieces(
         # has a fiber at all -- so there are no pieces to report; the
         # caller reads which of the two off `reasons` and `name`.
         return name, None, reasons
-    out, unusable = [], []
+    out, unusable, judged = [], [], {}
     for row in _placed_rows(contexts, placements, frame, name):
         unusable.append(row.reason)
         if row.grid is None:
@@ -1306,12 +1306,16 @@ def resolve_channel_pieces(
             # above rather than answered for.
             out.append([(row.low, row.high)] if complement and not row.reason else [])
             continue
-        mask = np.ones(len(row.grid), dtype=bool)
-        for wanted, selector in query.items():
-            mask &= _channel_matches(
-                inventory, row.context.optical_path, wanted, selector, row.distances
-            )
-        out.append(_mask_pieces(~mask if complement else mask, *row.grid_bounds))
+        # Rows placed alike match alike, so each placement is judged once.
+        if (pieces := judged.get(row.key)) is None:
+            mask = np.ones(len(row.grid), dtype=bool)
+            for wanted, selector in query.items():
+                mask &= _channel_matches(
+                    inventory, row.context.optical_path, wanted, selector, row.distances
+                )
+            pieces = _mask_pieces(~mask if complement else mask, *row.grid_bounds)
+            judged[row.key] = pieces
+        out.append(list(pieces))
     return name, out, [x or y for x, y in zip(reasons, unusable, strict=True)]
 
 
@@ -1351,6 +1355,8 @@ class PlacedRow(NamedTuple):
     grid: np.ndarray | None
     distances: np.ndarray | None
     reason: str | None
+    # The placement's key, shared by every row placed alike.
+    key: tuple | None = None
 
     @property
     def grid_bounds(self) -> tuple:
@@ -1415,7 +1421,7 @@ def _placed_rows(contexts, placements, frame, name: str):
             placed = (grid, context.acquisition.channel_to_distance(on_axis, axis=axis))
             cache[key] = placed
         grid, distances = placed
-        yield PlacedRow(context, low, high, grid, distances, None)
+        yield PlacedRow(context, low, high, grid, distances, None, key)
 
 
 def resolve_split_pieces(inventory, contexts, frame, name, keep) -> tuple:
