@@ -110,12 +110,12 @@ jobs:
           python -m pip install "pyodide-build==$PYODIDE_BUILD_VERSION"
           pyodide xbuildenv install "$PYODIDE_VERSION"
           pyodide venv .venv-pyodide
-          # findiff, pyyaml, tabulate and ipython are not dascore requirements,
-          # but the documentation examples import them, so the doc tests below
-          # cannot run without them. platformdirs 4.14 imports os.geteuid,
-          # which Pyodide lacks.
+          # findiff, pyyaml, tabulate, ipython and array-api-strict are not
+          # dascore requirements, but the documentation examples import them,
+          # so the doc tests below cannot run without them. platformdirs 4.14
+          # imports os.geteuid, which Pyodide lacks.
           .venv-pyodide/bin/pip install dist/*.whl pytest \
-            findiff pyyaml tabulate ipython "platformdirs<4.14"
+            findiff pyyaml tabulate ipython array-api-strict "platformdirs<4.14"
 
       - name: prepare test data cache
         uses: ./.github/actions/prime-test-data-cache
