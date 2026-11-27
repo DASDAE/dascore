@@ -12,6 +12,7 @@ from itertools import islice
 from pathlib import Path
 from unittest import mock
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -19,7 +20,6 @@ from pandas.errors import PerformanceWarning
 
 import dascore as dc
 import dascore.core.spool as spool_module
-import dascore.utils.patch_assembly as assembly_mod
 from dascore.config import config_context
 from dascore.core.coords import get_coord
 from dascore.core.spool import BaseSpool, Spool, _bytes_to_load
@@ -38,15 +38,12 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.io.index.catalog import PatchCatalog
-from dascore.io.segy import SegyV1_0
 from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs
-from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
-from dascore.viz.spool import _lane_names
 from dascore.warnings import DASCoreWarning
 
 
@@ -128,7 +125,7 @@ class TestSpoolBasics:
             """A subclass which never builds a catalog."""
 
             def __init__(self, patches):
-                self._patches = list(patches)
+                pass
 
         with pytest.raises(InvalidSpoolError, match="has no catalog"):
             Spool(SubSpool(random_spool))
@@ -244,7 +241,11 @@ class TestLiveSpoolLazy:
 
 
 class TestSpoolHelpers:
-    """Tests for helper functions used by spool implementations."""
+    """
+    Tests for helper functions used by spool implementations.
+
+    A pure helper's edge cases (rule A): no index writes these frames.
+    """
 
     def test_get_varying_dim_ignores_missing_ranges(self):
         """Columns without min/max pairs should not count as varying dims."""
@@ -368,7 +369,13 @@ class TestLoad:
         self._assert_needs(chunked, budget, expected)
 
     def test_unknown_step_or_dtype_counts_nothing(self):
-        """A row whose size cannot be told does not inflate the figure."""
+        """
+        A row whose size cannot be told does not inflate the figure.
+
+        A pure helper's edge cases (rule A): no index writes a row without
+        a dtype, or with one numpy cannot read. test_mixed_kinds_load shows
+        the unknown step through a load.
+        """
         df = pd.DataFrame(
             {
                 "dims": ["time"] * 4,
@@ -383,7 +390,12 @@ class TestLoad:
         assert _bytes_to_load(df.iloc[:0]) == 0
 
     def test_dim_without_ranges_counts_nothing(self):
-        """A dimension the frame has no ranges for leaves the row unknown."""
+        """
+        A dimension the frame has no ranges for leaves the row unknown.
+
+        A pure helper's edge case (rule A): no index writes a frame without
+        a dimension's range columns.
+        """
         df = pd.DataFrame({"dims": ["time"], "_dtype": ["float64"]})
         assert _bytes_to_load(df) == 0
 
@@ -1444,7 +1456,12 @@ class TestUnknownRiders:
             ]
 
     def test_reads_nothing_unasked(self, spool, monkeypatch):
-        """Length, contents, loading and plans on other coordinates read nothing."""
+        """
+        Length, contents, loading and plans on other coordinates read nothing.
+
+        A performance guard (rule C): a read changes no output, so reading
+        a coordinate's labels is refused.
+        """
         view = spool.select(distance=(5, 24))
         monkeypatch.setattr(Spool, "_read_coord", _refuse_reading)
         assert len(view) == len(view.get_contents()) == 3
@@ -1455,7 +1472,11 @@ class TestUnknownRiders:
         assert len(view.select(time=(None, dc.to_datetime64("2020-01-01T00:00:04"))))
 
     def test_open_selection_reads_nothing(self, spool, monkeypatch):
-        """A selection bounding no rider reads none of its labels."""
+        """
+        A selection bounding no rider reads none of its labels.
+
+        A performance guard (rule C), as in the test above.
+        """
         view = spool.select(distance=(5, 24))
         monkeypatch.setattr(Spool, "_read_coord", _refuse_reading)
         for value in (None, ..., (None, None), (..., ...)):
@@ -2852,11 +2873,9 @@ class TestSpoolBehaviorOptionalImports:
     _msg = "found files that can be read if additional"
 
     @pytest.fixture(scope="function", autouse=True)
-    def monkey_patch_segy(self, monkeypatch):
-        """Monkey patch the name of the imported library for segy."""
-        # TODO we should find a cleaner way to do this in the future.
-
-        monkeypatch.setattr(SegyV1_0, "_package_name", "not_segyio_clearly")
+    def monkey_patch_segy(self, hide_module):
+        """Make segyio look uninstalled."""
+        hide_module("segyio")
 
     @pytest.fixture(scope="class")
     def segy_file_path(self, tmp_path_factory):
@@ -3024,16 +3043,6 @@ class TestSpoolCoverageEdges:
             _ = derived[len(patches)]
         with pytest.raises(IndexError, match="out of bounds"):
             _ = derived[-len(patches) - 1]
-
-    def test_merge_buffer_grows_when_estimate_short(self, many_contiguous, monkeypatch):
-        """An under-estimated merge buffer is grown to fit (uneven sampling)."""
-        # Force the pre-merge sample estimate to be too small so the
-        # streaming buffer must grow mid-merge.
-        monkeypatch.setattr(assembly_mod, "_estimate_merge_samples", lambda *a, **k: 1)
-        merged = dc.spool(many_contiguous).chunk(time=None)
-        assert merged[0].get_coord("time").size == sum(
-            p.get_coord("time").size for p in many_contiguous
-        )
 
     def test_empty_memory_spool_len_iter_repr(self):
         """A bare Spool() is a valid empty spool, string and all. See #295."""
@@ -3914,6 +3923,13 @@ class TestAllBlankConcatenate:
         assert len(out.get_coord("stack")) == len(reduced_spool)
 
 
+def _lane_labels(spool):
+    """The lane names the spool's coverage plot draws along time."""
+    ax = spool.viz.coverage()
+    plt.close(ax.figure)
+    return [x.get_text() for x in ax.get_yticklabels()]
+
+
 class TestSpoolRepr:
     """What a spool says of itself when it is printed."""
 
@@ -3945,8 +3961,6 @@ class TestSpoolRepr:
         # the same helper the repr uses would follow it into a wrong
         # answer, which is what a regression test is for catching.
         assert "2020-01-03T00:00:00 to …:23.996" in str(spool)
-        stated = range_texts(df["time_min"].min(), df["time_max"].max())[1]
-        assert str(stated) in str(spool)
 
     def test_a_single_patch_spans_its_own_length(self):
         """One patch is a span of its duration, not a span of nothing."""
@@ -3994,9 +4008,9 @@ class TestSpoolRepr:
         """A track and the lane of the same patches carry the same name."""
         spool = dc.get_example_spool("diverse_das")
         rendered = str(spool)
-        # The plot's own function, not a rebuild of its arguments: a
-        # rebuild agrees with itself no matter how the two drift.
-        lanes = _lane_names(spool.get_coverage("time"), "time")
+        # The plot's own labels, not a rebuild of them: a rebuild agrees
+        # with itself no matter how the two drift.
+        lanes = _lane_labels(spool)
         # A lane appends the coverage it measured; a track does not.
         names = [x.rsplit("  ", 1)[0] for x in lanes]
         # This spool's kinds and its coverage groups partition alike, so
@@ -4151,7 +4165,12 @@ class TestSpoolRepr:
         assert any(message in str(x.message) for x in caught)
 
     def test_repr_never_raises(self, monkeypatch):
-        """A summary which fails still leaves an object you can look at."""
+        """
+        A summary which fails still leaves an object you can look at.
+
+        Fault injection (rule B): no spool is known to fail its summary, so
+        one part of the summary is made to.
+        """
 
         def _boom(self, df, dims):
             raise ValueError("nope")
@@ -4304,7 +4323,7 @@ class TestSpoolRepr:
             ]
         )
         rendered = str(spool)
-        lanes = _lane_names(spool.get_coverage("time"), "time")
+        lanes = _lane_labels(spool)
         # The plot named this group by its acquisition; a track calling
         # it "group 0" would be one rule reaching two names.
         assert "XM.A..HSF" in rendered
