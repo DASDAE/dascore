@@ -420,6 +420,26 @@ class TestCut:
         assert patch.data.size
         assert _span(patch) == _seconds(start, 5, 12)
 
+    def test_one_id_through_plans(self, spool, start):
+        """
+        A cut's patch keeps its data_id read alone, through a plan or cut
+        over it which changes nothing, or a select keeping it whole; cut by
+        windows, annotations, or windows over annotations.
+        """
+        times = _seconds(start, 5, 12)
+        windows, ann = {"time": np.array([times])}, _ranges(start, (5, 12))
+        windowed, annotated = spool.cut(**windows), spool.cut(ann)
+        relabelled = annotated.cut(**windows)
+        for cut, again in (
+            (windowed, windowed.cut(**windows)),
+            (annotated, annotated.cut(ann)),
+            (relabelled, relabelled.cut(**windows)),
+        ):
+            routes = (cut, cut.chunk(time=None), again, cut.select(time=times))
+            assert [len(x) for x in routes] == [1] * len(routes)
+            (data_id,) = {x[0].attrs.data_id for x in routes}
+            assert data_id
+
 
 def _late(patch, steps):
     """A patch moved `steps` of its own steps later, with no history."""

@@ -1565,11 +1565,16 @@ class PatchAssembler:
         Convert the dataframe to a list of dicts for iteration.
 
         This is significantly faster than iterating rows. Empty strings
-        (missing format fields on file rows) normalize to None; stored
-        relative paths pass through unchanged — the catalog's resolver
-        owns resolving them against the spool root.
+        (missing format fields on file rows) normalize to None, but not a
+        stamp's: a member which is another plan's output is stamped from
+        its row, which must say what its catalog presents. Stored relative
+        paths pass through unchanged — the catalog's resolver owns
+        resolving them against the spool root.
         """
         return [
-            {k: None if isinstance(v, str) and not v else v for k, v in row.items()}
+            {
+                k: None if isinstance(v, str) and not v and k not in self.stamped else v
+                for k, v in row.items()
+            }
             for row in df.to_dict("records")
         ]
