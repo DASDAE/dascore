@@ -3361,6 +3361,55 @@ class TestChannelSelectAlignment:
             rows = np.searchsorted(whole, piece.get_array("distance"))
             assert np.array_equal(piece.data, source.data[rows])
 
+    @pytest.fixture()
+    def swapped(self, inventory, patch):
+        """The example inventory, its zones swapped just after the patch."""
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        other = {"north": "south", "south": "north"}
+        labels = tuple(
+            x.new(value=other[x.value]) if x.group == "zone" else x for x in path.labels
+        )
+        time = patch.get_coord("time")
+        return _split_epochs(
+            inventory, time.max() + time.step / 2, second={"labels": labels}
+        )
+
+    @pytest.fixture()
+    def layouts(self, patch):
+        """
+        Narrow, coarse and fine layouts first, then the whole one either side
+        of the swap; the coarse and fine ones share an envelope.
+        """
+        time = patch.get_coord("time")
+        span = time.max() - time.min() + time.step
+        first = [
+            patch.select(distance=(0, 50)),
+            patch.decimate(distance=2, filter_type=None),
+            patch.select(distance=(0, 298)),
+        ]
+        out = [
+            x.update_coords(time_min=time.min() - (5 - i) * span)
+            for i, x in enumerate(first)
+        ]
+        return out + [
+            patch.update_coords(time_min=time.min() + x * span) for x in (-1, 0, 1, 2)
+        ]
+
+    @pytest.mark.parametrize("verb", ["select", "unselect"])
+    def test_rows_placed_alike_share_nothing_else(self, layouts, swapped, verb):
+        """Selecting the spool gives what selecting each patch alone gives, in order."""
+        spool = dc.spool(layouts).attach_inventory(swapped)
+        together = list(getattr(spool, verb)(zone="north"))
+        alone = [
+            out
+            for x in layouts
+            for out in getattr(dc.spool(x).attach_inventory(swapped), verb)(
+                zone="north"
+            )
+        ]
+        assert together
+        assert all(x.equals(y) for x, y in zip(together, alone, strict=True))
+
 
 def _float_grid_pair(distance, span):
     """A patch on a given float grid, and an inventory annotating its middle."""
