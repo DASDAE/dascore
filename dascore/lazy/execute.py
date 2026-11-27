@@ -400,22 +400,30 @@ def _middle(shape: tuple[int, ...], sizes: list[int]) -> Box:
 
 def _grains(array: LazyArray) -> dict[int, int]:
     """
-    Return, for each axis the last tiled step cuts, every how many samples
+    Return, for each axis a periodic tiled step cuts, every how many samples
     of the result its boxes are cut from their tiles alike: a whole run of
-    tiles between two which do not overlap. The steps after it may only
-    select samples or keep them, so a box of the result is one of its own.
+    tiles between two which do not overlap, of each such step, counted in
+    samples of the result through what the steps after it keep. Steps
+    which select samples or keep them leave a box of the result one of
+    their own.
     """
+    out: dict[int, int] = {}
+    # How many samples of a step's output one of the result is.
+    scale: dict[int, int] = {}
     for node in reversed(array.chain.nodes):
         contract = node.contract
         if isinstance(contract, Tiles):
-            spans, factors = contract.spans.items(), contract.factors
-            return {
-                axis: stride // factors.get(axis, 1) * -(-size // stride)
-                for axis, (size, stride, _) in spans
-            }
-        if not isinstance(contract, Pointwise | Unchanged | Halo | WholeAxis | Window):
-            return {}
-    return {}
+            for axis, (size, stride, _) in contract.spans.items():
+                every, many = contract.factors.get(axis, 1), scale.get(axis, 1)
+                if contract.periodic:
+                    run = stride // every * -(-size // stride)
+                    out[axis] = math.lcm(out.get(axis, 1), run // math.gcd(run, many))
+                scale[axis] = many * every
+        elif not isinstance(
+            contract, Pointwise | Unchanged | Halo | WholeAxis | Window
+        ):
+            break
+    return {k: v for k, v in out.items() if v > 1}
 
 
 def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
@@ -459,10 +467,15 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     # all but those at the ends are cut from their tiles alike and a chain
     # compiled for one runs for the rest.
     # To the nearest whole number of runs, so no more boxes are cut than
-    # the block size asked for, and none much larger.
+    # the block size asked for, unless that holds more than the boxes did:
+    # then down to one. An axis cut shorter than a run is left as it is.
     for axis, every in _grains(array).items():
-        if sizes[axis] < shape[axis]:
-            sizes[axis] = max(every, (sizes[axis] + every // 2) // every * every)
+        if every <= sizes[axis] < shape[axis]:
+            near = (sizes[axis] + every // 2) // every * every
+            trial = [*sizes[:axis], near, *sizes[axis + 1 :]]
+            if _largest(array, _middle(shape, trial)) > max(cost, block_size):
+                near = sizes[axis] // every * every
+            sizes[axis] = near
     edges = [range(0, n, size or 1) for n, size in zip(shape, sizes, strict=True)]
     spans = [
         [slice(a, min(a + size, n)) for a in starts] or [slice(0, 0)]

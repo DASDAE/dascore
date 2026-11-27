@@ -233,11 +233,11 @@ class Tiles(ChunkContract):
 
     The kernel is told which tiles it was given: it takes a ``tiles``
     keyword holding, for each tiled axis in the order of `spans`, the first
-    tile and one past the last. What it makes of them depends on where they
-    are only by how many there are, the first modulo the tiles between two
-    which do not overlap, and how far they reach past the ends of the
-    axis, so boxes cut alike from their tiles are computed alike; see
-    `key`.
+    tile and one past the last. A kernel which reads where they are only by
+    how many there are, the first modulo the tiles between two which do
+    not overlap, and how far they reach past the ends of the axis, as a
+    window's does, says so by `periodic`; boxes cut alike from their tiles
+    are then computed alike, see `key`.
 
     Parameters
     ----------
@@ -255,6 +255,9 @@ class Tiles(ChunkContract):
         of a tile, that n, which the stride is a multiple of. The output is
         then shorter than the input along the axis: a box counts samples of
         the output, and what it needs counts samples of the input.
+    periodic
+        Whether the kernel reads where its tiles are only as above. False,
+        the default, keys each box by itself.
 
     Examples
     --------
@@ -274,6 +277,7 @@ class Tiles(ChunkContract):
     widths: Mapping[int, tuple[int, int]] = field(default_factory=dict)
     whole: tuple[int, ...] = ()
     factors: Mapping[int, int] = field(default_factory=dict)
+    periodic: bool = False
 
     def tiles(self, box: Box) -> tuple[tuple[int, int], ...]:
         """Return the first tile overlapping a box, and one past the last."""
@@ -322,19 +326,23 @@ class Tiles(ChunkContract):
 
     def key(self, box: Box, needed: Box) -> Hashable:
         """
-        Return how the box is cut from its tiles.
+        Return how the box is cut from its tiles, for a periodic kernel.
 
-        The shapes and where the box sits in what its tiles make, and for
-        each tiled axis how many tiles there are and the first modulo the
-        tiles between two which do not overlap, so boxes a whole number of
-        such runs apart share a key. That says how far the tiles reach past
-        the ends of the axis too: a box whose first tile starts before the
-        array sits nearer the start of what it needs than any other can,
-        and one whose last ends after it needs less of the axis.
+        The shapes, in samples read and made, and where the box sits in
+        what its tiles make, and for each tiled axis how many tiles there
+        are and the first modulo the tiles between two which do not
+        overlap, so boxes a whole number of such runs apart share a key.
+        That says how far the tiles reach past the ends of the axis too: a
+        box whose first tile starts before the array sits nearer the start
+        of what it needs than any other can, and one whose last ends after
+        it needs less of the axis. A kernel which is not periodic keys each
+        box by itself.
         """
+        if not self.periodic:
+            return box, needed
         tiles = zip(self.spans.values(), self.tiles(box), strict=True)
         runs = tuple((b - a, a % -(-z // step)) for (z, step, _), (a, b) in tiles)
-        return _relative(box, self._made(needed)), runs
+        return _relative(box, self._made(needed)), _sizes(needed), runs
 
 
 @dataclass(frozen=True)
