@@ -931,6 +931,9 @@ def get_coord_values(inventory, path, name, distances):
             values = values.view()
         width = 0 if values is None else np.dtype(values.dtype).itemsize
         size = len(distances) * (distances.itemsize + width)
+        if size > _PROJECTION_BYTES:
+            # More than the table may hold: hand it out without keeping it.
+            return values
         if table.nbytes + size > _PROJECTION_BYTES:
             table.clear()
             table.nbytes = 0

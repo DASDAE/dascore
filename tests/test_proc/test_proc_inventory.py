@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.core import _spool_inventory
 from dascore.core.coords import get_coord
 from dascore.core.inventory import (
     Acquisition,
@@ -1150,6 +1151,19 @@ class TestManyPatches:
         for start in range(1, 8):
             wide(start).enrich(inventory)
         assert wide(0).enrich(inventory).equals(first)
+
+    def test_projection_past_what_is_kept_is_not_held(self, monkeypatch):
+        """A projection larger than all an inventory keeps is handed out only."""
+        monkeypatch.setattr(_spool_inventory, "_PROJECTION_BYTES", 0)
+        inventory = inventory_patch_pair()[1]
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        values = _spool_inventory.get_coord_values(
+            inventory, path, "distance", np.arange(10.0)
+        )
+        ref = weakref.ref(values)
+        del values
+        gc.collect()
+        assert ref() is None
 
     def test_shared_values_stay_read_only(self, patch, inventory):
         """A projection serves later patches, so none can make it writable."""
