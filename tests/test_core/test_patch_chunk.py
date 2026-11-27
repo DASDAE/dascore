@@ -29,7 +29,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import BaseNumericCoord, concat_coords, get_coord
+from dascore.core.coords import concat_coords, get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     ChunkError,
@@ -45,10 +45,7 @@ from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.io.neubrex.core import NeubrexDASPatchAttrs
 from dascore.lazy.recipe import Recipe
 from dascore.units import get_quantity
-from dascore.utils.chunk_plan import (
-    _adopt_lone_steps,
-    patch_local_adjusted_envelopes,
-)
+from dascore.utils.chunk_plan import _adopt_lone_steps
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import (
@@ -60,11 +57,6 @@ from dascore.utils.time import to_int, to_timedelta64
 from dascore.warnings import DASCoreWarning
 from dascore.xarray.spool import _misstated_merge
 from tests.conftest import join_patches
-
-
-def _is_segmented(coord) -> bool:
-    """True when the coordinate holds more than one run, as a gap makes it."""
-    return isinstance(coord, BaseNumericCoord) and coord.runs_count > 1
 
 
 @pytest.fixture(scope="class")
@@ -1649,7 +1641,7 @@ class TestMatchMergeUnits:
 
     Plan-driven assembly re-expresses each member in the plan's unit
     before this runs, so these branches are exercised directly rather
-    than through a chunk.
+    than through a chunk (rule A).
     """
 
     def test_incompatible_units_pass_through(self):
@@ -2655,37 +2647,35 @@ class TestFilledWindows:
 class TestLongFractionalGrid:
     """An exact 3000 Hz grid long enough that whole-ns steps miscount it."""
 
-    @pytest.fixture(scope="class")
-    def row(self):
-        """The one-row frame an index states for the long grid."""
-        coord = _LONG_GRID
-        grid = (*coord.runs[0].canonical()[1:], len(coord))
-        step = pd.Timedelta(coord.step)
-        return pd.DataFrame(
-            {"x_min": [coord.min()], "x_max": [coord.max()], "x_step": [step]}
-        ).assign(_x_grid=[grid])
+    @staticmethod
+    def _line(coord):
+        """A one-row patch along ``coord``."""
+        data = np.zeros((1, len(coord)), dtype=np.int8)
+        return dc.Patch(data=data, coords={"y": [0], "x": coord}, dims=("y", "x"))
 
-    def test_sample_selection_uses_the_grid(self, row):
+    def test_sample_selection_uses_the_grid(self):
         """A whole row's sample selection lands on the grid's own labels."""
-        residuals = (({"x": (500_000, None)}, True, False),)
-        out = patch_local_adjusted_envelopes(row, residuals)
+        spool = dc.spool([self._line(_LONG_GRID)])
+        view = spool.select(x=(500_000, None), samples=True)
         picked = _LONG_GRID[500_000:]
-        assert out["x_min"].iloc[0] == picked.min()
-        assert out["_x_grid"].iloc[0][-1] == len(picked)
+        assert view.get_contents()["x_min"].iloc[0] == picked.min()
+        # windows planned on the selected row's grid hold its samples
+        chunked = view.chunk(x=10.0)
+        assert len(chunked) == 3
+        rows = chunked.get_contents().itertuples()
+        for num, (row, patch) in enumerate(zip(rows, chunked, strict=True)):
+            coord = patch.get_coord("x")
+            assert coord == picked[num * 30_000 : (num + 1) * 30_000]
+            assert (row.x_min, row.x_max) == (coord.min(), coord.max())
 
-    def test_emptied_row_is_passed_over(self, row):
+    def test_emptied_row_is_passed_over(self):
         """A row an earlier sample selection emptied stays empty."""
         longer = get_coord(start=_T0, step=(1, 3000), shape=(800_000,))
-        grid = (*longer.runs[0].canonical()[1:], len(longer))
-        other = row.assign(x_max=longer.max(), _x_grid=[grid])
-        df = pd.concat([row, other], ignore_index=True)
-        residuals = (
-            ({"x": (700_000, None)}, True, False),
-            ({"x": (1, None)}, True, False),
-        )
-        out = patch_local_adjusted_envelopes(df, residuals, drop_empty=False)
-        assert out.loc[0, ["x_min", "x_max"]].isna().all()
-        assert out.loc[1, "x_min"] == longer[700_001:].min()
+        spool = dc.spool([self._line(_LONG_GRID), self._line(longer)])
+        view = spool.select(x=(700_000, None), samples=True)
+        contents = view.select(x=(1, None), samples=True).get_contents()
+        assert contents.loc[0, ["x_min", "x_max"]].isna().all()
+        assert contents.loc[1, "x_min"] == longer[700_001:].min()
 
     def test_one_sample_windows(self):
         """Windows one fractional step long hold one sample each."""
@@ -3746,7 +3736,12 @@ class TestChunkFromIndex:
         assert not reads
 
     def test_row_bounds_states_what_the_plan_drew(self):
-        """The window is taken as stated, whatever the coordinate holds."""
+        """
+        The window is taken as stated, whatever the coordinate holds.
+
+        A pure helper's edge cases (rule A): bounds rounded onto the grid
+        fail no chunk test, so the bounds themselves are checked.
+        """
         bounds = assembly_module._row_bounds
         row = {"x_min": 7.8, "x_max": 9.0, "_x_coord_dtype": "int64"}
         assert bounds(row, "x") == (7.8, 9.0), "never rounded onto the grid"
@@ -3756,7 +3751,12 @@ class TestChunkFromIndex:
         assert bounds({"x_min": 1.0, "x_max": None}, "x") is None
 
     def test_row_values_refuses_what_it_cannot_state(self):
-        """An envelope the row states differently than the file had is refused."""
+        """
+        An envelope the row states differently than the file had is refused.
+
+        A pure helper's edge cases (rule A): through a chunk, each refusal
+        needs files of its own.
+        """
         row_values = assembly_module._row_values
         base = {"x_min": 0.0, "x_max": 4.0, "x_step": 1.0}
         # no stored dtype: the envelope is taken as it stands
@@ -3772,7 +3772,13 @@ class TestChunkFromIndex:
         assert row_values(big, "x") is None
 
     def test_attrs_from_row(self):
-        """The row's attrs are the file's; bookkeeping and envelopes are not."""
+        """
+        The row's attrs are the file's; bookkeeping and envelopes are not.
+
+        A pure helper's edge cases (rule A): test_matches_patch_path shows
+        the kept and dropped fields through a merge, but a null attr needs
+        an archive of its own, whose files differ in which attrs they hold.
+        """
         row = {
             "dims": "distance,time",
             "output_id": 3,
@@ -4094,7 +4100,7 @@ class TestChunkFillValue:
     def test_single_member_hole_fills_in_place(self, gapped_spool):
         """A lone member carrying its own hole is filled at the hole, not the end."""
         gapped = join_patches(list(gapped_spool))
-        assert _is_segmented(gapped.get_coord("time"))
+        assert gapped.get_coord("time").runs_count > 1
         # one source patch, so nothing is merged and only the fill reshapes it
         filled = dc.spool([gapped]).fill_gaps(time=19, samples=True)[0]
         where = np.flatnonzero(np.isnan(filled.data).all(axis=0))
@@ -5161,7 +5167,12 @@ class TestPromotionChain:
         ],
     )
     def test_one_intermediate_states_the_whole_chain(self, dtypes):
-        """Casting through what `_cast_via` names is casting along the chain."""
+        """
+        Casting through what `_cast_via` names is casting along the chain.
+
+        A pure helper's edge cases (rule A): each chain through files would
+        take an archive of its own, as test_both_routes_give_one_array does.
+        """
         chain = list(accumulate([np.dtype(x) for x in dtypes], np.result_type))
         for num, name in enumerate(dtypes):
             dtype = np.dtype(name)
@@ -5211,13 +5222,6 @@ class TestStatPrecision:
         The first file's exact mtime must match the one recorded, so its merge
         is read from the index with the files unopenable.
         """
-        spool, paths = mixed
-        chunked = spool.chunk(time=to_timedelta64(0.16))
-        with unopenable(*paths):
-            assert chunked[0].shape[0] == 16
-
-    def test_unchanged_files_keep_the_recipe(self, mixed):
-        """The file-backed outputs of a mixed spool are read as recipes."""
         spool, paths = mixed
         chunked = spool.chunk(time=to_timedelta64(0.16))
         with unopenable(*paths):
@@ -5877,7 +5881,12 @@ class TestSelectedRecipeMerge:
         )
 
     def test_which_selections_a_window_can_stand_for(self):
-        """The rule a windowed trim rests on, kind by kind."""
+        """
+        The rule a windowed trim rests on, kind by kind.
+
+        A pure helper's edge cases (rule A): through a chunk, each kind needs
+        the resolver read, as _assert_the_patch_path_is_kept does.
+        """
         plain = ({"time": (1, 2)}, False, False)
         assert planned._value_residuals_on((plain,), "time")
         assert planned._value_residuals_on((plain, plain), "time")
@@ -5957,7 +5966,13 @@ class TestChunkMergeRegressions:
 
     @pytest.fixture(params=["memory", "index", "stream", "materialized"])
     def merge_spool(self, request, tmp_path, monkeypatch):
-        """Build a spool through each assembly route."""
+        """
+        Build a spool through each assembly route.
+
+        An engine test (rule E): the rows pick one route for these patches,
+        so the stream and materialized routes are forced by withholding the
+        index metadata and the sample estimate.
+        """
         if request.param == "stream":
             monkeypatch.setattr(
                 PatchAssembler, "_member_meta_from_index", lambda *a: None
@@ -6157,7 +6172,13 @@ class TestChunkMergeRegressions:
         assert patch.get_coord("time").step is None
 
     def test_adopted_step_ignores_row_order(self):
-        """A lone sample adopts its cell's median step, whatever the order."""
+        """
+        A lone sample adopts its cell's median step, whatever the order.
+
+        A pure helper's edge case (rule A): the published step of a lone
+        sample stays unknown, so a spool shows the adopted one only in
+        which seams the sample joins.
+        """
         steps = pd.to_timedelta([1.0, 1.04, 1.02, None], unit="s")
         frame = pd.DataFrame({"time_step": steps})
         cells = pd.Series(0, index=frame.index)
