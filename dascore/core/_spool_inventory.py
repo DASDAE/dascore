@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 import warnings
+import weakref
 from collections.abc import Sequence, Sized
 from itertools import pairwise
 from numbers import Real
@@ -896,7 +897,49 @@ def _get_geometry_column_coord(path, name, distances):
     return get_coord(data=values, units=units, snap=False)
 
 
+class _Projections(dict):
+    """One inventory's projections, and roughly how many bytes they hold."""
+
+    nbytes = 0
+
+
+# Projections made so far, one table per inventory: a spool's patches mostly
+# share a path and a channel layout, so each name is projected once. The
+# inventory is frozen and fixes the CRS, so a key of the path, the name and
+# the optical distances can't go stale; an entry holds its path, so no other
+# path can reuse that path's id. A table is dropped when its inventory is
+# collected, and is emptied when it would pass this many bytes.
+_PROJECTIONS: dict[int, _Projections] = {}
+_PROJECTION_BYTES = 64 * 1024**2
+
+
 def get_coord_values(inventory, path, name, distances):
+    """
+    Return one coordinate's values on these channels, or None if undefined.
+
+    Every patch asking shares them, so an array comes back read-only.
+    """
+    if (table := _PROJECTIONS.get(id(inventory))) is None:
+        table = _PROJECTIONS.setdefault(id(inventory), _Projections())
+        weakref.finalize(inventory, _PROJECTIONS.pop, id(inventory), None)
+    key = (id(path), name, distances.dtype.str, distances.tobytes())
+    if (entry := table.get(key)) is None:
+        values = _project_coord_values(inventory, path, name, distances)
+        if isinstance(values, np.ndarray):
+            values.flags.writeable = False
+            # A view of a read-only array can't be made writable again.
+            values = values.view()
+        width = 0 if values is None else np.dtype(values.dtype).itemsize
+        size = len(distances) * (distances.itemsize + width)
+        if table.nbytes + size > _PROJECTION_BYTES:
+            table.clear()
+            table.nbytes = 0
+        table.nbytes += size
+        entry = table[key] = (path, values)
+    return entry[1]
+
+
+def _project_coord_values(inventory, path, name, distances):
     """Return the values of one requested coordinate, or None if undefined."""
     if name == "distance":
         # The distances are already the optical path's, in meters.

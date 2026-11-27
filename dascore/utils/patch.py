@@ -210,6 +210,10 @@ def _format_values(val):
     elif isinstance(val, dc.Patch):
         # Truncate patch representations in history (issue #529)
         out = "Patch..."
+    elif isinstance(val, dc.Inventory):
+        # Named without drawing it: even an empty inventory's display is
+        # longer than the limit below, and drawing one is slow.
+        out = f"{type(val).__name__}..."
     elif callable(val):
         # By name: a repr would carry an address which changes every run. A
         # partial is named by the function it wraps, an object by its class.
@@ -222,8 +226,8 @@ def _format_values(val):
     else:
         out = str(val)
         if len(out) > _MAX_HISTORY_VALUE_LEN:
-            # An argument with a large repr (an inventory, say) would
-            # otherwise be pasted into the history of every patch it touches.
+            # An argument with a large repr would otherwise be pasted into
+            # the history of every patch it touches.
             out = f"{type(val).__name__}..."
     return out
 

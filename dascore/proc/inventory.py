@@ -121,19 +121,17 @@ def _resolve_context(inventory, source_id, times) -> ResolvedContext:
         other = context if first == last else inventory.resolve(source_id, time=last)
     except InvalidInventoryError as error:
         raise UnresolvedPatchError(str(error)) from error
-    if first != last:
-        if other.acquisition != context.acquisition:
-            what = "acquisition"
-        elif other.optical_path != context.optical_path:
-            what = "optical path"
-        else:
-            what = ""
-        if what:
-            msg = (
-                f"The patch spans a change of {what} for {source_id!r} "
-                f"between {first} and {last}; select or split it first."
-            )
-            raise PatchError(msg)
+    # Both ends resolve to the same objects unless an epoch bound falls inside
+    # the patch, and a tuple compares its items by identity first.
+    ends = [(x.acquisition, x.optical_path) for x in (context, other)]
+    if ends[0] != ends[1]:
+        changed = other.acquisition != context.acquisition
+        what = "acquisition" if changed else "optical path"
+        msg = (
+            f"The patch spans a change of {what} for {source_id!r} "
+            f"between {first} and {last}; select or split it first."
+        )
+        raise PatchError(msg)
     return context
 
 
