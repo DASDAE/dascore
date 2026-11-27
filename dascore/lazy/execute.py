@@ -32,13 +32,19 @@ Examples
 
 from __future__ import annotations
 
+import hashlib
 import math
-from functools import partial
-from itertools import product
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Hashable, Mapping, Sequence
+from dataclasses import dataclass, fields, is_dataclass
+from functools import cached_property, partial
+from itertools import groupby, product
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from pydantic import BaseModel
 
+from dascore.backends import ArrayBackend
+from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.core.processor import running_under
 from dascore.exceptions import PatchError
@@ -52,7 +58,6 @@ from dascore.utils.array_api import (
 )
 
 if TYPE_CHECKING:
-    from dascore.backends import ArrayBackend
     from dascore.lazy.array import LazyArray
 
 
@@ -88,6 +93,223 @@ _EVERYTHING = _Everything()
 # axis needed whole keeps it all, and one read with a halo keeps more the
 # shorter its pieces get.
 _WORTH_CUTTING = 0.75
+
+
+@dataclass(frozen=True)
+class _Slot:
+    """Where an array of a plan was: its place in the arrays a step holds."""
+
+    index: int
+
+
+def _split(value: Any, arrays: list, traced: bool = False) -> Any:
+    """Return a plan value with each array in it moved to `arrays`."""
+    if traced or is_array_like(value):
+        arrays.append(value)
+        return _Slot(len(arrays) - 1)
+    if isinstance(value, dict):
+        return {k: _split(v, arrays) for k, v in value.items()}
+    if type(value) in (tuple, list):
+        return type(value)(_split(x, arrays) for x in value)
+    return value
+
+
+def _filled(value: Any, arrays: Sequence) -> Any:
+    """Return a plan value with the arrays put back in their slots."""
+    if isinstance(value, _Slot):
+        return arrays[value.index]
+    if isinstance(value, dict):
+        return {k: _filled(v, arrays) for k, v in value.items()}
+    if type(value) in (tuple, list):
+        return type(value)(_filled(x, arrays) for x in value)
+    return value
+
+
+def _frozen(value: Any) -> Hashable:
+    """
+    Return a hashable stand-in for a value, equal for equal values.
+
+    A NumPy array stands for its shape, dtype and a digest of its values,
+    so a processor holding one, as a taper, is told apart by what it holds.
+
+    Raises
+    ------
+    TypeError
+        If the value, or something in it, cannot be hashed.
+    """
+    if isinstance(value, np.ndarray):
+        if value.dtype.hasobject:
+            raise TypeError("An array of objects has no digest of its values.")
+        digest = hashlib.blake2b(value.tobytes(), digest_size=16).digest()
+        return "ndarray", value.shape, value.dtype.str, digest
+    if isinstance(value, BaseModel):
+        return type(value), tuple((k, _frozen(v)) for k, v in value)
+    if is_dataclass(value) and not isinstance(value, type):
+        items = ((x.name, getattr(value, x.name)) for x in fields(value))
+        return type(value), tuple((k, _frozen(v)) for k, v in items)
+    if isinstance(value, Mapping):
+        return dict, tuple((k, _frozen(v)) for k, v in value.items())
+    if isinstance(value, (tuple, list)):
+        return type(value), tuple(_frozen(x) for x in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_frozen(x) for x in value)
+    hash(value)
+    return value
+
+
+def _signature(value: Any) -> Hashable:
+    """Return what a compiled chain is specialized to of an array it is handed."""
+    if is_array_like(value):
+        return tuple(value.shape), _as_numpy_dtype(value.dtype)
+    return type(value)
+
+
+@dataclass(frozen=True)
+class Step:
+    """
+    One step of a lazy array's chain, for one box, as a backend runs it.
+
+    [`ArrayBackend.run_chain`](`dascore.backends.ArrayBackend.run_chain`)
+    is handed the steps, so a backend which compiles a chain needs nothing
+    else of DASCore: [`run`](`dascore.lazy.execute.Step.run`) runs one,
+    and [`arrays`](`dascore.lazy.execute.Step.arrays`) and
+    [`key`](`dascore.lazy.execute.Step.key`) say what a compiled chain is
+    given and what it may be reused for.
+
+    Parameters
+    ----------
+    processor
+        The operation.
+    kernel
+        Its kernel for the backend, already resolved.
+    plan
+        The keywords the kernel takes, as `get_metadata` worked them out.
+    contract
+        What a box of the step's output needs of its input, or None, when
+        the step is given all of its input.
+    given
+        The box of the step's input it is given.
+    made
+        The box of its output it makes.
+    shape
+        The shape of the step's whole output, as its metadata stated.
+    dtype
+        The dtype its metadata stated.
+    """
+
+    processor: Any
+    kernel: Callable[..., Any]
+    plan: Mapping[str, Any]
+    contract: ChunkContract | None
+    given: Box
+    made: Box
+    shape: tuple[int, ...]
+    dtype: np.dtype
+
+    @cached_property
+    def _parts(self) -> tuple[dict[str, Any], tuple]:
+        """Return the plan with its arrays taken out, and the arrays."""
+        arrays: list = []
+        named = type(self.processor).plan_arrays
+        static = {k: _split(v, arrays, k in named) for k, v in self.plan.items()}
+        return static, tuple(arrays)
+
+    @property
+    def arrays(self) -> tuple:
+        """
+        The arrays of the plan, wherever in it they are, in a fixed order.
+
+        A backend which compiles a chain hands these to it as arguments, so
+        a patch whose plan holds others of the same shapes, as filter
+        coefficients for another sampling rate, runs what was compiled.
+        Entries the processor names in `plan_arrays` are among them, though
+        they are not arrays.
+        """
+        return self._parts[1]
+
+    @property
+    def static(self) -> dict[str, Any]:
+        """The plan without its arrays, which a compiled chain holds fixed."""
+        return self._parts[0]
+
+    @cached_property
+    def key(self) -> Hashable | None:
+        """
+        What a chain compiled with this step is specialized to.
+
+        The kernel, the processor, the plan without its arrays, the shape
+        and dtype of each array, the contract, and what it does with the
+        boxes, which is where they are relative to each other and not in
+        the array, so equal boxes along a patch share a key. With the shape
+        and dtype of the data a chain is given, the keys of its steps say
+        when a compiled chain can be run again. None for a step whose
+        processor or plan holds something which cannot be hashed, whose
+        chain is not to be reused.
+        """
+        contract = self.contract or _EVERYTHING
+        try:
+            return (
+                self.kernel,
+                _frozen(self.processor),
+                _frozen(self.static),
+                tuple(_signature(x) for x in self.arrays),
+                _frozen(self.contract),
+                contract.key(self.made, self.given),
+                self.dtype,
+            )
+        except TypeError:
+            return None
+
+    def run(self, data, arrays: Sequence | None = None):
+        """
+        Return the step's output box, computed from its input box.
+
+        Parameters
+        ----------
+        data
+            The input over `given`.
+        arrays
+            The arrays to run the plan with in place of its own, in the
+            order of `arrays`, as a compiled chain is handed them.
+
+        Raises
+        ------
+        PatchError
+            If the kernel made an array of another shape or dtype than the
+            step's metadata stated; see `check`.
+        """
+        plan = self.plan if arrays is None else _filled(self.static, arrays)
+        run = partial(self.kernel, self.processor, **plan)
+        out = (self.contract or _EVERYTHING).apply(run, data, self.made, self.given)
+        self.check(out)
+        # A step with no contract made the whole of its result.
+        return out if self.contract else out[self.made]
+
+    def check(self, out) -> None:
+        """
+        Raise if what the kernel returned is not what the metadata stated.
+
+        Shapes and dtypes are known while a chain is traced, so a backend
+        which compiles one can check each step as it is traced.
+
+        Raises
+        ------
+        PatchError
+            If the array is of another shape or dtype.
+        """
+        # A step with no contract is checked as a whole, before the box is
+        # taken from it.
+        expected = _sizes(self.made) if self.contract else self.shape
+        shape, dtype = tuple(out.shape), _as_numpy_dtype(out.dtype)
+        if shape != expected or dtype != self.dtype:
+            name = type(self.processor).__name__
+            msg = (
+                f"{name} computed an array of shape {shape} and dtype "
+                f"{dtype} where its metadata stated one of {expected} "
+                f"and {self.dtype}. Its get_metadata must state what its "
+                "kernel returns."
+            )
+            raise PatchError(msg)
 
 
 def _needs(array: LazyArray, box: Box) -> list[Box]:
@@ -177,10 +399,13 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     """
     Read what one box of a lazy array needs, and compute it.
 
-    Each step runs the kernel its processor has for the array's
-    backend, and what it makes is
-    checked against the dtype its metadata stated and the shape of the box.
-    An empty box is returned without running anything.
+    Each step runs the kernel its processor has for the array's backend,
+    and what it makes is checked against the dtype its metadata stated and
+    the shape of the box. Each run of steps with a kernel for the library is
+    handed to the backend's
+    [`run_chain`](`dascore.backends.ArrayBackend.run_chain`), and a step
+    which goes through NumPy is run between them. An empty box is returned
+    without running anything.
 
     Raises
     ------
@@ -206,34 +431,32 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     # What the backend's arrays are, and its name: the same for every box,
     # so each step runs one kernel throughout.
     native, under = backend._native, backend.name
-    steps = zip(array.chain, needed[:-1], needed[1:], strict=True)
-    for node, before, after in steps:
-        stated_shape, stated_dtype, _ = node.made()
-        processor = node.processor
-        kernel = type(processor).kernel_for(native, under)
-        run = partial(kernel, processor, **node.plan)
-        # A step with no kernel for the library was let through, or
-        # refused, when it was chained: it is not asked again for each box.
-        with fallbacks_decided(_converted(processor, backend)), running_under(backend):
-            data = (node.contract or _EVERYTHING).apply(run, data, after, before)
-        # A step with no contract made the whole of its result, which is
-        # checked as a whole before the box is taken from it.
-        expected = _sizes(after) if node.contract else stated_shape
-        shape, dtype = tuple(data.shape), _as_numpy_dtype(data.dtype)
-        if shape != expected or dtype != stated_dtype:
-            name = type(processor).__name__
-            msg = (
-                f"{name} computed an array of shape {shape} and dtype "
-                f"{dtype} where its metadata stated one of {expected} "
-                f"and {stated_dtype}. Its get_metadata must state what its "
-                "kernel returns."
-            )
-            raise PatchError(msg)
-        if node.contract is None:
-            data = data[after]
-        # One of the backend's arrays for the next step, as a patch in
-        # memory holds between two operations.
-        data = backend.from_array(data)
+    steps = [
+        Step(
+            node.processor,
+            type(node.processor).kernel_for(native, under),
+            node.plan,
+            node.contract,
+            before,
+            after,
+            *node.made()[:2],
+        )
+        for node, before, after in zip(
+            array.chain, needed[:-1], needed[1:], strict=True
+        )
+    ]
+    # A step with no kernel for the library is run by itself, with the
+    # backend's chain run up to it and on from it: a backend never sees a
+    # step which goes through NumPy. It was let through, or refused, when
+    # it was chained, so it is not asked again for each box.
+    names = [_converted(x.processor, backend) for x in steps]
+    for name, group in groupby(zip(names, steps, strict=True), key=lambda x: x[0]):
+        section = [x for _, x in group]
+        with fallbacks_decided(name), running_under(backend):
+            if name is None:
+                data = backend.run_chain(section, data)
+            else:
+                data = ArrayBackend.run_chain(backend, section, data)
     return data
 
 

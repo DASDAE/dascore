@@ -42,7 +42,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -92,6 +92,22 @@ class ChunkContract:
         # the distance the input was grown by.
         spans = zip(box, needed, strict=True)
         return out[tuple(slice(b.start - n.start, b.stop - n.start) for b, n in spans)]
+
+    def key(self, box: Box, needed: Box) -> Hashable:
+        """
+        Return what `apply` does with the boxes, wherever they are.
+
+        Two pairs of boxes with the same key are applied alike, so a chain
+        compiled for one is run for the other. By default that is the
+        shape of the input, where the output box sits in it, and its
+        shape.
+        """
+        spans = zip(box, needed, strict=True)
+        return (
+            tuple(x.stop - x.start for x in needed),
+            tuple(b.start - n.start for b, n in spans),
+            tuple(x.stop - x.start for x in box),
+        )
 
 
 @dataclass(frozen=True)
@@ -285,6 +301,10 @@ class Tiles(ChunkContract):
             return out
         spans = zip(box, made, strict=True)
         return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
+
+    def key(self, box: Box, needed: Box) -> Hashable:
+        """Return the boxes: the tiles a kernel is given are the array's own."""
+        return box, needed
 
 
 @dataclass(frozen=True)

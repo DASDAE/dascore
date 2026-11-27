@@ -231,6 +231,10 @@ class PatchProcessor(DascoreBaseModel):
     # so its response to one impulse says what it does to any data, which
     # is what `Patch.impulse_window` measures its reach from.
     linear: ClassVar[bool] = False
+    # Plan entries a backend which compiles a chain is handed as arrays
+    # though they are not, such as a float it need not compile again for;
+    # see `dascore.lazy.execute.Step`.
+    plan_arrays: ClassVar[tuple[str, ...]] = ()
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
     # The fields a call may give positionally, in order; None for all.

@@ -79,7 +79,7 @@ A `Halo` kernel sees the true ends of the array in the chunks which hold them, s
 
 1. **Cut the result into boxes.** If no array the result needs is larger than the `lazy_block_size` setting, there is one box. There is also one box when no step computes anything, since reading in pieces would only open each file again. Otherwise the box is halved along the first axis worth cutting until they fit. An axis an operation needs whole is not worth cutting, and nor is one already short beside its halo, so the block size is aimed for rather than promised.
 2. **Work out what each box reads.** Each step's contract is asked, last to first, which box of its input it needs. Nothing is read to answer, so every read is known before the first one happens.
-3. **Read and compute each box.** The recipe reads only the box needed, and each step's kernel for the array's library runs on it, first to last.
+3. **Read and compute each box.** The recipe reads only the box needed, and each step's kernel for the array's library runs on it, first to last: each run of steps with a kernel for the library is handed to the backend's `run_chain`, which a backend may compile (see [Compiling a chain](#compiling-a-chain)).
 
 A selection therefore narrows what is read wherever it sits in the chain.
 
@@ -166,6 +166,43 @@ The entry point, in the package's `pyproject.toml`:
 ```toml
 [project.entry-points."dascore.kernels"]
 strict = "strict_kernels.backend"
+```
+
+### Compiling a chain
+
+A box is computed by [`ArrayBackend.run_chain`](`dascore.backends.ArrayBackend.run_chain`), handed the steps of the chain and the box's data. By default it runs each step's kernel in turn, as the loop always has. A backend which compiles overrides it, and everything a compiled chain needs is in the [`Step`](`dascore.lazy.execute.Step`)s it is handed, so it never reaches into DASCore.
+
+- **A step** holds the processor, its kernel for the backend, its plan, its contract with the box it is given and the box it makes, and the shape and dtype its metadata stated. `step.run(data)` runs it, cut to its box and checked against what was stated; the check reads only shapes and dtypes, which are known while a chain is traced.
+- **The plan is split in two.** `step.arrays` holds every array in the plan, nested ones too, as filter coefficients or tapers, and `step.static` the rest: numbers, strings, tuples, dtypes. A compiled chain is handed the arrays as arguments, so another patch whose coefficients have the same shapes runs what was compiled, and holds the rest fixed, so a new window length compiles again, as it must since shapes change. A processor names in `plan_arrays` entries to hand over as arrays though they are not, such as a float it need not compile again for.
+- **A key** says what a compiled chain is specialized to: the kernel, the processor and its fields, the static plan, the shape and dtype of each array, the contract, and where the step's boxes are relative to each other, so equal boxes along a patch share a key. A step's key is None when something in its processor or plan cannot be hashed, and its chain is not to be reused. A NumPy array a processor holds, as a taper, is keyed by its values. *Implemented so far:* a tiled step, as `Patch.window` makes, is told where its tiles are in the array, so its key is its boxes and no two boxes share one.
+- **Sections.** A step with no kernel for the library goes through NumPy and cannot be compiled with the rest. The chain is run up to it and on from it, each run of steps with kernels handed to `run_chain` and the step between run as before, so a backend only ever sees steps it has kernels for.
+- **Caching is the backend's.** What it keeps, for how long, and whether on disk, are options of the backend, as its fields, and none is a DASCore setting. While a chain runs the backend is in force, so a step which runs another inside its kernel, as a window does, resolves that one's kernel for it.
+
+```{python}
+from typing import ClassVar
+
+
+class CountingStrict(Strict):
+    """Arrays of array_api_strict, which says how many chains it would compile."""
+
+    name = "counting_strict"
+    keys: ClassVar[set] = set()
+
+    def run_chain(self, steps, data):
+        self.keys.add((data.shape, str(data.dtype), tuple(x.key for x in steps)))
+        return super().run_chain(steps, data)
+
+
+def lazy_ramp(step):
+    recipe = Recipe.from_source(ArraySource.full((100, 4), 1.0))
+    coords = {"time": np.arange(100), "distance": np.arange(4) * step}
+    patch = dc.Patch(data=recipe, coords=coords, dims=("time", "distance"))
+    return patch.set_backend("lazy[counting_strict]")
+
+
+for step in (1.0, 2.0):
+    lazy_ramp(step).select(time=(10, 90), samples=True).abs().load()
+print(len(CountingStrict.keys))
 ```
 
 ## Where it happens
