@@ -351,5 +351,7 @@ class Window(ChunkContract):
         return data
 
     def key(self, box: Box, needed: Box) -> Hashable:
-        """Return the shapes: nothing is done wherever the boxes are."""
-        return _relative(box, needed)
+        """Return the shapes, unless a subclass writes its own `apply`."""
+        if type(self).apply is Window.apply:
+            return _relative(box, needed)
+        return box, needed

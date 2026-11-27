@@ -114,7 +114,8 @@ def _rebuilt(value: Any, parts: list) -> Any:
     if type(value) is dict:
         return dict(zip(value, parts, strict=True))
     if hasattr(type(value), "_fields"):
-        return type(value)(*parts)
+        # Its constructor is not run again on what it made.
+        return type(value)._make(parts)
     return type(value)(parts)
 
 
@@ -157,12 +158,16 @@ def _frozen(value: Any) -> Hashable:
     if is_dataclass(value) and not isinstance(value, type):
         items = ((x.name, getattr(value, x.name)) for x in fields(value))
         return type(value), tuple((k, _frozen(v)) for k, v in items)
-    if isinstance(value, Mapping):
-        return type(value), tuple((k, _frozen(v)) for k, v in value.items())
-    if isinstance(value, tuple | list):
-        return type(value), tuple(_frozen(x) for x in value)
+    if type(value) is dict:
+        return dict, tuple((k, _frozen(v)) for k, v in value.items())
+    if (parts := _parts(value)) is not None:
+        return type(value), tuple(_frozen(x) for x in parts)
+    if isinstance(value, Mapping | list | tuple):
+        # A container of a kind of its own may hold more than its items.
+        raise TypeError(f"A {type(value).__name__} is keyed by more than its items.")
     hash(value)
-    return value
+    # By type too: True and 1 are equal, and a kernel may tell them apart.
+    return type(value), value
 
 
 def _signature(value: Any) -> Hashable:
@@ -256,7 +261,7 @@ class Step:
         what it does with the boxes, which for most is where they are
         relative to each other and not in the array, so boxes of one shape
         cut alike along a patch share a key, and for a tiled step the boxes
-        themselves; and the dtype the metadata stated. A backend adds the
+        themselves; and the shape and dtype the metadata stated. A backend adds the
         shape and dtype of the data it is handed. None for a step whose
         operation has no id, as one holding a patch, or whose plan holds
         something which is not hashed by its value; its chain is not to be
@@ -273,6 +278,7 @@ class Step:
                 tuple(_signature(x) for x in self.arrays),
                 _frozen(self.contract),
                 contract.key(self.made, self.given),
+                self.shape,
                 self.dtype,
             )
             hash(out)

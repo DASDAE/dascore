@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import tracemalloc
 import warnings
+from collections import defaultdict
 from itertools import product
 from typing import Any, ClassVar, NamedTuple
 
@@ -721,6 +722,39 @@ class _Signed(dc.PatchProcessor):
         return data * 0 + math.copysign(1.0, zero)
 
 
+class _Flagged(dc.PatchProcessor):
+    """Double the data for a flag of True, and triple them for a 1."""
+
+    name = None
+    position_free = True
+    chunk_contract = _each_sample
+
+    def get_metadata(self, meta):
+        """Return True for channels one apart, and 1 otherwise."""
+        return meta, {"flag": True if _spacing(meta) == 1 else 1}
+
+    def kernel(self, data, *, flag):
+        """Return the data times two or three."""
+        return data * (2 if flag is True else 3)
+
+
+class _Defaulted(dc.PatchProcessor):
+    """Add what a dict gives for a key it lacks, which its items do not say."""
+
+    name = None
+    position_free = True
+    chunk_contract = _each_sample
+
+    def get_metadata(self, meta):
+        """Return a table whose missing entries are the channel spacing."""
+        spacing = _spacing(meta)
+        return meta, {"table": defaultdict(lambda: spacing)}
+
+    def kernel(self, data, *, table):
+        """Return the data plus the table's missing entry."""
+        return data + table["missing"]
+
+
 class _NumpyOnly(dc.PatchProcessor):
     """An operation with a NumPy kernel alone, which converts on any other."""
 
@@ -771,15 +805,25 @@ class _Placed(ChunkContract):
         return super().apply(run, data, box, needed) + box[0].start
 
 
+class _PlacedWindow(Window):
+    """A window which adds where its box starts in the array."""
+
+    def apply(self, run, data, box, needed):
+        """Return the input moved up by the start of the box."""
+        return data + box[0].start
+
+
 class _Moved(dc.PatchProcessor):
     """An operation whose contract writes its own apply, and no key."""
 
     name = None
     position_free = True
 
+    contract: Any = None
+
     def chunk_contract(self, dtype, plan):
         """Return the contract which adds where the box is."""
-        return _Placed()
+        return self.contract
 
     def kernel(self, data):
         """Return the data as they are."""
@@ -857,13 +901,23 @@ class TestRunChain:
 
     @pytest.mark.parametrize(
         "operation, expected",
-        ((_Shifted(), (_rows(1, 41), _rows(2, 42))), (_Signed(), (-1.0, 1.0))),
+        (
+            (_Shifted(), (_rows(1, 41), _rows(2, 42))),
+            (_Signed(), (-1.0, 1.0)),
+            (_Flagged(), (_rows() * 2, _rows() * 3)),
+        ),
     )
     def test_a_fixed_entry_compiles_again(self, operation, expected):
-        """What the plan holds fixed was compiled, 0.0 and -0.0 apart."""
+        """What the plan holds fixed was compiled, 0.0 and -0.0, True and 1 apart."""
         outs = [_values(operation(_ramp(x)).load()) for x in (1.0, 2.0)]
         assert len(_Compiling.compiled) == 2
         assert all(np.array_equal(x, y + 0 * x) for x, y in zip(outs, expected))
+
+    def test_a_container_of_its_own_kind_has_no_key(self):
+        """A dict which holds more than its items is not keyed by them."""
+        outs = [_values(_Defaulted()(_ramp(x)).load()) for x in (1.0, 2.0)]
+        assert all(x[0].key is None for x in _Compiling.sections)
+        assert np.array_equal(outs[1] - outs[0], np.ones((40, 6)))
 
     def test_boxes_of_one_shape_compile_once(self):
         """Equal boxes along a patch share a compile; another shape does not."""
@@ -890,9 +944,12 @@ class TestRunChain:
             assert np.array_equal(_values(compute(array, box)), _rows(start, stop))
         assert len(_Compiling.compiled) == 2
 
-    def test_a_contract_with_its_own_apply_is_keyed_by_its_boxes(self):
+    @pytest.mark.parametrize(
+        "contract", (_Placed(), _PlacedWindow((slice(None), slice(None))))
+    )
+    def test_a_contract_with_its_own_apply_is_keyed_by_its_boxes(self, contract):
         """An apply which reads where the box is shares no compile between boxes."""
-        array = _Moved()(_ramp()).data
+        array = _Moved(contract=contract)(_ramp()).data
         for start in (0, 10):
             box = (slice(start, start + 10), slice(0, 6))
             out = _values(compute(array, box))
