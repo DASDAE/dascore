@@ -104,6 +104,7 @@ class ProdMLRawPatchAttrs(dc.PatchAttrs):
     """Patch attrs for raw data contained in ProdML."""
 
     pulse_width: OptionalFiniteFloat = None
+    pulse_rate: OptionalFiniteFloat = None
     gauge_length: OptionalFiniteFloat = None
     refractive_index: OptionalFiniteFloat = None
     laser_wavelength: OptionalFiniteFloat = None
