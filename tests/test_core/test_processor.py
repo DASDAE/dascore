@@ -18,6 +18,7 @@ from pydantic import ConfigDict, Field, ValidationError
 from scipy import ndimage
 
 import dascore as dc
+from dascore.backends import ArrayAPIBackend
 from dascore.config import config_context
 from dascore.constants import PatchMetaType, PatchType
 from dascore.core import processor as processor_module
@@ -51,6 +52,13 @@ from dascore.utils.patch_registry import (
     resolve_patch_function,
 )
 from dascore.warnings import NumpyFallbackWarning
+
+
+class _Elsewhere(ArrayAPIBackend):
+    """A registered backend these tests register kernels for, and never run."""
+
+    name = "elsewhere"
+    array_type = "elsewhere_library.Array"
 
 
 class SeamScale(PatchProcessor):

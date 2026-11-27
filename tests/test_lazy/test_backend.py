@@ -480,6 +480,9 @@ class TestBackendNames:
             return loaded.pop(0)
 
         monkeypatch.setattr(backends_module, "load_backend_plugins", load)
+        # Named first in brackets, as a lazy backend computing on it.
+        lazy = get_backend("lazy[plugged_backend]")
+        assert str(lazy) == "lazy[plugged_backend]"
         assert str(get_backend("plugged_backend")) == "plugged_backend"
         # One whose module failed part way leaves no backend half made.
         backends_module._BACKENDS.pop("plugged_backend")

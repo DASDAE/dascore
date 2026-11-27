@@ -102,7 +102,7 @@ spool.set_backend("LazyArray[strict]")  # lazy, kernels on a registered backend
 spool.set_backend(LazyBackend(compute=Strict(device=device)))  # with options
 ```
 
-`"lazy"` is an alias for `"LazyArray"`, and `"LazyArray"` for `"LazyArray[numpy]"`. The bracket names the backend each box is computed on, which leaves room for another lazy backend later. A name is a registered [`ArrayBackend`](`dascore.backends.ArrayBackend`) with its default options; an instance carries its own. DASCore registers `numpy` and `lazy`, and another package registers its own, as `Strict` here (see [Lazy Operations](lazy_operations.qmd#a-backend-from-another-package)).
+`"lazy"` is an alias for `"LazyArray"`, and `"LazyArray"` for `"LazyArray[numpy]"`. The bracket names the backend each box is computed on, which leaves room for another lazy backend later. A name is a registered [`ArrayBackend`](`dascore.backends.ArrayBackend`) with its default options; an instance carries its own. `Strict` above stands for a backend another package registers; see [Lazy Operations](lazy_operations.qmd#a-backend-from-another-package).
 
 One setting, `numpy_fallback`, decides what happens when an operation has no kernel for the backend and would convert through NumPy: `raise`, `warn` or `ignore`. Left unset it is `raise` for lazy data and `warn` otherwise. The same setting decides a read, a fill or a merge which cannot stay lazy.
 
