@@ -77,7 +77,6 @@ from dascore.io.utils import (
     slice_dataset,
     validate_windows,
 )
-from dascore.lazy.recipe import Recipe
 from dascore.utils.array_api import _as_numpy_dtype, decide_fallback
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
@@ -717,7 +716,7 @@ def _backend_data(fiber_io, source: ArraySource, backend: ArrayBackend):
     `ArraySource.narrow`.
     """
     if source.loadable:
-        return backend.from_recipe(Recipe.from_source(source.anchored()))
+        return backend.from_source(source.anchored())
     if isinstance(backend, LazyBackend):
         decide_fallback(
             f"A {fiber_io.name} patch cannot be read lazily here: it selects "

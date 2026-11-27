@@ -324,6 +324,30 @@ class TestBackendNames:
             apart = dc.read(path, time=wanted, samples=True)[0]
         assert len(handed) == 1 and apart.equals(expected)
 
+    def test_backend_which_reads_a_source_for_itself(self, path, patch, monkeypatch):
+        """
+        A backend overriding `from_source` is handed the window, no recipe made.
+
+        A performance promise, so making a recipe fails here.
+        """
+        handed = []
+
+        class Reading(NumpyBackend):
+            """NumPy, reading each stored window itself."""
+
+            def from_source(self, source):
+                """Read the window, and say that this was asked."""
+                handed.append(source)
+                return source.load()
+
+        def made(*args, **kwargs):
+            """Fail: the window is handed over before a recipe is made."""
+            raise AssertionError("a recipe was made of the window")
+
+        monkeypatch.setattr(Recipe, "from_source", made)
+        out = dc.spool(path).set_backend(Reading())[0]
+        assert handed == [out._source] and out.equals(patch)
+
     def test_backend_which_reads_an_array_of_its_own_kind(self, path, patch):
         """What a backend makes of a stored array is handed out as it made it."""
 
