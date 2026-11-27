@@ -45,7 +45,17 @@ from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.core.processor import _REGISTERED, running_under
 from dascore.exceptions import PatchError
-from dascore.lazy.contract import Box, ChunkContract, Window, _sizes
+from dascore.lazy.contract import (
+    Box,
+    ChunkContract,
+    Halo,
+    Pointwise,
+    Tiles,
+    Unchanged,
+    WholeAxis,
+    Window,
+    _sizes,
+)
 from dascore.utils.array_api import (
     NUMPY_BACKEND,
     _as_numpy_dtype,
@@ -388,6 +398,26 @@ def _middle(shape: tuple[int, ...], sizes: list[int]) -> Box:
     return tuple(slice(a, a + size) for a, size in zip(starts, sizes, strict=True))
 
 
+def _grains(array: LazyArray) -> dict[int, int]:
+    """
+    Return, for each axis the last tiled step cuts, every how many samples
+    of the result its boxes are cut from their tiles alike: a whole run of
+    tiles between two which do not overlap. The steps after it may only
+    select samples or keep them, so a box of the result is one of its own.
+    """
+    for node in reversed(array.chain.nodes):
+        contract = node.contract
+        if isinstance(contract, Tiles):
+            spans, factors = contract.spans.items(), contract.factors
+            return {
+                axis: stride // factors.get(axis, 1) * -(-size // stride)
+                for axis, (size, stride, _) in spans
+            }
+        if not isinstance(contract, Pointwise | Unchanged | Halo | WholeAxis | Window):
+            return {}
+    return {}
+
+
 def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     """
     Cut a lazy array into the boxes it is computed in.
@@ -397,7 +427,10 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
     pieces would only open each file again. Otherwise the box is halved
     along the first axis worth cutting until its arrays fit. An axis a step
     needs whole is never worth cutting, so the block size is aimed for
-    rather than promised.
+    rather than promised. Along an axis a windowed step tiles, the boxes
+    are a whole number of runs of its tiles long, so all but those at the
+    ends are cut from their tiles alike, and a chain compiled for one is
+    run again for the rest.
 
     Parameters
     ----------
@@ -422,6 +455,14 @@ def chunk_boxes(array: LazyArray, block_size: int | None = None) -> list[Box]:
                 break
         else:
             break
+    # Along an axis a tiled step cuts, the boxes are cut on its grain, so
+    # all but those at the ends are cut from their tiles alike and a chain
+    # compiled for one runs for the rest.
+    # To the nearest whole number of runs, so no more boxes are cut than
+    # the block size asked for, and none much larger.
+    for axis, every in _grains(array).items():
+        if sizes[axis] < shape[axis]:
+            sizes[axis] = max(every, (sizes[axis] + every // 2) // every * every)
     edges = [range(0, n, size or 1) for n, size in zip(shape, sizes, strict=True)]
     spans = [
         [slice(a, min(a + size, n)) for a in starts] or [slice(0, 0)]

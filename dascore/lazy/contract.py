@@ -233,7 +233,11 @@ class Tiles(ChunkContract):
 
     The kernel is told which tiles it was given: it takes a ``tiles``
     keyword holding, for each tiled axis in the order of `spans`, the first
-    tile and one past the last.
+    tile and one past the last. What it makes of them depends on where they
+    are only by how many there are, the first modulo the tiles between two
+    which do not overlap, and how far they reach past the ends of the
+    axis, so boxes cut alike from their tiles are computed alike; see
+    `key`.
 
     Parameters
     ----------
@@ -301,20 +305,36 @@ class Tiles(ChunkContract):
     def apply(self, run: Callable[..., Any], data, box: Box, needed: Box):
         """Return the output box, blended from the tiles which overlap it."""
         out = run(data, tiles=self.tiles(box))
-        # The result starts where the data do, counted in the samples made.
-        made = list(needed)
-        for axis, every in self.factors.items():
-            span = needed[axis]
-            made[axis] = slice(span.start // every, -(-span.stop // every))
+        made = self._made(needed)
         # A result of another shape is handed back for the caller to refuse.
-        if tuple(out.shape) != _sizes(tuple(made)):
+        if tuple(out.shape) != _sizes(made):
             return out
         spans = zip(box, made, strict=True)
         return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
 
+    def _made(self, needed: Box) -> Box:
+        """Return what the data needed make: where they are, in samples made."""
+        made = list(needed)
+        for axis, every in self.factors.items():
+            span = needed[axis]
+            made[axis] = slice(span.start // every, -(-span.stop // every))
+        return tuple(made)
+
     def key(self, box: Box, needed: Box) -> Hashable:
-        """Return the boxes: the tiles a kernel is given are the array's own."""
-        return box, needed
+        """
+        Return how the box is cut from its tiles.
+
+        The shapes and where the box sits in what its tiles make, and for
+        each tiled axis how many tiles there are and the first modulo the
+        tiles between two which do not overlap, so boxes a whole number of
+        such runs apart share a key. That says how far the tiles reach past
+        the ends of the axis too: a box whose first tile starts before the
+        array sits nearer the start of what it needs than any other can,
+        and one whose last ends after it needs less of the axis.
+        """
+        tiles = zip(self.spans.values(), self.tiles(box), strict=True)
+        runs = tuple((b - a, a % -(-z // step)) for (z, step, _), (a, b) in tiles)
+        return _relative(box, self._made(needed)), runs
 
 
 @dataclass(frozen=True)

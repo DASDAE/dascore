@@ -25,6 +25,7 @@ from dascore.lazy.execute import chunk_boxes, compute, read_schedule
 from dascore.lazy.recipe import Recipe, concat
 from dascore.proc.basic import Abs
 from dascore.proc.coords import Select
+from dascore.proc.window import Windowed
 from dascore.utils.array_api import array_namespace, backend_name, to_numpy
 
 from .conftest import constant, lazy_patch, stored_patch, unreadable
@@ -895,10 +896,33 @@ class _Summed(dc.PatchProcessor):
         return array_namespace(data).sum(data, axis=1)
 
 
-def _ramp(spacing: float = 1.0):
-    """Return a lazy patch of the row numbers, 40 rows of 6 channels."""
-    rows = [constant((1, 6), float(x)) for x in range(40)]
-    coords = {"time": np.arange(40), "distance": np.arange(6) * spacing}
+class _Lagged(dc.PatchProcessor):
+    """Subtract the sample six before, leaving the first six empty."""
+
+    name = None
+    position_free = True
+
+    def get_metadata(self, meta):
+        """Return the time axis."""
+        return meta, {"axis": meta.get_axis("time")}
+
+    def halo(self, plan):
+        """Return the six samples read before the one filled."""
+        return {plan["axis"]: (6, 0)}
+
+    def kernel(self, data, *, axis):
+        """Return the data less those six before, NaN where there are none."""
+        xp = array_namespace(data)
+        moved = xp.moveaxis(data, axis, 0)
+        empty = xp.full((6, *moved.shape[1:]), xp.nan, dtype=moved.dtype)
+        out = xp.concat([empty, moved[6:, ...] - moved[:-6, ...]], axis=0)
+        return xp.moveaxis(out, 0, axis)
+
+
+def _ramp(spacing: float = 1.0, rows: int = 40):
+    """Return a lazy patch of the row numbers, of 6 channels."""
+    rows = [constant((1, 6), float(x)) for x in range(rows)]
+    coords = {"time": np.arange(len(rows)), "distance": np.arange(6) * spacing}
     patch = dc.Patch(data=concat(rows), coords=coords, dims=("time", "distance"))
     return patch.set_backend("lazy[compiling_strict]")
 
@@ -1045,16 +1069,61 @@ class TestRunChain:
             assert np.array_equal(out, _rows(start, start + 10) + start)
         assert len(_Compiling.compiled) == 2
 
-    def test_tiles_compile_for_each_box(self):
-        """A tiled step's kernel is told where its tiles are, so no box shares."""
+    def test_tiles_inside_the_array_share_a_compile(self):
+        """Boxes a run of tiles apart share a compile; one at an end does not."""
         windowed = _ramp().window(time=8, overlap=4, samples=True).taper(time=0.25)
         expected = windowed.set_backend("lazy").load().data
-        # Two windows apart: the same tiles, counted from each box.
-        for start in (10, 18):
+        # Tiles of 8 every 4, two between two which do not overlap: a run
+        # is 8 samples, so 14 is cut otherwise than 10 and 18. The box at 0
+        # has a tile which starts before the array.
+        for start in (10, 18, 14, 0):
             box = (slice(start, start + 10), slice(0, 6))
             out = _values(compute(windowed.data, box))
             assert np.allclose(out, expected[box], equal_nan=True)
-        assert len(_Compiling.compiled) == 2
+        assert len(_Compiling.compiled) == 3
+
+    @pytest.mark.parametrize(
+        "operation, size, overlap",
+        (
+            (dc.proc.Taper(time=0.25), 8, 4),
+            (_Lagged(), 16, 8),
+            # Every second sample kept, so a box counts half the samples read.
+            (dc.proc.Decimate(time=2, filter_type=None), 8, 4),
+        ),
+    )
+    def test_every_box_is_right_from_what_was_compiled(self, operation, size, overlap):
+        """Wherever a box starts, a chain compiled for another of its key is right."""
+        window = {"time": size, "overlap": overlap, "samples": True}
+        patch = Windowed(operation, **window)(_ramp(rows=60))
+        expected = patch.set_backend("lazy").load().data
+        starts = range(len(expected) - 12)
+        for start in starts:
+            box = (slice(start, start + 12), slice(0, 6))
+            out = _values(compute(patch.data, box))
+            assert np.allclose(out, expected[box], equal_nan=True)
+        # Many boxes were run by what was compiled for another.
+        assert len(_Compiling.compiled) < len(starts)
+
+    @pytest.mark.parametrize(
+        "operation, size, overlap",
+        ((dc.proc.Taper(time=0.25), 8, 4), (_Lagged(), 16, 8)),
+    )
+    @pytest.mark.parametrize("selected", (False, True))
+    def test_a_long_windowed_load_compiles_a_few_times(
+        self, operation, size, overlap, selected
+    ):
+        """Cut on the tiles' grain, a load compiles for its ends and its middle."""
+        window = {"time": size, "overlap": overlap, "samples": True}
+        patch = Windowed(operation, **window)(_ramp(rows=400))
+        if selected:
+            patch = patch.select(time=(3, 397), samples=True)
+        expected = patch.set_backend("lazy").load().data
+        block = 6 * 8 * 48
+        with config_context(lazy_block_size=block):
+            out = patch.load()
+        assert len(chunk_boxes(patch.data, block)) >= 8
+        assert len(_Compiling.compiled) <= 4
+        assert np.allclose(_values(out), expected, equal_nan=True)
 
     def test_a_step_dropping_an_axis_has_a_key(self):
         """A step with no contract which drops an axis is keyed as a whole."""
