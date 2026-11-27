@@ -113,6 +113,9 @@ docs = [
     # Builds the browser notebooks the tutorial pages link to; the floor is the
     # release the setup cell and wheel bundling were verified with.
     "marimo>=0.25.2",
+    # The notes and API examples run a backend on this reference array API
+    # library, as another package registers one for its own.
+    "array-api-strict",
 ]
 
 test_base = [

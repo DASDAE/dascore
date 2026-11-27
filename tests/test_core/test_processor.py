@@ -18,6 +18,7 @@ from pydantic import ConfigDict, Field, ValidationError
 from scipy import ndimage
 
 import dascore as dc
+from dascore.backends import ArrayAPIBackend
 from dascore.config import config_context
 from dascore.constants import PatchMetaType, PatchType
 from dascore.core import processor as processor_module
@@ -51,6 +52,13 @@ from dascore.utils.patch_registry import (
     resolve_patch_function,
 )
 from dascore.warnings import NumpyFallbackWarning
+
+
+class _Elsewhere(ArrayAPIBackend):
+    """A registered backend these tests register kernels for, and never run."""
+
+    name = "elsewhere"
+    array_type = "elsewhere_library.Array"
 
 
 class SeamScale(PatchProcessor):
@@ -633,7 +641,7 @@ class TestCheck:
 
             name = None
 
-        @register_kernel(Elsewhere, "cupy")
+        @register_kernel(Elsewhere, "elsewhere")
         def _elsewhere(processor, data):
             """Never called from these tests."""
             raise AssertionError
@@ -1123,7 +1131,7 @@ class TestKernelFor:
 
             name = None
 
-        @register_kernel(Local, "cupy")
+        @register_kernel(Local, "elsewhere")
         def _never(processor, data):
             """Registered for a backend nothing here uses."""
             raise AssertionError
@@ -1143,13 +1151,13 @@ class TestKernelFor:
 
             name = None
 
-        @register_kernel(Child, "cupy")
+        @register_kernel(Child, "elsewhere")
         def _child(processor, data):
-            """The child's cupy kernel."""
+            """The child's kernel for another backend."""
             return data
 
-        assert Child.kernel_for("cupy") is _child
-        assert Parent.kernel_for("cupy") is SeamScale.__dict__["kernel"]
+        assert Child.kernel_for("elsewhere") is _child
+        assert Parent.kernel_for("elsewhere") is SeamScale.__dict__["kernel"]
 
     def test_a_subclass_kernel_beats_a_parents_backend_kernel(self):
         """A parent's backend kernel must not answer for a subclass."""
@@ -1448,8 +1456,8 @@ class TestWhereOperationsAreListed:
             __module__ = "dascore.proc.basic"
             __qualname__ = "SeamPartial"
 
-        @register_kernel(SeamPartial, "cupy")
-        def _cupy(processor, data):
+        @register_kernel(SeamPartial, "elsewhere")
+        def _elsewhere_kernel(processor, data):
             """Registered while nothing is listed, so nothing is checked."""
             return data
 
