@@ -144,6 +144,15 @@ def _filled(value: Any, arrays: Sequence) -> Any:
     return _rebuilt(value, [_filled(x, arrays) for x in parts])
 
 
+def _state(value: Any) -> set[str]:
+    """Return the names of the attributes an object holds, in slots or not."""
+    names = set(getattr(value, "__dict__", ()))
+    for klass in type(value).__mro__:
+        slots = klass.__dict__.get("__slots__", ())
+        names |= {slots} if isinstance(slots, str) else set(slots)
+    return {x for x in names - {"__dict__", "__weakref__"} if hasattr(value, x)}
+
+
 def _frozen(value: Any) -> Hashable:
     """
     Return a hashable stand-in for a value, equal only for equal values.
@@ -167,12 +176,12 @@ def _frozen(value: Any) -> Hashable:
         return type(value), _frozen(value.real), _frozen(value.imag)
     if is_dataclass(value) and not isinstance(value, type):
         names = [x.name for x in fields(value)]
-        if set(getattr(value, "__dict__", names)) != set(names):
+        if not _state(value) <= set(names):
             raise TypeError("A dataclass holding more than its fields is not keyed.")
         items = ((x, getattr(value, x)) for x in names)
         return type(value), tuple((k, _frozen(v)) for k, v in items)
     if type(value) is dict:
-        return dict, tuple((k, _frozen(v)) for k, v in value.items())
+        return dict, tuple((_frozen(k), _frozen(v)) for k, v in value.items())
     if (parts := _parts(value)) is not None:
         return type(value), tuple(_frozen(x) for x in parts)
     if isinstance(value, Mapping | list | tuple):

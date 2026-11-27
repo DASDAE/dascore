@@ -784,6 +784,15 @@ class _Biased(Pointwise):
         object.__setattr__(self, "bias", bias)
 
 
+class _Slotted(Pointwise):
+    """A pointwise contract holding a value in a slot."""
+
+    __slots__ = ("bias",)
+
+    def __init__(self, bias):
+        object.__setattr__(self, "bias", bias)
+
+
 class _Named(NamedTuple):
     """A named tuple of one value."""
 
@@ -985,6 +994,7 @@ class TestRunChain:
         (
             _Stated(pair=(_tagged(1.0, "a"), _tagged(1.0, "b"))),
             _Stated(pair=(1.0, 1.0), contract=_Biased(2.0)),
+            _Stated(pair=(1.0, 1.0), contract=_Slotted(2.0)),
         ),
     )
     def test_what_holds_more_than_it_says_has_no_key(self, operation):
