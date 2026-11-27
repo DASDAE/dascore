@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import gc
+import weakref
+
 import numpy as np
 import pandas as pd
 import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.core import _spool_inventory
 from dascore.core.coords import get_coord
 from dascore.core.inventory import (
     Acquisition,
@@ -131,6 +135,14 @@ class TestResolution:
         split = inventory.replace(old, old.new(acquisitions=(first, second)))
         with pytest.raises(PatchError, match="spans a change of acquisition"):
             patch.enrich(split, coords=False)
+
+    def test_straddling_an_unchanged_acquisition(self, patch, inventory):
+        """A network epoch inside the patch, repeating its acquisition, is no change."""
+        network = inventory.networks[0]
+        middle = patch.get_coord("time").values[len(patch.get_coord("time")) // 2]
+        epochs = (network.new(time_max=middle), network.new(time_min=middle))
+        split = inventory.new(networks=epochs).check()
+        assert patch.enrich(split, coords=False).attrs.gauge_length == 10.0
 
 
 class TestAttrs:
@@ -1092,6 +1104,83 @@ class TestProjectionDetails:
             patch.enrich(inventory, attrs=False, coords=("coupling.attachment",))
 
 
+class TestManyPatches:
+    """One inventory enriching many patches, as a spool does."""
+
+    def test_each_channel_layout_gets_its_own_values(self, patch, inventory):
+        """Every layout matches a fresh inventory's, the first time and again."""
+        # Equal lengths, so only the channels' values tell these apart.
+        subs = [patch.select(distance=(x, x + 60), samples=True) for x in (0, 90, 180)]
+        # Equal lengths and first channels, on different steps.
+        subs += [
+            patch.decimate(distance=2, filter_type=None),
+            patch.select(distance=(0, 150), samples=True),
+        ]
+        for sub in subs * 2:
+            assert sub.enrich(inventory).equals(sub.enrich(inventory.model_copy()))
+
+    def test_each_path_gets_its_own_values(self, patch, inventory):
+        """Two epochs of a path, on the same channels, project their own."""
+        array = inventory.networks[0].fiber_arrays[0]
+        path = array.optical_paths[0]
+        time = patch.get_coord("time")
+        change = time.max() + time.step / 2
+        labels = tuple(x.new(value="east") if x.value else x for x in path.labels)
+        paths = (path.new(time_max=change), path.new(time_min=change, labels=labels))
+        split = inventory.replace(array, array.new(optical_paths=paths))
+        later = patch.update_coords(time_min=time.max() + time.step)
+        outs = [x.enrich(split, attrs=False, coords=("zone",)) for x in (patch, later)]
+        assert set(outs[0].coords.get_array("zone")) == {"north", "south"}
+        assert set(outs[1].coords.get_array("zone")) == {"east"}
+
+    def test_wide_layouts_past_what_is_kept(self, patch):
+        """Layouts holding more than an inventory keeps still get their own."""
+        inventory = inventory_patch_pair()[1]
+        count, time = 100_000, patch.get_coord("time").values[:2]
+
+        def wide(start):
+            """A patch of many channels, whose projections take about 12 MB."""
+            distance = np.linspace(start, start + 200, count)
+            coords = {"distance": distance, "time": time}
+            data = np.zeros((count, len(time)))
+            return dc.Patch(
+                data=data, coords=coords, dims=patch.dims, attrs=patch.attrs
+            )
+
+        first = wide(0).enrich(inventory)
+        for start in range(1, 8):
+            wide(start).enrich(inventory)
+        assert wide(0).enrich(inventory).equals(first)
+
+    def test_projection_past_what_is_kept_is_not_held(self, monkeypatch):
+        """A projection larger than all an inventory keeps is handed out only."""
+        monkeypatch.setattr(_spool_inventory, "_PROJECTION_BYTES", 0)
+        inventory = inventory_patch_pair()[1]
+        path = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        values = _spool_inventory.get_coord_values(
+            inventory, path, "distance", np.arange(10.0)
+        )
+        ref = weakref.ref(values)
+        del values
+        gc.collect()
+        assert ref() is None
+
+    def test_shared_values_stay_read_only(self, patch, inventory):
+        """A projection serves later patches, so none can make it writable."""
+        out = patch.enrich(inventory, attrs=False, coords=("zone",))
+        with pytest.raises(ValueError, match="WRITEABLE"):
+            out.coords.get_array("zone").flags.writeable = True
+
+    def test_inventory_is_let_go(self, patch):
+        """What enriching keeps is dropped with the inventory."""
+        inventory = inventory_patch_pair()[1]
+        path = weakref.ref(inventory.networks[0].fiber_arrays[0].optical_paths[0])
+        patch.enrich(inventory)
+        del inventory
+        gc.collect()
+        assert path() is None
+
+
 class TestEnrichContracts:
     """Contracts enrich keeps at track ends, markers, and channel maps."""
 
@@ -1355,10 +1444,15 @@ class TestEnrichContracts:
         )
 
     def test_enrich_writes_one_history_entry(self, patch, inventory):
-        """The operation is enrich; how it updates coords is its own business."""
+        """
+        The operation is enrich; how it updates coords is its own business.
+
+        The inventory is named rather than drawn.
+        """
         history = patch.enrich(inventory).attrs.history
         assert len(history) == 1
         assert history[0].startswith("enrich(")
+        assert "inventory='Inventory...'" in history[0]
 
     def test_enrich_encodes_the_inventory_once(self, patch, monkeypatch):
         """
