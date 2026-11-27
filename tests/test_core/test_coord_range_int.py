@@ -948,6 +948,16 @@ class TestFloatRepresentation:
         )
         assert len(coord) == 5
 
+    def test_one_element_arrays_state_the_scalar_range(self):
+        """A one-element start, stop or step builds what its value builds."""
+        expected = get_coord(start=0.0, stop=10.0, step=2.0)
+        for name in ("start", "stop", "step"):
+            kwargs = dict(start=0.0, stop=10.0, step=2.0)
+            kwargs[name] = np.array([kwargs[name]])
+            coord = get_coord(**kwargs)
+            assert coord.data_id == expected.data_id
+            assert np.ndim(coord.step) == 0
+
     def test_needs_three_values(self):
         """Fewer than three of start, stop, step, shape is an error or a partial."""
         with pytest.raises(CoordError, match="start, stop, and step"):
