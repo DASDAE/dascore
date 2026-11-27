@@ -1817,12 +1817,16 @@ class TestSelectorEdgeShapes:
             with pytest.raises(InvalidSpoolQueryError, match="lo > hi"):
                 len(spool.select(gauge_length=(20.0, 5.0)))
 
-    def test_units_are_spelled_the_way_a_patch_spells_them(self, patch, inventory):
+    @pytest.mark.parametrize("selector", ["m / s", get_quantity("m/s")])
+    def test_units_are_spelled_the_way_a_patch_spells_them(
+        self, patch, inventory, selector
+    ):
         """
         The inventory models units as a quantity; a patch carries a string.
 
         The same fact stored two ways would never match one selector, so
-        the inventory's answer is rendered the way a header states it.
+        the inventory's answer is rendered the way a header states it, and
+        a quantity selects it as it selects the patch (#1761).
         """
         described = _replace_acquisition(inventory, data_units="m/s")
         spool = dc.spool(
@@ -1831,7 +1835,7 @@ class TestSelectorEdgeShapes:
                 patch.update_attrs(tag="blank", data_units=""),
             ]
         ).attach_inventory(described)
-        out = sorted(spool.select(data_units="m / s").get_contents()["tag"])
+        out = sorted(spool.select(data_units=selector).get_contents()["tag"])
         assert out == ["blank", "stated"]
 
     def test_a_wildcard_crosses_a_newline(self, inventory):

@@ -24,7 +24,8 @@ from dascore.exceptions import (
 )
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
-from dascore.units import get_quantity, m, percent, s
+from dascore.units import get_quantity, get_unit, m, percent, s
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 
@@ -1669,3 +1670,99 @@ class TestEmptiedMembers:
         with suppress_warnings(DASCoreWarning):  # labels with no step are read
             outs = PLANS[plan](spool.select(depth=(12, 18)))
         assert outs and all(x.get_array("depth").tolist() == [15] for x in outs)
+
+
+class TestUnitAttrSelection:
+    """A unit attr's selector is read as units (#1761)."""
+
+    @pytest.fixture(scope="class", params=("memory", "directory"))
+    @classmethod
+    def unit_spool(cls, request, tmp_path_factory):
+        """Patches in strain, in m/s, and without units, tagged so."""
+        base = dc.get_example_patch()
+        patches = [
+            base.update_attrs(data_units="strain", tag="strain"),
+            base.update_attrs(data_units="m/s", tag="velocity"),
+            base.update_attrs(tag="unitless"),
+        ]
+        if request.param == "memory":
+            return dc.spool(patches)
+        path = tmp_path_factory.mktemp("unit_select")
+        for patch in patches:
+            patch.io.write(path / f"{patch.attrs.tag}.h5", "DASDAE")
+        return dc.spool(path).update(progress=None)
+
+    @staticmethod
+    def _tags(spool):
+        return sorted(x.attrs.tag for x in spool)
+
+    @pytest.mark.parametrize(
+        "value", ["strain", "ϵ", get_quantity("strain"), get_unit("strain")]
+    )
+    def test_name_symbol_quantity(self, unit_spool, value):
+        """The name, the stored symbol, a quantity and a unit select alike."""
+        assert self._tags(unit_spool.select(data_units=value)) == ["strain"]
+        assert self._tags(unit_spool.unselect(data_units=value)) == [
+            "unitless",
+            "velocity",
+        ]
+
+    @pytest.mark.parametrize(
+        "value", ["m/s", "m / s", "meter/second", get_quantity("m/s")]
+    )
+    def test_compound_unit(self, unit_spool, value):
+        """A compound unit selects in any spelling."""
+        assert self._tags(unit_spool.select(data_units=value)) == ["velocity"]
+
+    @pytest.mark.parametrize("container", [list, set, tuple, np.array])
+    def test_membership(self, unit_spool, container):
+        """Each member of a membership selector is read as units."""
+        out = unit_spool.select(data_units=container(["strain", "meter/second", "K"]))
+        assert self._tags(out) == ["strain", "velocity"]
+
+    @pytest.mark.parametrize(
+        ("value", "tags"), [("foo", []), ("", []), (1, []), ("m*", ["velocity"])]
+    )
+    def test_not_a_unit(self, unit_spool, value, tags):
+        """A value which isn't a unit compares as before, a glob as a glob."""
+        assert self._tags(unit_spool.select(data_units=value)) == tags
+
+    def test_glob_spelling_a_unit(self, unit_spool):
+        """A glob which spells a unit is read as that unit: m*s is not m / s."""
+        assert self._tags(unit_spool.select(data_units="m*s")) == []
+
+    @pytest.mark.parametrize("glob", ["m?", "m[ms]"])
+    def test_glob_only_syntax(self, glob):
+        """? and [ keep a glob a glob, though some unit parsers skip them."""
+        base = dc.get_example_patch()
+        units = ("m", "mm", "ms")
+        spool = dc.spool([base.update_attrs(data_units=x, tag=x) for x in units])
+        assert self._tags(spool.select(data_units=glob)) == ["mm", "ms"]
+
+    @pytest.mark.parametrize("value", [get_quantity("ns"), [get_quantity("ns")]])
+    def test_quantity_valued_attr(self, value):
+        """An extra attr holding a quantity is still found by that quantity."""
+        patch = dc.get_example_patch().update_attrs(
+            pulse_width_units=get_quantity("ns"), tag="quantity"
+        )
+        out = dc.spool([patch]).select(pulse_width_units=value)
+        assert self._tags(out) == ["quantity"]
+
+    def test_other_unit_attr(self):
+        """Any attr named for units is read as units, kept as given too."""
+        base = dc.get_example_patch()
+        patches = [
+            base.update_attrs(pulse_width_units="ns", tag="symbol"),
+            base.update_attrs(pulse_width_units="nanoseconds", tag="name"),
+        ]
+        spool = dc.spool(patches)
+        assert self._tags(spool.select(pulse_width_units="nanosecond")) == ["symbol"]
+        assert self._tags(spool.select(pulse_width_units="nanoseconds")) == [
+            "name",
+            "symbol",
+        ]
+
+    def test_reader_states_name(self):
+        """A reader stating its unit by name is found by that name."""
+        spool = dc.spool(fetch("febus_1.h5"))
+        assert len(spool.select(data_units="nanostrain/s")) == len(spool)

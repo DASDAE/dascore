@@ -8,13 +8,16 @@ from typing import Any, TypeVar, cast
 
 import numpy as np
 import pandas as pd
+from pint import Quantity, Unit
 
 import dascore as dc
 from dascore.constants import PatchType, namespace_select_type
 from dascore.core.attrs import PatchAttrs
 from dascore.exceptions import InvalidSpoolQueryError, ParameterError
+from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.misc import (
     glob_to_regex,
+    is_range,
     order_range_tuple,
     sanitize_range_param,
 )
@@ -134,6 +137,48 @@ def normalize_range_forms(value):
     return value
 
 
+def _unit_spellings(value) -> list | None:
+    """
+    A unit's forms as given and as attrs store it, or None for no unit.
+
+    A unit object is given as its quantity, which an extra attr holding a
+    quantity is indexed by. ``?`` and ``[`` are glob syntax no unit uses,
+    though older unit parsers skip them.
+    """
+    if isinstance(value, str) and {"?", "["} & set(value):
+        return None
+    if not isinstance(value, str | Quantity | Unit):
+        return None
+    try:
+        quantity = get_quantity(value)
+        stored = get_quantity_str(quantity)
+    except Exception:  # not a unit
+        return None
+    if stored is None:
+        return None
+    if not isinstance(value, str):
+        return [quantity, stored]
+    return [value, stored] if value != stored else [stored]
+
+
+def _read_unit_selector(name: str, value):
+    """
+    Read a ``*_units`` attr's selector as units, in the spelling attrs store.
+
+    Attrs store ``strain`` as ``ϵ``, so its name, its symbol and a quantity
+    select alike. A string keeps its own spelling too, for an extra attr
+    stored as given. The spellings form a list, so they compare exactly
+    rather than as a glob; a value which isn't a unit is left as it is.
+    """
+    if not name.endswith("_units"):
+        return value
+    if isinstance(value, list | set | frozenset | np.ndarray) or (
+        isinstance(value, tuple) and not is_range(value)
+    ):
+        return [y for x in value for y in (_unit_spellings(x) or [x])]
+    return _unit_spellings(value) or value
+
+
 def resolve_selector_namespaces(
     known_attrs: Collection[str],
     known_coords: Collection[str],
@@ -220,6 +265,7 @@ def resolve_selector_namespaces(
                     "that, e.g. acquisition_key='NET.*'."
                 )
             raise InvalidSpoolQueryError(msg)
+    attrs = {k: _read_unit_selector(k, v) for k, v in attrs.items()}
     return attrs, coords
 
 

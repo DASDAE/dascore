@@ -460,6 +460,8 @@ def evaluate_attr_predicate(values, name: str, value, units=None) -> np.ndarray:
         where the range form — which keeps its converted bounds — does.
         """
         out = _coerce_scalar(item, kinds)
+        if out.kind not in kinds:  # matches nothing, as in the index
+            return out
         value = _to_target_unit(out, units.get(out.kind), name)
         return replace(out, value=value)
 
