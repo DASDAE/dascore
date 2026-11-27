@@ -755,6 +755,52 @@ class _Defaulted(dc.PatchProcessor):
         return data + table["missing"]
 
 
+class _Stated(dc.PatchProcessor):
+    """Hand the data back, with one of two values in the plan by spacing."""
+
+    name = None
+    position_free = True
+
+    pair: Any = None
+    contract: Any = None
+
+    def get_metadata(self, meta):
+        """Return the first value for channels one apart, else the second."""
+        return meta, {"value": self.pair[0] if _spacing(meta) == 1 else self.pair[1]}
+
+    def chunk_contract(self, dtype, plan):
+        """Return the contract given, or that each sample is its own."""
+        return self.contract or Pointwise()
+
+    def kernel(self, data, *, value):
+        """Return the data as they are."""
+        return data + 0
+
+
+class _Biased(Pointwise):
+    """A pointwise contract holding a value outside its fields."""
+
+    def __init__(self, bias):
+        object.__setattr__(self, "bias", bias)
+
+
+class _Named(NamedTuple):
+    """A named tuple of one value."""
+
+    value: float
+
+
+class _Tagged(_Named):
+    """A named tuple which holds a tag besides its items."""
+
+
+def _tagged(value, tag):
+    """Return a tagged named tuple."""
+    out = _Tagged(value)
+    out.tag = tag
+    return out
+
+
 class _NumpyOnly(dc.PatchProcessor):
     """An operation with a NumPy kernel alone, which converts on any other."""
 
@@ -913,6 +959,39 @@ class TestRunChain:
         assert len(_Compiling.compiled) == 2
         assert all(np.array_equal(x, y + 0 * x) for x, y in zip(outs, expected))
 
+    @pytest.mark.parametrize(
+        "pair",
+        (
+            (complex(-1, 0.0), complex(-1, -0.0)),
+            (np.float32(0.0), np.float32(-0.0)),
+            pytest.param(
+                (np.longdouble(1), np.longdouble(1) + np.longdouble(2) ** -63),
+                marks=pytest.mark.skipif(
+                    np.finfo(np.longdouble).nmant <= np.finfo(float).nmant,
+                    reason="no wider float here",
+                ),
+            ),
+        ),
+    )
+    def test_values_a_kernel_tells_apart_key_apart(self, pair):
+        """Signed zeros of complex numbers, and wide floats, are keyed whole."""
+        for spacing in (1.0, 2.0):
+            _Stated(pair=pair)(_ramp(spacing)).load()
+        first, second = (x[0].key for x in _Compiling.sections)
+        assert None not in (first, second) and first != second
+
+    @pytest.mark.parametrize(
+        "operation",
+        (
+            _Stated(pair=(_tagged(1.0, "a"), _tagged(1.0, "b"))),
+            _Stated(pair=(1.0, 1.0), contract=_Biased(2.0)),
+        ),
+    )
+    def test_what_holds_more_than_it_says_has_no_key(self, operation):
+        """A named tuple or a contract holding more than its items has no key."""
+        operation(_ramp()).load()
+        assert _Compiling.sections[0][0].key is None
+
     def test_a_container_of_its_own_kind_has_no_key(self):
         """A dict which holds more than its items is not keyed by them."""
         outs = [_values(_Defaulted()(_ramp(x)).load()) for x in (1.0, 2.0)]
@@ -1036,4 +1115,7 @@ class TestRunChain:
             processor(_ramp()).load()
         first, second = (x[0].key for x in _Compiling.sections)
         assert first is not None
-        assert (second == first) is same if same is not None else second is None
+        if same is None:
+            assert second is None
+        else:
+            assert second is not None and (second == first) is same

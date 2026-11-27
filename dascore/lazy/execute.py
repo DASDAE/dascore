@@ -104,7 +104,11 @@ def _parts(value: Any) -> list | None:
     """Return what a plan's container holds, or None for anything else."""
     if type(value) is dict:
         return list(value.values())
-    if type(value) in (tuple, list) or hasattr(type(value), "_fields"):
+    if type(value) in (tuple, list):
+        return list(value)
+    # A named tuple holding more than its items, which rebuilding it would
+    # drop, is kept whole.
+    if hasattr(type(value), "_fields") and not getattr(value, "__dict__", None):
         return list(value)
     return None
 
@@ -146,17 +150,26 @@ def _frozen(value: Any) -> Hashable:
 
     For what a contract holds, and what a plan holds without its arrays,
     which is numbers, slices, strings and containers of them. A float
-    stands for its exact spelling, so 0.0 and -0.0 differ.
+    stands for its exact spelling, so 0.0 and -0.0 differ, in a complex
+    number too.
 
     Raises
     ------
     TypeError
         If the value, or something in it, cannot be hashed.
     """
-    if isinstance(value, float | np.floating):
-        return type(value), float(value).hex()
+    if isinstance(value, float):
+        return type(value), value.hex()
+    if isinstance(value, np.floating):
+        # At its own precision, which may be more than a float's.
+        return type(value), np.format_float_positional(value, unique=True)
+    if isinstance(value, complex | np.complexfloating):
+        return type(value), _frozen(value.real), _frozen(value.imag)
     if is_dataclass(value) and not isinstance(value, type):
-        items = ((x.name, getattr(value, x.name)) for x in fields(value))
+        names = [x.name for x in fields(value)]
+        if set(getattr(value, "__dict__", names)) != set(names):
+            raise TypeError("A dataclass holding more than its fields is not keyed.")
+        items = ((x, getattr(value, x)) for x in names)
         return type(value), tuple((k, _frozen(v)) for k, v in items)
     if type(value) is dict:
         return dict, tuple((k, _frozen(v)) for k, v in value.items())
