@@ -18,7 +18,6 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.exceptions import (
-    CoordDataError,
     CoordError,
     ParameterError,
     PatchBroadcastError,
@@ -1880,28 +1879,28 @@ class TestDropPrivateCoords:
         assert out.shape == random_patch.shape
         assert np.array_equal(out.data, random_patch.data)
 
-    def test_private_dimension_empties_its_axis(self):
-        """A private dimension takes its axis with it, data included."""
-        patch = dc.Patch(np.arange(3), coords={"_x": np.arange(3)}, dims=("_x",))
-        out = patch.drop_private_coords()
-        assert out.dims == ()
-        assert out.data.shape == (0,)
-
-    def test_private_dimension_beside_a_public_one(self):
-        """The manager empties that axis rather than removing it, so no patch fits.
-
-        Emptying is what makes a patch of nothing but private dimensions work;
-        beside a public dimension it leaves an axis the coordinates no longer
-        describe, which no patch can hold. Pinned so the array half of this
-        operation cannot drift from what the coordinate manager does.
-        """
+    def test_private_dimension_is_kept(self):
+        """A dimension stays whatever its name; private coordinates on it go."""
         patch = dc.Patch(
             np.ones((3, 4)),
-            coords={"_x": np.arange(3), "time": dc.to_datetime64(np.arange(4))},
+            coords={
+                "_x": np.arange(3),
+                "time": dc.to_datetime64(np.arange(4)),
+                "_rider": ("_x", np.arange(3)),
+            },
             dims=("_x", "time"),
         )
-        with pytest.raises(CoordDataError, match=r"shape of \(0, 4\)"):
-            patch.drop_private_coords()
+        out = patch.drop_private_coords()
+        assert out.dims == patch.dims
+        assert set(out.coords.coord_map) == {"_x", "time"}
+        assert np.array_equal(out.data, patch.data)
+
+    def test_only_private_dimensions(self):
+        """A patch of nothing but private dimensions comes back as it was."""
+        patch = dc.Patch(np.arange(3), coords={"_x": np.arange(3)}, dims=("_x",))
+        out = patch.drop_private_coords()
+        assert out.dims == ("_x",)
+        assert out.equals(patch)
 
 
 class TestProcessorSeam:
@@ -1912,13 +1911,13 @@ class TestProcessorSeam:
         coords_module.RenameCoords,
         coords_module.UpdateCoords,
         coords_module.DropCoords,
+        coords_module.DropPrivateCoords,
         coords_module.CoordsFromDf,
     )
     # Operations which also move, drop or repeat samples.
     with_kernel = (
         coords_module.SnapCoords,
         coords_module.SortCoords,
-        coords_module.DropPrivateCoords,
         coords_module.Select,
         coords_module.Isel,
         coords_module.Sel,

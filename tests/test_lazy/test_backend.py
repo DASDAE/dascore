@@ -1968,12 +1968,11 @@ class TestSpoolSetBackend:
         assert backend_name(out.data) == "lazy" and not reads
         assert out.attrs == expected.attrs and out.load().equals(expected)
 
-    def test_private_dimension_is_not_dropped_lazily(self, patch):
-        """Dropping a private dimension is refused, as it was."""
-        lazy = _lazy(patch)
-        renamed = lazy.rename_coords(time="_time")
-        with pytest.raises(LazyOperationError, match="drop_private_coords"):
-            renamed.drop_private_coords()
+    def test_private_dimension_is_kept_lazily(self, patch):
+        """A private dimension stays, and so do its data, unread."""
+        renamed = _lazy(patch).rename_coords(time="_time")
+        out = renamed.drop_private_coords()
+        assert out.dims == renamed.dims and backend_name(out.data) == "lazy"
 
     def test_recipes_of_different_dtypes_are_read(self, whole, tmp_path):
         """Recipes of different dtypes are read: a lazy join could skip a cast."""

@@ -631,10 +631,6 @@ class Patch(NamespaceOwner, PatchMeta):
         """Sort the patch along one or more coordinates."""
         return dascore.proc.coords.SortCoords(coords=coords, reverse=reverse).run(self)
 
-    def drop_private_coords(self) -> Self:
-        """Drop coordinates whose names start with an underscore."""
-        return dascore.proc.coords.DropPrivateCoords().run(self)
-
     def make_broadcastable_to(self, shape: tuple[int, ...], drop_coords=False) -> Self:
         """Make the patch broadcastable to a given shape."""
         return dascore.proc.coords.MakeBroadcastableTo(

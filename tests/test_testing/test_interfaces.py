@@ -27,6 +27,12 @@ from tests._stand_ins import (
     _StringCoord,
 )
 
+# The base tests run in other packages' suites, under a pytest which may
+# refuse what this one warns of.
+pytestmark = pytest.mark.filterwarnings(
+    "error:Class-scoped fixtures? defined as instance methods?"
+)
+
 
 class TestNumericCoord(BaseNumericCoordTests):
     """dascore's numeric coordinates."""
@@ -129,7 +135,8 @@ class TestCheck:
     """The comparison the tests make, a pure helper, fails what differs."""
 
     @pytest.fixture(scope="class")
-    def coord(self):
+    @classmethod
+    def coord(cls):
         """An evenly sampled coordinate."""
         return get_coord(start=0.0, stop=10.0, step=1.0, units="m")
 
