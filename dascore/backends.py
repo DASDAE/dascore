@@ -192,10 +192,12 @@ class ArrayBackend(BaseModel, ABC):
 
         Each step is run in turn, and what it makes is held as one of the
         backend's arrays before the next. A backend which compiles a chain
-        overrides this: the steps say what to run and what it is
-        specialized to, and caching what was compiled is the backend's. A
-        step with no kernel for the library, which goes through NumPy, is
-        never handed here; the chain is run up to it and on from it.
+        overrides this: the steps say what to run and what the compiled
+        chain is specialized to, and the backend caches what it compiled.
+        An override keeps the check of shapes and dtypes by running each
+        step with `Step.run`, or checking it with `Step.check`. A step with
+        no kernel for the library goes through NumPy and is never handed
+        here: the chain is run up to it and on from it.
 
         Parameters
         ----------
@@ -215,7 +217,7 @@ class ArrayBackend(BaseModel, ABC):
         >>> from dascore.lazy.recipe import Recipe
         >>>
         >>> class Strict(ArrayAPIBackend):
-        ...     '''Arrays of array_api_strict, which says what it runs.'''
+        ...     '''A backend of array_api_strict which says what it runs.'''
         ...
         ...     name = "strict"
         ...     array_type = "array_api_strict._array_object.Array"

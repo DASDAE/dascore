@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import tracemalloc
 import warnings
 from itertools import product
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NamedTuple
 
 import numpy as np
 import pytest
@@ -13,11 +14,12 @@ import pytest
 import dascore as dc
 from dascore.backends import ArrayAPIBackend
 from dascore.config import config_context
+from dascore.core.processor import register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import LazyOperationError, ParameterError, PatchError
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Chain, Node
-from dascore.lazy.contract import Halo, Pointwise, Window
+from dascore.lazy.contract import ChunkContract, Halo, Pointwise, WholeAxis, Window
 from dascore.lazy.execute import chunk_boxes, compute, read_schedule
 from dascore.lazy.recipe import Recipe, concat
 from dascore.proc.basic import Abs
@@ -594,7 +596,12 @@ class _Compiling(ArrayAPIBackend):
         key = (tuple(data.shape), str(data.dtype), keys)
         if key not in self.compiled:
             self.compiled[key] = self._compile(steps)
-        return self.compiled[key](data, [x.arrays for x in steps])
+        arrays = [[self._held(y) for y in x.arrays] for x in steps]
+        return self.compiled[key](data, arrays)
+
+    def _held(self, value):
+        """Return an array the chain is handed as one of the backend's."""
+        return self.from_array(value) if hasattr(value, "shape") else value
 
     def _compile(self, steps):
         """Return the steps as one function of the data and their arrays."""
@@ -607,51 +614,123 @@ class _Compiling(ArrayAPIBackend):
         return run
 
 
+def _spacing(meta) -> float:
+    """Return the distance between channels."""
+    return float(meta.get_coord("distance").step)
+
+
+def _each_sample(processor, dtype, plan):
+    """Return that each sample is made from its own."""
+    return Pointwise()
+
+
+class _Gains(NamedTuple):
+    """The gains of a plan, held as a named tuple."""
+
+    gain: Any
+
+
 class _Gained(dc.PatchProcessor):
-    """Multiply by the distance step, which the plan holds as an array."""
+    """Multiply by the channel spacing, which the plan holds nested, as an array."""
 
     name = None
     position_free = True
+    chunk_contract = _each_sample
+
     # A float the compiled chain is handed, as a tuning knob would be.
     plan_arrays: ClassVar[tuple[str, ...]] = ("offset",)
 
     keep: Any = None
 
     def get_metadata(self, meta):
-        """Return the gain, the offset, and the nested and fixed entries."""
-        gain = np.asarray([float(meta.get_coord("distance").step)])
-        plan = {"gain": gain, "offset": 0.0, "nested": {"also": gain}, "n": 1}
+        """Return the gains, the offset, and a fixed entry."""
+        gain = np.asarray([_spacing(meta)])
+        nested = {"gains": _Gains(gain)}
+        plan = {"unit": np.ones(1), "offset": 0.0, "nested": nested, "n": 1}
         return meta, plan
 
-    def chunk_contract(self, dtype, plan):
-        """Return that each sample is made from its own."""
-        return Pointwise()
-
-    def kernel(self, data, *, gain, offset, nested, n):
-        """Return the data times the gain, plus the offset."""
+    def kernel(self, data, *, unit, offset, nested, n):
+        """Return the data times the gains, plus the offset."""
         xp = array_namespace(data)
-        return data * xp.asarray(gain) * n + offset
+        gain = xp.asarray(nested["gains"].gain)
+        return data * xp.asarray(unit) * gain * n + offset
 
 
-class _Shifted(dc.PatchProcessor):
-    """Add a whole number, which the plan holds fixed."""
+class _Weighted(dc.PatchProcessor):
+    """Multiply by weights, as many as the channel spacing."""
 
     name = None
     position_free = True
+    chunk_contract = _each_sample
 
-    by: int = 1
+    def get_metadata(self, meta):
+        """Return a weight of one for each unit of spacing."""
+        return meta, {"weights": np.ones(int(_spacing(meta)))}
+
+    def kernel(self, data, *, weights):
+        """Return the data times the weights."""
+        return data * array_namespace(data).asarray(weights)
+
+
+class _Paired(dc.PatchProcessor):
+    """Multiply by weights a container holds, handed over whole as arrays."""
+
+    name = None
+    position_free = True
+    chunk_contract = _each_sample
+    plan_arrays: ClassVar[tuple[str, ...]] = ("pair",)
+
+    def get_metadata(self, meta):
+        """Return a weight of one for each unit of spacing, in a container."""
+        return meta, {"pair": {"weights": np.ones(int(_spacing(meta)))}}
+
+    def kernel(self, data, *, pair):
+        """Return the data times the weights."""
+        return data * array_namespace(data).asarray(pair["weights"])
+
+
+class _Shifted(dc.PatchProcessor):
+    """Add the channel spacing, which the plan holds fixed."""
+
+    name = None
+    position_free = True
+    chunk_contract = _each_sample
 
     def get_metadata(self, meta):
         """Return the number to add."""
-        return meta, {"by": self.by}
-
-    def chunk_contract(self, dtype, plan):
-        """Return that each sample is made from its own."""
-        return Pointwise()
+        return meta, {"by": int(_spacing(meta))}
 
     def kernel(self, data, *, by):
         """Return the data plus the number."""
         return data + by
+
+
+class _Signed(dc.PatchProcessor):
+    """Replace the data by the sign of a zero the plan holds fixed."""
+
+    name = None
+    position_free = True
+    chunk_contract = _each_sample
+
+    def get_metadata(self, meta):
+        """Return a zero, negative for channels closer than 1.5."""
+        return meta, {"zero": math.copysign(0.0, _spacing(meta) - 1.5)}
+
+    def kernel(self, data, *, zero):
+        """Return the zero's sign everywhere."""
+        return data * 0 + math.copysign(1.0, zero)
+
+
+class _NumpyOnly(dc.PatchProcessor):
+    """An operation with a NumPy kernel alone, which converts on any other."""
+
+    name = None
+    position_free = True
+    chunk_contract = _each_sample
+
+    def numpy_kernel(self, data):
+        """Return the data negated."""
+        return -data
 
 
 class _Spread(dc.PatchProcessor):
@@ -669,27 +748,78 @@ class _Spread(dc.PatchProcessor):
         return data + 0
 
 
-class _NumpyOnly(dc.PatchProcessor):
-    """An operation with a NumPy kernel alone, which converts on any other."""
+class _Whole(dc.PatchProcessor):
+    """Hand the data back, needing the first axis whole."""
 
     name = None
     position_free = True
 
     def chunk_contract(self, dtype, plan):
-        """Return that each sample is made from its own."""
-        return Pointwise()
+        """Return that the first axis is needed whole."""
+        return WholeAxis((0,))
 
-    def numpy_kernel(self, data):
-        """Return the data negated."""
-        return -data
+    def kernel(self, data):
+        """Return the data as they are."""
+        return data + 0
 
 
-def _ramp(step: float = 1.0):
-    """Return a lazy patch of the row numbers, 40 rows of 6 distances apart."""
+class _Placed(ChunkContract):
+    """Each sample is its own plus where its box starts in the array."""
+
+    def apply(self, run, data, box, needed):
+        """Return the result moved up by the start of the box."""
+        return super().apply(run, data, box, needed) + box[0].start
+
+
+class _Moved(dc.PatchProcessor):
+    """An operation whose contract writes its own apply, and no key."""
+
+    name = None
+    position_free = True
+
+    def chunk_contract(self, dtype, plan):
+        """Return the contract which adds where the box is."""
+        return _Placed()
+
+    def kernel(self, data):
+        """Return the data as they are."""
+        return data + 0
+
+
+class _Summed(dc.PatchProcessor):
+    """Sum each row, a step with no contract which drops an axis."""
+
+    name = None
+
+    def kernel(self, data):
+        """Return the sum of each row."""
+        return array_namespace(data).sum(data, axis=1)
+
+
+def _ramp(spacing: float = 1.0):
+    """Return a lazy patch of the row numbers, 40 rows of 6 channels."""
     rows = [constant((1, 6), float(x)) for x in range(40)]
-    coords = {"time": np.arange(40), "distance": np.arange(6) * step}
+    coords = {"time": np.arange(40), "distance": np.arange(6) * spacing}
     patch = dc.Patch(data=concat(rows), coords=coords, dims=("time", "distance"))
     return patch.set_backend("lazy[compiling_strict]")
+
+
+def _values(array):
+    """Return an array, or a patch's, as NumPy's."""
+    return np.asarray(to_numpy(getattr(array, "data", array)))
+
+
+def _rows(start=0, stop=40):
+    """Return the row numbers of a ramp, in its 6 channels."""
+    return np.arange(float(start), float(stop))[:, None] * np.ones(6)
+
+
+@pytest.fixture()
+def abs_kernels():
+    """Forget, after a test, the kernels it registered for Abs."""
+    before = dict(Abs.__dict__.get("_kernels", {}))
+    yield
+    Abs._kernels = before
 
 
 class TestRunChain:
@@ -698,6 +828,7 @@ class TestRunChain:
     @pytest.fixture(autouse=True)
     def _forget(self):
         """Start each test with nothing compiled, and nothing run."""
+        pytest.importorskip("array_api_strict")
         _Compiling.compiled.clear()
         _Compiling.sections.clear()
         yield
@@ -705,94 +836,147 @@ class TestRunChain:
         _Compiling.sections.clear()
 
     @staticmethod
-    def _values(patch):
-        """Return a patch's data as NumPy's."""
-        return np.asarray(to_numpy(patch.data))
+    def _names():
+        """Return the operations of each run of steps the backend was handed."""
+        return [[type(x.processor).__name__ for x in y] for y in _Compiling.sections]
 
     def test_two_patches_of_one_shape_compile_once(self):
-        """The plan's arrays are handed to what was compiled for the first."""
-        pytest.importorskip("array_api_strict")
-        outs = [_Gained()(_ramp(x)).abs().load() for x in (1.0, 2.0)]
+        """The plan's arrays, nested ones too, are handed to what was compiled."""
+        window = {"time": (5, 35), "samples": True}
+        outs = [_Gained()(_ramp(x)).select(**window).abs().load() for x in (1, 2)]
         assert len(_Compiling.compiled) == 1
-        rows = np.arange(40.0)[:, None] * np.ones(6)
-        assert np.array_equal(self._values(outs[0]), rows)
-        assert np.array_equal(self._values(outs[1]), rows * 2)
+        assert np.array_equal(_values(outs[0]), _rows(5, 35))
+        assert np.array_equal(_values(outs[1]), _rows(5, 35) * 2)
 
-    def test_a_fixed_entry_compiles_again(self):
-        """A plan entry which is not an array is what was compiled."""
-        pytest.importorskip("array_api_strict")
-        one, two = (_Shifted(by=x)(_ramp()).load() for x in (1, 2))
+    @pytest.mark.parametrize("operation", (_Weighted(), _Paired()))
+    def test_arrays_of_another_shape_compile_again(self, operation):
+        """An array of the plan, or of a container it hands over, compiles by shape."""
+        outs = [operation(_ramp(x)).load() for x in (1.0, 6.0)]
         assert len(_Compiling.compiled) == 2
-        assert np.array_equal(self._values(two) - self._values(one), np.ones((40, 6)))
+        assert all(np.array_equal(_values(x), _rows()) for x in outs)
+
+    @pytest.mark.parametrize(
+        "operation, expected",
+        ((_Shifted(), (_rows(1, 41), _rows(2, 42))), (_Signed(), (-1.0, 1.0))),
+    )
+    def test_a_fixed_entry_compiles_again(self, operation, expected):
+        """What the plan holds fixed was compiled, 0.0 and -0.0 apart."""
+        outs = [_values(operation(_ramp(x)).load()) for x in (1.0, 2.0)]
+        assert len(_Compiling.compiled) == 2
+        assert all(np.array_equal(x, y + 0 * x) for x, y in zip(outs, expected))
 
     def test_boxes_of_one_shape_compile_once(self):
         """Equal boxes along a patch share a compile; another shape does not."""
-        pytest.importorskip("array_api_strict")
         array = _Gained()(_ramp()).data
         boxes = [(slice(a, b), slice(0, 6)) for a, b in ((0, 10), (10, 20), (20, 35))]
-        outs = [np.asarray(to_numpy(compute(array, x))) for x in boxes]
+        outs = [_values(compute(array, x)) for x in boxes]
         assert len(_Compiling.compiled) == 2
-        assert np.array_equal(outs[1][:, 0], np.arange(10.0, 20.0))
+        assert np.array_equal(outs[1], _rows(10, 20))
 
-    def test_boxes_placed_apart_are_not_confused(self):
-        """Boxes of one shape a halo is cut differently from compile apart."""
-        pytest.importorskip("array_api_strict")
-        array = _Spread()(_ramp()).data
-        # Both read 11 rows: the first one after it, the last one before.
-        first, last = (slice(0, 10), slice(0, 6)), (slice(30, 40), slice(0, 6))
-        outs = [np.asarray(to_numpy(compute(array, x))) for x in (first, last)]
+    @pytest.mark.parametrize(
+        "operation, boxes",
+        (
+            # Both read 11 rows: the first one after it, the last one before.
+            (_Spread(), ((0, 10), (30, 40))),
+            # Both read all 40 rows, from which they cut 10 and 15.
+            (_Whole(), ((0, 10), (0, 15))),
+        ),
+    )
+    def test_boxes_cut_otherwise_compile_apart(self, operation, boxes):
+        """Boxes a contract cuts differently share no compile."""
+        array = operation(_ramp()).data
+        for start, stop in boxes:
+            box = (slice(start, stop), slice(0, 6))
+            assert np.array_equal(_values(compute(array, box)), _rows(start, stop))
         assert len(_Compiling.compiled) == 2
-        assert np.array_equal(outs[1][:, 0], np.arange(30.0, 40.0))
+
+    def test_a_contract_with_its_own_apply_is_keyed_by_its_boxes(self):
+        """An apply which reads where the box is shares no compile between boxes."""
+        array = _Moved()(_ramp()).data
+        for start in (0, 10):
+            box = (slice(start, start + 10), slice(0, 6))
+            out = _values(compute(array, box))
+            assert np.array_equal(out, _rows(start, start + 10) + start)
+        assert len(_Compiling.compiled) == 2
+
+    def test_tiles_compile_for_each_box(self):
+        """A tiled step's kernel is told where its tiles are, so no box shares."""
+        windowed = _ramp().window(time=8, overlap=4, samples=True).taper(time=0.25)
+        expected = windowed.set_backend("lazy").load().data
+        # Two windows apart: the same tiles, counted from each box.
+        for start in (10, 18):
+            box = (slice(start, start + 10), slice(0, 6))
+            out = _values(compute(windowed.data, box))
+            assert np.allclose(out, expected[box], equal_nan=True)
+        assert len(_Compiling.compiled) == 2
+
+    def test_a_step_dropping_an_axis_has_a_key(self):
+        """A step with no contract which drops an axis is keyed as a whole."""
+        node = Node(_Summed(), {}).settled((40,), np.float64, "a")
+        array = LazyArray(_ramp().data.recipe, Chain((node,)), backend=_Compiling())
+        assert np.array_equal(
+            _values(compute(array, (slice(0, 40),))), _rows()[:, 0] * 6
+        )
+        assert _Compiling.sections[0][0].key is not None
+
+    def test_a_kernel_registered_later_is_run(self, abs_kernels):
+        """What was compiled before a kernel was registered is not reused."""
+        windowed = _ramp().window(time=8, overlap=4, samples=True).abs()
+        before = _values(windowed.load())
+
+        @register_kernel(Abs, "compiling_strict")
+        def _abs(processor, data):
+            """Return the absolute values, and 10 more."""
+            return array_namespace(data).abs(data) + 10
+
+        after = _values(windowed.load())
+        assert np.allclose(after, before + 10, equal_nan=True)
+        # Compiled again: a compiler would have kept the kernel it traced.
+        assert len(_Compiling.compiled) == 2
 
     def test_split_at_a_step_which_converts(self):
         """A step with no kernel for the library is run between sections."""
-        pytest.importorskip("array_api_strict")
         with config_context(numpy_fallback="ignore"):
-            out = _NumpyOnly()(_Shifted()(_ramp())).abs().load()
-        names = [[type(x.processor).__name__ for x in y] for y in _Compiling.sections]
-        assert names == [["_Shifted"], ["Abs"]]
-        expected = np.arange(1.0, 41.0)[:, None] * np.ones(6)
-        assert np.array_equal(self._values(out), expected)
+            out = _Shifted()(_NumpyOnly()(_Shifted()(_ramp()))).load()
+        assert self._names() == [["_Shifted"], ["_Shifted"]]
+        assert np.array_equal(_values(out), -_rows())
+
+    def test_split_at_a_window_whose_operation_converts(self):
+        """A window converts for the operation it runs, so it splits too."""
+        with config_context(numpy_fallback="ignore"):
+            window = _ramp().window(time=8, overlap=4, samples=True)
+            _Shifted()(window.detrend("time")).abs().load()
+        assert self._names() == [["_Shifted", "Abs"]]
 
     def test_arrays_wherever_the_plan_holds_them(self):
         """Arrays, nested ones and those the processor names are handed over."""
-        pytest.importorskip("array_api_strict")
         _Gained()(_ramp(3.0)).load()
         (step,) = _Compiling.sections[0]
         # In the order the plan holds them.
-        gain, offset, nested = step.arrays
-        assert np.array_equal(gain, [3.0]) and offset == 0.0 and nested is gain
-        assert step.static["n"] == 1 and "gain" in step.static
-        data = _Compiling().from_array(np.ones((40, 6)))
-        out = step.run(data, (np.asarray([5.0]), 1.0, nested))
-        assert np.array_equal(np.asarray(to_numpy(out)), np.full((40, 6), 6.0))
+        unit, offset, gain = step.arrays
+        assert np.array_equal(gain, [3.0]) and offset == 0.0 and unit[0] == 1
+        assert step.static["n"] == 1 and "nested" in step.static
+        backend = _Compiling()
+        data = backend.from_array(np.ones((40, 6)))
+        arrays = (unit, 1.0, backend.from_array(np.asarray([5.0])))
+        assert np.array_equal(_values(step.run(data, arrays)), np.full((40, 6), 6.0))
 
+    # A processor holding what has no id says so, and its key is None.
+    @pytest.mark.filterwarnings("ignore:No id could be derived")
     @pytest.mark.parametrize(
         "keep, same",
         (
             (np.arange(3), True),
             (np.arange(3) + 1, False),
             ({1, 2}, False),
-            (bytearray(b"x"), None),
+            (object(), None),
             (np.array([object()]), None),
         ),
     )
     def test_a_processors_array_is_told_apart(self, keep, same):
-        """An array a processor holds keys by its values; what cannot hash, none."""
-        pytest.importorskip("array_api_strict")
+        """An array a processor holds keys by its values; what has no id, none."""
         for processor in (_Gained(keep=np.arange(3)), _Gained(keep=keep)):
             processor(_ramp()).load()
         first, second = (x[0].key for x in _Compiling.sections)
         assert first is not None
         assert (second == first) is same if same is not None else second is None
-
-    def test_tiles_compile_for_each_box(self):
-        """A tiled step's kernel is told where its tiles are, so no box shares."""
-        pytest.importorskip("array_api_strict")
-        windowed = _ramp().window(time=8, overlap=4, samples=True).taper(time=0.25)
-        expected = windowed.set_backend("lazy").load().data
-        boxes = [(slice(a, a + 10), slice(0, 6)) for a in (10, 20)]
-        for box in boxes:
-            out = np.asarray(to_numpy(compute(windowed.data, box)))
-            assert np.allclose(out, expected[box], equal_nan=True)
-        assert len(_Compiling.compiled) == 2

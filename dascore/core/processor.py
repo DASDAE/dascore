@@ -116,6 +116,10 @@ _CAPTURE: ContextVar[list | None] = ContextVar("dascore_capture", default=None)
 # runs inside itself, as a window does, can be resolved under it too; see
 # `running_under` and `running_name`.
 _UNDER: ContextVar[ArrayBackend | None] = ContextVar("dascore_running", default=None)
+# How many kernels have been registered, which a step's key holds: a kernel
+# resolved as a chain runs, as a window's operation's is, may be another
+# after a registration, and what was compiled before it is not reused.
+_REGISTERED = [0]
 
 
 @contextmanager
@@ -231,9 +235,9 @@ class PatchProcessor(DascoreBaseModel):
     # so its response to one impulse says what it does to any data, which
     # is what `Patch.impulse_window` measures its reach from.
     linear: ClassVar[bool] = False
-    # Plan entries a backend which compiles a chain is handed as arrays
-    # though they are not, such as a float it need not compile again for;
-    # see `dascore.lazy.execute.Step`.
+    # Names of plan entries to hand a backend which compiles a chain as
+    # arrays though they are not, such as a float whose new values should
+    # not mean compiling again; see `dascore.lazy.execute.Step`.
     plan_arrays: ClassVar[tuple[str, ...]] = ()
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
@@ -978,6 +982,7 @@ def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, .
         _recheck_for_kernel(owner)
         kernels = owner.__dict__.get("_kernels", {})
         owner._kernels = {**kernels, **dict.fromkeys(backends, func)}
+        _REGISTERED[0] += 1
         return func
 
     return decorate

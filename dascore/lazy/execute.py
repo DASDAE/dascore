@@ -32,7 +32,6 @@ Examples
 
 from __future__ import annotations
 
-import hashlib
 import math
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
@@ -41,14 +40,12 @@ from itertools import groupby, product
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from pydantic import BaseModel
 
-from dascore.backends import ArrayBackend
 from dascore.compat import is_array_like
 from dascore.config import get_config
-from dascore.core.processor import running_under
+from dascore.core.processor import _REGISTERED, running_under
 from dascore.exceptions import PatchError
-from dascore.lazy.contract import Box, ChunkContract, Window
+from dascore.lazy.contract import Box, ChunkContract, Window, _sizes
 from dascore.utils.array_api import (
     NUMPY_BACKEND,
     _as_numpy_dtype,
@@ -58,6 +55,7 @@ from dascore.utils.array_api import (
 )
 
 if TYPE_CHECKING:
+    from dascore.backends import ArrayBackend
     from dascore.lazy.array import LazyArray
 
 
@@ -102,66 +100,80 @@ class _Slot:
     index: int
 
 
+def _parts(value: Any) -> list | None:
+    """Return what a plan's container holds, or None for anything else."""
+    if type(value) is dict:
+        return list(value.values())
+    if type(value) in (tuple, list) or hasattr(type(value), "_fields"):
+        return list(value)
+    return None
+
+
+def _rebuilt(value: Any, parts: list) -> Any:
+    """Return a container of a plan like `value`, holding `parts`."""
+    if type(value) is dict:
+        return dict(zip(value, parts, strict=True))
+    if hasattr(type(value), "_fields"):
+        return type(value)(*parts)
+    return type(value)(parts)
+
+
 def _split(value: Any, arrays: list, traced: bool = False) -> Any:
     """Return a plan value with each array in it moved to `arrays`."""
     if traced or is_array_like(value):
         arrays.append(value)
         return _Slot(len(arrays) - 1)
-    if isinstance(value, dict):
-        return {k: _split(v, arrays) for k, v in value.items()}
-    if type(value) in (tuple, list):
-        return type(value)(_split(x, arrays) for x in value)
-    return value
+    parts = _parts(value)
+    if parts is None:
+        return value
+    return _rebuilt(value, [_split(x, arrays) for x in parts])
 
 
 def _filled(value: Any, arrays: Sequence) -> Any:
     """Return a plan value with the arrays put back in their slots."""
     if isinstance(value, _Slot):
         return arrays[value.index]
-    if isinstance(value, dict):
-        return {k: _filled(v, arrays) for k, v in value.items()}
-    if type(value) in (tuple, list):
-        return type(value)(_filled(x, arrays) for x in value)
-    return value
+    parts = _parts(value)
+    if parts is None:
+        return value
+    return _rebuilt(value, [_filled(x, arrays) for x in parts])
 
 
 def _frozen(value: Any) -> Hashable:
     """
-    Return a hashable stand-in for a value, equal for equal values.
+    Return a hashable stand-in for a value, equal only for equal values.
 
-    A NumPy array stands for its shape, dtype and a digest of its values,
-    so a processor holding one, as a taper, is told apart by what it holds.
+    For what a contract holds, and what a plan holds without its arrays,
+    which is numbers, slices, strings and containers of them. A float
+    stands for its exact spelling, so 0.0 and -0.0 differ.
 
     Raises
     ------
     TypeError
         If the value, or something in it, cannot be hashed.
     """
-    if isinstance(value, np.ndarray):
-        if value.dtype.hasobject:
-            raise TypeError("An array of objects has no digest of its values.")
-        digest = hashlib.blake2b(value.tobytes(), digest_size=16).digest()
-        return "ndarray", value.shape, value.dtype.str, digest
-    if isinstance(value, BaseModel):
-        return type(value), tuple((k, _frozen(v)) for k, v in value)
+    if isinstance(value, float | np.floating):
+        return type(value), float(value).hex()
     if is_dataclass(value) and not isinstance(value, type):
         items = ((x.name, getattr(value, x.name)) for x in fields(value))
         return type(value), tuple((k, _frozen(v)) for k, v in items)
     if isinstance(value, Mapping):
-        return dict, tuple((k, _frozen(v)) for k, v in value.items())
-    if isinstance(value, (tuple, list)):
+        return type(value), tuple((k, _frozen(v)) for k, v in value.items())
+    if isinstance(value, tuple | list):
         return type(value), tuple(_frozen(x) for x in value)
-    if isinstance(value, (set, frozenset)):
-        return frozenset(_frozen(x) for x in value)
     hash(value)
     return value
 
 
 def _signature(value: Any) -> Hashable:
-    """Return what a compiled chain is specialized to of an array it is handed."""
+    """Return what a compiled chain is specialized to of a value it is handed."""
     if is_array_like(value):
         return tuple(value.shape), _as_numpy_dtype(value.dtype)
-    return type(value)
+    parts = _parts(value)
+    if parts is None:
+        return type(value)
+    names = tuple(value) if type(value) is dict else None
+    return type(value), names, tuple(_signature(x) for x in parts)
 
 
 @dataclass(frozen=True)
@@ -237,28 +249,38 @@ class Step:
         """
         What a chain compiled with this step is specialized to.
 
-        The kernel, the processor, the plan without its arrays, the shape
-        and dtype of each array, the contract, and what it does with the
-        boxes, which is where they are relative to each other and not in
-        the array, so equal boxes along a patch share a key. With the shape
-        and dtype of the data a chain is given, the keys of its steps say
-        when a compiled chain can be run again. None for a step whose
-        processor or plan holds something which cannot be hashed, whose
-        chain is not to be reused.
+        The kernel, and how many kernels had been registered when it was
+        resolved, since one run inside it, as a window's operation is, may
+        be another since; the operation, by its id; the plan without its
+        arrays, and the shape and dtype of each array; the contract, and
+        what it does with the boxes, which for most is where they are
+        relative to each other and not in the array, so boxes of one shape
+        cut alike along a patch share a key, and for a tiled step the boxes
+        themselves; and the dtype the metadata stated. A backend adds the
+        shape and dtype of the data it is handed. None for a step whose
+        operation has no id, as one holding a patch, or whose plan holds
+        something which is not hashed by its value; its chain is not to be
+        reused.
         """
         contract = self.contract or _EVERYTHING
         try:
-            return (
+            out = (
                 self.kernel,
-                _frozen(self.processor),
+                _REGISTERED[0],
+                type(self.processor),
+                self.processor._identity(),
                 _frozen(self.static),
                 tuple(_signature(x) for x in self.arrays),
                 _frozen(self.contract),
                 contract.key(self.made, self.given),
                 self.dtype,
             )
-        except TypeError:
+            hash(out)
+        # An operation's id is refused for whatever it holds, as comparing
+        # two refuses them.
+        except Exception:
             return None
+        return out
 
     def run(self, data, arrays: Sequence | None = None):
         """
@@ -321,11 +343,6 @@ def _needs(array: LazyArray, box: Box) -> list[Box]:
     for node, shape in zip(reversed(nodes), reversed(shapes), strict=True):
         out.append((node.contract or _EVERYTHING).needs(out[-1], shape))
     return out[::-1]
-
-
-def _sizes(box: Box) -> tuple[int, ...]:
-    """Return the shape of a box."""
-    return tuple(x.stop - x.start for x in box)
 
 
 def _largest(array: LazyArray, box: Box) -> int:
@@ -452,11 +469,16 @@ def compute(array: LazyArray, box: Box) -> np.ndarray:
     names = [_converted(x.processor, backend) for x in steps]
     for name, group in groupby(zip(names, steps, strict=True), key=lambda x: x[0]):
         section = [x for _, x in group]
-        with fallbacks_decided(name), running_under(backend):
-            if name is None:
+        if name is None:
+            with running_under(backend):
                 data = backend.run_chain(section, data)
-            else:
-                data = ArrayBackend.run_chain(backend, section, data)
+            continue
+        for step in section:
+            with fallbacks_decided(name), running_under(backend):
+                out = step.run(data)
+            # One of the backend's arrays for the next step, as a patch in
+            # memory holds between two operations.
+            data = backend.from_array(out)
     return data
 
 

@@ -50,6 +50,17 @@ from typing import Any
 Box = tuple[slice, ...]
 
 
+def _sizes(box: Box) -> tuple[int, ...]:
+    """Return the shape of a box."""
+    return tuple(x.stop - x.start for x in box)
+
+
+def _relative(box: Box, needed: Box) -> tuple:
+    """Return the shape of what is needed, where the box sits in it, and its shape."""
+    spans = zip(box, needed, strict=True)
+    return _sizes(needed), tuple(b.start - n.start for b, n in spans), _sizes(box)
+
+
 @dataclass(frozen=True)
 class ChunkContract:
     """What one chunk of an operation's output needs of its input."""
@@ -95,19 +106,18 @@ class ChunkContract:
 
     def key(self, box: Box, needed: Box) -> Hashable:
         """
-        Return what `apply` does with the boxes, wherever they are.
+        Return what `apply` depends on of the boxes.
 
         Two pairs of boxes with the same key are applied alike, so a chain
-        compiled for one is run for the other. By default that is the
-        shape of the input, where the output box sits in it, and its
-        shape.
+        compiled for one is run for the other. The `apply` here depends on
+        the shape of the input, where the output box sits in it, and its
+        shape, and not on where they are in the array; for a contract
+        which writes its own `apply` the key is the boxes themselves,
+        unless it writes its own `key` too.
         """
-        spans = zip(box, needed, strict=True)
-        return (
-            tuple(x.stop - x.start for x in needed),
-            tuple(b.start - n.start for b, n in spans),
-            tuple(x.stop - x.start for x in box),
-        )
+        if type(self).apply is ChunkContract.apply:
+            return _relative(box, needed)
+        return box, needed
 
 
 @dataclass(frozen=True)
@@ -297,7 +307,7 @@ class Tiles(ChunkContract):
             span = needed[axis]
             made[axis] = slice(span.start // every, -(-span.stop // every))
         # A result of another shape is handed back for the caller to refuse.
-        if tuple(out.shape) != tuple(x.stop - x.start for x in made):
+        if tuple(out.shape) != _sizes(tuple(made)):
             return out
         spans = zip(box, made, strict=True)
         return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
@@ -339,3 +349,7 @@ class Window(ChunkContract):
     def apply(self, run: Callable[[Any], Any], data, box: Box, needed: Box):
         """Return the input, which is already the window's samples."""
         return data
+
+    def key(self, box: Box, needed: Box) -> Hashable:
+        """Return the shapes: nothing is done wherever the boxes are."""
+        return _relative(box, needed)
