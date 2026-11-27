@@ -1094,11 +1094,12 @@ class Spool(NodeRepr, NamespaceOwner, BaseSpool):
         backend
             An [`ArrayBackend`](`dascore.backends.ArrayBackend`), whose
             options are its own, or the name of a registered one with its
-            default options: ``"numpy"``, ``"jax"`` or ``"cupy"`` for
-            arrays in memory on that library, and ``"lazy"`` for arrays
-            which are not read until [`load`](`dascore.Patch.load`).
-            ``"lazy"`` computes each chunk on NumPy, and ``"lazy[jax]"``
-            names another backend to compute on. Operations on the
+            default options: ``"numpy"`` for arrays in memory, the name
+            another package registers for arrays on its library, and
+            ``"lazy"`` for arrays which are not read until
+            [`load`](`dascore.Patch.load`). ``"lazy"`` computes each chunk
+            on NumPy, and ``"lazy[<name>]"`` names another backend to
+            compute on. Operations on the
             patches run the kernels registered under the backend's name,
             where it has any. None unsets the backend.
 

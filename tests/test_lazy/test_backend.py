@@ -18,7 +18,6 @@ from dascore import backends as backends_module
 from dascore.backends import (
     ArrayAPIBackend,
     ArrayBackend,
-    JaxBackend,
     LazyBackend,
     NumpyBackend,
     get_backend,
@@ -255,10 +254,10 @@ class TestBackendNames:
         "name, expected",
         (
             ("numpy", NumpyBackend()),
-            ("JAX", JaxBackend()),
+            ("ARRAY_API_STRICT", _Strict()),
             ("lazy", LazyBackend()),
             ("LazyArray", LazyBackend()),
-            ("lazyarray[ jax ]", LazyBackend(compute=JaxBackend())),
+            ("lazyarray[ Array_API_Strict ]", LazyBackend(compute=_Strict())),
             ("LazyArray[array_api_strict]", LazyBackend(compute=_Strict())),
             ("lazy[numpy]", LazyBackend(compute=NumpyBackend())),
         ),
@@ -285,7 +284,9 @@ class TestBackendNames:
         with pytest.raises(ParameterError, match=r"is not a backend.*numpy"):
             get_backend(name)
 
-    @pytest.mark.parametrize("name", ("numpy[jax]", "jax[gpu]"))
+    @pytest.mark.parametrize(
+        "name", ("numpy[array_api_strict]", "array_api_strict[gpu]")
+    )
     def test_brackets_a_backend_does_not_take(self, name):
         """Only a backend which says so takes anything in brackets."""
         with pytest.raises(ParameterError, match="nothing in square brackets"):

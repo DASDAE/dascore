@@ -55,8 +55,6 @@ if TYPE_CHECKING:
 __all__ = [
     "ArrayAPIBackend",
     "ArrayBackend",
-    "CupyBackend",
-    "JaxBackend",
     "LazyBackend",
     "NumpyBackend",
     "get_backend",
@@ -95,8 +93,9 @@ class ArrayBackend(BaseModel, ABC):
         kernels are registered under.
     array_type
         The class of the backend's arrays, or a string of where it is, such
-        as ``"cupy.ndarray"``, which imports nothing. Its arrays are the
-        instances of it. A subclass under another name inherits it.
+        as ``"array_api_strict._array_object.Array"``, which imports
+        nothing. Its arrays are the instances of it. A subclass under
+        another name inherits it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
@@ -347,37 +346,6 @@ class ArrayAPIBackend(ArrayBackend):
         return out if self.device is None else to_device(out, self.device)
 
 
-class JaxBackend(ArrayAPIBackend):
-    """
-    JAX arrays.
-
-    Examples
-    --------
-    >>> from dascore.backends import JaxBackend, get_backend
-    >>>
-    >>> assert get_backend("jax") == JaxBackend()
-    """
-
-    name = "jax"
-    array_type = "jax.Array"
-    module = "jax.numpy"
-
-
-class CupyBackend(ArrayAPIBackend):
-    """
-    CuPy arrays.
-
-    Examples
-    --------
-    >>> from dascore.backends import CupyBackend, get_backend
-    >>>
-    >>> assert get_backend("cupy") == CupyBackend()
-    """
-
-    name = "cupy"
-    array_type = "cupy.ndarray"
-
-
 class LazyBackend(ArrayBackend):
     """
     Arrays which are not read until they are loaded.
@@ -386,14 +354,20 @@ class LazyBackend(ArrayBackend):
     ----------
     compute
         The backend each chunk is computed on, and the loaded array is one
-        of. A string gives it in square brackets: ``"lazy[jax]"``.
+        of. A string gives it in square brackets: ``"lazy[numpy]"``.
 
     Examples
     --------
-    >>> from dascore.backends import JaxBackend, LazyBackend, get_backend
+    >>> from dascore.backends import ArrayAPIBackend, LazyBackend, get_backend
     >>>
-    >>> assert get_backend("LazyArray[jax]") == LazyBackend(compute=JaxBackend())
-    >>> assert str(LazyBackend(compute=JaxBackend())) == "lazy[jax]"
+    >>> class Strict(ArrayAPIBackend):
+    ...     '''Arrays of array_api_strict.'''
+    ...
+    ...     name = "strict"
+    ...     array_type = "array_api_strict._array_object.Array"
+    >>>
+    >>> assert get_backend("LazyArray[strict]") == LazyBackend(compute=Strict())
+    >>> assert str(LazyBackend(compute=Strict())) == "lazy[strict]"
     """
 
     name = LAZY_BACKEND
@@ -544,7 +518,7 @@ def get_backend(backend: str | ArrayBackend) -> ArrayBackend:
         msg = (
             f"{backend!r} is not a backend. The registered backends are: "
             f"{known}. A lazy one names the backend it computes on in square "
-            "brackets, as in 'lazy[jax]'."
+            "brackets, as in 'lazy[numpy]'."
         )
         raise ParameterError(msg)
     return _BACKENDS[name].from_string(found.group(2))

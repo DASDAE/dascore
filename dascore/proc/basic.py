@@ -1766,5 +1766,5 @@ class Demean(PatchProcessor):
         return data - nan_reduce("mean", data, axis=axis, keepdims=True)
 
 
-# Dask and cupy implement nanmedian without copying to numpy.
-register_kernel(Demedian, ("dask", "cupy"))(Demedian.numpy_kernel)
+# Dask implements nanmedian without copying to numpy.
+register_kernel(Demedian, "dask")(Demedian.numpy_kernel)
