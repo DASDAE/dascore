@@ -816,7 +816,9 @@ class Windowed(PatchProcessor):
         axes, others = plan["axes"], plan["others"]
         spans = dict(zip(axes, zip(plan["size"], plan["stride"], plan["length"])))
         factors = {x: q for x, q in zip(axes, plan["factor"], strict=True) if q != 1}
-        tiles = partial(Tiles, spans, factors=factors)
+        # Its kernel reads where its tiles are only by their count, their
+        # colour and how far they reach past the ends; see `Tiles`.
+        tiles = partial(Tiles, spans, factors=factors, periodic=True)
         inner = _contract(self.operation, self._given_dtype(dtype), plan["inner"])
         if isinstance(inner, Pointwise | Unchanged):
             return tiles()

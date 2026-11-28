@@ -79,7 +79,7 @@ A `Halo` kernel sees the true ends of the array in the chunks which hold them, s
 
 1. **Cut the result into boxes.** If no array the result needs is larger than the `lazy_block_size` setting, there is one box. There is also one box when no step computes anything, since reading in pieces would only open each file again. Otherwise the box is halved along the first axis worth cutting until they fit. An axis an operation needs whole is not worth cutting, and nor is one already short beside its halo, so the block size is aimed for rather than promised.
 2. **Work out what each box reads.** Each step's contract is asked, last to first, which box of its input it needs. Nothing is read to answer, so every read is known before the first one happens.
-3. **Read and compute each box.** The recipe reads only the box needed, and each step's kernel for the array's library runs on it, first to last.
+3. **Read and compute each box.** The recipe reads only the box needed, and each step's kernel for the array's library runs on it, first to last: each run of steps with a kernel for the library is handed to the backend's `run_chain`, which a backend may compile (see [Compiling a chain](#compiling-a-chain)).
 
 A selection therefore narrows what is read wherever it sits in the chain.
 
@@ -97,7 +97,7 @@ print(boxes, read_schedule(chain.data, boxes))
 
 The whole result is still put together in memory; writing each box out as it is made is a later change, and [Windowed and Lazy Processing](windowed_processing.qmd) is the plan for it and for what else is to come. Until then:
 
-- Nothing is kept between loads. Each piece a spool cuts from a lazy patch runs the chain for itself, so a piece cut along an axis a step needs whole reads and computes that whole axis again.
+- No data or computed result is kept between loads. Each piece a spool cuts from a lazy patch runs the chain for itself, so a piece cut along an axis a step needs whole reads and computes that whole axis again. A backend which compiles may keep what it compiled (see [Compiling a chain](#compiling-a-chain)), which is code, not data.
 - A kernel is not run until the chain is, so an argument its kernel refuses, such as an edge mode scipy does not know, is refused at `load` rather than at the call.
 - A step which recorded no contract, as a kernel registered for the lazy backend may leave, is given all of its input.
 
@@ -166,6 +166,45 @@ The entry point, in the package's `pyproject.toml`:
 ```toml
 [project.entry-points."dascore.kernels"]
 strict = "strict_kernels.backend"
+```
+
+### Compiling a chain
+
+A box is computed by [`ArrayBackend.run_chain`](`dascore.backends.ArrayBackend.run_chain`), handed a run of the chain's steps and the box's data. By default it runs each step's kernel in turn, holding each result as one of the backend's arrays. A backend which compiles overrides it, and everything a compiled chain needs is in the [`Step`](`dascore.lazy.execute.Step`)s it is handed, so it never reaches into DASCore.
+
+- **A step** holds the operation, its kernel for the backend, its plan, its contract, the box of input it is given and the box of output it makes, and the shape and dtype its metadata stated. `step.run(data)` runs it, checks the result against what was stated, and cuts it to its box; the check reads only shapes and dtypes, which are known while a chain is traced.
+- **The plan is split in two.** `step.arrays` holds every array in it, nested ones too, and `step.static` the rest. A compiled chain is handed the arrays as arguments, so another patch whose coefficients have the same shapes runs what was compiled. It holds the rest fixed, so a new window length compiles again, as it must since shapes change. A processor lists in `plan_arrays` the entries to hand over as arrays though they are not, such as a float whose new values should not mean compiling again.
+- **A key** says what a compiled chain is specialized to, and boxes of one shape cut alike along a patch share one; [`Step.key`](`dascore.lazy.execute.Step.key`) says what it holds. A backend adds the shape and dtype of the data it is handed, as the example below does. A tiled step, as `Patch.window` makes, is keyed by how the box is cut from its tiles and where the first sits among the tiles between two which do not overlap, and the boxes are cut a whole number of such runs long, so a long windowed load compiles for its two ends and its middle.
+- **Sections.** A step with no kernel for the library goes through NumPy and is not handed to `run_chain`: the chain is run up to it and on from it, and the step is run between, so a backend only sees steps it has kernels for.
+- **Caching is the backend's.** What it keeps, for how long, and whether on disk, are options of the backend, as its fields; none is a DASCore setting. While a chain runs the backend is in force, so a step which runs another inside its kernel, as a window does, resolves that one's kernel for it.
+
+A backend which counts the keys it is handed shows that two patches of different channel spacings share one compiled chain, since nothing in `select` or `abs` depends on the spacing:
+
+```{python}
+from typing import ClassVar
+
+
+class CountingStrict(Strict):
+    """A Strict backend which counts the chains it would compile."""
+
+    name = "counting_strict"
+    keys: ClassVar[set] = set()
+
+    def run_chain(self, steps, data):
+        self.keys.add((data.shape, str(data.dtype), tuple(x.key for x in steps)))
+        return super().run_chain(steps, data)
+
+
+def lazy_ramp(spacing):
+    recipe = Recipe.from_source(ArraySource.full((100, 4), 1.0))
+    coords = {"time": np.arange(100), "distance": np.arange(4) * spacing}
+    patch = dc.Patch(data=recipe, coords=coords, dims=("time", "distance"))
+    return patch.set_backend("lazy[counting_strict]")
+
+
+for spacing in (1.0, 2.0):
+    lazy_ramp(spacing).select(time=(10, 90), samples=True).abs().load()
+print(len(CountingStrict.keys))
 ```
 
 ## Where it happens

@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 import sys
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from importlib import import_module
@@ -50,6 +50,7 @@ from dascore.utils.plugins import load_backend_plugins
 
 if TYPE_CHECKING:
     from dascore.core.source import ArraySource
+    from dascore.lazy.execute import Step
     from dascore.lazy.recipe import Recipe
 
 __all__ = [
@@ -184,6 +185,57 @@ class ArrayBackend(BaseModel, ABC):
             at the origin: the one window of a stored array a read selected.
         """
         return self.from_recipe(_RECIPE.resolve().from_source(source))
+
+    def run_chain(self, steps: Sequence[Step], data: Any) -> Any:
+        """
+        Return one box of a lazy array, computed by a run of its steps.
+
+        Each step is run in turn, and what it makes is held as one of the
+        backend's arrays before the next. A backend which compiles a chain
+        overrides this: the steps say what to run and what the compiled
+        chain is specialized to, and the backend caches what it compiled.
+        An override keeps the check of shapes and dtypes by running each
+        step with `Step.run`, or checking it with `Step.check`. A step with
+        no kernel for the library goes through NumPy and is never handed
+        here: the chain is run up to it and on from it.
+
+        Parameters
+        ----------
+        steps
+            The [`Step`](`dascore.lazy.execute.Step`)s, in order. The
+            kernels are run with the backend in force, so one which runs
+            another, as a window does, runs that one's kernel for it too.
+        data
+            The input of the first step, one of the backend's arrays.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>> from dascore.backends import ArrayAPIBackend
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.lazy.recipe import Recipe
+        >>>
+        >>> class Strict(ArrayAPIBackend):
+        ...     '''A backend of array_api_strict which says what it runs.'''
+        ...
+        ...     name = "strict"
+        ...     array_type = "array_api_strict._array_object.Array"
+        ...
+        ...     def run_chain(self, steps, data):
+        ...         print([type(x.processor).__name__ for x in steps])
+        ...         return super().run_chain(steps, data)
+        >>>
+        >>> recipe = Recipe.from_source(ArraySource.full((4, 3), -2.0))
+        >>> coords = {"distance": np.arange(4), "time": np.arange(3)}
+        >>> lazy = dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
+        >>> lazy = lazy.set_backend("lazy[strict]")
+        >>> loaded = lazy.abs().update_attrs(station="x").abs().load()
+        ['Abs', 'Abs']
+        """
+        for step in steps:
+            data = self.from_array(step.run(data))
+        return data
 
     @abstractmethod
     def from_array(self, array: Any) -> Any:

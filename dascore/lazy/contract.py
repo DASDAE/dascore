@@ -42,12 +42,23 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 # One slice for each axis, each with an int start and stop and a step of one.
 Box = tuple[slice, ...]
+
+
+def _sizes(box: Box) -> tuple[int, ...]:
+    """Return the shape of a box."""
+    return tuple(x.stop - x.start for x in box)
+
+
+def _relative(box: Box, needed: Box) -> tuple:
+    """Return the shape of what is needed, where the box sits in it, and its shape."""
+    spans = zip(box, needed, strict=True)
+    return _sizes(needed), tuple(b.start - n.start for b, n in spans), _sizes(box)
 
 
 @dataclass(frozen=True)
@@ -92,6 +103,21 @@ class ChunkContract:
         # the distance the input was grown by.
         spans = zip(box, needed, strict=True)
         return out[tuple(slice(b.start - n.start, b.stop - n.start) for b, n in spans)]
+
+    def key(self, box: Box, needed: Box) -> Hashable:
+        """
+        Return what `apply` depends on of the boxes.
+
+        Two pairs of boxes with the same key are applied alike, so a chain
+        compiled for one is run for the other. The `apply` here depends on
+        the shape of the input, where the output box sits in it, and its
+        shape, and not on where they are in the array; for a contract
+        which writes its own `apply` the key is the boxes themselves,
+        unless it writes its own `key` too.
+        """
+        if type(self).apply is ChunkContract.apply:
+            return _relative(box, needed)
+        return box, needed
 
 
 @dataclass(frozen=True)
@@ -207,7 +233,11 @@ class Tiles(ChunkContract):
 
     The kernel is told which tiles it was given: it takes a ``tiles``
     keyword holding, for each tiled axis in the order of `spans`, the first
-    tile and one past the last.
+    tile and one past the last. A kernel which reads where they are only by
+    how many there are, the first modulo the tiles between two which do
+    not overlap, and how far they reach past the ends of the axis, as a
+    window's does, says so by `periodic`; boxes cut alike from their tiles
+    are then computed alike, see `key`.
 
     Parameters
     ----------
@@ -225,6 +255,9 @@ class Tiles(ChunkContract):
         of a tile, that n, which the stride is a multiple of. The output is
         then shorter than the input along the axis: a box counts samples of
         the output, and what it needs counts samples of the input.
+    periodic
+        Whether the kernel reads where its tiles are only as above. False,
+        the default, keys each box by itself.
 
     Examples
     --------
@@ -244,6 +277,7 @@ class Tiles(ChunkContract):
     widths: Mapping[int, tuple[int, int]] = field(default_factory=dict)
     whole: tuple[int, ...] = ()
     factors: Mapping[int, int] = field(default_factory=dict)
+    periodic: bool = False
 
     def tiles(self, box: Box) -> tuple[tuple[int, int], ...]:
         """Return the first tile overlapping a box, and one past the last."""
@@ -275,16 +309,40 @@ class Tiles(ChunkContract):
     def apply(self, run: Callable[..., Any], data, box: Box, needed: Box):
         """Return the output box, blended from the tiles which overlap it."""
         out = run(data, tiles=self.tiles(box))
-        # The result starts where the data do, counted in the samples made.
+        made = self._made(needed)
+        # A result of another shape is handed back for the caller to refuse.
+        if tuple(out.shape) != _sizes(made):
+            return out
+        spans = zip(box, made, strict=True)
+        return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
+
+    def _made(self, needed: Box) -> Box:
+        """Return what the data needed make: where they are, in samples made."""
         made = list(needed)
         for axis, every in self.factors.items():
             span = needed[axis]
             made[axis] = slice(span.start // every, -(-span.stop // every))
-        # A result of another shape is handed back for the caller to refuse.
-        if tuple(out.shape) != tuple(x.stop - x.start for x in made):
-            return out
-        spans = zip(box, made, strict=True)
-        return out[tuple(slice(b.start - m.start, b.stop - m.start) for b, m in spans)]
+        return tuple(made)
+
+    def key(self, box: Box, needed: Box) -> Hashable:
+        """
+        Return how the box is cut from its tiles, for a periodic kernel.
+
+        The shapes, in samples read and made, and where the box sits in
+        what its tiles make, and for each tiled axis how many tiles there
+        are and the first modulo the tiles between two which do not
+        overlap, so boxes a whole number of such runs apart share a key.
+        That says how far the tiles reach past the ends of the axis too: a
+        box whose first tile starts before the array sits nearer the start
+        of what it needs than any other can, and one whose last ends after
+        it needs less of the axis. A kernel which is not periodic, or a
+        subclass which writes its own `apply`, keys each box by itself.
+        """
+        if not self.periodic or type(self).apply is not Tiles.apply:
+            return box, needed
+        tiles = zip(self.spans.values(), self.tiles(box), strict=True)
+        runs = tuple((b - a, a % -(-z // step)) for (z, step, _), (a, b) in tiles)
+        return _relative(box, self._made(needed)), _sizes(needed), runs
 
 
 @dataclass(frozen=True)
@@ -319,3 +377,9 @@ class Window(ChunkContract):
     def apply(self, run: Callable[[Any], Any], data, box: Box, needed: Box):
         """Return the input, which is already the window's samples."""
         return data
+
+    def key(self, box: Box, needed: Box) -> Hashable:
+        """Return the shapes, unless a subclass writes its own `apply`."""
+        if type(self).apply is Window.apply:
+            return _relative(box, needed)
+        return box, needed
