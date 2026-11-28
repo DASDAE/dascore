@@ -533,6 +533,14 @@ class TestToTimeDelta64:
         assert to_timedelta64(np.array([value])) == expected
         assert to_timedelta64(np.array(value)) == expected
 
+    @pytest.mark.parametrize("unit", ("Y", "M"))
+    def test_multiple_of_calendar_unit(self, unit):
+        """A multiple of years or months (2M) converts as that many of them."""
+        expected = to_timedelta64(np.array([2, 6], dtype=f"m8[{unit}]"))
+        doubled = np.array([1, 3], dtype=f"m8[2{unit}]")
+        assert np.array_equal(to_timedelta64(doubled), expected)
+        assert to_timedelta64(doubled[0]) == expected[0]
+
 
 class TestNanosecondRange:
     """Times a nanosecond count cannot hold raise rather than wrap (#890)."""

@@ -79,6 +79,10 @@ def _as_ns(value, kind: str):
             bad = np.any(((ticks > limit) | (ticks < -limit)) & ~np.isnat(value))
         if bad:
             _raise_out_of_range(value)
+    # Numpy casts one year or month to ns by its average length, but not a
+    # multiple of one (2M), which first becomes that many.
+    if unit in ("Y", "M") and count != 1:
+        value = value.astype(f"m8[{unit}]")
     return value.astype(dtype)
 
 
