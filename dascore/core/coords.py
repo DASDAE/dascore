@@ -770,15 +770,16 @@ class _CoordModel(RichRepr, DascoreBaseModel, BaseCoord):
 
         # Drawn as one range: the two ends state the same blocks, and
         # the second states only what the first did not already.
-        near, far = range_texts(self.min(), self.max())
-        if not pd.isnull(self.min()):
+        low, high = self._stated_bounds()
+        near, far = range_texts(low, high)
+        if not pd.isnull(low):
             fields.append(("min", measured(near), True))
-        if not pd.isnull(self.max()):
+        if not pd.isnull(high):
             fields.append(("max", measured(far), True))
         # How far the two ends lie apart, which they do not otherwise
         # say: a fiber run from 1212.4 m to 1636.7 m is 424.3 m of it.
-        if not (pd.isnull(self.min()) or pd.isnull(self.max())):
-            if (span := span_text(self.min(), self.max(), stated)) is not None:
+        if not (pd.isnull(low) or pd.isnull(high)):
+            if (span := span_text(low, high, stated)) is not None:
                 # The brackets say what it is, so a line does not
                 # need the label a column heading gives it.
                 fields.append(("span", span, False))
@@ -878,6 +879,14 @@ class _CoordModel(RichRepr, DascoreBaseModel, BaseCoord):
     def max(self):
         """Return max value."""
         return self._max()
+
+    def _stated_bounds(self) -> tuple[Any, Any]:
+        """Min and max, or null for both where the labels do not order."""
+        try:
+            return self.min(), self.max()
+        except TypeError:  # objects of types which do not compare, as 1 and "a"
+            null = _get_nullish(self.dtype)
+            return null, null
 
     @property
     def unit_str(self) -> str | None:
@@ -1220,9 +1229,10 @@ class _CoordModel(RichRepr, DascoreBaseModel, BaseCoord):
 
     def _summary_fields(self, dims) -> dict[str, Any]:
         """The fields a summary of this coordinate is built from."""
+        low, high = self._stated_bounds()
         return dict(
-            min=self.min(),
-            max=self.max(),
+            min=low,
+            max=high,
             # a summary with a step rebuilds a range; a step declared on
             # arrays or shared by runs describes their grid, not a range
             step=self.step if self.evenly_sampled else None,
@@ -2207,11 +2217,23 @@ def _coerce_run(run, sources: dict) -> Grid | Labels | Blank:
     return run
 
 
+def _label_ends(values) -> np.ndarray | None:
+    """The least and greatest labels, missing objects skipped; None for none."""
+    if values.dtype == object:  # nanmin skips no None, nor NaN by text
+        values = values[~pd.isna(values)]
+    if not values.size:
+        return None
+    return np.asarray([np.nanmin(values), np.nanmax(values)], dtype=values.dtype)
+
+
 def _promoted(values, dtype) -> Grid | None:
     """The grid these labels are exactly, or None where no grid is."""
     # Labels in years or months stay labels, as get_coord leaves them; a
-    # grid's arithmetic can't place bounds among their uneven lengths.
+    # grid's arithmetic can't place bounds among their uneven lengths. So do
+    # labels which need not subtract, such as objects.
     if values.ndim != 1 or len(values) < 2 or _in_calendar_unit(dtype):
+        return None
+    if np.dtype(dtype).kind not in "iufmM":
         return None
     diffs = _diffs(values)
     # A zero step would make one label answer for every sample, which
@@ -2698,8 +2720,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         for run in self.runs:
             if isinstance(run, Grid):
                 out.append(run.labels([0, run.count - 1], self.dtype))
-            elif (values := self._run_labels(run)).size:
-                out.append(np.asarray([np.nanmin(values), np.nanmax(values)]))
+            elif (ends := _label_ends(self._run_labels(run))) is not None:
+                out.append(ends)
         return np.concatenate(out) if out else np.empty(0, dtype=self.dtype)
 
     def _min(self):
@@ -3554,18 +3576,23 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """Each segment as a spool index stores it, with a grid's step."""
         if self._partial or self.ndim != 1 or not len(self):
             count = self.shape[0] if self.ndim else 1
-            return (RunRecord(count, self.min(), self.max()),)
+            return (RunRecord(count, *self._stated_bounds()),)
         if len(self.runs) == 1:
             # one run's ends are the coordinate's, which min and max cache
             run = self.runs[0]
             step = run.step(self.dtype) if isinstance(run, Grid) else None
-            return (RunRecord(len(run), self.min(), self.max(), step),)
+            return (RunRecord(len(run), *self._stated_bounds(), step),)
         out = []
         for run in self.runs:
             grid = isinstance(run, Grid)
             ends = self._run_labels(run, [0, run.count - 1] if grid else None)
             step = run.step(self.dtype) if grid else None
-            out.append(RunRecord(len(run), np.nanmin(ends), np.nanmax(ends), step))
+            try:  # objects of types which do not compare, as 1 and "a", state none
+                bounds = _label_ends(ends)
+            except TypeError:
+                bounds = None
+            low, high = (_get_nullish(self.dtype),) * 2 if bounds is None else bounds
+            out.append(RunRecord(len(run), low, high, step))
         return tuple(out)
 
     # --- identity, summary and display

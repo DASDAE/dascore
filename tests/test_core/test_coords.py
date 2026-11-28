@@ -3547,6 +3547,69 @@ class TestStringCoordUtilities:
         assert out.dtype == object
 
 
+class TestObjectLabels:
+    """Object labels: text with a missing value, or values of mixed types."""
+
+    @pytest.fixture(scope="class")
+    def stations(self):
+        """A patch whose station names, one missing, ride on time."""
+        names = pd.Series(["b", None, "a", "c"]).to_numpy()
+        coords = {"time": np.arange(4.0), "station": ("time", names)}
+        return dc.Patch(data=np.zeros(4), coords=coords, dims=("time",))
+
+    @pytest.mark.parametrize("key", [slice(0, 2), slice(1, 4), [0, 2], [3, 1]])
+    def test_part_keeps_labels(self, key):
+        """A part of object labels holds them as they are, never as a grid."""
+        labels = np.array(["b", None, "a", "c"], dtype=object)
+        out = get_coord(data=labels)[key]
+        assert out.values.tolist() == labels[key].tolist()
+        numbers = get_coord(data=np.array([1, "a", 2.5, 4], dtype=object))[[0, 2]]
+        assert [type(x) for x in numbers.values] == [int, float]
+        assert not numbers.evenly_sampled
+
+    def test_patch_selects(self, stations):
+        """A patch selects and indexes along the dimension the labels ride."""
+        selected = stations.select(time=(0.0, 1.0)).coords.get_array("station")
+        assert selected[0] == "b" and pd.isna(selected[1])
+        taken = stations.isel(time=[0, 2]).coords.get_array("station")
+        assert taken.tolist() == ["b", "a"]
+
+    def test_bounds_skip_missing(self, stations):
+        """Min and max skip missing labels, and the patch prints and lists."""
+        station = stations.get_coord("station")
+        assert (station.min(), station.max()) == ("a", "c")
+        assert "station" in str(stations)
+        assert len(dc.spool([stations]).get_contents()) == 1
+        missing = get_coord(data=np.array([None, np.nan], dtype=object))
+        assert pd.isna(missing.min()) and "min" not in str(missing)
+
+    def test_unordered_labels_state_no_bounds(self):
+        """
+        Labels which do not order state no bounds when printed or listed,
+        though min itself raises, as comparing them does.
+        """
+        coord = get_coord(data=np.array([1, "a"], dtype=object))
+        with pytest.raises(TypeError):
+            coord.min()
+        assert "min" not in str(coord)
+        assert pd.isna(coord.to_summary().min)
+        coords = {"time": np.arange(2.0), "x": ("time", coord.values)}
+        patch = dc.Patch(data=np.zeros(2), coords=coords, dims=("time",))
+        assert "x" in str(patch)
+        assert len(dc.spool([patch]).get_contents()) == 1
+
+    def test_runs_state_their_bounds(self):
+        """
+        Each run of object labels states its bounds, missing labels skipped,
+        or none where its labels do not order or are all missing.
+        """
+        labels = (["b", None], [1, "a"], [None, np.nan])
+        runs = tuple(np.array(x, dtype=object) for x in labels)
+        first, *others = get_coord(runs=runs).to_summary().runs
+        assert (first.min, first.max) == ("b", "b")
+        assert all(pd.isna(x.min) and pd.isna(x.max) for x in others)
+
+
 class TestDimensionalityErrors:
     """
     Operations that only support 1D coordinates should raise CoordError on
