@@ -871,10 +871,14 @@ class PatchCatalog:
         ids: tuple | None = None,
         default_order: tuple | None = None,
         stamps: Mapping | None = None,
+        presented: Mapping | None = None,
     ):
         self._backend = backend
         # attrs an operation stamped on every row, name -> presented dtype
         self._stamps = dict(stamps or {})
+        # and those only some rows state, as a union's members, presented
+        # in their dtype but not stamped by plans over this catalog
+        self._presented = dict(presented or {})
         self.resolver = resolver
         self._syncer = syncer
         self._queries = tuple(queries)
@@ -929,7 +933,19 @@ class PatchCatalog:
         # stamps hold only when every member states the same ones
         stamps = catalogs[0]._stamps if catalogs else {}
         stamps = stamps if all(x._stamps == stamps for x in catalogs) else {}
-        out = cls(resolver=resolver, stamps=stamps)
+        # but each keeps its presented dtype unless a member states it
+        # otherwise or carries it unstamped
+        shown = [x._presented | x._stamps for x in catalogs]
+        stated = {x: y for own in shown for x, y in own.items()}
+        presented = {
+            name: dtype
+            for name, dtype in stated.items()
+            if all(
+                own.get(name) == dtype or name not in {*own, *x.attr_names()}
+                for own, x in zip(shown, catalogs, strict=True)
+            )
+        }
+        out = cls(resolver=resolver, stamps=stamps, presented=presented)
         backend = out.backend
         # Collect and merge every member's records before writing:
         # write_sources replaces at (base_uri, source_path) grain, so
@@ -1181,6 +1197,7 @@ class PatchCatalog:
             ids=self._ids if isinstance(ids, _Keep) else ids,
             default_order=self._default_order,
             stamps=self._stamps,
+            presented=self._presented,
         )
         return out
 
@@ -1537,7 +1554,7 @@ class PatchCatalog:
             # after every step which drops rows, so it follows the rows kept
             df = _without_unstated_attrs(df, self.backend)
             # the index drops blanks, so a stamp's column may be partial or absent
-            for name, dtype in self._stamps.items():
+            for name, dtype in (self._presented | self._stamps).items():
                 column = df.get(name, pd.Series(None, index=df.index, dtype=object))
                 filled = column.fillna("") if dtype == "str" else column
                 df[name] = filled.astype(dtype)
