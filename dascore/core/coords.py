@@ -2217,6 +2217,15 @@ def _coerce_run(run, sources: dict) -> Grid | Labels | Blank:
     return run
 
 
+def _label_ends(values) -> np.ndarray | None:
+    """The least and greatest labels, missing objects skipped; None for none."""
+    if values.dtype == object:  # nanmin skips no None, nor NaN by text
+        values = values[~pd.isna(values)]
+    if not values.size:
+        return None
+    return np.asarray([np.nanmin(values), np.nanmax(values)], dtype=values.dtype)
+
+
 def _promoted(values, dtype) -> Grid | None:
     """The grid these labels are exactly, or None where no grid is."""
     # Labels in years or months stay labels, as get_coord leaves them; a
@@ -2711,12 +2720,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         for run in self.runs:
             if isinstance(run, Grid):
                 out.append(run.labels([0, run.count - 1], self.dtype))
-            elif (values := self._run_labels(run)).size:
-                if values.dtype == object:  # nanmin skips no None, nor NaN by text
-                    values = values[~pd.isna(values)]
-                if values.size:
-                    bounds = [np.nanmin(values), np.nanmax(values)]
-                    out.append(np.asarray(bounds, dtype=values.dtype))
+            elif (ends := _label_ends(self._run_labels(run))) is not None:
+                out.append(ends)
         return np.concatenate(out) if out else np.empty(0, dtype=self.dtype)
 
     def _min(self):
@@ -3582,7 +3587,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             grid = isinstance(run, Grid)
             ends = self._run_labels(run, [0, run.count - 1] if grid else None)
             step = run.step(self.dtype) if grid else None
-            out.append(RunRecord(len(run), np.nanmin(ends), np.nanmax(ends), step))
+            try:  # objects of types which do not compare, as 1 and "a", state none
+                bounds = _label_ends(ends)
+            except TypeError:
+                bounds = None
+            low, high = (_get_nullish(self.dtype),) * 2 if bounds is None else bounds
+            out.append(RunRecord(len(run), low, high, step))
         return tuple(out)
 
     # --- identity, summary and display

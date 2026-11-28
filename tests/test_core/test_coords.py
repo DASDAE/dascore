@@ -3583,6 +3583,17 @@ class TestObjectLabels:
         assert "x" in str(patch)
         assert len(dc.spool([patch]).get_contents()) == 1
 
+    def test_runs_state_their_bounds(self):
+        """
+        Each run of object labels states its bounds, missing labels skipped,
+        or none where its labels do not order or are all missing.
+        """
+        labels = (["b", None], [1, "a"], [None, np.nan])
+        runs = tuple(np.array(x, dtype=object) for x in labels)
+        first, *others = get_coord(runs=runs).to_summary().runs
+        assert (first.min, first.max) == ("b", "b")
+        assert all(pd.isna(x.min) and pd.isna(x.max) for x in others)
+
 
 class TestDimensionalityErrors:
     """
