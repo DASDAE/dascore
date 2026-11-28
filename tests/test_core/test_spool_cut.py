@@ -243,8 +243,9 @@ class TestCut:
     def test_union_with_other_stamps(self, spool, start):
         """
         A cut's patch reads through a union with a spool stamped otherwise,
-        or not at all, as it reads alone; the union keeps the stamps' dtypes
-        where no other member carries those attrs.
+        or not at all, as it reads alone, and so does a chunk of a member;
+        the union presents the stamps' dtypes where no other member carries
+        those attrs.
         """
         windowed = spool.cut(time=_windows(start, (3, 4)))
         annotated = spool.cut(_ranges(start, (3, 4)))
@@ -252,6 +253,7 @@ class TestCut:
         named = dc.spool([x.update_attrs(feature_id="ev") for x in spool])
         contents = (windowed + spool).get_contents()
         assert contents["window"].dtype == "Int64"
+        assert (windowed + spool)[:2].get_contents()["window"].dtype == "Int64"
         assert contents["window"].fillna(-1).tolist() == [0, -1, -1, -1]
         dtypes = (annotated + spool).get_contents()[["feature_id", "annotation"]]
         assert list(dtypes.dtypes) == ["str", "Int64"]
@@ -263,6 +265,14 @@ class TestCut:
             (annotated, windowed + annotated, 1),
         ):
             assert union[row].attrs == cut[0].attrs
+        # a plan over a union's members states only the stamps they state
+        for part, alone in (
+            ((windowed + spool)[1:], spool),
+            ((windowed + annotated)[:1], windowed),
+            ((windowed + annotated)[1:], annotated),
+        ):
+            chunked = part.chunk(time=None)[0].attrs
+            assert chunked == alone.chunk(time=None)[0].attrs
 
     def test_overlapping_features(self, spool, start):
         """Two features with one window give two patches."""
