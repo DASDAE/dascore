@@ -335,10 +335,10 @@ class Tiles(ChunkContract):
         That says how far the tiles reach past the ends of the axis too: a
         box whose first tile starts before the array sits nearer the start
         of what it needs than any other can, and one whose last ends after
-        it needs less of the axis. A kernel which is not periodic keys each
-        box by itself.
+        it needs less of the axis. A kernel which is not periodic, or a
+        subclass which writes its own `apply`, keys each box by itself.
         """
-        if not self.periodic:
+        if not self.periodic or type(self).apply is not Tiles.apply:
             return box, needed
         tiles = zip(self.spans.values(), self.tiles(box), strict=True)
         runs = tuple((b - a, a % -(-z // step)) for (z, step, _), (a, b) in tiles)

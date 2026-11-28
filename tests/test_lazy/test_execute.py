@@ -876,6 +876,14 @@ class _PlacedWindow(Window):
         return data + box[0].start
 
 
+class _PlacedTiles(Tiles):
+    """Periodic tiles whose apply adds where its box starts in the array."""
+
+    def apply(self, run, data, box, needed):
+        """Return the blended tiles moved up by the start of the box."""
+        return super().apply(run, data, box, needed) + box[0].start
+
+
 class _Moved(dc.PatchProcessor):
     """An operation whose contract writes its own apply, and no key."""
 
@@ -888,7 +896,7 @@ class _Moved(dc.PatchProcessor):
         """Return the contract which adds where the box is."""
         return self.contract
 
-    def kernel(self, data):
+    def kernel(self, data, *, tiles=None):
         """Return the data as they are."""
         return data + 0
 
@@ -1092,6 +1100,17 @@ class TestRunChain:
             box = (slice(start, start + 10), slice(0, 6))
             out = _values(compute(array, box))
             assert np.array_equal(out, _rows(start, start + 10) + start)
+        assert len(_Compiling.compiled) == 2
+
+    def test_tiles_with_their_own_apply_are_keyed_by_their_boxes(self):
+        """Periodic tiles whose apply reads where the box is share no compile."""
+        contract = _PlacedTiles({0: (8, 4, 40)}, periodic=True)
+        array = _Moved(contract=contract)(_ramp()).data
+        # A run of these tiles is 8 samples, so the boxes would share a key.
+        for start in (8, 16):
+            box = (slice(start, start + 4), slice(0, 6))
+            out = _values(compute(array, box))
+            assert np.array_equal(out, _rows(start, start + 4) + start)
         assert len(_Compiling.compiled) == 2
 
     @pytest.mark.parametrize(
