@@ -827,7 +827,7 @@ class PlanResolver(PatchResolver):
         mode: str = "chunk",
         aux_coords: frozenset[str] = frozenset(),
         origin_path=None,
-        stamped: tuple[str, ...] = (),
+        stamped: tuple[str, ...] | Mapping[str, str | None] = (),
         lossy: bool = False,
         trim_dims: tuple[str, ...] = (),
         parent_backend=None,
@@ -857,8 +857,10 @@ class PlanResolver(PatchResolver):
         self.mode = mode
         # informational only: the directory/file the plan derived from
         self.origin_path = origin_path
-        # attrs the outputs state about themselves rather than inherit
+        # attrs the outputs state about themselves rather than inherit, and
+        # the dtypes their catalog presents them in, where it states one
         self.stamped = tuple(stamped)
+        self.stamp_dtypes = dict(stamped) if isinstance(stamped, Mapping) else {}
         # Whether the outputs leave samples of their sources out. A lossy
         # plan must never be collapsed: its members do not cover their
         # sources, so re-planning over them would load back what it
@@ -1256,7 +1258,23 @@ class PlanResolver(PatchResolver):
         """
         if not self.stamped:
             return patch
-        return patch.update_attrs(**{x: row[x] for x in self.stamped})
+        dtypes = self.stamp_dtypes
+        stamps = {x: _stamp_value(row.get(x), dtypes.get(x)) for x in self.stamped}
+        return patch.update_attrs(**stamps)
+
+
+def _stamp_value(value, dtype: str | None):
+    """
+    A stamp as its own catalog presents it, from a row of any catalog.
+
+    A union's row may lack the column (the index drops blanks) or widen it
+    (float for integers beside an unstated row, object beside other values).
+    """
+    if dtype is None:
+        return value
+    if pd.isna(value):
+        return "" if dtype == "str" else None
+    return int(value) if dtype == "Int64" else value
 
 
 def _index_named(backend):
@@ -1587,7 +1605,7 @@ def derived_catalog(
         mode=mode,
         aux_coords=aux_coords,
         origin_path=origin_path,
-        stamped=tuple(dict.fromkeys([*stamped, *stamps])),
+        stamped={x: stamps.get(x) for x in dict.fromkeys([*stamped, *stamps])},
         lossy=lossy,
         trim_dims=plan.trim_dims,
         parent_backend=None if parent is None else parent.backend,

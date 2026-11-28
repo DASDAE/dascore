@@ -926,9 +926,17 @@ class PatchCatalog:
         on the result for exact envelopes.
         """
         resolver = CompositeResolver()
-        # stamps hold only when every member states the same ones
-        stamps = catalogs[0]._stamps if catalogs else {}
-        stamps = stamps if all(x._stamps == stamps for x in catalogs) else {}
+        # a stamp holds unless a member states it otherwise or carries it unstamped
+        stated = {x: y for catalog in catalogs for x, y in catalog._stamps.items()}
+        stamps = {
+            name: dtype
+            for name, dtype in stated.items()
+            if all(
+                x._stamps.get(name) == dtype
+                or name not in {*x._stamps, *x.attr_names()}
+                for x in catalogs
+            )
+        }
         out = cls(resolver=resolver, stamps=stamps)
         backend = out.backend
         # Collect and merge every member's records before writing:

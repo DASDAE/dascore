@@ -240,6 +240,30 @@ class TestCut:
         contents = (cut + other).get_contents()
         assert contents["annotation"].tolist() == [0, "foo", "foo", "foo"]
 
+    def test_union_with_other_stamps(self, spool, start):
+        """
+        A cut's patch reads through a union with a spool stamped otherwise,
+        or not at all, as it reads alone; the union keeps the stamps' dtypes
+        where no other member carries those attrs.
+        """
+        windowed = spool.cut(time=_windows(start, (3, 4)))
+        annotated = spool.cut(_ranges(start, (3, 4)))
+        numbered = dc.spool([x.update_attrs(window=5) for x in spool])
+        named = dc.spool([x.update_attrs(feature_id="ev") for x in spool])
+        contents = (windowed + spool).get_contents()
+        assert contents["window"].dtype == "Int64"
+        assert contents["window"].fillna(-1).tolist() == [0, -1, -1, -1]
+        dtypes = (annotated + spool).get_contents()[["feature_id", "annotation"]]
+        assert list(dtypes.dtypes) == ["str", "Int64"]
+        for cut, union, row in (
+            (windowed, windowed + spool, 0),
+            (windowed, windowed + numbered, 0),
+            (annotated, annotated + spool, 0),
+            (annotated, annotated + named, 0),
+            (annotated, windowed + annotated, 1),
+        ):
+            assert union[row].attrs == cut[0].attrs
+
     def test_overlapping_features(self, spool, start):
         """Two features with one window give two patches."""
         assert len(spool.cut(_ranges(start, (0, 1), (0, 1)))) == 2
