@@ -300,6 +300,34 @@ class TestFacilityId:
         assert out["facility_id"] == "well_a,well_b"
 
 
+class TestPulseRate:
+    """The pulse rate is a declared float in Hz, units stated or not."""
+
+    @pytest.mark.parametrize(
+        "value, uom", [(50.0, "Hz"), (0.05, "kHz"), (np.float32(50), None)]
+    )
+    def test_float_in_hz(self, tmp_path, value, uom):
+        """A stated unit is converted; an unstated one is taken as Hz."""
+        path = tmp_path / "pulse_rate.h5"
+        dc.get_example_patch().io.write(path, "prodml")
+        with h5py.File(path, "r+") as h5:
+            attrs = h5["Acquisition"].attrs
+            attrs["PulseRate"] = value
+            if uom is not None:
+                attrs["PulseRate.uom"] = uom
+        attrs = dc.spool(path)[0].attrs
+        assert "pulse_rate" in type(attrs).model_fields
+        assert type(attrs.pulse_rate) is float
+        assert attrs.pulse_rate == pytest.approx(50.0)
+
+    def test_fbe(self):
+        """An FBE patch declares it too."""
+        attrs = dc.spool(fetch("prodml_fbe_1.h5"))[0].attrs
+        assert "pulse_rate" in type(attrs).model_fields
+        assert type(attrs.pulse_rate) is float
+        assert attrs.pulse_rate == 10_000.0
+
+
 class TestOffsetReads:
     """A PRODML array's chunks are read from their offsets, gaps and all."""
 
