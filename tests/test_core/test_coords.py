@@ -2080,6 +2080,21 @@ class TestMonotonicCoord:
         assert len(expected) == 2
         assert np.array_equal(out.values, expected)
 
+    @pytest.mark.parametrize("unit", ["Y", "M"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_select_by_multiplied_calendar_unit(self, unit, reverse):
+        """A bound in a multiple of years or months, as 2M, selects the same
+        labels whichever way they are sorted.
+        """
+        labels = np.arange(4).astype(f"m8[{unit}]")
+        coord = get_coord(data=labels[::-1] if reverse else labels)
+        bound = np.timedelta64(1, f"2{unit}")
+        windows = {(bound, bound): [2], (bound, None): [2, 3], (None, bound): [0, 1, 2]}
+        for window, expected in windows.items():
+            out, _ = coord.select(window)
+            in_order = expected[::-1] if reverse else expected
+            assert out.values.astype(int).tolist() == in_order
+
     @pytest.mark.parametrize(
         "labels",
         [
