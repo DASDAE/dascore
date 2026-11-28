@@ -268,6 +268,20 @@ class TestCut:
         """Two features with one window give two patches."""
         assert len(spool.cut(_ranges(start, (0, 1), (0, 1)))) == 2
 
+    def test_patch_with_no_dims(self, spool, start):
+        """A cut leaves out a patch with no dimensions, which no window cuts."""
+        scalar = dc.Patch(data=np.array(1.0), coords={}, dims=())
+        mixed = dc.spool([*spool, scalar])
+        open_window = {"time": np.array([[None, None]])}
+        for args, kwargs in (
+            ((), {"time": _windows(start, (3, 4))}),
+            ((), open_window),
+            ((_ranges(start, (3, 4)),), {}),
+        ):
+            expected = spool.cut(*args, **kwargs)
+            assert list(mixed.cut(*args, **kwargs)) == list(expected)
+        assert not len(dc.spool([scalar]).cut(**open_window))
+
     def test_nothing(self, spool, start):
         """No data, no samples, an empty range, or an empty set give nothing."""
         contents = spool.cut(_ranges(start, (100, 200))).get_contents()

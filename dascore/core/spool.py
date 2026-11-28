@@ -3511,9 +3511,9 @@ class Spool(NodeRepr, NamespaceOwner, BaseSpool):
         cuts = []  # one plan per set of patch dims, then one merge per dim
         rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
         for have, rows in self._df["_patch_row"].groupby(sets, sort=False):
-            have = str(have).split(",")
-            asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
-            if not asks:  # every window bounds a dim these patches lack
+            have = [x for x in str(have).split(",") if x]  # "" states no dims
+            asks = [i for i, w in enumerate(windows) if have and set(w) <= set(have)]
+            if not asks:  # every window bounds a dim these patches lack, or none
                 continue
             part = self._restrict_to_rows(rows)
             # the pieces' first dim is the one with the most distinct starts
@@ -3593,7 +3593,8 @@ class Spool(NodeRepr, NamespaceOwner, BaseSpool):
         out = sum(cuts[1:], cuts[0])
         # back into window order, each window's pieces in coordinate order
         keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
-        ranked = sorted(sorted(present), key=lambda x: -self._df[f"{x}_min"].nunique())
+        named = sorted(present - {""})
+        ranked = sorted(named, key=lambda x: -self._df[f"{x}_min"].nunique())
         mins = [f"{x}_min" for x in ranked if f"{x}_min" in out._df]
         frame = out._df[mins].assign(_rank=[rank[_stamp_key(*x)] for x in keys])
         frame = frame.reset_index(drop=True).sort_values(["_rank", *mins])
