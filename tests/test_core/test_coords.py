@@ -2092,7 +2092,8 @@ class TestMonotonicCoord:
         windows = {(bound, bound): [2], (bound, None): [2, 3], (None, bound): [0, 1, 2]}
         for window, expected in windows.items():
             out, _ = coord.select(window)
-            assert sorted(out.values.astype(int).tolist()) == expected
+            in_order = expected[::-1] if reverse else expected
+            assert out.values.astype(int).tolist() == in_order
 
     @pytest.mark.parametrize(
         "labels",
